@@ -44,12 +44,18 @@
 - [x] Added image display to ContentView with split layout
 - [x] Connected mood changes to image triggers (threshold-based)
 
-## Not Started
+### Phase 4.5: Settings & Caching (DONE)
+- [x] SettingsService with UserDefaults persistence
+- [x] Saved settings: mood values, scale, image interval
+- [x] Image caching for instant startup display
+- [x] Image interval slider (10-120s)
 
-### Phase 5: Visual Morphing
-- RIFE integration
-- Metal shader fallback
-- Display pipeline
+### Phase 5: Visual Morphing (PARTIAL)
+- [x] SwiftUI crossfade transitions (2s ease-in-out)
+- [ ] RIFE integration (optional enhancement - not installed)
+- [ ] Metal shader effects (optional enhancement)
+
+## Not Started
 
 ### Phase 6: Integration & Polish
 - Connect mood changes to image triggers
@@ -67,7 +73,8 @@
 | `Audio/MarkovChain.swift` | Probabilistic note selection |
 | `Visual/VisualEngine.swift` | Coordinates image generation and mood-based prompts |
 | `Visual/GeminiClient.swift` | Async Gemini REST API client for image generation |
-| `Visual/ImageQueue.swift` | Buffers pre-generated images for smooth transitions |
+| `Visual/ImageQueue.swift` | Buffers pre-generated images + disk caching |
+| `Services/SettingsService.swift` | UserDefaults persistence for preferences |
 | `State/MoodState.swift` | Observable mood: brightness, tension, density, movement |
 | `Services/EnvironmentService.swift` | API key management |
 | `Utils/Logger.swift` | LMLog unified logging |

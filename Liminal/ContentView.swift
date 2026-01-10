@@ -110,17 +110,21 @@ struct ContentView: View {
 
 struct VisualDisplayView: View {
     @ObservedObject var visualEngine: VisualEngine
+    @State private var displayedImage: NSImage?
+    @State private var imageID = UUID()
 
     var body: some View {
         ZStack {
             // Background
             Color.black
 
-            // Current image
-            if let image = visualEngine.currentImage {
+            // Current image with crossfade animation
+            if let image = displayedImage {
                 Image(nsImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
+                    .id(imageID)
+                    .transition(.opacity.animation(.easeInOut(duration: 2.0)))
             } else {
                 // Placeholder
                 VStack(spacing: 12) {
@@ -142,6 +146,15 @@ struct VisualDisplayView: View {
             }
         }
         .clipped()
+        .onChange(of: visualEngine.currentImage) { _, newImage in
+            withAnimation(.easeInOut(duration: 2.0)) {
+                displayedImage = newImage
+                imageID = UUID()
+            }
+        }
+        .onAppear {
+            displayedImage = visualEngine.currentImage
+        }
     }
 }
 
