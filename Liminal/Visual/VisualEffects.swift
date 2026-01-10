@@ -50,6 +50,18 @@ struct VisualEffects {
         )
     }
 
+    /// Creates spatial hue waves - rainbow bands flowing across the image
+    /// blendAmount: 0 = original image, 1 = full effect (0.6-0.7 recommended)
+    static func spatialHueShift(time: Double, baseShift: Double, waveIntensity: Double = 0.15, blendAmount: Double = 0.7) -> Shader {
+        ShaderLibrary.spatialHueShift(
+            .boundingRect,
+            .float(time),
+            .float(baseShift),
+            .float(waveIntensity),
+            .float(blendAmount)
+        )
+    }
+
     /// Creates breathing wave with animated time
     static func breathingWave(time: Double, amplitude: Double = 0.01) -> Shader {
         ShaderLibrary.breathingWave(
@@ -75,6 +87,12 @@ extension View {
     /// Applies slow hue rotation
     func hueShift(amount: Double) -> some View {
         self.colorEffect(VisualEffects.hueShift(amount: amount))
+    }
+
+    /// Applies spatial hue waves - rainbow bands that flow across the image
+    /// blendAmount controls how much the effect shows (0 = none, 1 = full, 0.6-0.7 recommended)
+    func spatialHueShift(time: Double, baseShift: Double = 0, waveIntensity: Double = 0.15, blendAmount: Double = 0.7) -> some View {
+        self.colorEffect(VisualEffects.spatialHueShift(time: time, baseShift: baseShift, waveIntensity: waveIntensity, blendAmount: blendAmount))
     }
 
     /// Applies breathing wave distortion

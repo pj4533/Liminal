@@ -145,8 +145,8 @@ struct VisualDisplayView: View {
                         .offset(kenBurnsOffset)
                         // Dreamy fBM distortion - boosted during crossfade to mask the blend
                         .dreamyDistortion(time: effectController.time, amplitude: distortionAmplitude, speed: 0.08)
-                        // Hue rotation for color drift (noticeable but not jarring)
-                        .hueShift(amount: effectController.time * 0.04)
+                        // Spatial hue waves with Color blend mode - psychedelic but preserves image structure
+                        .spatialHueShift(time: effectController.time, baseShift: effectController.time * 0.03, waveIntensity: 0.5, blendAmount: 0.65)
 
                     // Status overlay (top corners)
                     VStack {

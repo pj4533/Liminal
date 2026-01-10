@@ -140,6 +140,125 @@ float fbm(float2 p, float time, int octaves, float lacunarity, float persistence
     return half4(rgb, color.a);
 }
 
+// MARK: - Saliency-Aware Hue Shift
+// Varies hue based on saliency map - subjects and background get different colors
+// Creates rainbow color variety across the image
+
+[[stitchable]] half4 saliencyHueShift(
+    float2 position,
+    half4 color,
+    float4 bounds,
+    float time,
+    float baseShift,
+    float saliencyInfluence,
+    texture2d<half> saliencyMap
+) {
+    // Sample saliency at this position
+    float2 uv = position / bounds.zw;
+    constexpr sampler s(address::clamp_to_edge, filter::linear);
+    half saliency = saliencyMap.sample(s, uv).r;
+
+    // Convert RGB to HSV
+    half4 K = half4(0.0h, -1.0h / 3.0h, 2.0h / 3.0h, -1.0h);
+    half4 p = mix(half4(color.bg, K.wz), half4(color.gb, K.xy), step(color.b, color.g));
+    half4 q = mix(half4(p.xyw, color.r), half4(color.r, p.yzx), step(p.x, color.r));
+
+    half d = q.x - min(q.w, q.y);
+    half e = 1.0e-10h;
+    half3 hsv = half3(abs(q.z + (q.w - q.y) / (6.0h * d + e)), d / (q.x + e), q.x);
+
+    // Vary hue based on saliency: high saliency shifts one direction, low shifts another
+    // This creates color separation between subjects (salient) and background
+    float saliencyOffset = (float(saliency) - 0.5) * saliencyInfluence;
+
+    // Also add subtle spatial variation for extra rainbow feel
+    float spatialOffset = sin(uv.x * 4.0 + time * 0.3) * 0.05 + sin(uv.y * 3.0 + time * 0.2) * 0.03;
+
+    // Combine base shift + saliency variation + spatial waves
+    hsv.x = fract(hsv.x + half(baseShift + saliencyOffset + spatialOffset));
+
+    // Slight saturation boost for salient regions
+    hsv.y = min(1.0h, hsv.y * (1.0h + saliency * 0.2h));
+
+    // Convert back to RGB
+    half4 K2 = half4(1.0h, 2.0h / 3.0h, 1.0h / 3.0h, 3.0h);
+    half3 p2 = abs(fract(hsv.xxx + K2.xyz) * 6.0h - K2.www);
+    half3 rgb = hsv.z * mix(K2.xxx, clamp(p2 - K2.xxx, 0.0h, 1.0h), hsv.y);
+
+    return half4(rgb, color.a);
+}
+
+// MARK: - Spatial Hue Waves with Color Blend Mode
+// Rainbow waves that preserve original luminance - psychedelic but integrated
+
+[[stitchable]] half4 spatialHueShift(
+    float2 position,
+    half4 color,
+    float4 bounds,
+    float time,
+    float baseShift,
+    float waveIntensity,
+    float blendAmount  // 0 = original, 1 = full effect
+) {
+    float2 uv = position / bounds.zw;
+
+    // Store original luminance (preserve structure)
+    half originalLuma = dot(color.rgb, half3(0.299h, 0.587h, 0.114h));
+
+    // Convert RGB to HSV
+    half4 K = half4(0.0h, -1.0h / 3.0h, 2.0h / 3.0h, -1.0h);
+    half4 p = mix(half4(color.bg, K.wz), half4(color.gb, K.xy), step(color.b, color.g));
+    half4 q = mix(half4(p.xyw, color.r), half4(color.r, p.yzx), step(p.x, color.r));
+
+    half d = q.x - min(q.w, q.y);
+    half e = 1.0e-10h;
+    half3 hsv = half3(abs(q.z + (q.w - q.y) / (6.0h * d + e)), d / (q.x + e), q.x);
+
+    // LOTS of overlapping waves at different frequencies for chaotic rainbow feel
+    // Horizontal waves (multiple frequencies)
+    float horizWaves = sin(uv.x * 2.0 + time * 0.2) * waveIntensity
+                     + sin(uv.x * 5.0 - time * 0.15) * waveIntensity * 0.6
+                     + sin(uv.x * 8.0 + time * 0.3) * waveIntensity * 0.3;
+
+    // Vertical waves (multiple frequencies)
+    float vertWaves = sin(uv.y * 3.0 + time * 0.18) * waveIntensity * 0.8
+                    + sin(uv.y * 6.0 - time * 0.22) * waveIntensity * 0.5
+                    + sin(uv.y * 10.0 + time * 0.25) * waveIntensity * 0.25;
+
+    // Diagonal waves (for extra chaos)
+    float diagWaves = sin((uv.x + uv.y) * 4.0 + time * 0.12) * waveIntensity * 0.7
+                    + sin((uv.x - uv.y) * 3.0 - time * 0.16) * waveIntensity * 0.5
+                    + sin((uv.x * 2.0 + uv.y * 3.0) * 2.0 + time * 0.1) * waveIntensity * 0.4;
+
+    // Radial waves from center (adds organic feel)
+    float2 center = uv - 0.5;
+    float dist = length(center);
+    float radialWaves = sin(dist * 12.0 - time * 0.3) * waveIntensity * 0.5;
+
+    float spatialOffset = horizWaves + vertWaves + diagWaves + radialWaves;
+
+    hsv.x = fract(hsv.x + half(baseShift + spatialOffset));
+
+    // Boost saturation for vivid colors
+    hsv.y = min(1.0h, hsv.y * 1.4h);
+
+    // Convert back to RGB (this is the fully hue-shifted version)
+    half4 K2 = half4(1.0h, 2.0h / 3.0h, 1.0h / 3.0h, 3.0h);
+    half3 p2 = abs(fract(hsv.xxx + K2.xyz) * 6.0h - K2.www);
+    half3 shiftedRgb = hsv.z * mix(K2.xxx, clamp(p2 - K2.xxx, 0.0h, 1.0h), hsv.y);
+
+    // COLOR BLEND MODE: Take hue/saturation from shifted, luminance from original
+    // This preserves the image structure while applying rainbow colors
+    half shiftedLuma = dot(shiftedRgb, half3(0.299h, 0.587h, 0.114h));
+    half3 colorBlended = shiftedRgb * (originalLuma / max(shiftedLuma, 0.001h));
+    colorBlended = clamp(colorBlended, 0.0h, 1.0h);
+
+    // Mix between original and color-blended based on blendAmount
+    half3 finalRgb = mix(color.rgb, colorBlended, half(blendAmount));
+
+    return half4(finalRgb, color.a);
+}
+
 // MARK: - Breathing Wave Effect
 // Subtle sine wave displacement for "breathing" feel
 
