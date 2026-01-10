@@ -100,9 +100,24 @@ struct VisualDisplayView: View {
     @ObservedObject var audioEngine: GenerativeEngine
     @StateObject private var morphPlayer = MorphPlayer()
     @StateObject private var effectController = EffectController()
-    @State private var kenBurnsScale: CGFloat = 1.0
-    @State private var kenBurnsOffset: CGSize = .zero
     @State private var shimmerCancellable: AnyCancellable?
+
+    // Ken Burns is now computed from effectController.time for smooth continuous motion
+    private var kenBurnsScale: CGFloat {
+        // Oscillates between 1.0 and 1.4 using multiple sine waves for organic feel
+        let base = 1.2
+        let variation = 0.15 * sin(effectController.time * 0.05) + 0.05 * sin(effectController.time * 0.03)
+        return CGFloat(base + variation)
+    }
+
+    private var kenBurnsOffset: CGSize {
+        // Lissajous-like pattern for smooth panning that never jumps
+        let maxOffset: Double = 60
+        return CGSize(
+            width: maxOffset * sin(effectController.time * 0.04) + 20 * sin(effectController.time * 0.025),
+            height: maxOffset * cos(effectController.time * 0.035) + 20 * cos(effectController.time * 0.02)
+        )
+    }
 
     var body: some View {
         GeometryReader { geometry in
@@ -169,7 +184,6 @@ struct VisualDisplayView: View {
         .onChange(of: visualEngine.currentImage) { _, newImage in
             if let image = newImage {
                 morphPlayer.transitionTo(image)
-                startKenBurnsAnimation()
             }
         }
         .onChange(of: visualEngine.nextImage) { (_, upcomingImage: NSImage?) in
@@ -183,7 +197,6 @@ struct VisualDisplayView: View {
             effectController.start()
             if let image = visualEngine.currentImage {
                 morphPlayer.setInitialImage(image)
-                startKenBurnsAnimation()
             }
 
             // Subscribe to shimmer notes to trigger morphs
@@ -197,26 +210,6 @@ struct VisualDisplayView: View {
             morphPlayer.stop()
             effectController.stop()
             shimmerCancellable?.cancel()
-        }
-    }
-
-    private func startKenBurnsAnimation() {
-        // Reset to starting position
-        kenBurnsScale = 1.0
-        kenBurnsOffset = .zero
-
-        // Random direction for this cycle - VERY DRAMATIC for immersive feel
-        let targetScale = CGFloat.random(in: 1.3...1.5)
-        let maxOffset: CGFloat = 100
-        let targetOffset = CGSize(
-            width: CGFloat.random(in: -maxOffset...maxOffset),
-            height: CGFloat.random(in: -maxOffset...maxOffset)
-        )
-
-        // Slow continuous zoom/pan - long duration for dreamy feel
-        withAnimation(.easeInOut(duration: 20.0)) {
-            kenBurnsScale = targetScale
-            kenBurnsOffset = targetOffset
         }
     }
 }
