@@ -127,13 +127,13 @@ final class MorphPlayer: ObservableObject {
             frameIndex += 1
             currentFrame = morphFrames[frameIndex]
 
-            // Log progress every 30 frames
+            // Log progress every 30 frames (~1 second)
             if frameIndex % 30 == 0 {
-                LMLog.visual.debug("Morph progress: \(self.frameIndex)/\(self.morphFrames.count - 1)")
+                LMLog.visual.debug("🎞️ MORPH frame=\(self.frameIndex)/\(self.morphFrames.count - 1)")
             }
         } else {
             // Morph complete!
-            LMLog.visual.info("✨ Morph complete")
+            LMLog.visual.info("🎞️ MORPH COMPLETE frame=\(self.frameIndex)")
             currentFrame = morphFrames[frameIndex]
             morphFrames = []
             frameIndex = 0

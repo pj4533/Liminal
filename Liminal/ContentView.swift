@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import OSLog
 
 struct ContentView: View {
     @State private var apiKeyStatus = "Checking..."
@@ -99,6 +100,7 @@ struct VisualDisplayView: View {
     let isPlaying: Bool
     @StateObject private var morphPlayer = MorphPlayer()
     @StateObject private var effectController = EffectController()
+    @State private var lastLoggedSecond: Int = -1
 
     // Ken Burns is now computed from effectController.time for smooth continuous motion
     private var kenBurnsScale: CGFloat {
@@ -199,9 +201,21 @@ struct VisualDisplayView: View {
         }
         .onChange(of: isPlaying) { _, playing in
             if playing {
+                lastLoggedSecond = -1  // Reset so first log happens immediately
                 effectController.start()
             } else {
                 effectController.stop()
+            }
+        }
+        .onChange(of: effectController.time) { _, newTime in
+            // Log Ken Burns values once per second
+            let currentSecond = Int(newTime)
+            if currentSecond > lastLoggedSecond {
+                lastLoggedSecond = currentSecond
+                let scale = kenBurnsScale
+                let offset = kenBurnsOffset
+                let morphing = morphPlayer.isMorphing
+                LMLog.visual.debug("📐 KB t=\(String(format: "%.1f", newTime)) scale=\(String(format: "%.3f", scale)) offset=(\(String(format: "%.1f", offset.width)),\(String(format: "%.1f", offset.height))) morph=\(morphing)")
             }
         }
         .onDisappear {
