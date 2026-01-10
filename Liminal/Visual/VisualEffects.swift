@@ -52,13 +52,17 @@ struct VisualEffects {
 
     /// Creates spatial hue waves - rainbow bands flowing across the image
     /// blendAmount: 0 = original image, 1 = full effect (0.6-0.7 recommended)
-    static func spatialHueShift(time: Double, baseShift: Double, waveIntensity: Double = 0.15, blendAmount: Double = 0.7) -> Shader {
+    /// contrastBoost: 1.0 = no change, 1.5 = punchy, 2.0 = intense
+    /// saturationBoost: 1.0 = no change, 1.3 = vivid, 1.6 = intense
+    static func spatialHueShift(time: Double, baseShift: Double, waveIntensity: Double = 0.15, blendAmount: Double = 0.7, contrastBoost: Double = 1.4, saturationBoost: Double = 1.3) -> Shader {
         ShaderLibrary.spatialHueShift(
             .boundingRect,
             .float(time),
             .float(baseShift),
             .float(waveIntensity),
-            .float(blendAmount)
+            .float(blendAmount),
+            .float(contrastBoost),
+            .float(saturationBoost)
         )
     }
 
@@ -91,8 +95,10 @@ extension View {
 
     /// Applies spatial hue waves - rainbow bands that flow across the image
     /// blendAmount controls how much the effect shows (0 = none, 1 = full, 0.6-0.7 recommended)
-    func spatialHueShift(time: Double, baseShift: Double = 0, waveIntensity: Double = 0.15, blendAmount: Double = 0.7) -> some View {
-        self.colorEffect(VisualEffects.spatialHueShift(time: time, baseShift: baseShift, waveIntensity: waveIntensity, blendAmount: blendAmount))
+    /// contrastBoost: 1.0 = no change, 1.5 = punchy, 2.0 = intense
+    /// saturationBoost: 1.0 = no change, 1.3 = vivid, 1.6 = intense
+    func spatialHueShift(time: Double, baseShift: Double = 0, waveIntensity: Double = 0.15, blendAmount: Double = 0.7, contrastBoost: Double = 1.4, saturationBoost: Double = 1.3) -> some View {
+        self.colorEffect(VisualEffects.spatialHueShift(time: time, baseShift: baseShift, waveIntensity: waveIntensity, blendAmount: blendAmount, contrastBoost: contrastBoost, saturationBoost: saturationBoost))
     }
 
     /// Applies breathing wave distortion

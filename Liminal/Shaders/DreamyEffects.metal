@@ -198,7 +198,9 @@ float fbm(float2 p, float time, int octaves, float lacunarity, float persistence
     float time,
     float baseShift,
     float waveIntensity,
-    float blendAmount  // 0 = original, 1 = full effect
+    float blendAmount,      // 0 = original, 1 = full effect
+    float contrastBoost,    // 1.0 = no change, 1.5 = punchy, 2.0 = intense
+    float saturationBoost   // 1.0 = no change, 1.3 = vivid, 1.6 = intense
 ) {
     float2 uv = position / bounds.zw;
 
@@ -253,8 +255,17 @@ float fbm(float2 p, float time, int octaves, float lacunarity, float persistence
     half3 colorBlended = shiftedRgb * (originalLuma / max(shiftedLuma, 0.001h));
     colorBlended = clamp(colorBlended, 0.0h, 1.0h);
 
-    // Mix between original and color-blended based on blendAmount
-    half3 finalRgb = mix(color.rgb, colorBlended, half(blendAmount));
+    // CONTRAST BOOST: Push values away from gray for punchier look
+    half3 contrasted = (colorBlended - 0.5h) * half(contrastBoost) + 0.5h;
+    contrasted = clamp(contrasted, 0.0h, 1.0h);
+
+    // SATURATION BOOST: Make colors more vivid after contrast
+    half contrastedLuma = dot(contrasted, half3(0.299h, 0.587h, 0.114h));
+    half3 saturated = mix(half3(contrastedLuma), contrasted, half(saturationBoost));
+    saturated = clamp(saturated, 0.0h, 1.0h);
+
+    // Mix between original and processed based on blendAmount
+    half3 finalRgb = mix(color.rgb, saturated, half(blendAmount));
 
     return half4(finalRgb, color.a);
 }
