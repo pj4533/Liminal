@@ -7,8 +7,8 @@ actor GeminiClient {
 
     // MARK: - Configuration
 
-    /// Model supporting native image output
-    private let model = "gemini-2.0-flash-exp"
+    /// Model supporting native image output (Nano Banana - production ready)
+    private let model = "gemini-2.5-flash-image"
     private let baseURL = "https://generativelanguage.googleapis.com/v1beta/models"
 
     // MARK: - Errors

@@ -3,22 +3,11 @@ import AppKit
 import Combine
 import OSLog
 
-/// Manages a buffer of pre-generated images for smooth visual transitions.
-/// Always keeps 2-3 images ready, generating new ones in the background.
-/// Caches the last image to disk for instant startup.
+/// Manages a buffer of images for smooth visual transitions.
+/// Pipeline: Gemini generates → RealESRGAN upscales → Persistent cache
+/// On startup, shows one random cached image, then only new images (unless recycleImages is on).
 @MainActor
 final class ImageQueue: ObservableObject {
-
-    // MARK: - Configuration
-
-    private let targetQueueSize = 3
-    private let minimumQueueSize = 2
-    private let cacheURL: URL = {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let liminalDir = appSupport.appendingPathComponent("Liminal", isDirectory: true)
-        try? FileManager.default.createDirectory(at: liminalDir, withIntermediateDirectories: true)
-        return liminalDir.appendingPathComponent("cached_image.png")
-    }()
 
     // MARK: - State
 
@@ -26,40 +15,37 @@ final class ImageQueue: ObservableObject {
     @Published private(set) var nextImage: NSImage?  // For preloading morphs
     @Published private(set) var isGenerating = false
     @Published private(set) var queuedCount = 0
+    @Published private(set) var totalCachedCount = 0  // Total images in persistent cache
 
     private var imageBuffer: [NSImage] = []
     private var generationTask: Task<Void, Never>?
     private let gemini = GeminiClient()
+    private let upscaler = ImageUpscaler()
+    private let cache = ImageCache()
+
+    // All cached images (for recycling mode)
+    private var cachedImages: [NSImage] = []
 
     // MARK: - Init
 
     init() {
-        loadCachedImage()
+        Task {
+            await loadCachedImages()
+        }
     }
 
-    // MARK: - Cache
+    // MARK: - Cache Loading
 
-    private func loadCachedImage() {
-        guard FileManager.default.fileExists(atPath: cacheURL.path),
-              let image = NSImage(contentsOf: cacheURL) else {
-            LMLog.visual.debug("No cached image found")
-            return
-        }
-        currentImage = image
-        LMLog.visual.info("Loaded cached image for instant display")
-    }
+    private func loadCachedImages() async {
+        cachedImages = await cache.loadAll()
+        totalCachedCount = cachedImages.count
 
-    private func cacheImage(_ image: NSImage) {
-        guard let tiffData = image.tiffRepresentation,
-              let bitmap = NSBitmapImageRep(data: tiffData),
-              let pngData = bitmap.representation(using: .png, properties: [:]) else {
-            return
-        }
-        do {
-            try pngData.write(to: cacheURL)
-            LMLog.visual.debug("Cached image to disk")
-        } catch {
-            LMLog.visual.error("Failed to cache image: \(error.localizedDescription)")
+        if !cachedImages.isEmpty {
+            // Pick ONE random cached image for initial display
+            currentImage = cachedImages.randomElement()
+            LMLog.visual.info("Loaded \(self.cachedImages.count) cached upscaled images, showing random one")
+        } else {
+            LMLog.visual.debug("No cached images found - will generate fresh")
         }
     }
 
@@ -71,8 +57,22 @@ final class ImageQueue: ObservableObject {
 
     /// Start the image generation pipeline
     func start() {
-        LMLog.visual.info("ImageQueue starting")
-        fillQueue()
+        let recycleMode = SettingsService.shared.recycleImages
+        LMLog.visual.info("ImageQueue starting (recycle=\(recycleMode), cached=\(self.totalCachedCount))")
+
+        // Clear buffer - we start fresh each session
+        imageBuffer.removeAll()
+        queuedCount = 0
+
+        // If recycle mode is ON, populate buffer with cached images
+        if recycleMode && !cachedImages.isEmpty {
+            imageBuffer = cachedImages.shuffled()
+            queuedCount = imageBuffer.count
+            LMLog.visual.debug("Recycle mode: loaded \(self.imageBuffer.count) cached images into buffer")
+        }
+
+        // Start generating new images in background
+        startContinuousGeneration()
     }
 
     /// Stop generation and clear queue
@@ -80,7 +80,6 @@ final class ImageQueue: ObservableObject {
         generationTask?.cancel()
         generationTask = nil
         imageBuffer.removeAll()
-        currentImage = nil
         queuedCount = 0
         isGenerating = false
         LMLog.visual.info("ImageQueue stopped")
@@ -100,15 +99,12 @@ final class ImageQueue: ObservableObject {
 
         // Expose next image for morph preloading
         nextImage = imageBuffer.first
-        if nextImage != nil {
-            LMLog.visual.info("Next image available for preloading")
-        }
 
         LMLog.visual.debug("Advanced to next image, \(self.queuedCount) remaining in queue")
 
-        // Refill if needed
-        if imageBuffer.count < minimumQueueSize {
-            fillQueue()
+        // If recycle mode and buffer is low, refill from cache
+        if SettingsService.shared.recycleImages && imageBuffer.count < 2 && !cachedImages.isEmpty {
+            refillFromCache()
         }
 
         return true
@@ -116,50 +112,79 @@ final class ImageQueue: ObservableObject {
 
     /// Request a new image be generated immediately (mood change trigger)
     func requestNewImage() {
-        fillQueue()
+        // Restart generation if not already running
+        if generationTask == nil || generationTask?.isCancelled == true {
+            startContinuousGeneration()
+        }
     }
 
     // MARK: - Private
 
-    private func fillQueue() {
+    private func refillFromCache() {
+        // Only called in recycle mode
+        let shuffled = cachedImages.shuffled()
+        for image in shuffled {
+            if !imageBuffer.contains(where: { $0 === image }) {
+                imageBuffer.append(image)
+            }
+        }
+        queuedCount = imageBuffer.count
+        LMLog.visual.debug("Refilled buffer from cache, now \(self.imageBuffer.count) images")
+    }
+
+    private func startContinuousGeneration() {
         guard generationTask == nil || generationTask?.isCancelled == true else {
             return  // Already generating
         }
 
         generationTask = Task {
-            while imageBuffer.count < targetQueueSize && !Task.isCancelled {
-                await generateOne()
+            // Keep generating indefinitely while running
+            while !Task.isCancelled {
+                await generateAndUpscaleOne()
+
+                // Small delay between generations to not hammer the API
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
             }
             generationTask = nil
         }
     }
 
-    private func generateOne() async {
+    private func generateAndUpscaleOne() async {
         isGenerating = true
         defer { isGenerating = false }
 
         let prompt = promptBuilder?() ?? defaultPrompt()
 
         do {
-            let image = try await gemini.generateImage(prompt: prompt)
+            // Step 1: Generate from Gemini
+            LMLog.visual.debug("Generating image from Gemini...")
+            let rawImage = try await gemini.generateImage(prompt: prompt)
             guard !Task.isCancelled else { return }
 
-            imageBuffer.append(image)
+            // Step 2: Upscale with RealESRGAN
+            LMLog.visual.debug("Upscaling with RealESRGAN...")
+            let upscaledImage = try await upscaler.upscale(rawImage)
+            guard !Task.isCancelled else { return }
+
+            // Step 3: Save to persistent cache
+            try await cache.save(upscaledImage)
+
+            // Step 4: Add to buffer and update counts
+            imageBuffer.append(upscaledImage)
+            cachedImages.append(upscaledImage)
             queuedCount = imageBuffer.count
+            totalCachedCount = cachedImages.count
 
             // Set as current if we don't have one yet
             if currentImage == nil {
-                currentImage = image
+                currentImage = upscaledImage
             }
 
-            // Cache for quick startup next time
-            cacheImage(image)
-
-            LMLog.visual.info("Generated image, queue size: \(self.imageBuffer.count)")
+            LMLog.visual.info("Generated + upscaled image, queue: \(self.imageBuffer.count), total cached: \(self.totalCachedCount)")
         } catch {
-            LMLog.visual.error("Image generation failed: \(error.localizedDescription)")
+            LMLog.visual.error("Image pipeline failed: \(error.localizedDescription)")
             // Wait before retry
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
         }
     }
 

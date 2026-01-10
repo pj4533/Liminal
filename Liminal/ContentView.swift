@@ -10,6 +10,7 @@ import OSLog
 
 struct ContentView: View {
     @State private var apiKeyStatus = "Checking..."
+    @State private var showingSettings = false
     @StateObject private var audioEngine = GenerativeEngine()
     @StateObject private var visualEngine = VisualEngine()
     @StateObject private var settings = SettingsService.shared
@@ -31,6 +32,16 @@ struct ContentView: View {
                         .foregroundStyle(.tint)
                     Text("Liminal")
                         .font(.largeTitle)
+
+                    Spacer()
+
+                    Button {
+                        showingSettings = true
+                    } label: {
+                        Image(systemName: "gear")
+                            .imageScale(.large)
+                    }
+                    .buttonStyle(.plain)
                 }
 
                 Text(apiKeyStatus)
@@ -90,6 +101,51 @@ struct ContentView: View {
             settings.applyTo(mood: audioEngine.mood)
             audioEngine.currentScale = settings.scale
         }
+        .sheet(isPresented: $showingSettings) {
+            SettingsSheetView()
+        }
+    }
+}
+
+// MARK: - Settings Sheet
+
+struct SettingsSheetView: View {
+    @ObservedObject private var settings = SettingsService.shared
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            HStack {
+                Text("Settings")
+                    .font(.title2)
+                    .fontWeight(.semibold)
+                Spacer()
+                Button("Done") {
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+
+            Divider()
+
+            // Visual Settings
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Visuals")
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
+
+                Toggle("Recycle Images", isOn: $settings.recycleImages)
+                    .toggleStyle(.checkbox)
+
+                Text("When enabled, previously generated images will be shown again to save API costs. When disabled, only new images are shown (except the first one on launch).")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+        }
+        .padding(20)
+        .frame(width: 350, height: 200)
     }
 }
 
@@ -151,11 +207,11 @@ struct VisualDisplayView: View {
                     // Status overlay (top corners)
                     VStack {
                         HStack {
-                            // Pool size (bottom-left when we flip)
+                            // Total cached images count
                             HStack(spacing: 4) {
                                 Image(systemName: "photo.stack")
                                     .font(.caption2)
-                                Text("\(morphPlayer.poolSize)")
+                                Text("\(visualEngine.totalCachedCount)")
                                     .font(.caption2.monospacedDigit())
                             }
                             .padding(.horizontal, 8)

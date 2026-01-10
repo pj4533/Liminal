@@ -18,6 +18,7 @@ final class VisualEngine: ObservableObject {
     @Published private(set) var currentImage: NSImage?
     @Published private(set) var nextImage: NSImage?  // For morph preloading
     @Published private(set) var isGenerating: Bool = false
+    @Published private(set) var totalCachedCount: Int = 0
 
     private let imageQueue = ImageQueue()
     private var scheduledTimer: Timer?
@@ -56,6 +57,13 @@ final class VisualEngine: ObservableObject {
             .receive(on: RunLoop.main)
             .sink { [weak self] generating in
                 self?.isGenerating = generating
+            }
+            .store(in: &cancellables)
+
+        imageQueue.$totalCachedCount
+            .receive(on: RunLoop.main)
+            .sink { [weak self] count in
+                self?.totalCachedCount = count
             }
             .store(in: &cancellables)
 
