@@ -1,9 +1,11 @@
 import Foundation
 import AppKit
+import CoreImage
 import Combine
 import OSLog
 
 /// Manages crossfade transitions between images when new content arrives.
+/// Uses Core Image for GPU-accelerated blending at high resolutions.
 @MainActor
 final class MorphPlayer: ObservableObject {
 
@@ -21,11 +23,16 @@ final class MorphPlayer: ObservableObject {
 
     private var fromImage: NSImage?
     private var toImage: NSImage?
+    private var fromCIImage: CIImage?
+    private var toCIImage: CIImage?
     private var crossfadeStartTime: Date?
     private var displayLink: Timer?
 
     private var imageHistory: [NSImage] = []
     private let maxHistorySize = 10
+
+    // Core Image context for GPU rendering
+    private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
 
     // MARK: - Public API
 
@@ -65,12 +72,15 @@ final class MorphPlayer: ObservableObject {
             LMLog.visual.info("New image arrived during transition - redirecting")
             if let oldTarget = toImage {
                 fromImage = oldTarget
+                fromCIImage = toCIImage
             }
         } else {
             fromImage = current
+            fromCIImage = ciImage(from: current)
         }
 
         toImage = newImage
+        toCIImage = ciImage(from: newImage)
         addToHistory(newImage)
         poolSize = imageHistory.count
         startCrossfade()
@@ -111,8 +121,8 @@ final class MorphPlayer: ObservableObject {
 
     private func updateFrame() {
         guard isMorphing,
-              let from = fromImage,
-              let to = toImage,
+              fromCIImage != nil,
+              toCIImage != nil,
               let startTime = crossfadeStartTime else {
             return
         }
@@ -121,8 +131,8 @@ final class MorphPlayer: ObservableObject {
         let progress = min(elapsed / crossfadeDuration, 1.0)
         transitionProgress = progress
 
-        // Generate blended frame (always use 'from' dimensions for consistency)
-        if let blended = blendImages(from: from, to: to, progress: progress) {
+        // Generate blended frame using GPU-accelerated Core Image
+        if let blended = blendImages(progress: progress) {
             currentFrame = blended
         }
 
@@ -134,37 +144,47 @@ final class MorphPlayer: ObservableObject {
         // Check if complete - DON'T snap to raw 'to' image, keep using blended frame
         if progress >= 1.0 {
             LMLog.visual.info("🔄 CROSSFADE COMPLETE")
-            // Final frame is already the fully blended image (at from's dimensions)
+            // Final frame is already the fully blended image
             isMorphing = false
             transitionProgress = 0
             fromImage = nil
             toImage = nil
+            fromCIImage = nil
+            toCIImage = nil
             crossfadeStartTime = nil
         }
     }
 
-    private func blendImages(from: NSImage, to: NSImage, progress: Double) -> NSImage? {
+    /// GPU-accelerated image blending using Core Image dissolve transition
+    private func blendImages(progress: Double) -> NSImage? {
+        guard let fromCI = fromCIImage, let toCI = toCIImage else { return nil }
+
         let easedProgress = easeInOutCubic(progress)
-        let size = from.size
-        let newImage = NSImage(size: size)
 
-        newImage.lockFocus()
+        // Use CIDissolveTransition for GPU-accelerated crossfade
+        guard let dissolveFilter = CIFilter(name: "CIDissolveTransition") else { return nil }
+        dissolveFilter.setValue(fromCI, forKey: kCIInputImageKey)
+        dissolveFilter.setValue(toCI, forKey: kCIInputTargetImageKey)
+        dissolveFilter.setValue(easedProgress, forKey: kCIInputTimeKey)
 
-        // Draw 'from' image
-        from.draw(in: NSRect(origin: .zero, size: size),
-                  from: NSRect(origin: .zero, size: from.size),
-                  operation: .copy,
-                  fraction: 1.0)
+        guard let outputCI = dissolveFilter.outputImage else { return nil }
 
-        // Draw 'to' image scaled to match 'from' dimensions
-        to.draw(in: NSRect(origin: .zero, size: size),
-                from: NSRect(origin: .zero, size: to.size),
-                operation: .sourceOver,
-                fraction: CGFloat(easedProgress))
+        // Render to CGImage on GPU
+        let extent = outputCI.extent
+        guard let cgImage = ciContext.createCGImage(outputCI, from: extent) else { return nil }
 
-        newImage.unlockFocus()
+        // Convert to NSImage
+        return NSImage(cgImage: cgImage, size: NSSize(width: extent.width, height: extent.height))
+    }
 
-        return newImage
+    /// Convert NSImage to CIImage for GPU processing
+    private func ciImage(from nsImage: NSImage) -> CIImage? {
+        guard let tiffData = nsImage.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiffData),
+              let cgImage = bitmap.cgImage else {
+            return nil
+        }
+        return CIImage(cgImage: cgImage)
     }
 
     private func easeInOutCubic(_ t: Double) -> Double {
