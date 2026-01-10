@@ -64,13 +64,17 @@ float fbm(float2 p, float time, int octaves, float lacunarity, float persistence
     float amplitude = 0.5;
     float frequency = 1.0;
 
-    // Slowly rotate the noise field over time for organic movement
-    float angle = time * 0.1;
+    // Oscillating rotation - changes direction over time for organic feel
+    // Uses multiple sine waves at different frequencies for complex movement
+    float angle = sin(time * 0.03) * 0.5 + sin(time * 0.017) * 0.3;
     float2x2 rot = float2x2(cos(angle), -sin(angle), sin(angle), cos(angle));
 
     for (int i = 0; i < octaves; i++) {
-        // Add time-based offset for animation
-        float2 animatedP = p * frequency + float2(time * 0.05, time * 0.03);
+        // Oscillating offset - drifts back and forth instead of one direction
+        float2 animatedP = p * frequency + float2(
+            sin(time * 0.02) * 2.0 + sin(time * 0.013) * 1.5,
+            cos(time * 0.015) * 2.0 + cos(time * 0.021) * 1.5
+        );
         animatedP = rot * animatedP;
 
         value += amplitude * snoise(animatedP);

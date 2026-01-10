@@ -6,18 +6,18 @@
 //
 
 import SwiftUI
+import Combine
 
 struct ContentView: View {
     @State private var apiKeyStatus = "Checking..."
     @StateObject private var audioEngine = GenerativeEngine()
     @StateObject private var visualEngine = VisualEngine()
     @StateObject private var settings = SettingsService.shared
-    @State private var imageInterval: Double = 30.0
 
     var body: some View {
         HStack(spacing: 0) {
             // Visual display area
-            VisualDisplayView(visualEngine: visualEngine)
+            VisualDisplayView(visualEngine: visualEngine, audioEngine: audioEngine)
                 .frame(minWidth: 400, minHeight: 400)
 
             Divider()
@@ -59,18 +59,6 @@ struct ContentView: View {
                     }
                 }
 
-                // Image interval slider
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Image Interval: \(Int(imageInterval))s")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Slider(value: $imageInterval, in: 10...120, step: 5)
-                        .onChange(of: imageInterval) { _, newValue in
-                            settings.imageInterval = newValue
-                        }
-                }
-                .padding(.horizontal)
-
                 Spacer()
 
                 // Play/Stop
@@ -101,7 +89,6 @@ struct ContentView: View {
             // Apply saved settings
             settings.applyTo(mood: audioEngine.mood)
             audioEngine.currentScale = settings.scale
-            imageInterval = settings.imageInterval
         }
     }
 }
@@ -110,10 +97,12 @@ struct ContentView: View {
 
 struct VisualDisplayView: View {
     @ObservedObject var visualEngine: VisualEngine
+    @ObservedObject var audioEngine: GenerativeEngine
     @StateObject private var morphPlayer = MorphPlayer()
     @StateObject private var effectController = EffectController()
     @State private var kenBurnsScale: CGFloat = 1.0
     @State private var kenBurnsOffset: CGSize = .zero
+    @State private var shimmerCancellable: AnyCancellable?
 
     var body: some View {
         GeometryReader { geometry in
@@ -129,10 +118,10 @@ struct VisualDisplayView: View {
                         .frame(width: geometry.size.width, height: geometry.size.height)
                         .scaleEffect(kenBurnsScale)
                         .offset(kenBurnsOffset)
-                        // Dreamy fBM distortion - underwater/heat haze feel
-                        .dreamyDistortion(time: effectController.time, amplitude: 0.018, speed: 0.2)
-                        // Slow hue rotation for color drift
-                        .hueShift(amount: effectController.time * 0.015)
+                        // Dreamy fBM distortion - underwater/heat haze feel (slow, oscillating)
+                        .dreamyDistortion(time: effectController.time, amplitude: 0.012, speed: 0.08)
+                        // Hue rotation for color drift (noticeable but not jarring)
+                        .hueShift(amount: effectController.time * 0.04)
 
                     // Status overlay (top corners)
                     VStack {
@@ -151,21 +140,6 @@ struct VisualDisplayView: View {
                             .padding(8)
 
                             Spacer()
-
-                            // Preloading indicator (top-right)
-                            if morphPlayer.isPreloading {
-                                HStack(spacing: 4) {
-                                    ProgressView()
-                                        .scaleEffect(0.6)
-                                    Text("Preloading...")
-                                        .font(.caption2)
-                                }
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(.ultraThinMaterial)
-                                .cornerRadius(6)
-                                .padding(8)
-                            }
                         }
                         Spacer()
                     }
@@ -211,10 +185,18 @@ struct VisualDisplayView: View {
                 morphPlayer.setInitialImage(image)
                 startKenBurnsAnimation()
             }
+
+            // Subscribe to shimmer notes to trigger morphs
+            shimmerCancellable = audioEngine.shimmerNotePlayed
+                .receive(on: DispatchQueue.main)
+                .sink { _ in
+                    morphPlayer.triggerMorph()
+                }
         }
         .onDisappear {
             morphPlayer.stop()
             effectController.stop()
+            shimmerCancellable?.cancel()
         }
     }
 
@@ -223,16 +205,16 @@ struct VisualDisplayView: View {
         kenBurnsScale = 1.0
         kenBurnsOffset = .zero
 
-        // Random direction for this cycle - MORE DRAMATIC now!
-        let targetScale = CGFloat.random(in: 1.15...1.25)
-        let maxOffset: CGFloat = 40
+        // Random direction for this cycle - VERY DRAMATIC for immersive feel
+        let targetScale = CGFloat.random(in: 1.3...1.5)
+        let maxOffset: CGFloat = 100
         let targetOffset = CGSize(
             width: CGFloat.random(in: -maxOffset...maxOffset),
             height: CGFloat.random(in: -maxOffset...maxOffset)
         )
 
-        // Slow continuous zoom/pan over the image interval
-        withAnimation(.easeInOut(duration: SettingsService.shared.imageInterval)) {
+        // Slow continuous zoom/pan - long duration for dreamy feel
+        withAnimation(.easeInOut(duration: 20.0)) {
             kenBurnsScale = targetScale
             kenBurnsOffset = targetOffset
         }

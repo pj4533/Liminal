@@ -43,6 +43,11 @@ final class GenerativeEngine: ObservableObject {
 
     let mood = MoodState()
 
+    // MARK: - Events
+
+    /// Fires when a shimmer note plays - used to trigger visual morphs
+    let shimmerNotePlayed = PassthroughSubject<Int, Never>()  // MIDI note
+
     // MARK: - Published State
 
     @Published private(set) var isRunning = false
@@ -246,6 +251,11 @@ final class GenerativeEngine: ObservableObject {
 
             let noteDuration = Double.random(in: noteDurationRange)
             LMLog.audio.debug("✨ \(config.name): MIDI \(newNote) for \(String(format: "%.2f", noteDuration))s")
+
+            // Notify visual system when shimmer (high voice, index 2) plays
+            if voiceIndex == 2 {
+                shimmerNotePlayed.send(newNote)
+            }
 
             // Schedule note off
             let noteOffTimer = Timer.scheduledTimer(withTimeInterval: noteDuration, repeats: false) { [weak self] _ in

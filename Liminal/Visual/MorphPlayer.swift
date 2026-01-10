@@ -11,8 +11,9 @@ final class MorphPlayer: ObservableObject {
     // MARK: - Configuration
 
     private let targetFPS: Double = 30
-    private let frameCount = 60  // frames per morph transition (~2 seconds at 30fps)
+    private let frameCount = 120  // frames per morph transition (~4 seconds at 30fps - slow dreamy)
     private let maxPoolSize = 20  // Keep last N images
+    private let morphChance: Double = 0.4  // 40% chance to morph on shimmer note
 
     // MARK: - State
 
@@ -84,13 +85,8 @@ final class MorphPlayer: ObservableObject {
             LMLog.visual.info("First image displayed from pool")
         }
 
-        // If we have 2+ images and not morphing, start the continuous morph
-        if imagePool.count >= 2 && morphFrames.isEmpty && !isMorphing {
-            startNextMorph()
-        }
-
-        // Preload if we're idle
-        if morphFrames.isEmpty && !isPreloading {
+        // Start preloading morph frames so they're ready when shimmer triggers
+        if imagePool.count >= 2 && !isPreloading {
             preloadNextMorph()
         }
     }
@@ -110,6 +106,31 @@ final class MorphPlayer: ObservableObject {
         currentFrame = image
         lastImage = image
         LMLog.visual.debug("Initial image set")
+    }
+
+    /// Trigger a morph to the next image in the pool (called by shimmer notes).
+    /// Uses random chance - not every call will actually morph.
+    func triggerMorph() {
+        // Random chance to actually morph
+        guard Double.random(in: 0...1) < morphChance else {
+            LMLog.visual.debug("Shimmer note skipped (random chance)")
+            return
+        }
+
+        // Don't start a new morph if one is already in progress
+        guard !isMorphing && morphFrames.isEmpty else {
+            LMLog.visual.debug("Already morphing, skipping trigger")
+            return
+        }
+
+        // Need at least 2 images in pool
+        guard imagePool.count >= 2 else {
+            LMLog.visual.debug("Not enough images to morph")
+            return
+        }
+
+        LMLog.visual.info("✨ Shimmer triggered morph!")
+        startNextMorph()
     }
 
     // MARK: - Private
@@ -142,12 +163,12 @@ final class MorphPlayer: ObservableObject {
             lastImage = currentFrame
             morphFrames = []
             frameIndex = 0
+            isMorphing = false
 
-            // CONTINUOUS MORPHING: Immediately start next morph if we have 2+ images in pool
+            // Next morph will be triggered by shimmer notes - no auto-chain
+            // Just make sure we have preloaded frames ready
             if imagePool.count >= 2 {
-                startNextMorph()
-            } else {
-                LMLog.visual.info("Waiting for more images in pool...")
+                preloadNextMorph()
             }
         }
     }
