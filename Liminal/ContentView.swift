@@ -6,7 +6,6 @@
 //
 
 import SwiftUI
-import Combine
 
 struct ContentView: View {
     @State private var apiKeyStatus = "Checking..."
@@ -17,7 +16,7 @@ struct ContentView: View {
     var body: some View {
         HStack(spacing: 0) {
             // Visual display area
-            VisualDisplayView(visualEngine: visualEngine, audioEngine: audioEngine)
+            VisualDisplayView(visualEngine: visualEngine)
                 .frame(minWidth: 400, minHeight: 400)
 
             Divider()
@@ -97,10 +96,8 @@ struct ContentView: View {
 
 struct VisualDisplayView: View {
     @ObservedObject var visualEngine: VisualEngine
-    @ObservedObject var audioEngine: GenerativeEngine
     @StateObject private var morphPlayer = MorphPlayer()
     @StateObject private var effectController = EffectController()
-    @State private var shimmerCancellable: AnyCancellable?
 
     // Ken Burns is now computed from effectController.time for smooth continuous motion
     private var kenBurnsScale: CGFloat {
@@ -198,18 +195,10 @@ struct VisualDisplayView: View {
             if let image = visualEngine.currentImage {
                 morphPlayer.setInitialImage(image)
             }
-
-            // Subscribe to shimmer notes to trigger morphs
-            shimmerCancellable = audioEngine.shimmerNotePlayed
-                .receive(on: DispatchQueue.main)
-                .sink { _ in
-                    morphPlayer.triggerMorph()
-                }
         }
         .onDisappear {
             morphPlayer.stop()
             effectController.stop()
-            shimmerCancellable?.cancel()
         }
     }
 }

@@ -3,8 +3,8 @@ import AppKit
 import Combine
 import OSLog
 
-/// Manages continuous morphing between queued images.
-/// Always morphing, always psychedelic. Images flow through like a dream.
+/// Manages morphing between images when new content arrives.
+/// Morphs are meaningful transitions to fresh content, not busy cycling.
 @MainActor
 final class MorphPlayer: ObservableObject {
 
@@ -12,37 +12,29 @@ final class MorphPlayer: ObservableObject {
 
     private let targetFPS: Double = 30
     private let frameCount = 120  // frames per morph transition (~4 seconds at 30fps - slow dreamy)
-    private let maxPoolSize = 20  // Keep last N images
-    private let morphChance: Double = 0.4  // 40% chance to morph on shimmer note
 
     // MARK: - State
 
     @Published private(set) var currentFrame: NSImage?
     @Published private(set) var isMorphing = false
-    @Published private(set) var isPreloading = false
     @Published private(set) var poolSize = 0
 
     private var morphFrames: [NSImage] = []
     private var frameIndex = 0
     private var displayLink: Timer?
     private let morpher = NativeMorpher()
-    private var lastImage: NSImage?
     private var morphTask: Task<Void, Never>?
 
-    // Pool of images to morph between (grows over time, cycles through)
-    private var imagePool: [NSImage] = []
-    private var currentPoolIndex = 0
-
-    // Pre-cached morph sequences: [nextImage hash -> frames]
-    private var preloadedMorphs: [Int: [NSImage]] = [:]
-    private var preloadTask: Task<Void, Never>?
+    // Track images we've shown (for potential future features)
+    private var imageHistory: [NSImage] = []
+    private let maxHistorySize = 10
 
     // MARK: - Public API
 
-    /// Start playing morph animations
+    /// Start the display link for frame playback
     func start() {
         startDisplayLink()
-        LMLog.visual.info("MorphPlayer started - continuous morphing enabled")
+        LMLog.visual.info("MorphPlayer started")
     }
 
     /// Stop playback
@@ -51,89 +43,72 @@ final class MorphPlayer: ObservableObject {
         displayLink = nil
         morphTask?.cancel()
         morphTask = nil
-        preloadTask?.cancel()
-        preloadTask = nil
-        preloadedMorphs.removeAll()
-        // Keep the image pool for next session!
-        LMLog.visual.info("MorphPlayer stopped (pool retained: \(self.imagePool.count) images)")
-    }
-
-    /// Add an image to the pool. Starts morphing automatically when we have 2+ images.
-    func addToPool(_ image: NSImage) {
-        // Don't add duplicates
-        if imagePool.contains(where: { $0.hash == image.hash }) {
-            LMLog.visual.debug("Image already in pool, skipping")
-            return
-        }
-
-        imagePool.append(image)
-        poolSize = imagePool.count
-        LMLog.visual.info("Image added to pool. Pool size: \(self.imagePool.count)")
-
-        // Trim pool if too large
-        while imagePool.count > maxPoolSize {
-            imagePool.removeFirst()
-            poolSize = imagePool.count
-            LMLog.visual.debug("Pool trimmed to \(self.maxPoolSize)")
-        }
-
-        // If this is the first image, display it
-        if currentFrame == nil {
-            currentFrame = image
-            lastImage = image
-            currentPoolIndex = imagePool.count - 1
-            LMLog.visual.info("First image displayed from pool")
-        }
-
-        // Start preloading morph frames so they're ready when shimmer triggers
-        if imagePool.count >= 2 && !isPreloading {
-            preloadNextMorph()
-        }
-    }
-
-    /// Notify of upcoming image - adds to pool
-    func preloadMorphTo(_ upcomingImage: NSImage) {
-        addToPool(upcomingImage)
-    }
-
-    /// Transition to a new image - adds to pool
-    func transitionTo(_ newImage: NSImage) {
-        addToPool(newImage)
+        LMLog.visual.info("MorphPlayer stopped")
     }
 
     /// Set initial image without morphing
     func setInitialImage(_ image: NSImage) {
         currentFrame = image
-        lastImage = image
-        LMLog.visual.debug("Initial image set")
+        addToHistory(image)
+        poolSize = imageHistory.count
+        LMLog.visual.info("Initial image set")
     }
 
-    /// Trigger a morph to the next image in the pool (called by shimmer notes).
-    /// Uses random chance - not every call will actually morph.
-    func triggerMorph() {
-        // Random chance to actually morph
-        guard Double.random(in: 0...1) < morphChance else {
-            LMLog.visual.debug("Shimmer note skipped (random chance)")
+    /// Transition to a new image with a morph
+    func transitionTo(_ newImage: NSImage) {
+        // If we don't have a current image, just display the new one
+        guard let fromImage = currentFrame else {
+            currentFrame = newImage
+            addToHistory(newImage)
+            poolSize = imageHistory.count
+            LMLog.visual.info("First image displayed (no morph needed)")
             return
         }
 
-        // Don't start a new morph if one is already in progress
-        guard !isMorphing && morphFrames.isEmpty else {
-            LMLog.visual.debug("Already morphing, skipping trigger")
+        // Don't morph to the same image
+        if fromImage.hash == newImage.hash {
+            LMLog.visual.debug("Same image, skipping morph")
             return
         }
 
-        // Need at least 2 images in pool
-        guard imagePool.count >= 2 else {
-            LMLog.visual.debug("Not enough images to morph")
-            return
+        // If already morphing, queue this as the target (cancel current morph)
+        if isMorphing {
+            LMLog.visual.info("New image arrived during morph - redirecting to new target")
+            morphTask?.cancel()
+            morphFrames = []
+            frameIndex = 0
         }
 
-        LMLog.visual.info("✨ Shimmer triggered morph!")
-        startNextMorph()
+        addToHistory(newImage)
+        poolSize = imageHistory.count
+        startMorph(from: fromImage, to: newImage)
+    }
+
+    /// Legacy method - now just calls transitionTo
+    func addToPool(_ image: NSImage) {
+        // Only start morphing if we already have an image displayed
+        if currentFrame != nil {
+            transitionTo(image)
+        } else {
+            setInitialImage(image)
+        }
+    }
+
+    /// Legacy method - now just calls transitionTo
+    func preloadMorphTo(_ upcomingImage: NSImage) {
+        // With the new architecture, preloading is less useful since we morph immediately
+        // Just treat it as a transition
+        transitionTo(upcomingImage)
     }
 
     // MARK: - Private
+
+    private func addToHistory(_ image: NSImage) {
+        imageHistory.append(image)
+        while imageHistory.count > maxHistorySize {
+            imageHistory.removeFirst()
+        }
+    }
 
     private func startDisplayLink() {
         displayLink?.invalidate()
@@ -152,130 +127,44 @@ final class MorphPlayer: ObservableObject {
             frameIndex += 1
             currentFrame = morphFrames[frameIndex]
 
-            // Log progress every 20 frames
-            if frameIndex % 20 == 0 {
+            // Log progress every 30 frames
+            if frameIndex % 30 == 0 {
                 LMLog.visual.debug("Morph progress: \(self.frameIndex)/\(self.morphFrames.count - 1)")
             }
         } else {
             // Morph complete!
-            LMLog.visual.info("Morph complete - pool[\(self.currentPoolIndex)]")
+            LMLog.visual.info("✨ Morph complete")
             currentFrame = morphFrames[frameIndex]
-            lastImage = currentFrame
             morphFrames = []
             frameIndex = 0
             isMorphing = false
-
-            // Next morph will be triggered by shimmer notes - no auto-chain
-            // Just make sure we have preloaded frames ready
-            if imagePool.count >= 2 {
-                preloadNextMorph()
-            }
+            // Stay on this image until new content arrives
         }
     }
 
-    private func getNextPoolIndex() -> Int {
-        // Cycle through the pool
-        return (currentPoolIndex + 1) % imagePool.count
-    }
-
-    private func startNextMorph() {
-        guard imagePool.count >= 2 else { return }
-        guard let fromImage = lastImage ?? currentFrame else { return }
-
-        // Get next image from pool (cycling)
-        let nextIndex = getNextPoolIndex()
-        let nextImage = imagePool[nextIndex]
-        let key = nextImage.hash
-
-        LMLog.visual.info("Starting morph: pool[\(self.currentPoolIndex)] → pool[\(nextIndex)]")
-
-        // Check if we have preloaded frames for this image
-        if let preloadedFrames = preloadedMorphs[key] {
-            LMLog.visual.info("Using preloaded morph! \(preloadedFrames.count) frames")
-            morphFrames = preloadedFrames
-            frameIndex = 0
-            currentFrame = preloadedFrames.first
-            lastImage = nextImage
-            currentPoolIndex = nextIndex
-            preloadedMorphs.removeValue(forKey: key)
-
-            // Start preloading the NEXT morph
-            preloadNextMorph()
-            return
-        }
-
-        // No preload - generate now
+    private func startMorph(from fromImage: NSImage, to toImage: NSImage) {
         isMorphing = true
-        LMLog.visual.info("Generating morph on-demand...")
+        LMLog.visual.info("🎨 Starting morph to new image...")
 
         morphTask = Task {
             do {
-                let frames = try await morpher.generateMorphFrames(from: fromImage, to: nextImage, frameCount: frameCount)
+                let frames = try await morpher.generateMorphFrames(from: fromImage, to: toImage, frameCount: frameCount)
 
                 guard !Task.isCancelled else { return }
 
                 morphFrames = frames
                 frameIndex = 0
-                currentFrame = frames.first
-                lastImage = nextImage
-                currentPoolIndex = nextIndex
+                if let firstFrame = frames.first {
+                    currentFrame = firstFrame
+                }
 
                 LMLog.visual.info("Morph ready: \(frames.count) frames - starting playback")
-
-                // Preload next
-                preloadNextMorph()
             } catch {
                 LMLog.visual.error("Morph failed: \(error.localizedDescription)")
                 // Fallback: just show the new image
-                currentFrame = nextImage
-                lastImage = nextImage
-                currentPoolIndex = nextIndex
+                currentFrame = toImage
+                isMorphing = false
             }
-
-            isMorphing = false
-        }
-    }
-
-    private func preloadNextMorph() {
-        guard imagePool.count >= 2 else { return }
-        guard let fromImage = lastImage ?? currentFrame else { return }
-
-        // Get the image AFTER the current morph target
-        let targetIndex = getNextPoolIndex()
-        let preloadIndex = (targetIndex + 1) % imagePool.count
-        let nextImage = imagePool[preloadIndex]
-        let key = nextImage.hash
-
-        // Already preloaded?
-        if preloadedMorphs[key] != nil {
-            LMLog.visual.debug("Next morph already preloaded")
-            return
-        }
-
-        // Already preloading?
-        if isPreloading {
-            return
-        }
-
-        isPreloading = true
-        LMLog.visual.info("Preloading morph to pool[\(preloadIndex)] in background...")
-
-        preloadTask?.cancel()
-        preloadTask = Task {
-            // The "from" image for preload should be the target of the current morph
-            let preloadFrom = self.imagePool[targetIndex]
-
-            do {
-                let frames = try await morpher.generateMorphFrames(from: preloadFrom, to: nextImage, frameCount: frameCount)
-
-                guard !Task.isCancelled else { return }
-
-                preloadedMorphs[key] = frames
-                LMLog.visual.info("Morph preloaded: \(frames.count) frames ready for instant use")
-            } catch {
-                LMLog.visual.error("Preload failed: \(error.localizedDescription)")
-            }
-            isPreloading = false
         }
     }
 }
