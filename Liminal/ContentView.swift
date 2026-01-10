@@ -186,12 +186,8 @@ struct VisualDisplayView: View {
                 morphPlayer.transitionTo(image)
             }
         }
-        .onChange(of: visualEngine.nextImage) { (_, upcomingImage: NSImage?) in
-            // Pre-generate morph frames in background for seamless transition
-            if let upcoming = upcomingImage {
-                morphPlayer.preloadMorphTo(upcoming)
-            }
-        }
+        // nextImage handler removed - preloading not needed with new morph architecture
+        // Morphs trigger only when currentImage changes
         .onAppear {
             morphPlayer.start()
             // Effects start when Play is pressed, not on appear

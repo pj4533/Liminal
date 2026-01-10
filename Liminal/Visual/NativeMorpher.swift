@@ -136,7 +136,16 @@ actor NativeMorpher {
         }
 
         // Convert back to NSImages
-        var frames: [NSImage] = [from]  // Start with original
+        // Note: We DON'T append the original 'from' or raw 'to' images because they may have
+        // different dimensions than the interpolated frames. All frames must be consistent.
+        var frames: [NSImage] = []
+
+        // Create source frame at normalized dimensions (same as interpolated frames)
+        if let sourceImage = createImage(from: fromBuffer) {
+            frames.append(sourceImage)
+        } else {
+            frames.append(from)  // Fallback
+        }
 
         for buffer in destinationBuffers {
             if let image = createImage(from: buffer) {
@@ -144,7 +153,8 @@ actor NativeMorpher {
             }
         }
 
-        frames.append(to)  // End with target
+        // The last interpolated frame (at phase ~0.992) is visually identical to target
+        // and already at the correct dimensions - no need to append raw target
 
         LMLog.visual.info("Native morph complete: \(frames.count) total frames")
         return frames

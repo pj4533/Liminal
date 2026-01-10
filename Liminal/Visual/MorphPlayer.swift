@@ -94,12 +94,6 @@ final class MorphPlayer: ObservableObject {
         }
     }
 
-    /// Legacy method - now just calls transitionTo
-    func preloadMorphTo(_ upcomingImage: NSImage) {
-        // With the new architecture, preloading is less useful since we morph immediately
-        // Just treat it as a transition
-        transitionTo(upcomingImage)
-    }
 
     // MARK: - Private
 
