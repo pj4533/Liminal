@@ -110,50 +110,82 @@ struct ContentView: View {
 
 struct VisualDisplayView: View {
     @ObservedObject var visualEngine: VisualEngine
-    @State private var displayedImage: NSImage?
-    @State private var imageID = UUID()
+    @StateObject private var morphPlayer = MorphPlayer()
+    @State private var kenBurnsScale: CGFloat = 1.0
+    @State private var kenBurnsOffset: CGSize = .zero
 
     var body: some View {
-        ZStack {
-            // Background
-            Color.black
+        GeometryReader { geometry in
+            ZStack {
+                // Background
+                Color.black
 
-            // Current image with crossfade animation
-            if let image = displayedImage {
-                Image(nsImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .id(imageID)
-                    .transition(.opacity.animation(.easeInOut(duration: 2.0)))
-            } else {
-                // Placeholder
-                VStack(spacing: 12) {
-                    if visualEngine.isGenerating {
-                        ProgressView()
-                            .scaleEffect(1.5)
-                        Text("Generating...")
-                            .font(.caption)
-                            .foregroundStyle(.white.opacity(0.6))
-                    } else {
-                        Image(systemName: "sparkles")
-                            .font(.system(size: 48))
-                            .foregroundStyle(.white.opacity(0.3))
-                        Text("Press Play to begin")
-                            .font(.caption)
-                            .foregroundStyle(.white.opacity(0.5))
+                // Current frame from morph player with Ken Burns
+                if let image = morphPlayer.currentFrame {
+                    Image(nsImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                        .scaleEffect(kenBurnsScale)
+                        .offset(kenBurnsOffset)
+                } else {
+                    // Placeholder
+                    VStack(spacing: 12) {
+                        if visualEngine.isGenerating || morphPlayer.isMorphing {
+                            ProgressView()
+                                .scaleEffect(1.5)
+                            Text(morphPlayer.isMorphing ? "Morphing..." : "Generating...")
+                                .font(.caption)
+                                .foregroundStyle(.white.opacity(0.6))
+                        } else {
+                            Image(systemName: "sparkles")
+                                .font(.system(size: 48))
+                                .foregroundStyle(.white.opacity(0.3))
+                            Text("Press Play to begin")
+                                .font(.caption)
+                                .foregroundStyle(.white.opacity(0.5))
+                        }
                     }
                 }
             }
+            .frame(width: geometry.size.width, height: geometry.size.height)
+            .clipped()
         }
-        .clipped()
         .onChange(of: visualEngine.currentImage) { _, newImage in
-            withAnimation(.easeInOut(duration: 2.0)) {
-                displayedImage = newImage
-                imageID = UUID()
+            if let image = newImage {
+                morphPlayer.transitionTo(image)
+                startKenBurnsAnimation()
             }
         }
         .onAppear {
-            displayedImage = visualEngine.currentImage
+            morphPlayer.start()
+            if let image = visualEngine.currentImage {
+                morphPlayer.setInitialImage(image)
+                startKenBurnsAnimation()
+            }
+        }
+        .onDisappear {
+            morphPlayer.stop()
+        }
+    }
+
+    private func startKenBurnsAnimation() {
+        // Reset to starting position
+        kenBurnsScale = 1.0
+        kenBurnsOffset = .zero
+
+        // Random direction for this cycle
+        let targetScale = CGFloat.random(in: 1.08...1.15)
+        let maxOffset: CGFloat = 20
+        let targetOffset = CGSize(
+            width: CGFloat.random(in: -maxOffset...maxOffset),
+            height: CGFloat.random(in: -maxOffset...maxOffset)
+        )
+
+        // Slow continuous zoom/pan over the image interval
+        withAnimation(.easeInOut(duration: SettingsService.shared.imageInterval)) {
+            kenBurnsScale = targetScale
+            kenBurnsOffset = targetOffset
         }
     }
 }

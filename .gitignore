@@ -78,3 +78,6 @@ Icon
 # Secrets
 Secrets.swift
 Secrets.xcconfig
+
+# External binaries (RIFE, etc) - too large for git
+External/
