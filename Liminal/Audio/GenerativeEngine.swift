@@ -6,6 +6,7 @@ import OSLog
 
 /// Coordinates multiple voice layers with generative note selection.
 /// Three voices: bass drone, mid pad, high shimmer - each with own timing and behavior.
+/// Simple controls: delay, reverb, notes - all apply immediately.
 @MainActor
 final class GenerativeEngine: ObservableObject {
 
@@ -20,9 +21,9 @@ final class GenerativeEngine: ObservableObject {
         let amplitude: Float
         let lowMIDI: Int
         let highMIDI: Int
-        let noteChangeInterval: ClosedRange<Double>  // seconds between note changes
-        let noteDuration: ClosedRange<Double>?       // for staccato voices (nil = sustained)
-        let silenceGap: ClosedRange<Double>?         // silence between notes (nil = no gap)
+        let noteChangeInterval: ClosedRange<Double>
+        let noteDuration: ClosedRange<Double>?
+        let silenceGap: ClosedRange<Double>?
     }
 
     // MARK: - Audio Components
@@ -37,24 +38,60 @@ final class GenerativeEngine: ObservableObject {
 
     private var scale: Scale
     private var noteTimers: [Timer] = []
-    private var cancellables = Set<AnyCancellable>()
 
-    // MARK: - Mood Integration
+    // Mutable shimmer gap - controlled by notes slider
+    private var shimmerGapRange: ClosedRange<Double> = 2.0...5.0
 
-    let mood = MoodState()
+    /// Current musical scale - changes apply to new notes
+    @Published var currentScale: ScaleType = .pentatonicMajor {
+        didSet {
+            scale = Scale(type: currentScale, rootMIDI: 48)
+            rebuildMarkovChains()
+            let name = currentScale.rawValue
+            LMLog.audio.debug("🎼 Scale: \(name)")
+        }
+    }
 
     // MARK: - Events
 
-    /// Fires when a shimmer note plays - used to trigger visual morphs
-    let shimmerNotePlayed = PassthroughSubject<Int, Never>()  // MIDI note
+    /// Fires when a shimmer note plays
+    let shimmerNotePlayed = PassthroughSubject<Int, Never>()
 
     // MARK: - Published State
 
     @Published private(set) var isRunning = false
-    @Published var currentScale: ScaleType {
+
+    /// Delay amount (0-1): higher = more delay/echo
+    @Published var delay: Float = 0.5 {
         didSet {
-            scale = Scale(type: currentScale, rootMIDI: 48)  // C3
-            LMLog.audio.info("Scale changed to \(self.currentScale.rawValue)")
+            let feedback = 0.3 + delay * 0.5   // 0.3 to 0.8
+            let mix = 0.2 + delay * 0.5        // 0.2 to 0.7
+            effects?.setDelayFeedback(feedback)
+            effects?.setDelayMix(mix)
+            let pct = delay * 100
+            LMLog.audio.debug("🎚️ Delay: \(String(format: "%.0f", pct))%")
+        }
+    }
+
+    /// Reverb amount (0-1): higher = bigger reverb
+    @Published var reverb: Float = 0.5 {
+        didSet {
+            let mix = 0.3 + reverb * 0.6  // 0.3 to 0.9
+            effects?.setReverbMix(mix)
+            let pct = reverb * 100
+            LMLog.audio.debug("🎚️ Reverb: \(String(format: "%.0f", pct))%")
+        }
+    }
+
+    /// Notes frequency (0-1): higher = more shimmer notes
+    @Published var notes: Float = 0.5 {
+        didSet {
+            // Invert: high value = short gap (more notes)
+            let minGap = 0.5 + (1.0 - Double(notes)) * 2.0   // 0.5 to 2.5
+            let maxGap = 2.0 + (1.0 - Double(notes)) * 6.0   // 2.0 to 8.0
+            shimmerGapRange = minGap...maxGap
+            let pct = notes * 100
+            LMLog.audio.debug("🎚️ Notes: \(String(format: "%.0f", pct))% (gap \(String(format: "%.1f", minGap))-\(String(format: "%.1f", maxGap))s)")
         }
     }
 
@@ -62,62 +99,16 @@ final class GenerativeEngine: ObservableObject {
 
     init() {
         self.scale = Scale(type: .pentatonicMajor, rootMIDI: 48)
-        self.currentScale = .pentatonicMajor
         setupVoices()
         setupEffects()
-        observeMoodChanges()
     }
 
     // MARK: - Setup
 
     private func setupVoices() {
-        let configs: [VoiceConfig] = [
-            // Bass drone: low, slow, sustained
-            VoiceConfig(
-                name: "Bass",
-                oscillatorCount: 2,
-                detuneAmount: 0.008,
-                attackTime: 4.0,
-                releaseTime: 8.0,
-                amplitude: 0.25,
-                lowMIDI: 36,
-                highMIDI: 48,
-                noteChangeInterval: 8.0...15.0,
-                noteDuration: nil,
-                silenceGap: nil
-            ),
-            // Mid pad: warmer, moderate movement
-            VoiceConfig(
-                name: "Mid",
-                oscillatorCount: 4,
-                detuneAmount: 0.015,
-                attackTime: 2.5,
-                releaseTime: 6.0,
-                amplitude: 0.2,
-                lowMIDI: 48,
-                highMIDI: 72,
-                noteChangeInterval: 4.0...8.0,
-                noteDuration: nil,
-                silenceGap: nil
-            ),
-            // Shimmer: short soft blips with heavy effects
-            VoiceConfig(
-                name: "Shimmer",
-                oscillatorCount: 1,
-                detuneAmount: 0.0,
-                attackTime: 0.01,
-                releaseTime: 0.3,
-                amplitude: 0.08,
-                lowMIDI: 72,
-                highMIDI: 84,
-                noteChangeInterval: 3.0...6.0,
-                noteDuration: 0.05...0.15,
-                silenceGap: 2.0...5.0
-            )
-        ]
+        let configs = voiceConfigs()
 
         for (index, config) in configs.enumerated() {
-            // Create voice layer
             let voiceConfig = VoiceLayer.Config(
                 oscillatorCount: config.oscillatorCount,
                 detuneAmount: config.detuneAmount,
@@ -129,7 +120,6 @@ final class GenerativeEngine: ObservableObject {
             voices.append(voice)
             voiceMixer.addInput(voice.output)
 
-            // Create Markov chain
             let degreeCount = scale.type.intervals.count
             let chain: MarkovChain
             switch index {
@@ -139,21 +129,29 @@ final class GenerativeEngine: ObservableObject {
             }
             chains.append(chain)
 
-            LMLog.audio.debug("🎹 Created \(config.name) voice: MIDI \(config.lowMIDI)-\(config.highMIDI)")
+            LMLog.audio.debug("🎹 Created \(config.name) voice")
         }
     }
 
     private func setupEffects() {
-        // Heavy effects to turn short blips into ambient washes
         let effectsConfig = EffectsChain.Config(
-            reverbMix: 0.75,          // lots of reverb
-            reverbFeedback: 0.92,     // long decay
-            delayTime: 0.5,           // half-second echoes
-            delayFeedback: 0.65,      // more echo taps
-            delayMix: 0.4             // prominent delay
+            reverbMix: 0.6,
+            reverbFeedback: 0.92,
+            delayTime: 0.5,
+            delayFeedback: 0.55,
+            delayMix: 0.45
         )
         effects = EffectsChain(input: voiceMixer, config: effectsConfig)
         engine.output = effects?.output ?? voiceMixer
+    }
+
+    private func rebuildMarkovChains() {
+        let degreeCount = scale.type.intervals.count
+        chains = [
+            MarkovChain.bassDrone(degreeCount: degreeCount),
+            MarkovChain.midPad(degreeCount: degreeCount),
+            MarkovChain.highShimmer(degreeCount: degreeCount)
+        ]
     }
 
     // MARK: - Control
@@ -164,19 +162,16 @@ final class GenerativeEngine: ObservableObject {
         do {
             try engine.start()
 
-            // Start all voices with initial notes
             let configs = voiceConfigs()
             for (index, voice) in voices.enumerated() {
                 let config = configs[index]
                 let initialNote = scale.randomNote(lowMIDI: config.lowMIDI, highMIDI: config.highMIDI)
                 voice.setFrequency(Scale.midiToFrequency(initialNote))
 
-                // Staccato voices don't start continuously
                 if config.noteDuration == nil {
                     voice.start()
                     scheduleNoteChanges(voiceIndex: index, config: config)
                 } else {
-                    // Schedule first note for staccato voices
                     let initialDelay = Double.random(in: 0.5...2.0)
                     let timer = Timer.scheduledTimer(withTimeInterval: initialDelay, repeats: false) { [weak self] _ in
                         Task { @MainActor in
@@ -188,28 +183,23 @@ final class GenerativeEngine: ObservableObject {
             }
 
             isRunning = true
-            LMLog.audio.info("🎵 Generative engine started with \(self.voices.count) voices")
+            LMLog.audio.info("🎵 Engine started")
         } catch {
-            LMLog.audio.error("❌ Failed to start engine: \(error.localizedDescription)")
+            LMLog.audio.error("❌ Failed to start: \(error.localizedDescription)")
         }
     }
 
     func stop() {
-        // Cancel all timers
         noteTimers.forEach { $0.invalidate() }
         noteTimers.removeAll()
-
-        // Stop all voices
         voices.forEach { $0.stop() }
-
         isRunning = false
-        LMLog.audio.info("🛑 Generative engine stopping")
+        LMLog.audio.info("🛑 Engine stopped")
     }
 
     func shutdown() {
         stop()
         engine.stop()
-        LMLog.audio.info("🔇 Engine shutdown complete")
     }
 
     // MARK: - Generative Logic
@@ -231,33 +221,27 @@ final class GenerativeEngine: ObservableObject {
         let chain = chains[voiceIndex]
         let degree = chain.next()
 
-        // Get available notes and pick one near the degree
         let availableNotes = scale.notesInRange(lowMIDI: config.lowMIDI, highMIDI: config.highMIDI)
         guard !availableNotes.isEmpty else { return }
 
-        // Map degree to actual note (wrapping within available range)
         let noteIndex = degree % availableNotes.count
         let newNote = availableNotes[noteIndex]
         let frequency = Scale.midiToFrequency(newNote)
 
         let voice = voices[voiceIndex]
 
-        // Check if this is a staccato voice
-        if let noteDurationRange = config.noteDuration,
-           let silenceGapRange = config.silenceGap {
-            // Staccato: play note for duration, then silence
+        if let noteDurationRange = config.noteDuration {
+            // Staccato voice (shimmer)
             voice.setFrequency(frequency)
             voice.start()
 
             let noteDuration = Double.random(in: noteDurationRange)
-            LMLog.audio.debug("✨ \(config.name): MIDI \(newNote) for \(String(format: "%.2f", noteDuration))s")
+            LMLog.audio.debug("✨ Shimmer: MIDI \(newNote)")
 
-            // Notify visual system when shimmer (high voice, index 2) plays
             if voiceIndex == 2 {
                 shimmerNotePlayed.send(newNote)
             }
 
-            // Schedule note off
             let noteOffTimer = Timer.scheduledTimer(withTimeInterval: noteDuration, repeats: false) { [weak self] _ in
                 Task { @MainActor in
                     self?.voices[voiceIndex].stop()
@@ -265,8 +249,8 @@ final class GenerativeEngine: ObservableObject {
             }
             noteTimers.append(noteOffTimer)
 
-            // Schedule next note after silence gap
-            let silenceGap = Double.random(in: silenceGapRange)
+            // Use current shimmerGapRange (controlled by notes slider)
+            let silenceGap = Double.random(in: shimmerGapRange)
             let nextNoteDelay = noteDuration + silenceGap
 
             let nextTimer = Timer.scheduledTimer(withTimeInterval: nextNoteDelay, repeats: false) { [weak self] _ in
@@ -276,43 +260,10 @@ final class GenerativeEngine: ObservableObject {
             }
             noteTimers.append(nextTimer)
         } else {
-            // Sustained: just change frequency
+            // Sustained voice
             voice.setFrequency(frequency)
-            LMLog.audio.debug("🎵 \(config.name): degree \(degree) → MIDI \(newNote) (\(String(format: "%.1f", frequency))Hz)")
-
-            // Schedule next change
             scheduleNoteChanges(voiceIndex: voiceIndex, config: config)
         }
-    }
-
-    // MARK: - Mood Observation
-
-    private func observeMoodChanges() {
-        // Update effects when mood changes
-        mood.$brightness.combineLatest(mood.$tension, mood.$density, mood.$movement)
-            .debounce(for: .milliseconds(100), scheduler: RunLoop.main)
-            .sink { [weak self] _, _, _, _ in
-                self?.applyMoodToEffects()
-            }
-            .store(in: &cancellables)
-
-        // Update scale when brightness/tension change significantly
-        mood.$brightness.combineLatest(mood.$tension)
-            .debounce(for: .milliseconds(500), scheduler: RunLoop.main)
-            .sink { [weak self] _, _ in
-                guard let self else { return }
-                let suggested = self.mood.suggestedScale
-                if suggested != self.currentScale {
-                    self.currentScale = suggested
-                }
-            }
-            .store(in: &cancellables)
-    }
-
-    private func applyMoodToEffects() {
-        effects?.setReverbMix(mood.reverbMix)
-        effects?.setDelayFeedback(mood.delayFeedback)
-        LMLog.audio.debug("🎨 Mood applied: reverb=\(self.mood.reverbMix), delay=\(self.mood.delayFeedback)")
     }
 
     // MARK: - Helpers
@@ -330,7 +281,7 @@ final class GenerativeEngine: ObservableObject {
             VoiceConfig(name: "Shimmer", oscillatorCount: 1, detuneAmount: 0.0,
                        attackTime: 0.01, releaseTime: 0.3, amplitude: 0.08,
                        lowMIDI: 72, highMIDI: 84, noteChangeInterval: 3.0...6.0,
-                       noteDuration: 0.05...0.15, silenceGap: 2.0...5.0)
+                       noteDuration: 0.05...0.15, silenceGap: nil)
         ]
     }
 }

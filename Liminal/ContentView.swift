@@ -50,25 +50,42 @@ struct ContentView: View {
 
                 Divider()
 
-                // Mood sliders - bind to mood's published properties
-                MoodSlidersView(mood: audioEngine.mood)
-                    .padding(.horizontal)
+                // Simple audio controls - bound to settings (single source of truth)
+                VStack(spacing: 12) {
+                    AudioSlider(
+                        label: "Delay",
+                        value: $settings.delay,
+                        leftIcon: "waveform.slash",
+                        rightIcon: "waveform.badge.plus"
+                    )
+                    AudioSlider(
+                        label: "Reverb",
+                        value: $settings.reverb,
+                        leftIcon: "cube.transparent",
+                        rightIcon: "cube.fill"
+                    )
+                    AudioSlider(
+                        label: "Notes",
+                        value: $settings.notes,
+                        leftIcon: "music.note",
+                        rightIcon: "music.quarternote.3"
+                    )
+                }
+                .padding(.horizontal)
 
-                // Scale (auto-selected by mood, but can override)
+                // Scale selector - bound to settings
                 HStack {
                     Text("Scale:")
                         .foregroundStyle(.secondary)
-                    Picker("", selection: $audioEngine.currentScale) {
+                    Picker("", selection: $settings.currentScale) {
                         ForEach(ScaleType.allCases, id: \.self) { scale in
                             Text(scale.rawValue).tag(scale)
                         }
                     }
                     .pickerStyle(.menu)
-                    .frame(width: 160)
-                    .onChange(of: audioEngine.currentScale, initial: false) { _, newValue in
-                        settings.scaleName = newValue.rawValue
-                    }
+                    .frame(maxWidth: .infinity)
                 }
+                .padding(.horizontal)
 
                 Spacer()
 
@@ -77,8 +94,6 @@ struct ContentView: View {
                     if audioEngine.isRunning {
                         audioEngine.stop()
                         visualEngine.stop()
-                        // Save settings when stopping
-                        settings.saveFrom(mood: audioEngine.mood)
                     } else {
                         audioEngine.start()
                         visualEngine.start()
@@ -95,14 +110,19 @@ struct ContentView: View {
         .onAppear {
             let hasKey = EnvironmentService.shared.hasValidCredentials
             apiKeyStatus = hasKey ? "✓ Gemini API ready" : "✗ Missing API key"
-            visualEngine.observeMood(audioEngine.mood)
-
-            // Apply saved settings
-            settings.applyTo(mood: audioEngine.mood)
-            audioEngine.currentScale = settings.scale
+            // Apply saved settings to audio engine on launch
+            audioEngine.delay = settings.delay
+            audioEngine.reverb = settings.reverb
+            audioEngine.notes = settings.notes
+            audioEngine.currentScale = settings.currentScale
         }
+        // Settings -> AudioEngine: propagate changes immediately
+        .onChange(of: settings.delay) { _, newValue in audioEngine.delay = newValue }
+        .onChange(of: settings.reverb) { _, newValue in audioEngine.reverb = newValue }
+        .onChange(of: settings.notes) { _, newValue in audioEngine.notes = newValue }
+        .onChange(of: settings.currentScale) { _, newValue in audioEngine.currentScale = newValue }
         .sheet(isPresented: $showingSettings) {
-            SettingsSheetView()
+            SettingsSheetView(audioEngine: audioEngine)
         }
     }
 }
@@ -111,6 +131,7 @@ struct ContentView: View {
 
 struct SettingsSheetView: View {
     @ObservedObject private var settings = SettingsService.shared
+    @ObservedObject var audioEngine: GenerativeEngine
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -142,10 +163,33 @@ struct SettingsSheetView: View {
                     .foregroundStyle(.secondary)
             }
 
+            Divider()
+
+            // Reset Button
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Reset")
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
+
+                Button("Reset All to Defaults") {
+                    settings.resetToDefaults()
+                    // Apply reset values to engine
+                    audioEngine.delay = settings.delay
+                    audioEngine.reverb = settings.reverb
+                    audioEngine.notes = settings.notes
+                    audioEngine.currentScale = settings.currentScale
+                }
+                .foregroundStyle(.red)
+
+                Text("Resets delay, reverb, notes, scale, and visual settings to their default values.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Spacer()
         }
         .padding(20)
-        .frame(width: 350, height: 200)
+        .frame(width: 400, height: 320)
     }
 }
 
@@ -287,44 +331,9 @@ struct VisualDisplayView: View {
     }
 }
 
-// MARK: - Mood Sliders Container
+// MARK: - Audio Slider Component
 
-struct MoodSlidersView: View {
-    @ObservedObject var mood: MoodState
-
-    var body: some View {
-        VStack(spacing: 12) {
-            MoodSlider(
-                label: "Brightness",
-                value: $mood.brightness,
-                leftIcon: "moon.fill",
-                rightIcon: "sun.max.fill"
-            )
-            MoodSlider(
-                label: "Tension",
-                value: $mood.tension,
-                leftIcon: "leaf.fill",
-                rightIcon: "bolt.fill"
-            )
-            MoodSlider(
-                label: "Density",
-                value: $mood.density,
-                leftIcon: "circle.dotted",
-                rightIcon: "circle.grid.3x3.fill"
-            )
-            MoodSlider(
-                label: "Movement",
-                value: $mood.movement,
-                leftIcon: "pause.fill",
-                rightIcon: "wind"
-            )
-        }
-    }
-}
-
-// MARK: - Mood Slider Component
-
-struct MoodSlider: View {
+struct AudioSlider: View {
     let label: String
     @Binding var value: Float
     let leftIcon: String

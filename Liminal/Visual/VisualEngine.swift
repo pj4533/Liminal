@@ -3,15 +3,14 @@ import AppKit
 import Combine
 import OSLog
 
-/// Coordinates visual generation based on mood state.
-/// Triggers new images on schedule and on significant mood changes.
+/// Coordinates visual generation.
+/// Triggers new images on a schedule with psychedelic prompts.
 @MainActor
 final class VisualEngine: ObservableObject {
 
     // MARK: - Configuration
 
     private var scheduledInterval: TimeInterval { SettingsService.shared.imageInterval }
-    private let moodChangeThreshold: Float = 0.15     // significant change threshold
 
     // MARK: - State
 
@@ -23,10 +22,6 @@ final class VisualEngine: ObservableObject {
     private let imageQueue = ImageQueue()
     private var scheduledTimer: Timer?
     private var cancellables = Set<AnyCancellable>()
-    private var lastMoodValues: (Float, Float, Float, Float) = (0.5, 0.3, 0.4, 0.5)
-
-    // Reference to mood state for prompt building
-    weak var mood: MoodState?
 
     // MARK: - Init
 
@@ -98,23 +93,6 @@ final class VisualEngine: ObservableObject {
         imageQueue.advance()
     }
 
-    /// Observe mood for significant changes
-    func observeMood(_ moodState: MoodState) {
-        self.mood = moodState
-
-        Publishers.CombineLatest4(
-            moodState.$brightness,
-            moodState.$tension,
-            moodState.$density,
-            moodState.$movement
-        )
-        .debounce(for: .milliseconds(500), scheduler: RunLoop.main)
-        .sink { [weak self] b, t, d, m in
-            self?.handleMoodChange(brightness: b, tension: t, density: d, movement: m)
-        }
-        .store(in: &cancellables)
-    }
-
     // MARK: - Private
 
     private func startScheduledAdvances() {
@@ -125,29 +103,9 @@ final class VisualEngine: ObservableObject {
         }
     }
 
-    private func handleMoodChange(brightness: Float, tension: Float, density: Float, movement: Float) {
-        let (lastB, lastT, lastD, lastM) = lastMoodValues
-
-        // Check if any parameter changed significantly
-        let changed = abs(brightness - lastB) > moodChangeThreshold ||
-                      abs(tension - lastT) > moodChangeThreshold ||
-                      abs(density - lastD) > moodChangeThreshold ||
-                      abs(movement - lastM) > moodChangeThreshold
-
-        if changed {
-            LMLog.visual.debug("Significant mood change detected, requesting new image")
-            imageQueue.requestNewImage()
-            lastMoodValues = (brightness, tension, density, movement)
-        }
-    }
-
     // MARK: - Prompt Building
 
     private func buildPrompt() -> String {
-        guard let mood = mood else {
-            return defaultPrompt()
-        }
-
         // Start with strong visual anchors - actual things to render
         var descriptors: [String] = [
             "digital art",
@@ -180,48 +138,34 @@ final class VisualEngine: ObservableObject {
         ]
         descriptors.append(subjects.randomElement()!)
 
-        // Brightness affects palette
-        if mood.brightness < 0.3 {
-            descriptors.append(contentsOf: ["dark moody palette", "deep blues and purples", "noir lighting", "shadows"])
-        } else if mood.brightness > 0.7 {
-            descriptors.append(contentsOf: ["luminous", "golden hour light", "ethereal glow", "bright and airy"])
-        } else {
-            descriptors.append(contentsOf: ["twilight colors", "muted tones", "dusk atmosphere"])
-        }
+        // Random style variations
+        let styles = [
+            ["dark moody palette", "deep blues and purples", "noir lighting"],
+            ["luminous", "golden hour light", "ethereal glow"],
+            ["twilight colors", "muted tones", "dusk atmosphere"],
+            ["vibrant neon", "electric colors", "psychedelic glow"],
+            ["soft pastels", "dreamy atmosphere", "gentle gradients"]
+        ]
+        descriptors.append(contentsOf: styles.randomElement()!)
 
-        // Tension affects visual complexity
-        if mood.tension > 0.6 {
-            descriptors.append(contentsOf: ["dramatic angles", "high contrast", "sharp edges", "intense"])
-        } else if mood.tension < 0.3 {
-            descriptors.append(contentsOf: ["soft focus", "gentle curves", "harmonious", "peaceful"])
-        } else {
-            descriptors.append(contentsOf: ["balanced composition", "subtle tension"])
-        }
+        // Random complexity
+        let complexities = [
+            ["intricate details", "complex textures", "layered depth"],
+            ["minimalist", "negative space", "clean lines"],
+            ["balanced composition", "focused detail"]
+        ]
+        descriptors.append(contentsOf: complexities.randomElement()!)
 
-        // Density affects detail richness
-        if mood.density > 0.6 {
-            descriptors.append(contentsOf: ["intricate details", "complex textures", "layered depth", "maximalist"])
-        } else if mood.density < 0.3 {
-            descriptors.append(contentsOf: ["minimalist", "negative space", "clean lines", "sparse elements"])
-        } else {
-            descriptors.append(contentsOf: ["moderate detail", "focused composition"])
-        }
-
-        // Movement affects dynamism
-        if mood.movement > 0.6 {
-            descriptors.append(contentsOf: ["motion blur", "flowing energy", "dynamic movement", "swirling"])
-        } else if mood.movement < 0.3 {
-            descriptors.append(contentsOf: ["still and calm", "frozen moment", "meditative", "tranquil"])
-        } else {
-            descriptors.append(contentsOf: ["gentle movement", "subtle flow"])
-        }
+        // Random movement feel
+        let movements = [
+            ["motion blur", "flowing energy", "swirling"],
+            ["still and calm", "frozen moment", "meditative"],
+            ["gentle movement", "subtle flow"]
+        ]
+        descriptors.append(contentsOf: movements.randomElement()!)
 
         let prompt = descriptors.joined(separator: ", ")
         LMLog.visual.debug("Built prompt: \(prompt.prefix(80))...")
         return prompt
-    }
-
-    private func defaultPrompt() -> String {
-        "Digital art, 4k wallpaper, abstract cosmic nebula, ethereal glow, soft colors, peaceful atmosphere, dreamy"
     }
 }

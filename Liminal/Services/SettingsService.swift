@@ -12,10 +12,9 @@ final class SettingsService: ObservableObject {
     // MARK: - Keys
 
     private enum Keys {
-        static let brightness = "mood.brightness"
-        static let tension = "mood.tension"
-        static let density = "mood.density"
-        static let movement = "mood.movement"
+        static let delay = "audio.delay"
+        static let reverb = "audio.reverb"
+        static let notes = "audio.notes"
         static let scale = "audio.scale"
         static let imageInterval = "visual.imageInterval"
         static let cacheOnly = "visual.cacheOnly"
@@ -25,26 +24,31 @@ final class SettingsService: ObservableObject {
 
     private let defaults = UserDefaults.standard
 
+    // MARK: - Default Values
+
+    static let defaultDelay: Float = 0.5
+    static let defaultReverb: Float = 0.5
+    static let defaultNotes: Float = 0.5
+    static let defaultScale: ScaleType = .pentatonicMajor
+    static let defaultImageInterval: Double = 30.0
+    static let defaultCacheOnly: Bool = false
+
     // MARK: - Published Settings
 
-    @Published var brightness: Float {
-        didSet { defaults.set(brightness, forKey: Keys.brightness) }
+    @Published var delay: Float {
+        didSet { defaults.set(delay, forKey: Keys.delay) }
     }
 
-    @Published var tension: Float {
-        didSet { defaults.set(tension, forKey: Keys.tension) }
+    @Published var reverb: Float {
+        didSet { defaults.set(reverb, forKey: Keys.reverb) }
     }
 
-    @Published var density: Float {
-        didSet { defaults.set(density, forKey: Keys.density) }
+    @Published var notes: Float {
+        didSet { defaults.set(notes, forKey: Keys.notes) }
     }
 
-    @Published var movement: Float {
-        didSet { defaults.set(movement, forKey: Keys.movement) }
-    }
-
-    @Published var scaleName: String {
-        didSet { defaults.set(scaleName, forKey: Keys.scale) }
+    @Published var currentScale: ScaleType {
+        didSet { defaults.set(currentScale.rawValue, forKey: Keys.scale) }
     }
 
     @Published var imageInterval: Double {
@@ -59,37 +63,29 @@ final class SettingsService: ObservableObject {
 
     private init() {
         // Load saved values or use defaults
-        self.brightness = defaults.object(forKey: Keys.brightness) as? Float ?? 0.5
-        self.tension = defaults.object(forKey: Keys.tension) as? Float ?? 0.3
-        self.density = defaults.object(forKey: Keys.density) as? Float ?? 0.4
-        self.movement = defaults.object(forKey: Keys.movement) as? Float ?? 0.5
-        self.scaleName = defaults.string(forKey: Keys.scale) ?? "Pentatonic Major"
-        self.imageInterval = defaults.object(forKey: Keys.imageInterval) as? Double ?? 30.0
-        self.cacheOnly = defaults.object(forKey: Keys.cacheOnly) as? Bool ?? false
+        self.delay = defaults.object(forKey: Keys.delay) as? Float ?? Self.defaultDelay
+        self.reverb = defaults.object(forKey: Keys.reverb) as? Float ?? Self.defaultReverb
+        self.notes = defaults.object(forKey: Keys.notes) as? Float ?? Self.defaultNotes
 
-        LMLog.state.info("Settings loaded: scale=\(self.scaleName), imageInterval=\(self.imageInterval)s, cacheOnly=\(self.cacheOnly)")
+        // Load scale from saved string, fallback to default
+        let savedScaleName = defaults.string(forKey: Keys.scale) ?? Self.defaultScale.rawValue
+        self.currentScale = ScaleType.allCases.first { $0.rawValue == savedScaleName } ?? Self.defaultScale
+
+        self.imageInterval = defaults.object(forKey: Keys.imageInterval) as? Double ?? Self.defaultImageInterval
+        self.cacheOnly = defaults.object(forKey: Keys.cacheOnly) as? Bool ?? Self.defaultCacheOnly
+
+        LMLog.state.info("Settings loaded: scale=\(self.currentScale.rawValue), delay=\(self.delay), reverb=\(self.reverb), notes=\(self.notes)")
     }
 
-    // MARK: - Sync Methods
+    // MARK: - Reset
 
-    /// Apply saved settings to a MoodState
-    func applyTo(mood: MoodState) {
-        mood.brightness = brightness
-        mood.tension = tension
-        mood.density = density
-        mood.movement = movement
-    }
-
-    /// Save current mood values
-    func saveFrom(mood: MoodState) {
-        brightness = mood.brightness
-        tension = mood.tension
-        density = mood.density
-        movement = mood.movement
-    }
-
-    /// Get scale type from saved name
-    var scale: ScaleType {
-        ScaleType.allCases.first { $0.rawValue == scaleName } ?? .pentatonicMajor
+    func resetToDefaults() {
+        delay = Self.defaultDelay
+        reverb = Self.defaultReverb
+        notes = Self.defaultNotes
+        currentScale = Self.defaultScale
+        imageInterval = Self.defaultImageInterval
+        cacheOnly = Self.defaultCacheOnly
+        LMLog.state.info("Settings reset to defaults")
     }
 }
