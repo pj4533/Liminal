@@ -119,6 +119,16 @@ struct VisualDisplayView: View {
         )
     }
 
+    // Distortion amplitude - boosted 10x during crossfade transitions to mask the blend
+    private var distortionAmplitude: Double {
+        let baseAmplitude = 0.012
+        let boostMultiplier = 10.0
+        // Ease in and out of the boost using transition progress
+        // Peak at middle of transition (0.5), smooth ramp up/down
+        let transitionBoost = sin(morphPlayer.transitionProgress * .pi)
+        return baseAmplitude * (1.0 + (boostMultiplier - 1.0) * transitionBoost)
+    }
+
     var body: some View {
         GeometryReader { geometry in
             ZStack {
@@ -133,8 +143,8 @@ struct VisualDisplayView: View {
                         .frame(width: geometry.size.width, height: geometry.size.height)
                         .scaleEffect(kenBurnsScale)
                         .offset(kenBurnsOffset)
-                        // Dreamy fBM distortion - underwater/heat haze feel (slow, oscillating)
-                        .dreamyDistortion(time: effectController.time, amplitude: 0.012, speed: 0.08)
+                        // Dreamy fBM distortion - boosted during crossfade to mask the blend
+                        .dreamyDistortion(time: effectController.time, amplitude: distortionAmplitude, speed: 0.08)
                         // Hue rotation for color drift (noticeable but not jarring)
                         .hueShift(amount: effectController.time * 0.04)
 
