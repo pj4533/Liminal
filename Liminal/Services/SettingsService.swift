@@ -18,7 +18,7 @@ final class SettingsService: ObservableObject {
         static let movement = "mood.movement"
         static let scale = "audio.scale"
         static let imageInterval = "visual.imageInterval"
-        static let recycleImages = "visual.recycleImages"
+        static let cacheOnly = "visual.cacheOnly"
     }
 
     // MARK: - Defaults
@@ -51,8 +51,8 @@ final class SettingsService: ObservableObject {
         didSet { defaults.set(imageInterval, forKey: Keys.imageInterval) }
     }
 
-    @Published var recycleImages: Bool {
-        didSet { defaults.set(recycleImages, forKey: Keys.recycleImages) }
+    @Published var cacheOnly: Bool {
+        didSet { defaults.set(cacheOnly, forKey: Keys.cacheOnly) }
     }
 
     // MARK: - Init
@@ -65,9 +65,9 @@ final class SettingsService: ObservableObject {
         self.movement = defaults.object(forKey: Keys.movement) as? Float ?? 0.5
         self.scaleName = defaults.string(forKey: Keys.scale) ?? "Pentatonic Major"
         self.imageInterval = defaults.object(forKey: Keys.imageInterval) as? Double ?? 30.0
-        self.recycleImages = defaults.object(forKey: Keys.recycleImages) as? Bool ?? false
+        self.cacheOnly = defaults.object(forKey: Keys.cacheOnly) as? Bool ?? false
 
-        LMLog.state.info("Settings loaded: scale=\(self.scaleName), imageInterval=\(self.imageInterval)s, recycleImages=\(self.recycleImages)")
+        LMLog.state.info("Settings loaded: scale=\(self.scaleName), imageInterval=\(self.imageInterval)s, cacheOnly=\(self.cacheOnly)")
     }
 
     // MARK: - Sync Methods

@@ -134,10 +134,10 @@ struct SettingsSheetView: View {
                     .font(.headline)
                     .foregroundStyle(.secondary)
 
-                Toggle("Recycle Images", isOn: $settings.recycleImages)
+                Toggle("Cache Only Mode", isOn: $settings.cacheOnly)
                     .toggleStyle(.checkbox)
 
-                Text("When enabled, previously generated images will be shown again to save API costs. When disabled, only new images are shown (except the first one on launch).")
+                Text("When enabled, only cached images are used - no new images will be generated. Useful for testing effects without API costs.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

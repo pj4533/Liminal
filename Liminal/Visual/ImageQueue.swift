@@ -57,22 +57,26 @@ final class ImageQueue: ObservableObject {
 
     /// Start the image generation pipeline
     func start() {
-        let recycleMode = SettingsService.shared.recycleImages
-        LMLog.visual.info("ImageQueue starting (recycle=\(recycleMode), cached=\(self.totalCachedCount))")
+        let cacheOnly = SettingsService.shared.cacheOnly
+        LMLog.visual.info("ImageQueue starting (cacheOnly=\(cacheOnly), cached=\(self.totalCachedCount))")
 
         // Clear buffer - we start fresh each session
         imageBuffer.removeAll()
         queuedCount = 0
 
-        // If recycle mode is ON, populate buffer with cached images
-        if recycleMode && !cachedImages.isEmpty {
+        // Load cached images into buffer
+        if !cachedImages.isEmpty {
             imageBuffer = cachedImages.shuffled()
             queuedCount = imageBuffer.count
-            LMLog.visual.debug("Recycle mode: loaded \(self.imageBuffer.count) cached images into buffer")
+            LMLog.visual.debug("Loaded \(self.imageBuffer.count) cached images into buffer")
         }
 
-        // Start generating new images in background
-        startContinuousGeneration()
+        // Only generate new images if NOT in cache-only mode
+        if !cacheOnly {
+            startContinuousGeneration()
+        } else {
+            LMLog.visual.info("Cache-only mode: skipping image generation")
+        }
     }
 
     /// Stop generation and clear queue
@@ -102,8 +106,8 @@ final class ImageQueue: ObservableObject {
 
         LMLog.visual.debug("Advanced to next image, \(self.queuedCount) remaining in queue")
 
-        // If recycle mode and buffer is low, refill from cache
-        if SettingsService.shared.recycleImages && imageBuffer.count < 2 && !cachedImages.isEmpty {
+        // If buffer is low, refill from cache (always do this now)
+        if imageBuffer.count < 2 && !cachedImages.isEmpty {
             refillFromCache()
         }
 
@@ -112,6 +116,9 @@ final class ImageQueue: ObservableObject {
 
     /// Request a new image be generated immediately (mood change trigger)
     func requestNewImage() {
+        // Skip if in cache-only mode
+        guard !SettingsService.shared.cacheOnly else { return }
+
         // Restart generation if not already running
         if generationTask == nil || generationTask?.isCancelled == true {
             startContinuousGeneration()
