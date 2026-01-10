@@ -23,6 +23,7 @@ final class ImageQueue: ObservableObject {
     // MARK: - State
 
     @Published private(set) var currentImage: NSImage?
+    @Published private(set) var nextImage: NSImage?  // For preloading morphs
     @Published private(set) var isGenerating = false
     @Published private(set) var queuedCount = 0
 
@@ -96,6 +97,13 @@ final class ImageQueue: ObservableObject {
 
         currentImage = imageBuffer.removeFirst()
         queuedCount = imageBuffer.count
+
+        // Expose next image for morph preloading
+        nextImage = imageBuffer.first
+        if nextImage != nil {
+            LMLog.visual.info("Next image available for preloading")
+        }
+
         LMLog.visual.debug("Advanced to next image, \(self.queuedCount) remaining in queue")
 
         // Refill if needed

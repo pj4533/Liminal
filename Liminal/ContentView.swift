@@ -54,7 +54,7 @@ struct ContentView: View {
                     }
                     .pickerStyle(.menu)
                     .frame(width: 160)
-                    .onChange(of: audioEngine.currentScale) { _, newValue in
+                    .onChange(of: audioEngine.currentScale, initial: false) { _, newValue in
                         settings.scaleName = newValue.rawValue
                     }
                 }
@@ -128,6 +128,42 @@ struct VisualDisplayView: View {
                         .frame(width: geometry.size.width, height: geometry.size.height)
                         .scaleEffect(kenBurnsScale)
                         .offset(kenBurnsOffset)
+
+                    // Status overlay (top corners)
+                    VStack {
+                        HStack {
+                            // Pool size (bottom-left when we flip)
+                            HStack(spacing: 4) {
+                                Image(systemName: "photo.stack")
+                                    .font(.caption2)
+                                Text("\(morphPlayer.poolSize)")
+                                    .font(.caption2.monospacedDigit())
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(.ultraThinMaterial)
+                            .cornerRadius(6)
+                            .padding(8)
+
+                            Spacer()
+
+                            // Preloading indicator (top-right)
+                            if morphPlayer.isPreloading {
+                                HStack(spacing: 4) {
+                                    ProgressView()
+                                        .scaleEffect(0.6)
+                                    Text("Preloading...")
+                                        .font(.caption2)
+                                }
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(.ultraThinMaterial)
+                                .cornerRadius(6)
+                                .padding(8)
+                            }
+                        }
+                        Spacer()
+                    }
                 } else {
                     // Placeholder
                     VStack(spacing: 12) {
@@ -155,6 +191,12 @@ struct VisualDisplayView: View {
             if let image = newImage {
                 morphPlayer.transitionTo(image)
                 startKenBurnsAnimation()
+            }
+        }
+        .onChange(of: visualEngine.nextImage) { (_, upcomingImage: NSImage?) in
+            // Pre-generate morph frames in background for seamless transition
+            if let upcoming = upcomingImage {
+                morphPlayer.preloadMorphTo(upcoming)
             }
         }
         .onAppear {

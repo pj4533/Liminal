@@ -16,6 +16,7 @@ final class VisualEngine: ObservableObject {
     // MARK: - State
 
     @Published private(set) var currentImage: NSImage?
+    @Published private(set) var nextImage: NSImage?  // For morph preloading
     @Published private(set) var isGenerating: Bool = false
 
     private let imageQueue = ImageQueue()
@@ -40,6 +41,14 @@ final class VisualEngine: ObservableObject {
             .receive(on: RunLoop.main)
             .sink { [weak self] image in
                 self?.currentImage = image
+            }
+            .store(in: &cancellables)
+
+        // Mirror next image for morph preloading
+        imageQueue.$nextImage
+            .receive(on: RunLoop.main)
+            .sink { [weak self] image in
+                self?.nextImage = image
             }
             .store(in: &cancellables)
 
