@@ -111,6 +111,7 @@ struct ContentView: View {
 struct VisualDisplayView: View {
     @ObservedObject var visualEngine: VisualEngine
     @StateObject private var morphPlayer = MorphPlayer()
+    @StateObject private var effectController = EffectController()
     @State private var kenBurnsScale: CGFloat = 1.0
     @State private var kenBurnsOffset: CGSize = .zero
 
@@ -120,7 +121,7 @@ struct VisualDisplayView: View {
                 // Background
                 Color.black
 
-                // Current frame from morph player with Ken Burns
+                // Current frame from morph player with Ken Burns + Effects
                 if let image = morphPlayer.currentFrame {
                     Image(nsImage: image)
                         .resizable()
@@ -128,6 +129,10 @@ struct VisualDisplayView: View {
                         .frame(width: geometry.size.width, height: geometry.size.height)
                         .scaleEffect(kenBurnsScale)
                         .offset(kenBurnsOffset)
+                        // Dreamy fBM distortion - underwater/heat haze feel
+                        .dreamyDistortion(time: effectController.time, amplitude: 0.018, speed: 0.2)
+                        // Slow hue rotation for color drift
+                        .hueShift(amount: effectController.time * 0.015)
 
                     // Status overlay (top corners)
                     VStack {
@@ -201,6 +206,7 @@ struct VisualDisplayView: View {
         }
         .onAppear {
             morphPlayer.start()
+            effectController.start()
             if let image = visualEngine.currentImage {
                 morphPlayer.setInitialImage(image)
                 startKenBurnsAnimation()
@@ -208,6 +214,7 @@ struct VisualDisplayView: View {
         }
         .onDisappear {
             morphPlayer.stop()
+            effectController.stop()
         }
     }
 
@@ -216,9 +223,9 @@ struct VisualDisplayView: View {
         kenBurnsScale = 1.0
         kenBurnsOffset = .zero
 
-        // Random direction for this cycle
-        let targetScale = CGFloat.random(in: 1.08...1.15)
-        let maxOffset: CGFloat = 20
+        // Random direction for this cycle - MORE DRAMATIC now!
+        let targetScale = CGFloat.random(in: 1.15...1.25)
+        let maxOffset: CGFloat = 40
         let targetOffset = CGSize(
             width: CGFloat.random(in: -maxOffset...maxOffset),
             height: CGFloat.random(in: -maxOffset...maxOffset)
