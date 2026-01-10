@@ -10,7 +10,7 @@ final class VisualEngine: ObservableObject {
 
     // MARK: - Configuration
 
-    private let scheduledInterval: TimeInterval = 45  // seconds between auto-advances
+    private var scheduledInterval: TimeInterval { SettingsService.shared.imageInterval }
     private let moodChangeThreshold: Float = 0.15     // significant change threshold
 
     // MARK: - State

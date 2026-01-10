@@ -5,6 +5,7 @@ import OSLog
 
 /// Manages a buffer of pre-generated images for smooth visual transitions.
 /// Always keeps 2-3 images ready, generating new ones in the background.
+/// Caches the last image to disk for instant startup.
 @MainActor
 final class ImageQueue: ObservableObject {
 
@@ -12,6 +13,12 @@ final class ImageQueue: ObservableObject {
 
     private let targetQueueSize = 3
     private let minimumQueueSize = 2
+    private let cacheURL: URL = {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let liminalDir = appSupport.appendingPathComponent("Liminal", isDirectory: true)
+        try? FileManager.default.createDirectory(at: liminalDir, withIntermediateDirectories: true)
+        return liminalDir.appendingPathComponent("cached_image.png")
+    }()
 
     // MARK: - State
 
@@ -22,6 +29,38 @@ final class ImageQueue: ObservableObject {
     private var imageBuffer: [NSImage] = []
     private var generationTask: Task<Void, Never>?
     private let gemini = GeminiClient()
+
+    // MARK: - Init
+
+    init() {
+        loadCachedImage()
+    }
+
+    // MARK: - Cache
+
+    private func loadCachedImage() {
+        guard FileManager.default.fileExists(atPath: cacheURL.path),
+              let image = NSImage(contentsOf: cacheURL) else {
+            LMLog.visual.debug("No cached image found")
+            return
+        }
+        currentImage = image
+        LMLog.visual.info("Loaded cached image for instant display")
+    }
+
+    private func cacheImage(_ image: NSImage) {
+        guard let tiffData = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiffData),
+              let pngData = bitmap.representation(using: .png, properties: [:]) else {
+            return
+        }
+        do {
+            try pngData.write(to: cacheURL)
+            LMLog.visual.debug("Cached image to disk")
+        } catch {
+            LMLog.visual.error("Failed to cache image: \(error.localizedDescription)")
+        }
+    }
 
     // MARK: - Prompt Builder
 
@@ -104,6 +143,9 @@ final class ImageQueue: ObservableObject {
             if currentImage == nil {
                 currentImage = image
             }
+
+            // Cache for quick startup next time
+            cacheImage(image)
 
             LMLog.visual.info("Generated image, queue size: \(self.imageBuffer.count)")
         } catch {

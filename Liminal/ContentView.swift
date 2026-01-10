@@ -11,6 +11,8 @@ struct ContentView: View {
     @State private var apiKeyStatus = "Checking..."
     @StateObject private var audioEngine = GenerativeEngine()
     @StateObject private var visualEngine = VisualEngine()
+    @StateObject private var settings = SettingsService.shared
+    @State private var imageInterval: Double = 30.0
 
     var body: some View {
         HStack(spacing: 0) {
@@ -52,7 +54,22 @@ struct ContentView: View {
                     }
                     .pickerStyle(.menu)
                     .frame(width: 160)
+                    .onChange(of: audioEngine.currentScale) { _, newValue in
+                        settings.scaleName = newValue.rawValue
+                    }
                 }
+
+                // Image interval slider
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Image Interval: \(Int(imageInterval))s")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Slider(value: $imageInterval, in: 10...120, step: 5)
+                        .onChange(of: imageInterval) { _, newValue in
+                            settings.imageInterval = newValue
+                        }
+                }
+                .padding(.horizontal)
 
                 Spacer()
 
@@ -61,6 +78,8 @@ struct ContentView: View {
                     if audioEngine.isRunning {
                         audioEngine.stop()
                         visualEngine.stop()
+                        // Save settings when stopping
+                        settings.saveFrom(mood: audioEngine.mood)
                     } else {
                         audioEngine.start()
                         visualEngine.start()
@@ -78,6 +97,11 @@ struct ContentView: View {
             let hasKey = EnvironmentService.shared.hasValidCredentials
             apiKeyStatus = hasKey ? "✓ Gemini API ready" : "✗ Missing API key"
             visualEngine.observeMood(audioEngine.mood)
+
+            // Apply saved settings
+            settings.applyTo(mood: audioEngine.mood)
+            audioEngine.currentScale = settings.scale
+            imageInterval = settings.imageInterval
         }
     }
 }
