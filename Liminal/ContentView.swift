@@ -16,7 +16,7 @@ struct ContentView: View {
     var body: some View {
         HStack(spacing: 0) {
             // Visual display area
-            VisualDisplayView(visualEngine: visualEngine)
+            VisualDisplayView(visualEngine: visualEngine, isPlaying: audioEngine.isRunning)
                 .frame(minWidth: 400, minHeight: 400)
 
             Divider()
@@ -96,6 +96,7 @@ struct ContentView: View {
 
 struct VisualDisplayView: View {
     @ObservedObject var visualEngine: VisualEngine
+    let isPlaying: Bool
     @StateObject private var morphPlayer = MorphPlayer()
     @StateObject private var effectController = EffectController()
 
@@ -191,9 +192,16 @@ struct VisualDisplayView: View {
         }
         .onAppear {
             morphPlayer.start()
-            effectController.start()
+            // Effects start when Play is pressed, not on appear
             if let image = visualEngine.currentImage {
                 morphPlayer.setInitialImage(image)
+            }
+        }
+        .onChange(of: isPlaying) { _, playing in
+            if playing {
+                effectController.start()
+            } else {
+                effectController.stop()
             }
         }
         .onDisappear {
