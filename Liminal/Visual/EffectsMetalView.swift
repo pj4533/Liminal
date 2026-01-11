@@ -1,28 +1,9 @@
+#if os(macOS)
+
 import MetalKit
 import AppKit
 import SwiftUI
 import OSLog
-
-// MARK: - Uniforms Structure (must match Metal shader)
-
-struct EffectsUniforms {
-    var time: Float
-    var kenBurnsScale: Float
-    var kenBurnsOffsetX: Float
-    var kenBurnsOffsetY: Float
-    var distortionAmplitude: Float
-    var distortionSpeed: Float
-    var hueBaseShift: Float
-    var hueWaveIntensity: Float
-    var hueBlendAmount: Float
-    var contrastBoost: Float
-    var saturationBoost: Float
-    var feedbackAmount: Float
-    var feedbackZoom: Float
-    var feedbackDecay: Float
-    var saliencyInfluence: Float
-    var hasSaliencyMap: Float  // 1.0 if saliency map is available, 0.0 otherwise
-}
 
 // MARK: - Effects Metal View
 
@@ -495,3 +476,5 @@ struct EffectsMetalViewRepresentable: NSViewRepresentable {
         nsView.hueBaseShift = Float(time * 0.03)
     }
 }
+
+#endif

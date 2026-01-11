@@ -1,5 +1,4 @@
 import Foundation
-import AppKit
 import Vision
 import CoreML
 import VideoToolbox
@@ -19,6 +18,7 @@ actor ImageUpscaler {
         case processingFailed(Error)
         case noResult
         case imageConversionFailed
+        case timeout
 
         var errorDescription: String? {
             switch self {
@@ -28,6 +28,7 @@ actor ImageUpscaler {
             case .processingFailed(let error): return "Upscaling failed: \(error.localizedDescription)"
             case .noResult: return "No result from upscaler"
             case .imageConversionFailed: return "Failed to convert result to image"
+            case .timeout: return "Upscaling timed out (CoreML may not be supported)"
             }
         }
     }
@@ -39,10 +40,57 @@ actor ImageUpscaler {
 
     // MARK: - Public API
 
-    /// Upscale an NSImage using RealESRGAN
+    /// Upscale a PlatformImage using RealESRGAN
     /// - Parameter image: Input image (any size)
-    /// - Returns: Upscaled 2048x2048 image
-    func upscale(_ image: NSImage) async throws -> NSImage {
+    /// - Returns: Upscaled 2048x2048 image, or original image if upscaling fails/skipped
+    @MainActor
+    func upscale(_ image: PlatformImage) async -> PlatformImage {
+        // Skip upscaling entirely in simulator - CPU-only is too slow
+        #if targetEnvironment(simulator)
+        LMLog.visual.info("⏭️ SKIPPING UPSCALE (simulator) - using original 1024x1024")
+        return image
+        #else
+
+        // Extract CGImage on main actor (where PlatformImage access is safe)
+        guard let inputCGImage = image.cgImageRepresentation else {
+            LMLog.visual.error("⚠️🚨⚠️ UPSCALER FAILED: Could not extract CGImage from input ⚠️🚨⚠️")
+            LMLog.visual.error("⚠️🚨⚠️ RETURNING ORIGINAL IMAGE (NOT UPSCALED) ⚠️🚨⚠️")
+            return image
+        }
+
+        do {
+            // Do the actual upscaling work with a 30-second timeout
+            let outputCGImage = try await withThrowingTaskGroup(of: CGImage.self) { group in
+                group.addTask {
+                    try await self.upscaleCGImage(inputCGImage)
+                }
+
+                group.addTask {
+                    try await Task.sleep(nanoseconds: 30_000_000_000) // 30 seconds
+                    throw UpscalerError.timeout
+                }
+
+                // Return first result (success or timeout)
+                let result = try await group.next()!
+                group.cancelAll()
+                return result
+            }
+
+            LMLog.visual.info("✅ Upscaling completed successfully")
+            // Convert back to PlatformImage on main actor
+            return PlatformImage(cgImage: outputCGImage)
+        } catch {
+            // LOUD logging so we know upscaling failed
+            LMLog.visual.error("⚠️🚨⚠️ UPSCALER FAILED ⚠️🚨⚠️")
+            LMLog.visual.error("⚠️🚨⚠️ Error: \(error.localizedDescription) ⚠️🚨⚠️")
+            LMLog.visual.error("⚠️🚨⚠️ RETURNING ORIGINAL IMAGE (NOT UPSCALED) ⚠️🚨⚠️")
+            return image
+        }
+        #endif
+    }
+
+    /// Internal upscaling that works with CGImage (can run on any thread)
+    private func upscaleCGImage(_ inputCGImage: CGImage) async throws -> CGImage {
         // Load model if needed
         if !isModelLoaded {
             try loadModel()
@@ -52,13 +100,8 @@ actor ImageUpscaler {
             throw UpscalerError.modelNotFound
         }
 
-        // Resize to 512x512 for the model
-        guard let resizedImage = resize(image, to: CGSize(width: 512, height: 512)) else {
-            throw UpscalerError.resizeFailed
-        }
-
-        // Convert to CGImage for Vision
-        guard let cgImage = resizedImage.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+        // Resize to 512x512 for the model using nonisolated helper
+        guard let resizedCGImage = resizeCGImage(inputCGImage, to: CGSize(width: 512, height: 512)) else {
             throw UpscalerError.resizeFailed
         }
 
@@ -66,7 +109,11 @@ actor ImageUpscaler {
         let request = VNCoreMLRequest(model: model)
         request.imageCropAndScaleOption = .scaleFill
 
-        let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+        #if targetEnvironment(simulator)
+        request.usesCPUOnly = true  // Neural Engine not available in simulator
+        #endif
+
+        let handler = VNImageRequestHandler(cgImage: resizedCGImage, options: [:])
 
         do {
             try handler.perform([request])
@@ -79,7 +126,7 @@ actor ImageUpscaler {
             throw UpscalerError.noResult
         }
 
-        // Convert pixel buffer to NSImage
+        // Convert pixel buffer to CGImage
         var outputCGImage: CGImage?
         VTCreateCGImageFromCVPixelBuffer(result.pixelBuffer, options: nil, imageOut: &outputCGImage)
 
@@ -87,10 +134,7 @@ actor ImageUpscaler {
             throw UpscalerError.imageConversionFailed
         }
 
-        let outputImage = NSImage(cgImage: finalCGImage, size: NSSize(width: 2048, height: 2048))
-        LMLog.visual.info("Upscaled image to 2048x2048")
-
-        return outputImage
+        return finalCGImage
     }
 
     // MARK: - Private
@@ -100,29 +144,25 @@ actor ImageUpscaler {
             throw UpscalerError.modelNotFound
         }
 
+        // Configure compute units based on environment
+        // Neural Engine is NOT supported in simulator - it will hang indefinitely
+        let config = MLModelConfiguration()
+        #if targetEnvironment(simulator)
+        config.computeUnits = .cpuOnly
+        LMLog.visual.info("🧠 CoreML: Using CPU-only mode (simulator)")
+        #else
+        config.computeUnits = .cpuAndGPU  // Avoid ANE for large image models
+        LMLog.visual.info("🧠 CoreML: Using CPU+GPU mode (device)")
+        #endif
+
         do {
-            let mlModel = try MLModel(contentsOf: modelURL)
+            let mlModel = try MLModel(contentsOf: modelURL, configuration: config)
             model = try VNCoreMLModel(for: mlModel)
             isModelLoaded = true
-            LMLog.visual.info("RealESRGAN model loaded")
+            LMLog.visual.info("🧠 CoreML model loaded successfully")
         } catch {
             throw UpscalerError.modelLoadFailed(error)
         }
     }
 
-    private func resize(_ image: NSImage, to size: CGSize) -> NSImage? {
-        let newImage = NSImage(size: size)
-        newImage.lockFocus()
-
-        NSGraphicsContext.current?.imageInterpolation = .high
-        image.draw(
-            in: NSRect(origin: .zero, size: size),
-            from: NSRect(origin: .zero, size: image.size),
-            operation: .copy,
-            fraction: 1.0
-        )
-
-        newImage.unlockFocus()
-        return newImage
-    }
 }

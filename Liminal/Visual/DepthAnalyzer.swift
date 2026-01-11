@@ -1,5 +1,4 @@
 import Foundation
-import AppKit
 import Vision
 import CoreImage
 import OSLog
@@ -17,8 +16,8 @@ final class DepthAnalyzer {
     /// Generate a saliency map from an image.
     /// Returns a grayscale image where bright = salient/interesting regions.
     /// Uses objectness-based saliency to find subjects vs background.
-    func analyzeDepth(from image: NSImage) async -> NSImage? {
-        guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+    func analyzeDepth(from image: PlatformImage) async -> PlatformImage? {
+        guard let cgImage = image.cgImageRepresentation else {
             LMLog.visual.error("DepthAnalyzer: Failed to get CGImage")
             return nil
         }
@@ -33,7 +32,7 @@ final class DepthAnalyzer {
 
                 if let observation = saliencyRequest.results?.first {
                     let pixelBuffer = observation.pixelBuffer
-                    let saliencyImage = self.pixelBufferToNSImage(pixelBuffer, targetSize: image.size)
+                    let saliencyImage = self.pixelBufferToPlatformImage(pixelBuffer, targetSize: image.pixelSize)
                     LMLog.visual.info("DepthAnalyzer: Generated objectness saliency map")
                     continuation.resume(returning: saliencyImage)
                 } else {
@@ -47,8 +46,8 @@ final class DepthAnalyzer {
         }
     }
 
-    /// Convert pixel buffer to NSImage at target size
-    private func pixelBufferToNSImage(_ pixelBuffer: CVPixelBuffer, targetSize: NSSize) -> NSImage? {
+    /// Convert pixel buffer to PlatformImage at target size
+    private func pixelBufferToPlatformImage(_ pixelBuffer: CVPixelBuffer, targetSize: CGSize) -> PlatformImage? {
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
 
         // Scale to match source image dimensions
@@ -60,6 +59,6 @@ final class DepthAnalyzer {
             return nil
         }
 
-        return NSImage(cgImage: cgImage, size: targetSize)
+        return PlatformImage(cgImage: cgImage)
     }
 }

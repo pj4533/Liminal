@@ -1,5 +1,4 @@
 import Foundation
-import AppKit
 import Combine
 import OSLog
 
@@ -11,33 +10,33 @@ final class ImageQueue: ObservableObject {
 
     // MARK: - State
 
-    @Published private(set) var currentImage: NSImage?
-    @Published private(set) var nextImage: NSImage?  // For preloading morphs
+    @Published private(set) var currentImage: PlatformImage?
+    @Published private(set) var nextImage: PlatformImage?  // For preloading morphs
     @Published private(set) var isGenerating = false
     @Published private(set) var queuedCount = 0
     @Published private(set) var totalCachedCount = 0  // Total images in persistent cache
 
-    private var imageBuffer: [NSImage] = []
+    private var imageBuffer: [PlatformImage] = []
     private var generationTask: Task<Void, Never>?
     private let gemini = GeminiClient()
     private let upscaler = ImageUpscaler()
     private let cache = ImageCache()
 
     // All cached images (for recycling mode)
-    private var cachedImages: [NSImage] = []
+    private var cachedImages: [PlatformImage] = []
 
     // MARK: - Init
 
     init() {
         Task {
-            await loadCachedImages()
+            loadCachedImages()
         }
     }
 
     // MARK: - Cache Loading
 
-    private func loadCachedImages() async {
-        cachedImages = await cache.loadAll()
+    private func loadCachedImages() {
+        cachedImages = cache.loadAll()
         totalCachedCount = cachedImages.count
 
         if !cachedImages.isEmpty {
@@ -168,13 +167,13 @@ final class ImageQueue: ObservableObject {
             let rawImage = try await gemini.generateImage(prompt: prompt)
             guard !Task.isCancelled else { return }
 
-            // Step 2: Upscale with RealESRGAN
+            // Step 2: Upscale with RealESRGAN (gracefully falls back to original if fails)
             LMLog.visual.debug("Upscaling with RealESRGAN...")
-            let upscaledImage = try await upscaler.upscale(rawImage)
+            let upscaledImage = await upscaler.upscale(rawImage)
             guard !Task.isCancelled else { return }
 
             // Step 3: Save to persistent cache
-            try await cache.save(upscaledImage)
+            try cache.save(upscaledImage)
 
             // Step 4: Add to buffer and update counts
             imageBuffer.append(upscaledImage)

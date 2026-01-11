@@ -1,5 +1,4 @@
 import Foundation
-import AppKit
 import OSLog
 
 /// Client for Gemini API image generation using native multimodal output.
@@ -86,8 +85,8 @@ actor GeminiClient {
 
     /// Generate an image from a text prompt
     /// - Parameter prompt: The image generation prompt
-    /// - Returns: The generated NSImage
-    func generateImage(prompt: String) async throws -> NSImage {
+    /// - Returns: The generated PlatformImage
+    func generateImage(prompt: String) async throws -> PlatformImage {
         guard EnvironmentService.shared.hasValidCredentials else {
             throw GeminiError.missingAPIKey
         }
@@ -152,8 +151,8 @@ actor GeminiClient {
         for part in parts {
             if let inlineData = part.inlineData,
                let imageData = Data(base64Encoded: inlineData.data),
-               let image = NSImage(data: imageData) {
-                LMLog.visual.info("Image generated successfully (\(Int(image.size.width))x\(Int(image.size.height)))")
+               let image = PlatformImage.from(data: imageData) {
+                LMLog.visual.info("Image generated successfully (\(Int(image.pixelSize.width))x\(Int(image.pixelSize.height)))")
                 return image
             }
         }

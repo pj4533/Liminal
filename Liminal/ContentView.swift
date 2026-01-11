@@ -5,6 +5,8 @@
 //  Created by PJ Gray on 1/10/26.
 //
 
+#if os(macOS)
+
 import SwiftUI
 import OSLog
 import AppKit
@@ -429,3 +431,5 @@ struct AudioSlider: View {
 #Preview {
     ContentView()
 }
+
+#endif

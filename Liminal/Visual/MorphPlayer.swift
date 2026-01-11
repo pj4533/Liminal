@@ -1,5 +1,4 @@
 import Foundation
-import AppKit
 import CoreImage
 import Combine
 import OSLog
@@ -16,20 +15,20 @@ final class MorphPlayer: ObservableObject {
 
     // MARK: - State
 
-    @Published private(set) var currentFrame: NSImage?
-    @Published private(set) var currentSaliencyMap: NSImage?  // Saliency map for current target image
+    @Published private(set) var currentFrame: PlatformImage?
+    @Published private(set) var currentSaliencyMap: PlatformImage?  // Saliency map for current target image
     @Published private(set) var isMorphing = false
     @Published private(set) var transitionProgress: Double = 0  // 0-1, for effects to use
     @Published private(set) var poolSize = 0
 
-    private var fromImage: NSImage?
-    private var toImage: NSImage?
+    private var fromImage: PlatformImage?
+    private var toImage: PlatformImage?
     private var fromCIImage: CIImage?
     private var toCIImage: CIImage?
     private var crossfadeStartTime: Date?
     private var displayLink: Timer?
 
-    private var imageHistory: [NSImage] = []
+    private var imageHistory: [PlatformImage] = []
     private let maxHistorySize = 10
 
     // Core Image context for GPU rendering
@@ -48,7 +47,7 @@ final class MorphPlayer: ObservableObject {
         LMLog.visual.info("MorphPlayer stopped")
     }
 
-    func setInitialImage(_ image: NSImage) {
+    func setInitialImage(_ image: PlatformImage) {
         currentFrame = image
         addToHistory(image)
         poolSize = imageHistory.count
@@ -60,7 +59,7 @@ final class MorphPlayer: ObservableObject {
         }
     }
 
-    func transitionTo(_ newImage: NSImage) {
+    func transitionTo(_ newImage: PlatformImage) {
         guard let current = currentFrame else {
             currentFrame = newImage
             addToHistory(newImage)
@@ -102,7 +101,7 @@ final class MorphPlayer: ObservableObject {
         }
     }
 
-    func addToPool(_ image: NSImage) {
+    func addToPool(_ image: PlatformImage) {
         if currentFrame != nil {
             transitionTo(image)
         } else {
@@ -112,7 +111,7 @@ final class MorphPlayer: ObservableObject {
 
     // MARK: - Private
 
-    private func addToHistory(_ image: NSImage) {
+    private func addToHistory(_ image: PlatformImage) {
         imageHistory.append(image)
         while imageHistory.count > maxHistorySize {
             imageHistory.removeFirst()
@@ -172,7 +171,7 @@ final class MorphPlayer: ObservableObject {
     }
 
     /// GPU-accelerated image blending using Core Image dissolve transition
-    private func blendImages(progress: Double) -> NSImage? {
+    private func blendImages(progress: Double) -> PlatformImage? {
         guard let fromCI = fromCIImage, let toCI = toCIImage else { return nil }
 
         let easedProgress = easeInOutCubic(progress)
@@ -189,15 +188,13 @@ final class MorphPlayer: ObservableObject {
         let extent = outputCI.extent
         guard let cgImage = ciContext.createCGImage(outputCI, from: extent) else { return nil }
 
-        // Convert to NSImage
-        return NSImage(cgImage: cgImage, size: NSSize(width: extent.width, height: extent.height))
+        // Convert to PlatformImage
+        return PlatformImage(cgImage: cgImage)
     }
 
-    /// Convert NSImage to CIImage for GPU processing
-    private func ciImage(from nsImage: NSImage) -> CIImage? {
-        guard let tiffData = nsImage.tiffRepresentation,
-              let bitmap = NSBitmapImageRep(data: tiffData),
-              let cgImage = bitmap.cgImage else {
+    /// Convert PlatformImage to CIImage for GPU processing
+    private func ciImage(from image: PlatformImage) -> CIImage? {
+        guard let cgImage = image.cgImageRepresentation else {
             return nil
         }
         return CIImage(cgImage: cgImage)
@@ -213,7 +210,7 @@ final class MorphPlayer: ObservableObject {
 
     // MARK: - Saliency Analysis
 
-    private func generateSaliencyMap(for image: NSImage) async {
+    private func generateSaliencyMap(for image: PlatformImage) async {
         let startTime = Date()
 
         if let saliencyMap = await DepthAnalyzer.shared.analyzeDepth(from: image) {

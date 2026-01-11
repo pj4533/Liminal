@@ -1,11 +1,11 @@
 import Foundation
-import AppKit
 import OSLog
 
 /// Manages persistent cache of upscaled images.
 /// Images are stored in Application Support/Liminal/UpscaledImages/
 /// Each image is saved with a UUID filename and loaded on startup.
-actor ImageCache {
+@MainActor
+final class ImageCache {
 
     // MARK: - Configuration
 
@@ -20,16 +20,14 @@ actor ImageCache {
     // MARK: - Public API
 
     /// Save an upscaled image to the cache
-    /// - Parameter image: The upscaled NSImage to save
+    /// - Parameter image: The upscaled PlatformImage to save
     /// - Returns: The URL where the image was saved
     @discardableResult
-    func save(_ image: NSImage) async throws -> URL {
+    func save(_ image: PlatformImage) throws -> URL {
         let filename = UUID().uuidString + ".png"
         let fileURL = cacheDirectory.appendingPathComponent(filename)
 
-        guard let tiffData = image.tiffRepresentation,
-              let bitmap = NSBitmapImageRep(data: tiffData),
-              let pngData = bitmap.representation(using: .png, properties: [:]) else {
+        guard let pngData = image.pngData else {
             throw CacheError.conversionFailed
         }
 
@@ -40,8 +38,8 @@ actor ImageCache {
     }
 
     /// Load all cached images
-    /// - Returns: Array of cached NSImages, newest first
-    func loadAll() async -> [NSImage] {
+    /// - Returns: Array of cached PlatformImages, newest first
+    func loadAll() -> [PlatformImage] {
         do {
             let files = try FileManager.default.contentsOfDirectory(
                 at: cacheDirectory,
@@ -57,9 +55,9 @@ actor ImageCache {
                 return date1 > date2
             }
 
-            var images: [NSImage] = []
+            var images: [PlatformImage] = []
             for fileURL in sortedFiles {
-                if let image = NSImage(contentsOf: fileURL) {
+                if let image = PlatformImage.from(url: fileURL) {
                     images.append(image)
                 }
             }
@@ -74,22 +72,20 @@ actor ImageCache {
 
     /// Get count of cached images
     var count: Int {
-        get async {
-            do {
-                let files = try FileManager.default.contentsOfDirectory(
-                    at: cacheDirectory,
-                    includingPropertiesForKeys: nil,
-                    options: [.skipsHiddenFiles]
-                )
-                return files.filter { $0.pathExtension == "png" }.count
-            } catch {
-                return 0
-            }
+        do {
+            let files = try FileManager.default.contentsOfDirectory(
+                at: cacheDirectory,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            )
+            return files.filter { $0.pathExtension == "png" }.count
+        } catch {
+            return 0
         }
     }
 
     /// Clear all cached images
-    func clearAll() async {
+    func clearAll() {
         do {
             let files = try FileManager.default.contentsOfDirectory(
                 at: cacheDirectory,

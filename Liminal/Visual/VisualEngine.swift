@@ -1,5 +1,4 @@
 import Foundation
-import AppKit
 import Combine
 import OSLog
 
@@ -14,10 +13,11 @@ final class VisualEngine: ObservableObject {
 
     // MARK: - State
 
-    @Published private(set) var currentImage: NSImage?
-    @Published private(set) var nextImage: NSImage?  // For morph preloading
+    @Published private(set) var currentImage: PlatformImage?
+    @Published private(set) var nextImage: PlatformImage?  // For morph preloading
     @Published private(set) var isGenerating: Bool = false
     @Published private(set) var totalCachedCount: Int = 0
+    @Published private(set) var queuedCount: Int = 0
 
     private let imageQueue = ImageQueue()
     private var scheduledTimer: Timer?
@@ -59,6 +59,13 @@ final class VisualEngine: ObservableObject {
             .receive(on: RunLoop.main)
             .sink { [weak self] count in
                 self?.totalCachedCount = count
+            }
+            .store(in: &cancellables)
+
+        imageQueue.$queuedCount
+            .receive(on: RunLoop.main)
+            .sink { [weak self] count in
+                self?.queuedCount = count
             }
             .store(in: &cancellables)
 
