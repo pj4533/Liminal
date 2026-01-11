@@ -50,10 +50,10 @@
 - [x] Image caching for instant startup display
 - [x] Image interval slider (10-120s)
 
-### Phase 5: Visual Morphing (PARTIAL)
+### Phase 5: Visual Morphing (DONE)
 - [x] SwiftUI crossfade transitions (2s ease-in-out)
-- [ ] RIFE integration (optional enhancement - not installed)
-- [ ] Metal shader effects (optional enhancement)
+- [x] GPU-accelerated crossfade via CIDissolveTransition
+- [x] Metal shader effects (Ken Burns, fBM, saliency hue, trails)
 
 ## Not Started
 
