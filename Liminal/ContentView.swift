@@ -241,6 +241,7 @@ struct VisualDisplayView: View {
                 if morphPlayer.currentFrame != nil {
                     EffectsMetalViewRepresentable(
                         sourceImage: morphPlayer.currentFrame,
+                        saliencyMap: morphPlayer.currentSaliencyMap,
                         time: effectController.time,
                         kenBurnsScale: kenBurnsScale,
                         kenBurnsOffset: kenBurnsOffset,

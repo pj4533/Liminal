@@ -100,6 +100,8 @@ struct EffectsUniforms {
     float feedbackAmount;       // 0 = no trails, 1 = full trails
     float feedbackZoom;         // slight zoom on feedback (1.0 = no zoom)
     float feedbackDecay;        // darken feedback each frame
+    float saliencyInfluence;    // how much saliency affects hue (0 = none, 1 = full)
+    float hasSaliencyMap;       // 1.0 if saliency map available, 0.0 otherwise
 };
 
 // MARK: - Full-screen Quad Vertex Shader
@@ -132,6 +134,7 @@ fragment half4 effectsFragment(
     VertexOut in [[stage_in]],
     texture2d<half> sourceTexture [[texture(0)]],
     texture2d<half> feedbackTexture [[texture(1)]],
+    texture2d<half> saliencyTexture [[texture(2)]],
     constant EffectsUniforms &uniforms [[buffer(0)]]
 ) {
     constexpr sampler texSampler(address::clamp_to_edge, filter::linear);
@@ -194,8 +197,24 @@ fragment half4 effectsFragment(
 
     float spatialOffset = horizWaves + vertWaves + diagWaves + radialWaves;
 
-    hsv.x = fract(hsv.x + half(uniforms.hueBaseShift + spatialOffset));
-    hsv.y = min(1.0h, hsv.y * 1.4h);  // saturation boost
+    // === SALIENCY-BASED HUE VARIATION ===
+    // Sample saliency map if available - subjects get different hue treatment
+    float saliencyOffset = 0.0;
+    half saliencyValue = 0.5h;  // Default to neutral
+    if (uniforms.hasSaliencyMap > 0.5) {
+        // Sample saliency at the original UV (before distortion for consistency)
+        saliencyValue = saliencyTexture.sample(texSampler, in.texCoord).r;
+        // Shift hue based on saliency: high saliency (subjects) shift one direction,
+        // low saliency (background) shifts the other direction
+        // Range: -0.5 to +0.5 * saliencyInfluence
+        saliencyOffset = (float(saliencyValue) - 0.5) * uniforms.saliencyInfluence;
+    }
+
+    hsv.x = fract(hsv.x + half(uniforms.hueBaseShift + spatialOffset + saliencyOffset));
+
+    // Saturation boost - slightly more for salient regions
+    float satBoost = 1.4 + float(saliencyValue) * 0.2;  // 1.4 to 1.6
+    hsv.y = min(1.0h, hsv.y * half(satBoost));
 
     // Convert back to RGB
     half4 K2 = half4(1.0h, 2.0h / 3.0h, 1.0h / 3.0h, 3.0h);

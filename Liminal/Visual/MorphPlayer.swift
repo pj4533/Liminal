@@ -17,6 +17,7 @@ final class MorphPlayer: ObservableObject {
     // MARK: - State
 
     @Published private(set) var currentFrame: NSImage?
+    @Published private(set) var currentSaliencyMap: NSImage?  // Saliency map for current target image
     @Published private(set) var isMorphing = false
     @Published private(set) var transitionProgress: Double = 0  // 0-1, for effects to use
     @Published private(set) var poolSize = 0
@@ -52,6 +53,11 @@ final class MorphPlayer: ObservableObject {
         addToHistory(image)
         poolSize = imageHistory.count
         LMLog.visual.info("Initial image set")
+
+        // Generate saliency map asynchronously
+        Task {
+            await generateSaliencyMap(for: image)
+        }
     }
 
     func transitionTo(_ newImage: NSImage) {
@@ -60,6 +66,11 @@ final class MorphPlayer: ObservableObject {
             addToHistory(newImage)
             poolSize = imageHistory.count
             LMLog.visual.info("First image displayed (no transition needed)")
+
+            // Generate saliency map asynchronously
+            Task {
+                await generateSaliencyMap(for: newImage)
+            }
             return
         }
 
@@ -84,6 +95,11 @@ final class MorphPlayer: ObservableObject {
         addToHistory(newImage)
         poolSize = imageHistory.count
         startCrossfade()
+
+        // Generate saliency map for the target image asynchronously
+        Task {
+            await generateSaliencyMap(for: newImage)
+        }
     }
 
     func addToPool(_ image: NSImage) {
@@ -192,6 +208,23 @@ final class MorphPlayer: ObservableObject {
             return 4 * t * t * t
         } else {
             return 1 - pow(-2 * t + 2, 3) / 2
+        }
+    }
+
+    // MARK: - Saliency Analysis
+
+    private func generateSaliencyMap(for image: NSImage) async {
+        let startTime = Date()
+
+        if let saliencyMap = await DepthAnalyzer.shared.analyzeDepth(from: image) {
+            // Update on main actor
+            await MainActor.run {
+                self.currentSaliencyMap = saliencyMap
+            }
+            let elapsed = Date().timeIntervalSince(startTime) * 1000
+            LMLog.visual.info("🔍 Saliency map generated in \(String(format: "%.0f", elapsed))ms")
+        } else {
+            LMLog.visual.warning("⚠️ Failed to generate saliency map")
         }
     }
 }

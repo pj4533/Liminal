@@ -20,6 +20,8 @@ struct EffectsUniforms {
     var feedbackAmount: Float
     var feedbackZoom: Float
     var feedbackDecay: Float
+    var saliencyInfluence: Float
+    var hasSaliencyMap: Float  // 1.0 if saliency map is available, 0.0 otherwise
 }
 
 // MARK: - Effects Metal View
@@ -43,6 +45,10 @@ final class EffectsMetalView: MTKView {
     private var textureLoader: MTKTextureLoader?
     private var lastSourceImageHash: Int = 0  // Track image changes
 
+    // Saliency texture (from DepthAnalyzer)
+    private var saliencyTexture: MTLTexture?
+    private var lastSaliencyImageHash: Int = 0
+
     // MARK: - Effect Parameters
 
     var effectTime: Float = 0
@@ -59,6 +65,7 @@ final class EffectsMetalView: MTKView {
     var feedbackAmount: Float = 0.5  // Controlled by delay slider
     var feedbackZoom: Float = 0.96  // < 1 = expand outward, closer to 1 = tighter spacing
     var feedbackDecay: Float = 0.5  // Aggressive fade - ghosts become transparent fast
+    var saliencyInfluence: Float = 0.6  // How much saliency affects hue (0 = none, 1 = full)
 
     // Track if we have a valid source
     private var hasValidSource = false
@@ -240,6 +247,46 @@ final class EffectsMetalView: MTKView {
         }
     }
 
+    /// Update the saliency map texture - ONLY if image changed
+    func updateSaliencyMap(_ image: NSImage?) {
+        guard let image = image else {
+            saliencyTexture = nil
+            return
+        }
+
+        // Check if saliency map actually changed
+        let newHash = image.hash
+        if newHash == lastSaliencyImageHash && saliencyTexture != nil {
+            return
+        }
+
+        guard let textureLoader = self.textureLoader else {
+            return
+        }
+
+        // Convert NSImage to CGImage
+        guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            LMLog.visual.error("❌ Failed to get CGImage from saliency NSImage")
+            return
+        }
+
+        // Load as Metal texture
+        do {
+            let options: [MTKTextureLoader.Option: Any] = [
+                .SRGB: false,
+                .generateMipmaps: false
+            ]
+            saliencyTexture = try textureLoader.newTexture(cgImage: cgImage, options: options)
+            lastSaliencyImageHash = newHash
+
+            if let tex = saliencyTexture {
+                LMLog.visual.info("🔍 Saliency texture loaded: \(tex.width)x\(tex.height)")
+            }
+        } catch {
+            LMLog.visual.error("❌ Failed to create saliency texture: \(error.localizedDescription)")
+        }
+    }
+
     // MARK: - Rendering
 
     override func draw(_ dirtyRect: NSRect) {
@@ -287,6 +334,7 @@ final class EffectsMetalView: MTKView {
         }
 
         // Update uniforms
+        let hasSaliency = saliencyTexture != nil
         var uniforms = EffectsUniforms(
             time: effectTime,
             kenBurnsScale: kenBurnsScale,
@@ -301,7 +349,9 @@ final class EffectsMetalView: MTKView {
             saturationBoost: saturationBoost,
             feedbackAmount: feedbackAmount,
             feedbackZoom: feedbackZoom,
-            feedbackDecay: feedbackDecay
+            feedbackDecay: feedbackDecay,
+            saliencyInfluence: saliencyInfluence,
+            hasSaliencyMap: hasSaliency ? 1.0 : 0.0
         )
         memcpy(uniformBuffer.contents(), &uniforms, MemoryLayout<EffectsUniforms>.size)
 
@@ -326,6 +376,9 @@ final class EffectsMetalView: MTKView {
             encoder.setRenderPipelineState(pipelineState)
             encoder.setFragmentTexture(sourceTexture, index: 0)
             encoder.setFragmentTexture(readFeedback, index: 1)
+            if let saliencyTex = saliencyTexture {
+                encoder.setFragmentTexture(saliencyTex, index: 2)
+            }
             encoder.setFragmentBuffer(uniformBuffer, offset: 0, index: 0)
             encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
             encoder.endEncoding()
@@ -343,6 +396,9 @@ final class EffectsMetalView: MTKView {
             encoder.setRenderPipelineState(pipelineState)
             encoder.setFragmentTexture(sourceTexture, index: 0)
             encoder.setFragmentTexture(writeFeedback, index: 1)  // USE writeFeedback for trails!
+            if let saliencyTex = saliencyTexture {
+                encoder.setFragmentTexture(saliencyTex, index: 2)
+            }
             encoder.setFragmentBuffer(uniformBuffer, offset: 0, index: 0)
             encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
             encoder.endEncoding()
@@ -407,6 +463,7 @@ final class EffectsMetalView: MTKView {
 
 struct EffectsMetalViewRepresentable: NSViewRepresentable {
     let sourceImage: NSImage?
+    let saliencyMap: NSImage?
     let time: Double
     let kenBurnsScale: CGFloat
     let kenBurnsOffset: CGSize
@@ -422,6 +479,9 @@ struct EffectsMetalViewRepresentable: NSViewRepresentable {
     func updateNSView(_ nsView: EffectsMetalView, context: Context) {
         // Update source image (internally checks if changed)
         nsView.updateSourceImage(sourceImage)
+
+        // Update saliency map (internally checks if changed)
+        nsView.updateSaliencyMap(saliencyMap)
 
         // Update effect parameters
         nsView.effectTime = Float(time)
