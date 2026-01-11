@@ -18,7 +18,7 @@ struct ContentView: View {
     var body: some View {
         HStack(spacing: 0) {
             // Visual display area
-            VisualDisplayView(visualEngine: visualEngine, isPlaying: audioEngine.isRunning)
+            VisualDisplayView(visualEngine: visualEngine, settings: settings, isPlaying: audioEngine.isRunning)
                 .frame(minWidth: 400, minHeight: 400)
 
             Divider()
@@ -197,21 +197,20 @@ struct SettingsSheetView: View {
 
 struct VisualDisplayView: View {
     @ObservedObject var visualEngine: VisualEngine
+    @ObservedObject var settings: SettingsService
     let isPlaying: Bool
     @StateObject private var morphPlayer = MorphPlayer()
     @StateObject private var effectController = EffectController()
     @State private var lastLoggedSecond: Int = -1
 
-    // Ken Burns is now computed from effectController.time for smooth continuous motion
+    // Ken Burns computed from effectController.time for smooth continuous motion
     private var kenBurnsScale: CGFloat {
-        // Oscillates between 1.0 and 1.4 using multiple sine waves for organic feel
         let base = 1.2
         let variation = 0.15 * sin(effectController.time * 0.05) + 0.05 * sin(effectController.time * 0.03)
         return CGFloat(base + variation)
     }
 
     private var kenBurnsOffset: CGSize {
-        // Lissajous-like pattern for smooth panning that never jumps
         let maxOffset: Double = 60
         return CGSize(
             width: maxOffset * sin(effectController.time * 0.04) + 20 * sin(effectController.time * 0.025),
@@ -219,14 +218,17 @@ struct VisualDisplayView: View {
         )
     }
 
-    // Distortion amplitude - boosted 10x during crossfade transitions to mask the blend
+    // Distortion amplitude - boosted during crossfade transitions
     private var distortionAmplitude: Double {
         let baseAmplitude = 0.012
         let boostMultiplier = 10.0
-        // Ease in and out of the boost using transition progress
-        // Peak at middle of transition (0.5), smooth ramp up/down
         let transitionBoost = sin(morphPlayer.transitionProgress * .pi)
         return baseAmplitude * (1.0 + (boostMultiplier - 1.0) * transitionBoost)
+    }
+
+    // Feedback amount from delay slider (0-1 maps to 0-0.85 for usable range)
+    private var feedbackAmount: Float {
+        return settings.delay * 0.85
     }
 
     var body: some View {
@@ -235,18 +237,17 @@ struct VisualDisplayView: View {
                 // Background
                 Color.black
 
-                // Current frame from morph player with Ken Burns + Effects
-                if let image = morphPlayer.currentFrame {
-                    Image(nsImage: image)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .frame(width: geometry.size.width, height: geometry.size.height)
-                        .scaleEffect(kenBurnsScale)
-                        .offset(kenBurnsOffset)
-                        // Dreamy fBM distortion - boosted during crossfade to mask the blend
-                        .dreamyDistortion(time: effectController.time, amplitude: distortionAmplitude, speed: 0.08)
-                        // Spatial hue waves with Color blend mode - psychedelic but preserves image structure
-                        .spatialHueShift(time: effectController.time, baseShift: effectController.time * 0.03, waveIntensity: 0.5, blendAmount: 0.65)
+                // Metal view with all effects + feedback trails
+                if morphPlayer.currentFrame != nil {
+                    EffectsMetalViewRepresentable(
+                        sourceImage: morphPlayer.currentFrame,
+                        time: effectController.time,
+                        kenBurnsScale: kenBurnsScale,
+                        kenBurnsOffset: kenBurnsOffset,
+                        distortionAmplitude: distortionAmplitude,
+                        feedbackAmount: feedbackAmount
+                    )
+                    .frame(width: geometry.size.width, height: geometry.size.height)
 
                     // Status overlay (top corners)
                     VStack {
@@ -313,8 +314,8 @@ struct VisualDisplayView: View {
                 effectController.stop()
             }
         }
+        // Log Ken Burns values periodically for debugging
         .onChange(of: effectController.time) { _, newTime in
-            // Log Ken Burns values once per second
             let currentSecond = Int(newTime)
             if currentSecond > lastLoggedSecond {
                 lastLoggedSecond = currentSecond
