@@ -231,6 +231,26 @@ struct VisualDisplayView: View {
         return settings.delay * 0.85
     }
 
+    // Calculate frame size that preserves image aspect ratio within container
+    private func fittedSize(for imageSize: CGSize, in containerSize: CGSize) -> CGSize {
+        guard imageSize.width > 0 && imageSize.height > 0 else { return containerSize }
+
+        let imageAspect = imageSize.width / imageSize.height
+        let containerAspect = containerSize.width / containerSize.height
+
+        if imageAspect > containerAspect {
+            // Image is wider - fit to width
+            let width = containerSize.width
+            let height = width / imageAspect
+            return CGSize(width: width, height: height)
+        } else {
+            // Image is taller - fit to height
+            let height = containerSize.height
+            let width = height * imageAspect
+            return CGSize(width: width, height: height)
+        }
+    }
+
     var body: some View {
         GeometryReader { geometry in
             ZStack {
@@ -238,9 +258,10 @@ struct VisualDisplayView: View {
                 Color.black
 
                 // Metal view with all effects + feedback trails
-                if morphPlayer.currentFrame != nil {
+                if let currentFrame = morphPlayer.currentFrame {
+                    let fitted = fittedSize(for: currentFrame.size, in: geometry.size)
                     EffectsMetalViewRepresentable(
-                        sourceImage: morphPlayer.currentFrame,
+                        sourceImage: currentFrame,
                         saliencyMap: morphPlayer.currentSaliencyMap,
                         time: effectController.time,
                         kenBurnsScale: kenBurnsScale,
@@ -248,7 +269,7 @@ struct VisualDisplayView: View {
                         distortionAmplitude: distortionAmplitude,
                         feedbackAmount: feedbackAmount
                     )
-                    .frame(width: geometry.size.width, height: geometry.size.height)
+                    .frame(width: fitted.width, height: fitted.height)
 
                     // Status overlay (top corners)
                     VStack {
