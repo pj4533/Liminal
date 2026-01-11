@@ -9,6 +9,10 @@
 
 Liminal creates endless, evolving ambient soundscapes synchronized with AI-generated visuals that morph continuously. Run it in the background, let it play, and drift.
 
+<p align="center">
+  <img src="liminal_screenshot.png" alt="Liminal Screenshot" width="600">
+</p>
+
 ## Features
 
 - **Generative Audio** — Three-voice ambient synthesis with Markov-chain note selection across 47 musical scales

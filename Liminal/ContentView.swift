@@ -7,9 +7,65 @@
 
 import SwiftUI
 import OSLog
+import AppKit
+
+// MARK: - Window Aspect Ratio Constraint
+
+/// Enforces window resizing so visual area stays square (width = height + controlPanelWidth)
+final class SquareVisualWindowDelegate: NSObject, NSWindowDelegate {
+    static let controlPanelWidth: CGFloat = 281  // 280 panel + 1 divider
+
+    func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
+        // Calculate title bar height for this window
+        let titleBarHeight = sender.frame.height - sender.contentRect(forFrameRect: sender.frame).height
+        let contentHeight = frameSize.height - titleBarHeight
+        // Enforce: visual width = visual height (square)
+        // Total content width = visual width + control panel width
+        let newWidth = contentHeight + Self.controlPanelWidth
+        return NSSize(width: newWidth, height: frameSize.height)
+    }
+}
+
+struct WindowAccessor: NSViewRepresentable {
+    // CRITICAL: Store delegate in Coordinator so it stays alive
+    class Coordinator {
+        let delegate = SquareVisualWindowDelegate()
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        // Use async to ensure window is attached
+        DispatchQueue.main.async {
+            guard let window = view.window else { return }
+
+            // Set our delegate (stored in coordinator so it won't be deallocated)
+            window.delegate = context.coordinator.delegate
+
+            // Set initial frame to enforce square visual area
+            let titleBarHeight = window.frame.height - window.contentRect(forFrameRect: window.frame).height
+            let contentHeight = window.contentRect(forFrameRect: window.frame).height
+            let newWidth = contentHeight + SquareVisualWindowDelegate.controlPanelWidth
+            let newFrame = NSRect(
+                x: window.frame.origin.x,
+                y: window.frame.origin.y,
+                width: newWidth,
+                height: window.frame.height
+            )
+            window.setFrame(newFrame, display: true, animate: false)
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+// MARK: - Content View
 
 struct ContentView: View {
-    @State private var apiKeyStatus = "Checking..."
     @State private var showingSettings = false
     @StateObject private var audioEngine = GenerativeEngine()
     @StateObject private var visualEngine = VisualEngine()
@@ -43,10 +99,6 @@ struct ContentView: View {
                     }
                     .buttonStyle(.plain)
                 }
-
-                Text(apiKeyStatus)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
 
                 Divider()
 
@@ -107,9 +159,8 @@ struct ContentView: View {
             .frame(width: 280)
         }
         .frame(minWidth: 700, minHeight: 450)
+        .background(WindowAccessor())
         .onAppear {
-            let hasKey = EnvironmentService.shared.hasValidCredentials
-            apiKeyStatus = hasKey ? "✓ Gemini API ready" : "✗ Missing API key"
             // Apply saved settings to audio engine on launch
             audioEngine.delay = settings.delay
             audioEngine.reverb = settings.reverb
@@ -134,6 +185,10 @@ struct SettingsSheetView: View {
     @ObservedObject var audioEngine: GenerativeEngine
     @Environment(\.dismiss) private var dismiss
 
+    private var apiKeyStatus: String {
+        EnvironmentService.shared.hasValidCredentials ? "✓ Gemini API ready" : "✗ Missing API key"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             HStack {
@@ -145,6 +200,18 @@ struct SettingsSheetView: View {
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
+            }
+
+            Divider()
+
+            // API Status
+            VStack(alignment: .leading, spacing: 12) {
+                Text("API")
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
+
+                Text(apiKeyStatus)
+                    .font(.body)
             }
 
             Divider()
@@ -189,7 +256,7 @@ struct SettingsSheetView: View {
             Spacer()
         }
         .padding(20)
-        .frame(width: 400, height: 320)
+        .frame(width: 400, height: 380)
     }
 }
 
