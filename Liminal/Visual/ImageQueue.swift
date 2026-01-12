@@ -361,6 +361,15 @@ final class ImageQueue: ObservableObject {
             // This is the CRITICAL path - render loop reads from here, no MainActor!
             let bufferId = String(describing: ObjectIdentifier(imageBuffer))
             LMLog.visual.info("🔄 Pipeline Step 3: Checking atomic buffer id=\(bufferId)")
+
+            #if os(visionOS)
+            // visionOS: ALWAYS store new images directly to atomic buffer
+            // No cycling queue needed - the render loop reads directly from buffer
+            // Each new image replaces the previous one immediately
+            LMLog.visual.info("🔄 Pipeline (visionOS): 🎯 STORING CGImage (always replace)")
+            imageBuffer.storeCurrent(upscaledCGImage)
+            LMLog.visual.info("🔄 Pipeline ✅ COMPLETE (visionOS) - CGImage \(upscaledCGImage.width)x\(upscaledCGImage.height) stored")
+            #else
             let currentInBuffer = imageBuffer.loadCurrent()
             let needsCurrentImage = currentInBuffer == nil
             LMLog.visual.info("🔄 Pipeline: Atomic buffer \(currentInBuffer != nil ? "has image" : "EMPTY")")
@@ -372,14 +381,6 @@ final class ImageQueue: ObservableObject {
             } else {
                 LMLog.visual.debug("🔄 Pipeline: Buffer has image, not replacing")
             }
-
-            // On visionOS, skip Steps 4-7 entirely!
-            // The render loop reads CGImage directly from atomic buffer.
-            // Creating PlatformImage (UIImage) hangs because it needs MainActor,
-            // which is starved by the 90fps render loop. Classic deadlock!
-            #if os(visionOS)
-            LMLog.visual.info("🔄 Pipeline ✅ COMPLETE (visionOS) - CGImage in atomic buffer, skipping PlatformImage/cache")
-            #else
             // Steps 4-7 only needed for macOS (cache, @Published, etc.)
             LMLog.visual.info("🔄 Pipeline Step 4: Creating PlatformImage...")
             let upscaledPlatformImage = PlatformImage(cgImage: upscaledCGImage)
