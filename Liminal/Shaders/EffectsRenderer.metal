@@ -104,6 +104,18 @@ struct EffectsUniforms {
     float hasSaliencyMap;       // 1.0 if saliency map available, 0.0 otherwise
 };
 
+// MARK: - DEBUG: Simple Passthrough Fragment (no effects)
+// Use this to verify shader pipeline is working before debugging effects
+
+fragment half4 passthroughFragment(
+    VertexOut in [[stage_in]],
+    texture2d<half> sourceTexture [[texture(0)]],
+    constant EffectsUniforms &uniforms [[buffer(0)]]
+) {
+    constexpr sampler texSampler(address::clamp_to_edge, filter::linear);
+    return sourceTexture.sample(texSampler, in.texCoord);
+}
+
 // MARK: - Full-screen Quad Vertex Shader
 
 vertex VertexOut effectsVertex(uint vertexID [[vertex_id]]) {
@@ -130,6 +142,10 @@ vertex VertexOut effectsVertex(uint vertexID [[vertex_id]]) {
 
 // MARK: - Combined Effects Fragment Shader
 
+// DEBUG: Set to 0 for full effects, 1-6 for debug stages
+// 1 = just source, 2 = +KenBurns, 3 = +fBM, 4 = +color, 5 = +feedback, 0 = all
+#define DEBUG_STAGE 0
+
 fragment half4 effectsFragment(
     VertexOut in [[stage_in]],
     texture2d<half> sourceTexture [[texture(0)]],
@@ -141,6 +157,11 @@ fragment half4 effectsFragment(
 
     float2 uv = in.texCoord;
 
+    // DEBUG STAGE 1: Just sample source texture (should match passthrough)
+    #if DEBUG_STAGE == 1
+    return sourceTexture.sample(texSampler, uv);
+    #endif
+
     // === 1. KEN BURNS TRANSFORM ===
     // Apply scale around center
     float2 center = float2(0.5, 0.5);
@@ -149,6 +170,12 @@ fragment half4 effectsFragment(
     // Apply offset (normalized, convert to UV space)
     centered -= uniforms.kenBurnsOffset * 0.05;  // scale down offset
     uv = centered + center;
+
+    // DEBUG STAGE 2: Ken Burns only
+    #if DEBUG_STAGE == 2
+    uv = clamp(uv, float2(0.001), float2(0.999));
+    return sourceTexture.sample(texSampler, uv);
+    #endif
 
     // === 2. DREAMY DISTORTION (fBM) ===
     float2 noiseCoord = uv * 3.0;  // frequency
@@ -162,6 +189,11 @@ fragment half4 effectsFragment(
 
     // Sample source texture
     half4 color = sourceTexture.sample(texSampler, uv);
+
+    // DEBUG STAGE 3: Ken Burns + fBM distortion
+    #if DEBUG_STAGE == 3
+    return color;
+    #endif
 
     // === 3. SPATIAL HUE SHIFT ===
     // Store original luminance

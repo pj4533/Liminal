@@ -23,6 +23,7 @@ final class OffscreenEffectsRenderer {
     private let device: MTLDevice
     private let commandQueue: MTLCommandQueue
     private let pipelineState: MTLRenderPipelineState
+    private let passthroughPipelineState: MTLRenderPipelineState  // DEBUG: Simple passthrough
     private let samplerState: MTLSamplerState
 
     // MARK: - Textures
@@ -75,7 +76,12 @@ final class OffscreenEffectsRenderer {
             return nil
         }
 
-        // Create pipeline
+        guard let passthroughFragFunc = library.makeFunction(name: "passthroughFragment") else {
+            LMLog.visual.error("❌ Failed to load passthroughFragment")
+            return nil
+        }
+
+        // Create full effects pipeline
         let pipelineDescriptor = MTLRenderPipelineDescriptor()
         pipelineDescriptor.vertexFunction = vertexFunc
         pipelineDescriptor.fragmentFunction = fragmentFunc
@@ -84,7 +90,20 @@ final class OffscreenEffectsRenderer {
         do {
             pipelineState = try device.makeRenderPipelineState(descriptor: pipelineDescriptor)
         } catch {
-            LMLog.visual.error("❌ Failed to create pipeline: \(error.localizedDescription)")
+            LMLog.visual.error("❌ Failed to create effects pipeline: \(error.localizedDescription)")
+            return nil
+        }
+
+        // Create passthrough pipeline for debugging
+        let passthroughDescriptor = MTLRenderPipelineDescriptor()
+        passthroughDescriptor.vertexFunction = vertexFunc
+        passthroughDescriptor.fragmentFunction = passthroughFragFunc
+        passthroughDescriptor.colorAttachments[0].pixelFormat = .bgra8Unorm
+
+        do {
+            passthroughPipelineState = try device.makeRenderPipelineState(descriptor: passthroughDescriptor)
+        } catch {
+            LMLog.visual.error("❌ Failed to create passthrough pipeline: \(error.localizedDescription)")
             return nil
         }
 
@@ -113,6 +132,41 @@ final class OffscreenEffectsRenderer {
 
         self.outputTexture = device.makeTexture(descriptor: textureDescriptor)
         self.feedbackTexture = device.makeTexture(descriptor: textureDescriptor)
+
+        // Initialize feedback to black (prevents garbage on first frame)
+        if let feedback = self.feedbackTexture {
+            let blackData = [UInt8](repeating: 0, count: outputSize * outputSize * 4)
+            feedback.replace(
+                region: MTLRegion(origin: MTLOrigin(x: 0, y: 0, z: 0),
+                                  size: MTLSize(width: outputSize, height: outputSize, depth: 1)),
+                mipmapLevel: 0,
+                withBytes: blackData,
+                bytesPerRow: outputSize * 4
+            )
+        }
+
+        // Create default saliency texture (1x1 neutral gray)
+        // IMPORTANT: Prevents undefined behavior when sampling nil texture
+        let saliencyDescriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .r8Unorm,
+            width: 1,
+            height: 1,
+            mipmapped: false
+        )
+        saliencyDescriptor.usage = .shaderRead
+        saliencyDescriptor.storageMode = .shared
+
+        if let defaultSaliency = device.makeTexture(descriptor: saliencyDescriptor) {
+            var grayPixel: UInt8 = 128  // 0.5 in normalized form
+            defaultSaliency.replace(
+                region: MTLRegion(origin: MTLOrigin(x: 0, y: 0, z: 0),
+                                  size: MTLSize(width: 1, height: 1, depth: 1)),
+                mipmapLevel: 0,
+                withBytes: &grayPixel,
+                bytesPerRow: 1
+            )
+            self.saliencyTexture = defaultSaliency
+        }
 
         let size = outputSize
         LMLog.visual.info("✅ OffscreenEffectsRenderer initialized - \(size)x\(size)")
@@ -174,33 +228,136 @@ final class OffscreenEffectsRenderer {
 
     // MARK: - Render
 
+    // Staging texture for passthrough (reused)
+    private var passthroughStaging: MTLTexture?
+
+    /// DEBUG: Fill with solid color to verify pipeline works
+    func renderSolidColor(red: Float, green: Float, blue: Float) -> Bool {
+        renderCount += 1
+
+        guard let drawableQueue = drawableQueue else {
+            LMLog.visual.error("❌ SOLID COLOR: No drawable queue!")
+            return false
+        }
+
+        guard let drawable = try? drawableQueue.nextDrawable() else {
+            if renderCount <= 5 {
+                LMLog.visual.warning("⚠️ SOLID COLOR #\(self.renderCount): No drawable available")
+            }
+            return false
+        }
+
+        let width = drawable.texture.width
+        let height = drawable.texture.height
+
+        if renderCount <= 3 {
+            LMLog.visual.info("🔴 SOLID COLOR #\(self.renderCount): Filling \(width)x\(height) with RGB(\(red),\(green),\(blue))")
+        }
+
+        // Create/reuse staging texture
+        if passthroughStaging == nil ||
+           passthroughStaging?.width != width ||
+           passthroughStaging?.height != height {
+            let desc = MTLTextureDescriptor.texture2DDescriptor(
+                pixelFormat: .bgra8Unorm,
+                width: width,
+                height: height,
+                mipmapped: false
+            )
+            desc.usage = .shaderRead
+            desc.storageMode = .shared
+            passthroughStaging = device.makeTexture(descriptor: desc)
+        }
+
+        guard let staging = passthroughStaging else { return false }
+
+        // Fill with solid color (BGRA format)
+        let b = UInt8(blue * 255)
+        let g = UInt8(green * 255)
+        let r = UInt8(red * 255)
+        let a: UInt8 = 255
+
+        var pixelData = [UInt8](repeating: 0, count: width * height * 4)
+        for i in stride(from: 0, to: pixelData.count, by: 4) {
+            pixelData[i] = b
+            pixelData[i + 1] = g
+            pixelData[i + 2] = r
+            pixelData[i + 3] = a
+        }
+
+        staging.replace(
+            region: MTLRegion(origin: MTLOrigin(x: 0, y: 0, z: 0),
+                              size: MTLSize(width: width, height: height, depth: 1)),
+            mipmapLevel: 0,
+            withBytes: pixelData,
+            bytesPerRow: width * 4
+        )
+
+        // Blit to drawable
+        guard let commandBuffer = commandQueue.makeCommandBuffer(),
+              let blitEncoder = commandBuffer.makeBlitCommandEncoder() else { return false }
+
+        blitEncoder.copy(from: staging, to: drawable.texture)
+        blitEncoder.endEncoding()
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+
+        drawable.present()
+
+        if renderCount <= 5 || renderCount % 60 == 0 {
+            LMLog.visual.info("🔴 SOLID COLOR #\(self.renderCount): ✅ Presented RED")
+        }
+
+        return true
+    }
+
     /// MINIMAL TEST: Just blit the source image directly to drawable, NO shaders.
     /// Use this to verify the basic DrawableQueue → RealityKit pipeline works.
     func renderSimplePassthrough(sourceImage: CGImage) -> Bool {
         renderCount += 1
-        let shouldLog = renderCount == 1 || renderCount % 300 == 0
+        let shouldLog = renderCount <= 5 || renderCount % 60 == 0
 
         guard let drawableQueue = drawableQueue else {
-            LMLog.visual.error("❌ No drawable queue!")
+            LMLog.visual.error("❌ PASSTHROUGH: No drawable queue!")
             return false
         }
 
         guard let drawable = try? drawableQueue.nextDrawable() else {
             if shouldLog {
-                LMLog.visual.warning("⚠️ No drawable available")
+                LMLog.visual.warning("⚠️ PASSTHROUGH #\(self.renderCount): No drawable available")
             }
             return false
         }
 
-        if shouldLog {
-            LMLog.visual.info("🎯 SIMPLE PASSTHROUGH: source=\(sourceImage.width)x\(sourceImage.height), drawable=\(drawable.texture.width)x\(drawable.texture.height)")
-        }
-
-        // Convert CGImage directly to drawable texture (no intermediate textures!)
         let drawableWidth = drawable.texture.width
         let drawableHeight = drawable.texture.height
 
-        // Create pixel buffer at drawable size
+        if renderCount <= 5 {
+            LMLog.visual.info("🎯 PASSTHROUGH #\(self.renderCount): source=\(sourceImage.width)x\(sourceImage.height), drawable=\(drawableWidth)x\(drawableHeight)")
+        }
+
+        // Create/reuse staging texture (shared storage for CPU writes)
+        if passthroughStaging == nil ||
+           passthroughStaging?.width != drawableWidth ||
+           passthroughStaging?.height != drawableHeight {
+            let desc = MTLTextureDescriptor.texture2DDescriptor(
+                pixelFormat: .bgra8Unorm,
+                width: drawableWidth,
+                height: drawableHeight,
+                mipmapped: false
+            )
+            desc.usage = .shaderRead
+            desc.storageMode = .shared  // CPU-writable!
+            passthroughStaging = device.makeTexture(descriptor: desc)
+            LMLog.visual.info("🎯 PASSTHROUGH: Created staging texture \(drawableWidth)x\(drawableHeight)")
+        }
+
+        guard let staging = passthroughStaging else {
+            LMLog.visual.error("❌ PASSTHROUGH: Failed to create staging texture")
+            return false
+        }
+
+        // Render CGImage to staging texture
         let colorSpace = CGColorSpaceCreateDeviceRGB()
         let bytesPerPixel = 4
         let bytesPerRow = bytesPerPixel * drawableWidth
@@ -215,34 +372,52 @@ final class OffscreenEffectsRenderer {
             space: colorSpace,
             bitmapInfo: CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.premultipliedFirst.rawValue
         ) else {
-            LMLog.visual.error("❌ Failed to create CGContext")
+            LMLog.visual.error("❌ PASSTHROUGH: Failed to create CGContext")
             return false
         }
 
-        // Draw source image scaled to drawable size
         context.interpolationQuality = .high
         context.draw(sourceImage, in: CGRect(x: 0, y: 0, width: drawableWidth, height: drawableHeight))
 
-        // Copy directly to drawable texture
-        drawable.texture.replace(
-            region: MTLRegion(
-                origin: MTLOrigin(x: 0, y: 0, z: 0),
-                size: MTLSize(width: drawableWidth, height: drawableHeight, depth: 1)
-            ),
+        // Log sample pixels
+        if renderCount <= 3 {
+            let centerIdx = (drawableHeight / 2 * drawableWidth + drawableWidth / 2) * 4
+            LMLog.visual.info("🎯 PASSTHROUGH #\(self.renderCount): CENTER=(\(pixelData[centerIdx]),\(pixelData[centerIdx+1]),\(pixelData[centerIdx+2]),\(pixelData[centerIdx+3]))")
+        }
+
+        // Write to staging texture (this works because it's .shared storage)
+        staging.replace(
+            region: MTLRegion(origin: MTLOrigin(x: 0, y: 0, z: 0),
+                              size: MTLSize(width: drawableWidth, height: drawableHeight, depth: 1)),
             mipmapLevel: 0,
             withBytes: pixelData,
             bytesPerRow: bytesPerRow
         )
 
+        // Blit from staging to drawable using command buffer
+        guard let commandBuffer = commandQueue.makeCommandBuffer(),
+              let blitEncoder = commandBuffer.makeBlitCommandEncoder() else {
+            LMLog.visual.error("❌ PASSTHROUGH: Failed to create command buffer")
+            return false
+        }
+
+        blitEncoder.copy(from: staging, to: drawable.texture)
+        blitEncoder.endEncoding()
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+
         // Present!
         drawable.present()
 
-        if shouldLog {
-            LMLog.visual.info("🎯 SIMPLE PASSTHROUGH complete - presented!")
+        if renderCount <= 5 || renderCount % 60 == 0 {
+            LMLog.visual.info("🎯 PASSTHROUGH #\(self.renderCount): ✅ Presented via blit")
         }
 
         return true
     }
+
+    // DEBUG: Bypass shader to isolate if issue is texture update or shader
+    private let bypassShaderForDebug = false  // Now testing effectsFragment stages
 
     /// Render effects and present to DrawableQueue.
     /// - Parameters:
@@ -251,16 +426,13 @@ final class OffscreenEffectsRenderer {
     /// - Returns: True if rendering succeeded
     func renderAndPresent(sourceImage: CGImage, uniforms: EffectsUniforms) -> Bool {
         renderCount += 1
-        // Log very sparingly: every 5 seconds (300 frames)
         let shouldLog = renderCount == 1 || renderCount % 300 == 0
 
-        guard let drawableQueue = drawableQueue,
-              let outputTexture = outputTexture else {
-            LMLog.visual.warning("⚠️ No drawable queue or output texture (render \(self.renderCount))")
+        guard let drawableQueue = drawableQueue else {
+            LMLog.visual.warning("⚠️ No drawable queue (render \(self.renderCount))")
             return false
         }
 
-        // Get next drawable
         guard let drawable = try? drawableQueue.nextDrawable() else {
             if shouldLog {
                 LMLog.visual.warning("⚠️ No drawable available (render \(self.renderCount))")
@@ -269,7 +441,83 @@ final class OffscreenEffectsRenderer {
         }
 
         if shouldLog {
-            LMLog.visual.info("🎬 renderAndPresent \(self.renderCount): sourceImage=\(sourceImage.width)x\(sourceImage.height)")
+            LMLog.visual.info("🎬 renderAndPresent \(self.renderCount): sourceImage=\(sourceImage.width)x\(sourceImage.height), bypass=\(self.bypassShaderForDebug)")
+        }
+
+        // DEBUG: Use passthrough shader to test if shader pipeline works
+        if bypassShaderForDebug {
+            guard let outputTexture = outputTexture else {
+                LMLog.visual.warning("⚠️ No output texture for passthrough")
+                return false
+            }
+
+            updateSourceTexture(from: sourceImage)
+            guard let sourceTexture = sourceTexture else {
+                LMLog.visual.error("❌ PASSTHROUGH: sourceTexture nil!")
+                return false
+            }
+
+            if renderCount <= 3 {
+                LMLog.visual.info("🔧 PASSTHROUGH SHADER: src=\(sourceTexture.width)x\(sourceTexture.height), out=\(self.outputSize)x\(self.outputSize)")
+            }
+
+            guard let commandBuffer = commandQueue.makeCommandBuffer() else { return false }
+
+            // Render using passthrough shader (no effects, just samples texture)
+            let renderPassDescriptor = MTLRenderPassDescriptor()
+            renderPassDescriptor.colorAttachments[0].texture = outputTexture
+            renderPassDescriptor.colorAttachments[0].loadAction = .clear
+            renderPassDescriptor.colorAttachments[0].storeAction = .store
+            renderPassDescriptor.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
+
+            guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else { return false }
+
+            encoder.setRenderPipelineState(passthroughPipelineState)  // Use passthrough shader!
+
+            // Still need uniforms buffer even though passthrough ignores most of it
+            var dummyUniforms = EffectsUniforms(
+                time: 0, kenBurnsScale: 1, kenBurnsOffsetX: 0, kenBurnsOffsetY: 0,
+                distortionAmplitude: 0, distortionSpeed: 0, hueBaseShift: 0,
+                hueWaveIntensity: 0, hueBlendAmount: 0, contrastBoost: 1, saturationBoost: 1,
+                feedbackAmount: 0, feedbackZoom: 1, feedbackDecay: 1, saliencyInfluence: 0, hasSaliencyMap: 0
+            )
+            encoder.setFragmentBytes(&dummyUniforms, length: MemoryLayout<EffectsUniforms>.size, index: 0)
+            encoder.setFragmentTexture(sourceTexture, index: 0)
+            encoder.setFragmentSamplerState(samplerState, index: 0)
+
+            encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+            encoder.endEncoding()
+
+            // Blit output to drawable
+            if let blitEncoder = commandBuffer.makeBlitCommandEncoder() {
+                blitEncoder.copy(
+                    from: outputTexture,
+                    sourceSlice: 0,
+                    sourceLevel: 0,
+                    sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+                    sourceSize: MTLSize(width: outputSize, height: outputSize, depth: 1),
+                    to: drawable.texture,
+                    destinationSlice: 0,
+                    destinationLevel: 0,
+                    destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0)
+                )
+                blitEncoder.endEncoding()
+            }
+
+            commandBuffer.commit()
+            commandBuffer.waitUntilCompleted()
+            drawable.present()
+
+            if renderCount <= 5 {
+                LMLog.visual.info("🔧 PASSTHROUGH #\(self.renderCount): ✅ Rendered via passthrough shader")
+            }
+            return true
+        }
+
+        // --- Full shader path below ---
+        guard let outputTexture = outputTexture else {
+            LMLog.visual.warning("⚠️ No output texture (render \(self.renderCount))")
+            return false
         }
 
         // Update source texture from CGImage
