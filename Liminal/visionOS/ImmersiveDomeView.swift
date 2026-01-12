@@ -3,7 +3,28 @@
 //  Liminal
 //
 //  RealityKit immersive dome that displays visual effects.
-//  Uses an inverted sphere with effects rendered via Metal + DrawableQueue.
+//
+//  ============================================================================
+//  🧪 MINIMAL TEST MODE - Stripped down to diagnose basic rendering
+//  ============================================================================
+//
+//  REMOVED FOR DEBUGGING (restore once basic rendering works):
+//  - TimelineView(.animation) for 90fps render loop
+//  - DrawableQueue for dynamic texture updates
+//  - Metal shader pipeline (effectsVertex, effectsFragment)
+//  - Ken Burns animation (zoom/pan effects)
+//  - Feedback/trails effect
+//  - FrameCounter for frame tracking
+//  - Continuous render loop
+//
+//  CURRENT TEST:
+//  1. Create dome with RED material (verify RealityKit works at all)
+//  2. Wait for Nano Banana to generate first image
+//  3. Create TextureResource directly from CGImage (no DrawableQueue)
+//  4. Apply static texture to dome
+//
+//  If this works, we can add back complexity layer by layer.
+//  ============================================================================
 //
 
 #if os(visionOS)
@@ -17,139 +38,95 @@ struct ImmersiveDomeView: View {
     @ObservedObject var settings: SettingsService
 
     @State private var domeEntity: ModelEntity?
-    @State private var effectsRenderer: OffscreenEffectsRenderer?
-    @State private var effectTime: Double = 0
-    @State private var isRendererReady = false
+    @State private var textureResource: TextureResource?
+    @State private var isSetupComplete = false
 
-    private let domeRadius: Float = 50.0
-
-    // Ken Burns computed from effectTime
-    private var kenBurnsScale: Float {
-        let base: Float = 1.2
-        let variation = 0.15 * sin(Float(effectTime) * 0.05) + 0.05 * sin(Float(effectTime) * 0.03)
-        return base + Float(variation)
-    }
-
-    private var kenBurnsOffsetX: Float {
-        let maxOffset: Float = 60
-        return maxOffset * sin(Float(effectTime) * 0.04) + 20 * sin(Float(effectTime) * 0.025)
-    }
-
-    private var kenBurnsOffsetY: Float {
-        let maxOffset: Float = 60
-        return maxOffset * cos(Float(effectTime) * 0.035) + 20 * cos(Float(effectTime) * 0.02)
-    }
-
-    // Distortion amplitude - can be boosted during transitions
-    private var distortionAmplitude: Float {
-        return 0.012
-    }
-
-    // Feedback amount from delay slider
-    private var feedbackAmount: Float {
-        return settings.delay * 0.85
-    }
+    // BACK TO SPHERE - the curved display didn't work (black screen)
+    // The sphere DID show the image, just with some distortion.
+    // Let's iterate from what works rather than breaking things.
+    //
+    // Radius tuning - testing different values
+    private let domeRadius: Float = 3.0
 
     var body: some View {
-        TimelineView(.animation) { timeline in
-            RealityView { content in
-                LMLog.visual.info("🌐 Creating immersive dome...")
+        RealityView { content in
+            LMLog.visual.info("🌐 MINIMAL TEST: Creating sphere dome...")
 
-                // Create inverted sphere
-                let mesh = MeshResource.generateSphere(radius: domeRadius)
+            // Create inverted sphere - THIS WORKED BEFORE
+            let mesh = MeshResource.generateSphere(radius: domeRadius)
 
-                // Start with a simple material - will be replaced when renderer is ready
-                var material = UnlitMaterial()
-                material.color = .init(tint: .black)
+            // Start with bright RED so we can see if it exists
+            var material = UnlitMaterial()
+            material.color = .init(tint: .red)
 
-                let entity = ModelEntity(mesh: mesh, materials: [material])
+            let entity = ModelEntity(mesh: mesh, materials: [material])
 
-                // Flip scale to invert normals (see inside of sphere)
-                entity.scale = SIMD3<Float>(-1, -1, -1)
-                entity.position = .zero
+            // Flip scale to see inside of sphere - THIS IS KEY
+            entity.scale = SIMD3<Float>(-1, -1, -1)
+            entity.position = .zero
 
-                content.add(entity)
-                domeEntity = entity
+            content.add(entity)
+            domeEntity = entity
 
-                LMLog.visual.info("🌐 Dome created: radius=\(domeRadius)")
-            } update: { content in
-                // Update effect time from timeline
-                let now = timeline.date.timeIntervalSinceReferenceDate
-                effectTime = now
-
-                // Render frame if ready
-                renderFrame()
-            }
+            LMLog.visual.info("🌐 MINIMAL TEST: Sphere dome created - radius=\(domeRadius)m, RED material")
         }
         .task {
-            await setupRenderer()
+            await setupTexture()
         }
     }
 
     // MARK: - Setup
 
     @MainActor
-    private func setupRenderer() async {
-        LMLog.visual.info("🎨 Setting up effects renderer...")
+    private func setupTexture() async {
+        LMLog.visual.info("🎨 MINIMAL TEST: Setting up texture...")
 
-        guard let renderer = OffscreenEffectsRenderer() else {
-            LMLog.visual.error("❌ Failed to create OffscreenEffectsRenderer")
+        // Wait for first generated image
+        LMLog.visual.info("🎨 MINIMAL TEST: Waiting for first image from Nano Banana...")
+
+        // Poll for image (simple approach)
+        var waitCount = 0
+        while visualEngine.imageBuffer.loadCurrent() == nil {
+            waitCount += 1
+            if waitCount % 10 == 0 {
+                LMLog.visual.info("🎨 MINIMAL TEST: Still waiting for image... (\(waitCount)s)")
+            }
+            try? await Task.sleep(nanoseconds: 1_000_000_000)  // 1 second
+
+            if waitCount > 60 {
+                LMLog.visual.error("❌ MINIMAL TEST: Timed out waiting for image after 60s")
+                return
+            }
+        }
+
+        guard let cgImage = visualEngine.imageBuffer.loadCurrent() else {
+            LMLog.visual.error("❌ MINIMAL TEST: No image after wait")
             return
         }
+
+        LMLog.visual.info("🎨 MINIMAL TEST: Got image! \(cgImage.width)x\(cgImage.height)")
 
         do {
-            try await renderer.setupDrawableQueue()
+            // Create TextureResource directly from CGImage - NO DrawableQueue!
+            let resource = try await TextureResource(image: cgImage, options: .init(semantic: .color))
+            LMLog.visual.info("🎨 MINIMAL TEST: TextureResource created")
 
-            // Apply texture to dome
-            if let textureResource = renderer.textureResource,
-               let entity = domeEntity {
+            // Apply texture to sphere dome
+            if let entity = domeEntity {
                 var material = UnlitMaterial()
-                material.color = .init(texture: .init(textureResource))
+                material.color = .init(texture: .init(resource))
                 entity.model?.materials = [material]
-                LMLog.visual.info("🎨 Applied DrawableQueue texture to dome")
+                LMLog.visual.info("🎨 MINIMAL TEST: ✅ Applied texture to sphere dome!")
+            } else {
+                LMLog.visual.error("❌ MINIMAL TEST: No dome entity!")
             }
 
-            self.effectsRenderer = renderer
-            self.isRendererReady = true
-            LMLog.visual.info("✅ Effects renderer ready")
+            self.textureResource = resource
+            self.isSetupComplete = true
+
         } catch {
-            LMLog.visual.error("❌ Failed to setup DrawableQueue: \(error.localizedDescription)")
+            LMLog.visual.error("❌ MINIMAL TEST: Failed to create TextureResource: \(error.localizedDescription)")
         }
-    }
-
-    // MARK: - Render Loop
-
-    @MainActor
-    private func renderFrame() {
-        guard isRendererReady,
-              let renderer = effectsRenderer,
-              let image = visualEngine.currentImage,
-              let cgImage = image.cgImageRepresentation else {
-            return
-        }
-
-        // Build uniforms matching macOS
-        let uniforms = EffectsUniforms(
-            time: Float(effectTime),
-            kenBurnsScale: kenBurnsScale,
-            kenBurnsOffsetX: kenBurnsOffsetX,
-            kenBurnsOffsetY: kenBurnsOffsetY,
-            distortionAmplitude: distortionAmplitude,
-            distortionSpeed: 0.08,
-            hueBaseShift: 0,
-            hueWaveIntensity: 0.5,
-            hueBlendAmount: 0.65,
-            contrastBoost: 1.4,
-            saturationBoost: 1.3,
-            feedbackAmount: feedbackAmount,
-            feedbackZoom: 0.96,
-            feedbackDecay: 0.5,
-            saliencyInfluence: 0.6,
-            hasSaliencyMap: 0.0  // TODO: Add saliency support
-        )
-
-        // Render and present
-        _ = renderer.renderAndPresent(sourceImage: cgImage, uniforms: uniforms)
     }
 }
 

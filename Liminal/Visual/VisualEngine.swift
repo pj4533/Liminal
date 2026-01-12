@@ -4,6 +4,15 @@ import OSLog
 
 /// Coordinates visual generation.
 /// Triggers new images on a schedule with psychedelic prompts.
+///
+/// ARCHITECTURE NOTE for visionOS:
+/// The 90fps TimelineView render loop should NOT read from @Published properties.
+/// Those require MainActor scheduling, which is starved by the render loop itself.
+///
+/// Instead, the render loop should read from `imageBuffer` directly:
+///   let image = visualEngine.imageBuffer.loadCurrent()
+///
+/// This bypasses MainActor entirely and uses a lock-free atomic read.
 @MainActor
 final class VisualEngine: ObservableObject {
 
@@ -11,7 +20,14 @@ final class VisualEngine: ObservableObject {
 
     private var scheduledInterval: TimeInterval { SettingsService.shared.imageInterval }
 
-    // MARK: - State
+    // MARK: - Atomic Image Buffer (for render loop - bypasses MainActor)
+
+    /// Thread-safe buffer for the 90fps render loop.
+    /// Call `imageBuffer.loadCurrent()` directly from render loop.
+    /// This does NOT require MainActor and will not cause starvation.
+    var imageBuffer: AtomicImageBuffer { imageQueue.imageBuffer }
+
+    // MARK: - State (@Published for UI only - NOT for render loop)
 
     @Published private(set) var currentImage: PlatformImage?
     @Published private(set) var nextImage: PlatformImage?  // For morph preloading

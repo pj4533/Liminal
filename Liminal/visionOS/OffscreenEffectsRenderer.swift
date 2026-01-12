@@ -39,6 +39,9 @@ final class OffscreenEffectsRenderer {
     private var drawableQueue: TextureResource.DrawableQueue?
     private(set) var textureResource: TextureResource?
 
+    // Track renders for periodic logging
+    private var renderCount: Int = 0
+
     // MARK: - Init
 
     init?() {
@@ -171,29 +174,114 @@ final class OffscreenEffectsRenderer {
 
     // MARK: - Render
 
+    /// MINIMAL TEST: Just blit the source image directly to drawable, NO shaders.
+    /// Use this to verify the basic DrawableQueue → RealityKit pipeline works.
+    func renderSimplePassthrough(sourceImage: CGImage) -> Bool {
+        renderCount += 1
+        let shouldLog = renderCount == 1 || renderCount % 300 == 0
+
+        guard let drawableQueue = drawableQueue else {
+            LMLog.visual.error("❌ No drawable queue!")
+            return false
+        }
+
+        guard let drawable = try? drawableQueue.nextDrawable() else {
+            if shouldLog {
+                LMLog.visual.warning("⚠️ No drawable available")
+            }
+            return false
+        }
+
+        if shouldLog {
+            LMLog.visual.info("🎯 SIMPLE PASSTHROUGH: source=\(sourceImage.width)x\(sourceImage.height), drawable=\(drawable.texture.width)x\(drawable.texture.height)")
+        }
+
+        // Convert CGImage directly to drawable texture (no intermediate textures!)
+        let drawableWidth = drawable.texture.width
+        let drawableHeight = drawable.texture.height
+
+        // Create pixel buffer at drawable size
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let bytesPerPixel = 4
+        let bytesPerRow = bytesPerPixel * drawableWidth
+        var pixelData = [UInt8](repeating: 0, count: drawableWidth * drawableHeight * bytesPerPixel)
+
+        guard let context = CGContext(
+            data: &pixelData,
+            width: drawableWidth,
+            height: drawableHeight,
+            bitsPerComponent: 8,
+            bytesPerRow: bytesPerRow,
+            space: colorSpace,
+            bitmapInfo: CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.premultipliedFirst.rawValue
+        ) else {
+            LMLog.visual.error("❌ Failed to create CGContext")
+            return false
+        }
+
+        // Draw source image scaled to drawable size
+        context.interpolationQuality = .high
+        context.draw(sourceImage, in: CGRect(x: 0, y: 0, width: drawableWidth, height: drawableHeight))
+
+        // Copy directly to drawable texture
+        drawable.texture.replace(
+            region: MTLRegion(
+                origin: MTLOrigin(x: 0, y: 0, z: 0),
+                size: MTLSize(width: drawableWidth, height: drawableHeight, depth: 1)
+            ),
+            mipmapLevel: 0,
+            withBytes: pixelData,
+            bytesPerRow: bytesPerRow
+        )
+
+        // Present!
+        drawable.present()
+
+        if shouldLog {
+            LMLog.visual.info("🎯 SIMPLE PASSTHROUGH complete - presented!")
+        }
+
+        return true
+    }
+
     /// Render effects and present to DrawableQueue.
     /// - Parameters:
     ///   - sourceImage: The source image (from visual engine)
     ///   - uniforms: Effect parameters
     /// - Returns: True if rendering succeeded
     func renderAndPresent(sourceImage: CGImage, uniforms: EffectsUniforms) -> Bool {
+        renderCount += 1
+        // Log very sparingly: every 5 seconds (300 frames)
+        let shouldLog = renderCount == 1 || renderCount % 300 == 0
+
         guard let drawableQueue = drawableQueue,
               let outputTexture = outputTexture else {
-            LMLog.visual.debug("🖼️ No drawable queue or output texture")
+            LMLog.visual.warning("⚠️ No drawable queue or output texture (render \(self.renderCount))")
             return false
         }
 
         // Get next drawable
         guard let drawable = try? drawableQueue.nextDrawable() else {
-            LMLog.visual.debug("🖼️ No drawable available")
+            if shouldLog {
+                LMLog.visual.warning("⚠️ No drawable available (render \(self.renderCount))")
+            }
             return false
+        }
+
+        if shouldLog {
+            LMLog.visual.info("🎬 renderAndPresent \(self.renderCount): sourceImage=\(sourceImage.width)x\(sourceImage.height)")
         }
 
         // Update source texture from CGImage
         updateSourceTexture(from: sourceImage)
 
-        guard let sourceTexture = sourceTexture,
-              let commandBuffer = commandQueue.makeCommandBuffer() else {
+        guard let sourceTexture = sourceTexture else {
+            LMLog.visual.warning("⚠️ Source texture is nil after update")
+            return false
+        }
+
+        guard let commandBuffer = commandQueue.makeCommandBuffer() else {
+            LMLog.visual.warning("⚠️ Failed to create command buffer")
             return false
         }
 
@@ -205,6 +293,7 @@ final class OffscreenEffectsRenderer {
         renderPassDescriptor.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
 
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else {
+            LMLog.visual.warning("⚠️ Failed to create render command encoder")
             return false
         }
 
@@ -250,8 +339,18 @@ final class OffscreenEffectsRenderer {
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
 
+        // Check for GPU errors
+        if let error = commandBuffer.error {
+            LMLog.visual.error("❌ GPU error: \(error.localizedDescription)")
+            return false
+        }
+
         // Present to RealityKit
         drawable.present()
+
+        if shouldLog {
+            LMLog.visual.info("🎬 GPU render \(self.renderCount) complete - presented to DrawableQueue")
+        }
 
         return true
     }

@@ -4,8 +4,12 @@ import OSLog
 /// Manages persistent cache of upscaled images.
 /// Images are stored in Application Support/Liminal/UpscaledImages/
 /// Each image is saved with a UUID filename and loaded on startup.
-@MainActor
-final class ImageCache {
+///
+/// ARCHITECTURE NOTE: This is intentionally NOT @MainActor.
+/// On visionOS, the 90fps TimelineView starves MainActor, causing any
+/// @MainActor code to hang indefinitely. FileManager operations are
+/// thread-safe, so this class needs no actor isolation.
+final class ImageCache: @unchecked Sendable {
 
     // MARK: - Configuration
 
