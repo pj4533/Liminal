@@ -2,28 +2,17 @@
 //  ImmersiveDomeView.swift
 //  Liminal
 //
-//  RealityKit immersive dome that displays visual effects.
+//  RealityKit immersive view - curved panel for sharp, immersive visuals.
 //
 //  ============================================================================
-//  🧪 MINIMAL TEST MODE - Stripped down to diagnose basic rendering
+//  🧪 CURVED PANEL TEST - Concentrates pixels in main field of view
 //  ============================================================================
 //
-//  REMOVED FOR DEBUGGING (restore once basic rendering works):
-//  - TimelineView(.animation) for 90fps render loop
-//  - DrawableQueue for dynamic texture updates
-//  - Metal shader pipeline (effectsVertex, effectsFragment)
-//  - Ken Burns animation (zoom/pan effects)
-//  - Feedback/trails effect
-//  - FrameCounter for frame tracking
-//  - Continuous render loop
+//  Instead of spreading 2048x2048 across 360°, we create a curved panel
+//  that fills ~140° horizontal, ~100° vertical. All pixels concentrated
+//  where you're actually looking = sharper image.
 //
-//  CURRENT TEST:
-//  1. Create dome with RED material (verify RealityKit works at all)
-//  2. Wait for Nano Banana to generate first image
-//  3. Create TextureResource directly from CGImage (no DrawableQueue)
-//  4. Apply static texture to dome
-//
-//  If this works, we can add back complexity layer by layer.
+//  DEBUG APPROACH: Start with RED material, verify geometry, THEN add texture.
 //  ============================================================================
 //
 
@@ -37,95 +26,169 @@ struct ImmersiveDomeView: View {
     @ObservedObject var visualEngine: VisualEngine
     @ObservedObject var settings: SettingsService
 
-    @State private var domeEntity: ModelEntity?
+    @State private var panelEntity: ModelEntity?
     @State private var textureResource: TextureResource?
     @State private var isSetupComplete = false
 
-    // BACK TO SPHERE - the curved display didn't work (black screen)
-    // The sphere DID show the image, just with some distortion.
-    // Let's iterate from what works rather than breaking things.
-    //
-    // Radius tuning - testing different values
-    private let domeRadius: Float = 3.0
+    // Curved panel parameters
+    private let panelRadius: Float = 2.0        // Distance from user
+    private let horizontalArc: Float = 110.0    // Degrees of horizontal coverage
+    private let verticalArc: Float = 75.0       // Degrees of vertical coverage
+    private let horizontalSegments: Int = 32    // Mesh resolution
+    private let verticalSegments: Int = 24
 
     var body: some View {
         RealityView { content in
-            LMLog.visual.info("🌐 MINIMAL TEST: Creating sphere dome...")
+            LMLog.visual.info("🎬 CURVED PANEL: Creating mesh...")
+            LMLog.visual.info("🎬 CURVED PANEL: radius=\(panelRadius)m, h=\(horizontalArc)°, v=\(verticalArc)°")
 
-            // Create inverted sphere - THIS WORKED BEFORE
-            let mesh = MeshResource.generateSphere(radius: domeRadius)
+            // Generate curved panel mesh
+            guard let mesh = createCurvedPanelMesh() else {
+                LMLog.visual.error("❌ CURVED PANEL: Failed to create mesh!")
+                return
+            }
+            LMLog.visual.info("🎬 CURVED PANEL: Mesh created successfully")
 
-            // Start with bright RED so we can see if it exists
+            // Start with bright RED so we can see if geometry exists
             var material = UnlitMaterial()
             material.color = .init(tint: .red)
 
             let entity = ModelEntity(mesh: mesh, materials: [material])
 
-            // Flip scale to see inside of sphere - THIS IS KEY
-            entity.scale = SIMD3<Float>(-1, -1, -1)
-            entity.position = .zero
+            // Position panel at eye level (visionOS origin is at floor, eyes ~1.5m up)
+            entity.position = SIMD3<Float>(0, 1.5, 0)
 
             content.add(entity)
-            domeEntity = entity
+            panelEntity = entity
 
-            LMLog.visual.info("🌐 MINIMAL TEST: Sphere dome created - radius=\(domeRadius)m, RED material")
+            LMLog.visual.info("🎬 CURVED PANEL: ✅ Entity added with RED material")
         }
         .task {
+            // Wait a moment to see red, then apply texture
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
             await setupTexture()
         }
     }
 
-    // MARK: - Setup
+    // MARK: - Mesh Generation
+
+    /// Creates a curved panel mesh (partial cylinder) facing inward toward the user
+    private func createCurvedPanelMesh() -> MeshResource? {
+        let hArc = horizontalArc * .pi / 180.0  // Convert to radians
+        let vArc = verticalArc * .pi / 180.0
+
+        let startH = -hArc / 2  // Center horizontally
+        let startV = -vArc / 2  // Center vertically
+
+        var positions: [SIMD3<Float>] = []
+        var normals: [SIMD3<Float>] = []
+        var uvs: [SIMD2<Float>] = []
+        var indices: [UInt32] = []
+
+        // Generate vertices
+        for v in 0...verticalSegments {
+            let vFrac = Float(v) / Float(verticalSegments)
+            let vAngle = startV + vFrac * vArc
+
+            for h in 0...horizontalSegments {
+                let hFrac = Float(h) / Float(horizontalSegments)
+                let hAngle = startH + hFrac * hArc
+
+                // Cylindrical coordinates (panel curves around Y axis)
+                let x = panelRadius * sin(hAngle)
+                let y = panelRadius * tan(vAngle)  // Vertical spread
+                let z = -panelRadius * cos(hAngle) // Negative Z = in front of user
+
+                positions.append(SIMD3<Float>(x, y, z))
+
+                // Normal points inward (toward user at origin)
+                let normal = normalize(SIMD3<Float>(-x, 0, -z))
+                normals.append(normal)
+
+                // UV: 0-1 across the panel
+                uvs.append(SIMD2<Float>(hFrac, 1.0 - vFrac))  // Flip V for correct orientation
+            }
+        }
+
+        // Generate triangle indices
+        let rowSize = horizontalSegments + 1
+        for v in 0..<verticalSegments {
+            for h in 0..<horizontalSegments {
+                let topLeft = UInt32(v * rowSize + h)
+                let topRight = topLeft + 1
+                let bottomLeft = UInt32((v + 1) * rowSize + h)
+                let bottomRight = bottomLeft + 1
+
+                // Two triangles per quad - CLOCKWISE winding for inward-facing surface
+                indices.append(contentsOf: [topLeft, topRight, bottomLeft])
+                indices.append(contentsOf: [topRight, bottomRight, bottomLeft])
+            }
+        }
+
+        LMLog.visual.info("🎬 CURVED PANEL: Generated \(positions.count) vertices, \(indices.count / 3) triangles")
+
+        // Build mesh descriptor
+        var descriptor = MeshDescriptor(name: "CurvedPanel")
+        descriptor.positions = MeshBuffer(positions)
+        descriptor.normals = MeshBuffer(normals)
+        descriptor.textureCoordinates = MeshBuffer(uvs)
+        descriptor.primitives = .triangles(indices)
+
+        do {
+            let mesh = try MeshResource.generate(from: [descriptor])
+            return mesh
+        } catch {
+            LMLog.visual.error("❌ CURVED PANEL: MeshResource.generate failed: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    // MARK: - Texture Setup
 
     @MainActor
     private func setupTexture() async {
-        LMLog.visual.info("🎨 MINIMAL TEST: Setting up texture...")
+        LMLog.visual.info("🎨 CURVED PANEL: Setting up texture...")
 
-        // Wait for first generated image
-        LMLog.visual.info("🎨 MINIMAL TEST: Waiting for first image from Nano Banana...")
-
-        // Poll for image (simple approach)
+        // Poll for image
         var waitCount = 0
         while visualEngine.imageBuffer.loadCurrent() == nil {
             waitCount += 1
             if waitCount % 10 == 0 {
-                LMLog.visual.info("🎨 MINIMAL TEST: Still waiting for image... (\(waitCount)s)")
+                LMLog.visual.info("🎨 CURVED PANEL: Waiting for image... (\(waitCount)s)")
             }
-            try? await Task.sleep(nanoseconds: 1_000_000_000)  // 1 second
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
 
             if waitCount > 60 {
-                LMLog.visual.error("❌ MINIMAL TEST: Timed out waiting for image after 60s")
+                LMLog.visual.error("❌ CURVED PANEL: Timed out waiting for image")
                 return
             }
         }
 
         guard let cgImage = visualEngine.imageBuffer.loadCurrent() else {
-            LMLog.visual.error("❌ MINIMAL TEST: No image after wait")
+            LMLog.visual.error("❌ CURVED PANEL: No image after wait")
             return
         }
 
-        LMLog.visual.info("🎨 MINIMAL TEST: Got image! \(cgImage.width)x\(cgImage.height)")
+        LMLog.visual.info("🎨 CURVED PANEL: Got image \(cgImage.width)x\(cgImage.height)")
 
         do {
-            // Create TextureResource directly from CGImage - NO DrawableQueue!
             let resource = try await TextureResource(image: cgImage, options: .init(semantic: .color))
-            LMLog.visual.info("🎨 MINIMAL TEST: TextureResource created")
+            LMLog.visual.info("🎨 CURVED PANEL: TextureResource created")
 
-            // Apply texture to sphere dome
-            if let entity = domeEntity {
+            if let entity = panelEntity {
                 var material = UnlitMaterial()
                 material.color = .init(texture: .init(resource))
                 entity.model?.materials = [material]
-                LMLog.visual.info("🎨 MINIMAL TEST: ✅ Applied texture to sphere dome!")
+                LMLog.visual.info("🎨 CURVED PANEL: ✅ Applied texture!")
             } else {
-                LMLog.visual.error("❌ MINIMAL TEST: No dome entity!")
+                LMLog.visual.error("❌ CURVED PANEL: No panel entity!")
             }
 
             self.textureResource = resource
             self.isSetupComplete = true
 
         } catch {
-            LMLog.visual.error("❌ MINIMAL TEST: Failed to create TextureResource: \(error.localizedDescription)")
+            LMLog.visual.error("❌ CURVED PANEL: TextureResource failed: \(error.localizedDescription)")
         }
     }
 }

@@ -58,8 +58,8 @@ final class MetalFXUpscaler {
     private var currentInputSize: (width: Int, height: Int) = (0, 0)
     private var currentOutputSize: (width: Int, height: Int) = (0, 0)
 
-    // Default 2x upscale
-    private let scaleFactor: Int = 2
+    // 4x upscale for maximum crispiness 🔥
+    private let scaleFactor: Int = 4
 
     // MARK: - Init
 
