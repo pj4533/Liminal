@@ -21,10 +21,14 @@ final class EffectsMetalView: MTKView {
     private var feedbackTextures: [MTLTexture] = []
     private var currentFeedbackIndex = 0
 
-    // Source texture (from morphPlayer)
+    // Source texture (from morphPlayer - current/target image)
     private var sourceTexture: MTLTexture?
     private var textureLoader: MTKTextureLoader?
     private var lastSourceImageHash: Int = 0  // Track image changes
+
+    // Previous texture (for GPU crossfade blending during transitions)
+    private var previousTexture: MTLTexture?
+    private var lastPreviousImageHash: Int = 0
 
     // Saliency texture (from DepthAnalyzer)
     private var saliencyTexture: MTLTexture?
@@ -273,6 +277,48 @@ final class EffectsMetalView: MTKView {
         }
     }
 
+    /// Update the previous image texture for GPU crossfade blending - ONLY if image changed
+    func updatePreviousImage(_ image: NSImage?) {
+        guard let image = image else {
+            previousTexture = nil
+            lastPreviousImageHash = 0
+            return
+        }
+
+        // Check if previous image actually changed
+        let newHash = image.hash
+        if newHash == lastPreviousImageHash && previousTexture != nil {
+            return
+        }
+
+        guard let device = self.device,
+              let textureLoader = self.textureLoader else {
+            return
+        }
+
+        // Convert NSImage to CGImage
+        guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            LMLog.visual.error("❌ Failed to get CGImage from previous NSImage")
+            return
+        }
+
+        // Load as Metal texture
+        do {
+            let options: [MTKTextureLoader.Option: Any] = [
+                .SRGB: false,
+                .generateMipmaps: false
+            ]
+            previousTexture = try textureLoader.newTexture(cgImage: cgImage, options: options)
+            lastPreviousImageHash = newHash
+
+            if let tex = previousTexture {
+                LMLog.visual.debug("🔄 Previous texture loaded for crossfade: \(tex.width)x\(tex.height)")
+            }
+        } catch {
+            LMLog.visual.error("❌ Failed to create previous texture: \(error.localizedDescription)")
+        }
+    }
+
     // MARK: - Rendering
 
     override func draw(_ dirtyRect: NSRect) {
@@ -349,6 +395,8 @@ final class EffectsMetalView: MTKView {
             if let saliencyTex = saliencyTexture {
                 encoder.setFragmentTexture(saliencyTex, index: 2)
             }
+            // Previous texture for GPU crossfade (falls back to source if no transition)
+            encoder.setFragmentTexture(previousTexture ?? sourceTexture, index: 3)
             encoder.setFragmentBuffer(uniformBuffer, offset: 0, index: 0)
             encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
             encoder.endEncoding()
@@ -369,6 +417,8 @@ final class EffectsMetalView: MTKView {
             if let saliencyTex = saliencyTexture {
                 encoder.setFragmentTexture(saliencyTex, index: 2)
             }
+            // Previous texture for GPU crossfade (falls back to source if no transition)
+            encoder.setFragmentTexture(previousTexture ?? sourceTexture, index: 3)
             encoder.setFragmentBuffer(uniformBuffer, offset: 0, index: 0)
             encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
             encoder.endEncoding()
@@ -432,6 +482,7 @@ final class EffectsMetalView: MTKView {
 
 struct EffectsMetalViewRepresentable: NSViewRepresentable {
     let sourceImage: NSImage?
+    let previousImage: NSImage?  // For GPU crossfade blending
     let saliencyMap: NSImage?
     let uniforms: EffectsUniforms  // Single struct - matches visionOS pattern
 
@@ -444,6 +495,9 @@ struct EffectsMetalViewRepresentable: NSViewRepresentable {
     func updateNSView(_ nsView: EffectsMetalView, context: Context) {
         // Update source image (internally checks if changed)
         nsView.updateSourceImage(sourceImage)
+
+        // Update previous image for GPU crossfade (internally checks if changed)
+        nsView.updatePreviousImage(previousImage)
 
         // Update saliency map (internally checks if changed)
         nsView.updateSaliencyMap(saliencyMap)

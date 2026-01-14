@@ -4,7 +4,8 @@ import Combine
 import OSLog
 
 /// Manages crossfade transitions between images when new content arrives.
-/// Uses Core Image for GPU-accelerated blending at high resolutions.
+/// On macOS, exposes raw images for GPU shader blending (no Core Image).
+/// On visionOS, provides lock-free CGImage access for render loops.
 @MainActor
 final class MorphPlayer: ObservableObject {
 
@@ -15,10 +16,13 @@ final class MorphPlayer: ObservableObject {
 
     // MARK: - State
 
+    /// The current target image (what we're transitioning TO, or current if not transitioning)
     @Published private(set) var currentFrame: PlatformImage?
+    /// The previous image (what we're transitioning FROM) - for GPU shader blending
+    @Published private(set) var previousFrame: PlatformImage?
     @Published private(set) var currentSaliencyMap: PlatformImage?  // Saliency map for current target image
     @Published private(set) var isMorphing = false
-    @Published private(set) var transitionProgress: Double = 0  // 0-1, for effects to use
+    @Published private(set) var transitionProgress: Double = 0  // 0-1, for GPU crossfade
     @Published private(set) var poolSize = 0
 
     // MARK: - visionOS Render Path (non-published to avoid SwiftUI contention)
@@ -197,13 +201,16 @@ final class MorphPlayer: ObservableObject {
         isMorphing = true
         transitionProgress = 0
         crossfadeStartTime = Date()
+
+        // Set previousFrame for GPU shader blending (macOS)
+        // Store the "from" image so shader can blend between previous and current
+        previousFrame = fromImage
+
         LMLog.visual.info("🎨 Starting crossfade transition...")
     }
 
     private func updateFrame() {
         guard isMorphing,
-              fromCIImage != nil,
-              toCIImage != nil,
               let startTime = crossfadeStartTime else {
             return
         }
@@ -219,10 +226,11 @@ final class MorphPlayer: ObservableObject {
             _renderCGImage = blendedCGImage
         }
         #else
+        // macOS: GPU shader blending - just update progress, shader does the blend
         transitionProgress = progress
-        // Generate blended frame using GPU-accelerated Core Image
-        if let blended = blendImages(progress: progress) {
-            currentFrame = blended
+        // Set currentFrame to target image (shader blends previousFrame → currentFrame)
+        if let target = toImage {
+            currentFrame = target
         }
         #endif
 
@@ -231,16 +239,17 @@ final class MorphPlayer: ObservableObject {
             LMLog.visual.debug("🔄 CROSSFADE progress=\(String(format: "%.1f", progress * 100))%")
         }
 
-        // Check if complete - DON'T snap to raw 'to' image, keep using blended frame
+        // Check if complete
         if progress >= 1.0 {
             LMLog.visual.info("🔄 CROSSFADE COMPLETE")
-            // Final frame is already the fully blended image
             isMorphing = false
 
             #if os(visionOS)
             _renderTransitionProgress = 0
             #else
             transitionProgress = 0
+            // Clear previousFrame when transition completes
+            previousFrame = nil
             #endif
 
             fromImage = nil

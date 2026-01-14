@@ -85,12 +85,15 @@ struct ImmersiveDomeView: View {
     // DEBUG: Test with solid color first to verify pipeline
     private let debugSolidColorTest = false
 
-    // Curved panel parameters
-    private let panelRadius: Float = 2.0
-    private let horizontalArc: Float = 110.0
-    private let verticalArc: Float = 75.0
-    private let horizontalSegments: Int = 32
-    private let verticalSegments: Int = 24
+    // Curved panel parameters (static to enable mesh caching)
+    private static let panelRadius: Float = 2.0
+    private static let horizontalArc: Float = 110.0
+    private static let verticalArc: Float = 75.0
+    private static let horizontalSegments: Int = 32
+    private static let verticalSegments: Int = 24
+
+    // Cached mesh (generated once, reused across view recreations)
+    private static var cachedMesh: MeshResource?
 
     var body: some View {
         ZStack {
@@ -279,7 +282,7 @@ struct ImmersiveDomeView: View {
                 // Render frame - pass previous image for GPU crossfade when transitioning
                 let renderStartTime = Date()
                 let previousImage = transitionState.isTransitioning ? transitionState.previousImage : nil
-                let success = renderer.renderAndPresent(sourceImage: cgImage, previousImage: previousImage, uniforms: uniforms)
+                _ = renderer.renderAndPresent(sourceImage: cgImage, previousImage: previousImage, uniforms: uniforms)
                 let renderTime = Date().timeIntervalSince(renderStartTime) * 1000
                 totalRenderTime += renderTime
                 maxRenderTime = max(maxRenderTime, renderTime)
@@ -312,9 +315,19 @@ struct ImmersiveDomeView: View {
 
     // MARK: - Mesh Generation
 
+    /// Creates or returns cached curved panel mesh.
+    /// Mesh is cached as static property to avoid regeneration on view recreation.
     private func createCurvedPanelMesh() -> MeshResource? {
-        let hArc = horizontalArc * .pi / 180.0
-        let vArc = verticalArc * .pi / 180.0
+        // Return cached mesh if available
+        if let cached = Self.cachedMesh {
+            LMLog.visual.debug("🎬 CURVED PANEL: Using cached mesh")
+            return cached
+        }
+
+        LMLog.visual.info("🎬 CURVED PANEL: Generating new mesh...")
+
+        let hArc = Self.horizontalArc * .pi / 180.0
+        let vArc = Self.verticalArc * .pi / 180.0
 
         let startH = -hArc / 2
         let startV = -vArc / 2
@@ -324,17 +337,17 @@ struct ImmersiveDomeView: View {
         var uvs: [SIMD2<Float>] = []
         var indices: [UInt32] = []
 
-        for v in 0...verticalSegments {
-            let vFrac = Float(v) / Float(verticalSegments)
+        for v in 0...Self.verticalSegments {
+            let vFrac = Float(v) / Float(Self.verticalSegments)
             let vAngle = startV + vFrac * vArc
 
-            for h in 0...horizontalSegments {
-                let hFrac = Float(h) / Float(horizontalSegments)
+            for h in 0...Self.horizontalSegments {
+                let hFrac = Float(h) / Float(Self.horizontalSegments)
                 let hAngle = startH + hFrac * hArc
 
-                let x = panelRadius * sin(hAngle)
-                let y = panelRadius * tan(vAngle)
-                let z = -panelRadius * cos(hAngle)
+                let x = Self.panelRadius * sin(hAngle)
+                let y = Self.panelRadius * tan(vAngle)
+                let z = -Self.panelRadius * cos(hAngle)
 
                 positions.append(SIMD3<Float>(x, y, z))
                 normals.append(normalize(SIMD3<Float>(-x, 0, -z)))
@@ -342,9 +355,9 @@ struct ImmersiveDomeView: View {
             }
         }
 
-        let rowSize = horizontalSegments + 1
-        for v in 0..<verticalSegments {
-            for h in 0..<horizontalSegments {
+        let rowSize = Self.horizontalSegments + 1
+        for v in 0..<Self.verticalSegments {
+            for h in 0..<Self.horizontalSegments {
                 let topLeft = UInt32(v * rowSize + h)
                 let topRight = topLeft + 1
                 let bottomLeft = UInt32((v + 1) * rowSize + h)
@@ -362,7 +375,10 @@ struct ImmersiveDomeView: View {
         descriptor.primitives = .triangles(indices)
 
         do {
-            return try MeshResource.generate(from: [descriptor])
+            let mesh = try MeshResource.generate(from: [descriptor])
+            Self.cachedMesh = mesh  // Cache for future use
+            LMLog.visual.info("🎬 CURVED PANEL: Mesh cached (\(positions.count) vertices, \(indices.count/3) triangles)")
+            return mesh
         } catch {
             LMLog.visual.error("❌ MeshResource.generate failed: \(error.localizedDescription)")
             return nil

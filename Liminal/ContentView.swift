@@ -295,6 +295,7 @@ struct VisualDisplayView: View {
                 if morphPlayer.currentFrame != nil {
                     EffectsMetalViewRepresentable(
                         sourceImage: morphPlayer.currentFrame,
+                        previousImage: morphPlayer.previousFrame,  // GPU crossfade blending
                         saliencyMap: morphPlayer.currentSaliencyMap,
                         uniforms: effectUniforms
                     )
