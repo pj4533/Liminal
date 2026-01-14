@@ -272,32 +272,17 @@ struct VisualDisplayView: View {
     @StateObject private var effectController = EffectController()
     @State private var lastLoggedSecond: Int = -1
 
-    // Ken Burns computed from effectController.time for smooth continuous motion
-    private var kenBurnsScale: CGFloat {
-        let base = 1.2
-        let variation = 0.15 * sin(effectController.time * 0.05) + 0.05 * sin(effectController.time * 0.03)
-        return CGFloat(base + variation)
-    }
-
-    private var kenBurnsOffset: CGSize {
-        let maxOffset: Double = 60
-        return CGSize(
-            width: maxOffset * sin(effectController.time * 0.04) + 20 * sin(effectController.time * 0.025),
-            height: maxOffset * cos(effectController.time * 0.035) + 20 * cos(effectController.time * 0.02)
+    // Single uniforms struct - matches visionOS pattern for platform parity
+    private var effectUniforms: EffectsUniforms {
+        var uniforms = EffectsUniformsComputer.compute(
+            time: Float(effectController.time),
+            delay: settings.delay,
+            transitionProgress: Float(morphPlayer.transitionProgress),
+            hasSaliencyMap: morphPlayer.currentSaliencyMap != nil
         )
-    }
-
-    // Distortion amplitude - boosted during crossfade transitions
-    private var distortionAmplitude: Double {
-        let baseAmplitude = 0.012
-        let boostMultiplier = 10.0
-        let transitionBoost = sin(morphPlayer.transitionProgress * .pi)
-        return baseAmplitude * (1.0 + (boostMultiplier - 1.0) * transitionBoost)
-    }
-
-    // Feedback amount from delay slider (0-1 maps to 0-0.85 for usable range)
-    private var feedbackAmount: Float {
-        return settings.delay * 0.85
+        // Add time-based hue shift (macOS-specific for now)
+        uniforms.hueBaseShift = Float(effectController.time * 0.03)
+        return uniforms
     }
 
     var body: some View {
@@ -311,11 +296,7 @@ struct VisualDisplayView: View {
                     EffectsMetalViewRepresentable(
                         sourceImage: morphPlayer.currentFrame,
                         saliencyMap: morphPlayer.currentSaliencyMap,
-                        time: effectController.time,
-                        kenBurnsScale: kenBurnsScale,
-                        kenBurnsOffset: kenBurnsOffset,
-                        distortionAmplitude: distortionAmplitude,
-                        feedbackAmount: feedbackAmount
+                        uniforms: effectUniforms
                     )
                     .frame(width: geometry.size.width, height: geometry.size.height)
 
@@ -389,10 +370,9 @@ struct VisualDisplayView: View {
             let currentSecond = Int(newTime)
             if currentSecond > lastLoggedSecond {
                 lastLoggedSecond = currentSecond
-                let scale = kenBurnsScale
-                let offset = kenBurnsOffset
+                let uniforms = effectUniforms
                 let morphing = morphPlayer.isMorphing
-                LMLog.visual.debug("📐 KB t=\(String(format: "%.1f", newTime)) scale=\(String(format: "%.3f", scale)) offset=(\(String(format: "%.1f", offset.width)),\(String(format: "%.1f", offset.height))) morph=\(morphing)")
+                LMLog.visual.debug("📐 KB t=\(String(format: "%.1f", newTime)) scale=\(String(format: "%.3f", uniforms.kenBurnsScale)) offset=(\(String(format: "%.1f", uniforms.kenBurnsOffsetX)),\(String(format: "%.1f", uniforms.kenBurnsOffsetY))) morph=\(morphing)")
             }
         }
         .onDisappear {

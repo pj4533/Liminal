@@ -21,6 +21,34 @@ final class MorphPlayer: ObservableObject {
     @Published private(set) var transitionProgress: Double = 0  // 0-1, for effects to use
     @Published private(set) var poolSize = 0
 
+    // MARK: - visionOS Render Path (non-published to avoid SwiftUI contention)
+
+    /// Direct CGImage storage for visionOS render loop - bypasses @Published to avoid
+    /// SwiftUI observation overhead during 60fps rendering.
+    /// On macOS, falls back to currentFrame conversion.
+    #if os(visionOS)
+    private var _renderCGImage: CGImage?
+    private var _renderTransitionProgress: Double = 0
+    #endif
+
+    /// CGImage accessor for render loops. On visionOS, uses non-published backing store.
+    var currentFrameCGImage: CGImage? {
+        #if os(visionOS)
+        return _renderCGImage
+        #else
+        return currentFrame?.cgImageRepresentation
+        #endif
+    }
+
+    /// Transition progress for render loops. On visionOS, uses non-published backing store.
+    var renderTransitionProgress: Double {
+        #if os(visionOS)
+        return _renderTransitionProgress
+        #else
+        return transitionProgress
+        #endif
+    }
+
     private var fromImage: PlatformImage?
     private var toImage: PlatformImage?
     private var fromCIImage: CIImage?
@@ -41,35 +69,70 @@ final class MorphPlayer: ObservableObject {
         LMLog.visual.info("MorphPlayer started (crossfade mode)")
     }
 
+    /// Start without internal Timer - caller is responsible for calling tick()
+    /// Use this on visionOS where we drive updates from the render loop to avoid Timer conflicts
+    func startWithoutTimer() {
+        LMLog.visual.info("MorphPlayer started (manual tick mode)")
+    }
+
     func stop() {
         displayLink?.invalidate()
         displayLink = nil
         LMLog.visual.info("MorphPlayer stopped")
     }
 
+    /// Manual frame update - call this from external render loops (visionOS)
+    /// This advances crossfade blending without relying on internal Timer
+    func tick() {
+        updateFrame()
+    }
+
     func setInitialImage(_ image: PlatformImage) {
+        LMLog.visual.info("🔍 setInitialImage: START")
+
+        // On visionOS, populate the non-published render storage directly
+        #if os(visionOS)
+        if let cgImage = image.cgImageRepresentation {
+            _renderCGImage = cgImage
+            LMLog.visual.info("🔍 setInitialImage: _renderCGImage set (\(cgImage.width)x\(cgImage.height))")
+        } else {
+            LMLog.visual.error("🔍 setInitialImage: failed to get CGImage from PlatformImage!")
+        }
+        #endif
+
         currentFrame = image
+        LMLog.visual.info("🔍 setInitialImage: currentFrame set")
         addToHistory(image)
+        LMLog.visual.info("🔍 setInitialImage: added to history")
         poolSize = imageHistory.count
+        LMLog.visual.info("🔍 setInitialImage: poolSize updated")
         LMLog.visual.info("Initial image set")
 
-        // Generate saliency map asynchronously
+        // TEMPORARILY DISABLED: Saliency generation might be blocking on visionOS
+        #if os(macOS)
         Task {
             await generateSaliencyMap(for: image)
         }
+        #else
+        LMLog.visual.info("🔍 setInitialImage: skipping saliency on visionOS")
+        #endif
     }
 
     func transitionTo(_ newImage: PlatformImage) {
+        LMLog.visual.info("🔍 transitionTo: START")
         guard let current = currentFrame else {
+            LMLog.visual.info("🔍 transitionTo: no current frame, setting directly")
             currentFrame = newImage
             addToHistory(newImage)
             poolSize = imageHistory.count
             LMLog.visual.info("First image displayed (no transition needed)")
 
-            // Generate saliency map asynchronously
+            // TEMPORARILY DISABLED: Saliency generation might be blocking on visionOS
+            #if os(macOS)
             Task {
                 await generateSaliencyMap(for: newImage)
             }
+            #endif
             return
         }
 
@@ -94,11 +157,14 @@ final class MorphPlayer: ObservableObject {
         addToHistory(newImage)
         poolSize = imageHistory.count
         startCrossfade()
+        LMLog.visual.info("🔍 transitionTo: crossfade started")
 
-        // Generate saliency map for the target image asynchronously
+        // TEMPORARILY DISABLED: Saliency generation might be blocking on visionOS
+        #if os(macOS)
         Task {
             await generateSaliencyMap(for: newImage)
         }
+        #endif
     }
 
     func addToPool(_ image: PlatformImage) {
@@ -144,12 +210,21 @@ final class MorphPlayer: ObservableObject {
 
         let elapsed = Date().timeIntervalSince(startTime)
         let progress = min(elapsed / crossfadeDuration, 1.0)
-        transitionProgress = progress
 
+        // On visionOS, update non-published render storage to avoid SwiftUI contention
+        #if os(visionOS)
+        _renderTransitionProgress = progress
+        // Render blended CGImage directly without PlatformImage conversion
+        if let blendedCGImage = blendImagesToCGImage(progress: progress) {
+            _renderCGImage = blendedCGImage
+        }
+        #else
+        transitionProgress = progress
         // Generate blended frame using GPU-accelerated Core Image
         if let blended = blendImages(progress: progress) {
             currentFrame = blended
         }
+        #endif
 
         // Log progress periodically
         if Int(elapsed * 10) % 5 == 0 && Int(elapsed * 10) > 0 {
@@ -161,7 +236,13 @@ final class MorphPlayer: ObservableObject {
             LMLog.visual.info("🔄 CROSSFADE COMPLETE")
             // Final frame is already the fully blended image
             isMorphing = false
+
+            #if os(visionOS)
+            _renderTransitionProgress = 0
+            #else
             transitionProgress = 0
+            #endif
+
             fromImage = nil
             toImage = nil
             fromCIImage = nil
@@ -172,6 +253,12 @@ final class MorphPlayer: ObservableObject {
 
     /// GPU-accelerated image blending using Core Image dissolve transition
     private func blendImages(progress: Double) -> PlatformImage? {
+        guard let cgImage = blendImagesToCGImage(progress: progress) else { return nil }
+        return PlatformImage(cgImage: cgImage)
+    }
+
+    /// GPU-accelerated image blending returning CGImage directly (avoids PlatformImage overhead)
+    private func blendImagesToCGImage(progress: Double) -> CGImage? {
         guard let fromCI = fromCIImage, let toCI = toCIImage else { return nil }
 
         let easedProgress = easeInOutCubic(progress)
@@ -186,10 +273,7 @@ final class MorphPlayer: ObservableObject {
 
         // Render to CGImage on GPU
         let extent = outputCI.extent
-        guard let cgImage = ciContext.createCGImage(outputCI, from: extent) else { return nil }
-
-        // Convert to PlatformImage
-        return PlatformImage(cgImage: cgImage)
+        return ciContext.createCGImage(outputCI, from: extent)
     }
 
     /// Convert PlatformImage to CIImage for GPU processing

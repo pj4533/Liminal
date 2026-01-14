@@ -3,6 +3,7 @@ import SoundpipeAudioKit
 import Foundation
 import Combine
 import OSLog
+import AVFoundation
 
 /// Coordinates multiple voice layers with generative note selection.
 /// Three voices: bass drone, mid pad, high shimmer - each with own timing and behavior.
@@ -154,12 +155,53 @@ final class GenerativeEngine: ObservableObject {
         ]
     }
 
+    // MARK: - Audio Session (visionOS)
+
+    #if os(visionOS)
+    /// Configure audio session for visionOS stability
+    /// visionOS requires larger buffers and explicit session config to avoid underruns
+    private func configureAudioSession() throws {
+        let session = AVAudioSession.sharedInstance()
+
+        // Playback category with mix option (required for visionOS)
+        try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+
+        // visionOS prefers 48kHz - avoids resampling overhead
+        try session.setPreferredSampleRate(48000)
+
+        // Bypass spatial audio processing (we're doing stereo ambient)
+        try session.setIntendedSpatialExperience(.bypassed)
+
+        // Request larger buffer for stability - visionOS prioritizes 90fps rendering
+        // Try 100ms for maximum stability (latency irrelevant for ambient)
+        let requestedBuffer: TimeInterval = 0.1
+        try session.setPreferredIOBufferDuration(requestedBuffer)
+
+        // Activate AFTER setting preferences
+        try session.setActive(true)
+
+        // Some systems need buffer set again after activation
+        try session.setPreferredIOBufferDuration(requestedBuffer)
+
+        // Log actual values granted by the system
+        let actualBuffer = session.ioBufferDuration
+        let actualRate = session.sampleRate
+        let bufferMatch = abs(actualBuffer - requestedBuffer) < 0.001 ? "✅" : "⚠️ MISMATCH"
+
+        LMLog.audio.info("🎧 visionOS audio: requested=\(String(format: "%.3f", requestedBuffer))s, granted=\(String(format: "%.3f", actualBuffer))s \(bufferMatch), rate=\(actualRate)Hz")
+    }
+    #endif
+
     // MARK: - Control
 
     func start() {
         guard !isRunning else { return }
 
         do {
+            #if os(visionOS)
+            try configureAudioSession()
+            #endif
+
             try engine.start()
 
             let configs = voiceConfigs()

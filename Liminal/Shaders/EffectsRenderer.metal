@@ -89,7 +89,8 @@ float fbm_distort(float2 p, float time, int octaves) {
 struct EffectsUniforms {
     float time;
     float kenBurnsScale;
-    float2 kenBurnsOffset;      // normalized -1 to 1
+    float kenBurnsOffsetX;      // normalized -1 to 1
+    float kenBurnsOffsetY;      // normalized -1 to 1
     float distortionAmplitude;
     float distortionSpeed;
     float hueBaseShift;
@@ -102,6 +103,7 @@ struct EffectsUniforms {
     float feedbackDecay;        // darken feedback each frame
     float saliencyInfluence;    // how much saliency affects hue (0 = none, 1 = full)
     float hasSaliencyMap;       // 1.0 if saliency map available, 0.0 otherwise
+    float transitionProgress;   // 0-1 for GPU crossfade blending between images
 };
 
 // MARK: - DEBUG: Simple Passthrough Fragment (no effects)
@@ -151,6 +153,7 @@ fragment half4 effectsFragment(
     texture2d<half> sourceTexture [[texture(0)]],
     texture2d<half> feedbackTexture [[texture(1)]],
     texture2d<half> saliencyTexture [[texture(2)]],
+    texture2d<half> previousTexture [[texture(3)]],
     constant EffectsUniforms &uniforms [[buffer(0)]]
 ) {
     constexpr sampler texSampler(address::clamp_to_edge, filter::linear);
@@ -168,7 +171,7 @@ fragment half4 effectsFragment(
     float2 centered = uv - center;
     centered /= uniforms.kenBurnsScale;
     // Apply offset (normalized, convert to UV space)
-    centered -= uniforms.kenBurnsOffset * 0.05;  // scale down offset
+    centered -= float2(uniforms.kenBurnsOffsetX, uniforms.kenBurnsOffsetY) * 0.05;  // scale down offset
     uv = centered + center;
 
     // DEBUG STAGE 2: Ken Burns only
@@ -187,8 +190,19 @@ fragment half4 effectsFragment(
     // Clamp UV to valid range
     uv = clamp(uv, float2(0.001), float2(0.999));
 
-    // Sample source texture
-    half4 color = sourceTexture.sample(texSampler, uv);
+    // Sample source texture (current image) and previous texture
+    half4 sourceColor = sourceTexture.sample(texSampler, uv);
+    half4 prevColor = previousTexture.sample(texSampler, uv);
+
+    // === GPU CROSSFADE BLENDING ===
+    // Always blend - when not transitioning, previousTexture == sourceTexture (fallback)
+    // This avoids the "jump to new image" on first frame of transition
+    float blendT = uniforms.transitionProgress;
+    float eased = blendT < 0.5 ? 4.0 * blendT * blendT * blendT : 1.0 - pow(-2.0 * blendT + 2.0, 3.0) / 2.0;
+
+    // Blend: previous -> current as progress goes 0 -> 1
+    // At t=0: show previous (old image), at t=1: show source (new image)
+    half4 color = mix(prevColor, sourceColor, half(eased));
 
     // DEBUG STAGE 3: Ken Burns + fBM distortion
     #if DEBUG_STAGE == 3

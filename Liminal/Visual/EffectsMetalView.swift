@@ -32,21 +32,26 @@ final class EffectsMetalView: MTKView {
 
     // MARK: - Effect Parameters
 
-    var effectTime: Float = 0
-    var kenBurnsScale: Float = 1.2
-    var kenBurnsOffsetX: Float = 0
-    var kenBurnsOffsetY: Float = 0
-    var distortionAmplitude: Float = 0.012
-    var distortionSpeed: Float = 0.08
-    var hueBaseShift: Float = 0
-    var hueWaveIntensity: Float = 0.5
-    var hueBlendAmount: Float = 0.65
-    var contrastBoost: Float = 1.4
-    var saturationBoost: Float = 1.3
-    var feedbackAmount: Float = 0.5  // Controlled by delay slider
-    var feedbackZoom: Float = 0.96  // < 1 = expand outward, closer to 1 = tighter spacing
-    var feedbackDecay: Float = 0.5  // Aggressive fade - ghosts become transparent fast
-    var saliencyInfluence: Float = 0.6  // How much saliency affects hue (0 = none, 1 = full)
+    /// Single uniforms struct - matches visionOS pattern for platform parity
+    var uniforms = EffectsUniforms(
+        time: 0,
+        kenBurnsScale: 1.2,
+        kenBurnsOffsetX: 0,
+        kenBurnsOffsetY: 0,
+        distortionAmplitude: 0.012,
+        distortionSpeed: 0.08,
+        hueBaseShift: 0,
+        hueWaveIntensity: 0.5,
+        hueBlendAmount: 0.65,
+        contrastBoost: 1.4,
+        saturationBoost: 1.3,
+        feedbackAmount: 0.5,
+        feedbackZoom: 0.96,
+        feedbackDecay: 0.5,
+        saliencyInfluence: 0.6,
+        hasSaliencyMap: 0,
+        transitionProgress: 0
+    )
 
     // Track if we have a valid source
     private var hasValidSource = false
@@ -314,27 +319,11 @@ final class EffectsMetalView: MTKView {
             return
         }
 
-        // Update uniforms
-        let hasSaliency = saliencyTexture != nil
-        var uniforms = EffectsUniforms(
-            time: effectTime,
-            kenBurnsScale: kenBurnsScale,
-            kenBurnsOffsetX: kenBurnsOffsetX,
-            kenBurnsOffsetY: kenBurnsOffsetY,
-            distortionAmplitude: distortionAmplitude,
-            distortionSpeed: distortionSpeed,
-            hueBaseShift: hueBaseShift,
-            hueWaveIntensity: hueWaveIntensity,
-            hueBlendAmount: hueBlendAmount,
-            contrastBoost: contrastBoost,
-            saturationBoost: saturationBoost,
-            feedbackAmount: feedbackAmount,
-            feedbackZoom: feedbackZoom,
-            feedbackDecay: feedbackDecay,
-            saliencyInfluence: saliencyInfluence,
-            hasSaliencyMap: hasSaliency ? 1.0 : 0.0
-        )
-        memcpy(uniformBuffer.contents(), &uniforms, MemoryLayout<EffectsUniforms>.size)
+        // Copy uniforms to GPU buffer (uniforms are set externally via the uniforms property)
+        // Update hasSaliencyMap based on current saliency texture state
+        var uniformsCopy = uniforms
+        uniformsCopy.hasSaliencyMap = saliencyTexture != nil ? 1.0 : 0.0
+        memcpy(uniformBuffer.contents(), &uniformsCopy, MemoryLayout<EffectsUniforms>.size)
 
         // Get feedback textures (read from current, write to next)
         let readFeedback = feedbackTextures[currentFeedbackIndex]
@@ -402,8 +391,8 @@ final class EffectsMetalView: MTKView {
             let avgDrawTime = totalDrawTime / Double(frameCount)
             let fps = Double(frameCount) / timeSinceLastLog
 
-            // Extract values for logging
-            let fbPct = feedbackAmount * 100
+            // Extract values for logging (now from uniforms struct)
+            let fbPct = uniforms.feedbackAmount * 100
             let srcW = sourceTexture.width
             let srcH = sourceTexture.height
             let fbIdx = currentFeedbackIndex
@@ -412,16 +401,15 @@ final class EffectsMetalView: MTKView {
             LMLog.visual.info("📊 METAL PERF: fps=\(String(format: "%.1f", fps)) avgDraw=\(String(format: "%.2f", avgDrawTime))ms fb=\(String(format: "%.0f", fbPct))% src=\(srcW)x\(srcH) fbIdx=\(fbIdx) texUpdates=\(texUpdates)")
 
             // Log uniforms once per second for debugging
-            let t = effectTime
-            let kb = kenBurnsScale
-            let kbX = kenBurnsOffsetX
-            let kbY = kenBurnsOffsetY
-            let dist = distortionAmplitude
-            let hue = hueBaseShift
-            let fb = feedbackAmount
-
-            let fbZoom = feedbackZoom
-            let fbDecay = feedbackDecay
+            let t = uniforms.time
+            let kb = uniforms.kenBurnsScale
+            let kbX = uniforms.kenBurnsOffsetX
+            let kbY = uniforms.kenBurnsOffsetY
+            let dist = uniforms.distortionAmplitude
+            let hue = uniforms.hueBaseShift
+            let fb = uniforms.feedbackAmount
+            let fbZoom = uniforms.feedbackZoom
+            let fbDecay = uniforms.feedbackDecay
             LMLog.visual.debug("🎛️ UNIFORMS: t=\(String(format: "%.1f", t)) kb=\(String(format: "%.2f", kb)) kbOff=(\(String(format: "%.2f", kbX)),\(String(format: "%.2f", kbY))) dist=\(String(format: "%.3f", dist)) hue=\(String(format: "%.2f", hue)) fb=\(String(format: "%.2f", fb)) fbZoom=\(String(format: "%.3f", fbZoom)) fbDecay=\(String(format: "%.2f", fbDecay))")
 
             // Reset counters
@@ -445,11 +433,7 @@ final class EffectsMetalView: MTKView {
 struct EffectsMetalViewRepresentable: NSViewRepresentable {
     let sourceImage: NSImage?
     let saliencyMap: NSImage?
-    let time: Double
-    let kenBurnsScale: CGFloat
-    let kenBurnsOffset: CGSize
-    let distortionAmplitude: Double
-    let feedbackAmount: Float  // From delay slider
+    let uniforms: EffectsUniforms  // Single struct - matches visionOS pattern
 
     func makeNSView(context: Context) -> EffectsMetalView {
         let view = EffectsMetalView()
@@ -464,16 +448,8 @@ struct EffectsMetalViewRepresentable: NSViewRepresentable {
         // Update saliency map (internally checks if changed)
         nsView.updateSaliencyMap(saliencyMap)
 
-        // Update effect parameters
-        nsView.effectTime = Float(time)
-        nsView.kenBurnsScale = Float(kenBurnsScale)
-        nsView.kenBurnsOffsetX = Float(kenBurnsOffset.width / 100.0)  // Normalize
-        nsView.kenBurnsOffsetY = Float(kenBurnsOffset.height / 100.0)
-        nsView.distortionAmplitude = Float(distortionAmplitude)
-        nsView.feedbackAmount = feedbackAmount
-
-        // Hue shift advances with time
-        nsView.hueBaseShift = Float(time * 0.03)
+        // Pass uniforms directly - single assignment, platform parity with visionOS
+        nsView.uniforms = uniforms
     }
 }
 

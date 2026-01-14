@@ -29,6 +29,7 @@ final class OffscreenEffectsRenderer {
     // MARK: - Textures
 
     private var sourceTexture: MTLTexture?
+    private var previousTexture: MTLTexture?  // For GPU crossfade blending
     private var outputTexture: MTLTexture?
     private var feedbackTexture: MTLTexture?
     private var saliencyTexture: MTLTexture?
@@ -42,6 +43,17 @@ final class OffscreenEffectsRenderer {
 
     // Track renders for periodic logging
     private var renderCount: Int = 0
+
+    // Image caching - only update texture when source actually changes
+    private var lastImageIdentifier: ObjectIdentifier?
+    private var textureUpdateSkipCount: Int = 0
+
+    // Performance tracking
+    private var totalTextureUpdateTime: Double = 0
+    private var totalGPURenderTime: Double = 0
+    private var totalPresentTime: Double = 0
+    private var perfFrameCount: Int = 0
+    private var lastPerfLogTime: Date = Date()
 
     // MARK: - Init
 
@@ -194,7 +206,8 @@ final class OffscreenEffectsRenderer {
         let placeholderImage = createPlaceholderImage(width: size, height: size)
 
         // Create texture resource from placeholder, then link to drawable queue
-        let resource = try await TextureResource(image: placeholderImage, options: .init(semantic: .color))
+        // Use .raw semantic to prevent sRGB color space conversion (matches macOS behavior)
+        let resource = try await TextureResource(image: placeholderImage, options: .init(semantic: .raw))
         resource.replace(withDrawables: queue)
 
         self.drawableQueue = queue
@@ -421,12 +434,20 @@ final class OffscreenEffectsRenderer {
 
     /// Render effects and present to DrawableQueue.
     /// - Parameters:
-    ///   - sourceImage: The source image (from visual engine)
-    ///   - uniforms: Effect parameters
+    ///   - sourceImage: The current source image
+    ///   - previousImage: Optional previous image for GPU crossfade blending during transitions
+    ///   - uniforms: Effect parameters (includes transitionProgress for blending)
     /// - Returns: True if rendering succeeded
-    func renderAndPresent(sourceImage: CGImage, uniforms: EffectsUniforms) -> Bool {
+    func renderAndPresent(sourceImage: CGImage, previousImage: CGImage? = nil, uniforms: EffectsUniforms) -> Bool {
         renderCount += 1
+        perfFrameCount += 1
         let shouldLog = renderCount == 1 || renderCount % 300 == 0
+
+        // Track timing for each phase
+        let phaseStartTime = Date()
+        var textureUpdateTime: Double = 0
+        var gpuRenderTime: Double = 0
+        var presentTime: Double = 0
 
         guard let drawableQueue = drawableQueue else {
             LMLog.visual.warning("⚠️ No drawable queue (render \(self.renderCount))")
@@ -479,7 +500,8 @@ final class OffscreenEffectsRenderer {
                 time: 0, kenBurnsScale: 1, kenBurnsOffsetX: 0, kenBurnsOffsetY: 0,
                 distortionAmplitude: 0, distortionSpeed: 0, hueBaseShift: 0,
                 hueWaveIntensity: 0, hueBlendAmount: 0, contrastBoost: 1, saturationBoost: 1,
-                feedbackAmount: 0, feedbackZoom: 1, feedbackDecay: 1, saliencyInfluence: 0, hasSaliencyMap: 0
+                feedbackAmount: 0, feedbackZoom: 1, feedbackDecay: 1, saliencyInfluence: 0, hasSaliencyMap: 0,
+                transitionProgress: 0
             )
             encoder.setFragmentBytes(&dummyUniforms, length: MemoryLayout<EffectsUniforms>.size, index: 0)
             encoder.setFragmentTexture(sourceTexture, index: 0)
@@ -520,8 +542,33 @@ final class OffscreenEffectsRenderer {
             return false
         }
 
-        // Update source texture from CGImage
-        updateSourceTexture(from: sourceImage)
+        // TIMING: Texture update phase
+        let textureUpdateStart = Date()
+
+        // Only update source texture if image actually changed
+        // CGImage doesn't conform to Identifiable, so use memory address comparison
+        let currentImageID = ObjectIdentifier(sourceImage)
+        let imageChanged = (currentImageID != lastImageIdentifier)
+
+        if imageChanged {
+            // Update source texture from CGImage (downsampled to outputSize)
+            updateSourceTexture(from: sourceImage)
+            lastImageIdentifier = currentImageID
+            textureUpdateSkipCount = 0
+        } else {
+            textureUpdateSkipCount += 1
+        }
+
+        // Update previous texture for GPU crossfade blending (only during transitions)
+        if let previousImage = previousImage {
+            updatePreviousTexture(from: previousImage)
+        }
+
+        textureUpdateTime = Date().timeIntervalSince(textureUpdateStart) * 1000
+        totalTextureUpdateTime += textureUpdateTime
+
+        // TIMING: GPU render phase
+        let gpuRenderStart = Date()
 
         guard let sourceTexture = sourceTexture else {
             LMLog.visual.warning("⚠️ Source texture is nil after update")
@@ -555,6 +602,8 @@ final class OffscreenEffectsRenderer {
         encoder.setFragmentTexture(sourceTexture, index: 0)
         encoder.setFragmentTexture(feedbackTexture, index: 1)
         encoder.setFragmentTexture(saliencyTexture, index: 2)
+        // Previous texture for GPU crossfade (uses sourceTexture as fallback if no previous)
+        encoder.setFragmentTexture(previousTexture ?? sourceTexture, index: 3)
         encoder.setFragmentSamplerState(samplerState, index: 0)
 
         // Draw fullscreen quad (shader generates vertices from vertexID)
@@ -587,14 +636,41 @@ final class OffscreenEffectsRenderer {
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
 
+        gpuRenderTime = Date().timeIntervalSince(gpuRenderStart) * 1000
+        totalGPURenderTime += gpuRenderTime
+
         // Check for GPU errors
         if let error = commandBuffer.error {
             LMLog.visual.error("❌ GPU error: \(error.localizedDescription)")
             return false
         }
 
+        // TIMING: Present phase
+        let presentStart = Date()
+
         // Present to RealityKit
         drawable.present()
+
+        presentTime = Date().timeIntervalSince(presentStart) * 1000
+        totalPresentTime += presentTime
+
+        // Log detailed timing breakdown every second
+        let timeSincePerfLog = Date().timeIntervalSince(lastPerfLogTime)
+        if timeSincePerfLog >= 1.0 {
+            let avgTextureUpdate = totalTextureUpdateTime / Double(perfFrameCount)
+            let avgGPURender = totalGPURenderTime / Double(perfFrameCount)
+            let avgPresent = totalPresentTime / Double(perfFrameCount)
+            let totalAvg = avgTextureUpdate + avgGPURender + avgPresent
+
+            LMLog.visual.info("🔧 RENDERER TIMING: texture=\(String(format: "%.2f", avgTextureUpdate))ms | gpu=\(String(format: "%.2f", avgGPURender))ms | present=\(String(format: "%.2f", avgPresent))ms | TOTAL=\(String(format: "%.2f", totalAvg))ms/frame | skipped=\(self.textureUpdateSkipCount)")
+
+            // Reset perf counters
+            totalTextureUpdateTime = 0
+            totalGPURenderTime = 0
+            totalPresentTime = 0
+            perfFrameCount = 0
+            lastPerfLogTime = Date()
+        }
 
         if shouldLog {
             LMLog.visual.info("🎬 GPU render \(self.renderCount) complete - presented to DrawableQueue")
@@ -606,48 +682,117 @@ final class OffscreenEffectsRenderer {
     // MARK: - Private
 
     private func updateSourceTexture(from cgImage: CGImage) {
-        let width = cgImage.width
-        let height = cgImage.height
+        // OPTIMIZATION: Downsample to output size instead of using full source resolution
+        // 4096x4096 → 2048x2048 reduces memory from 67MB to 16MB per update
+        let targetSize = outputSize
+        let sourceWidth = cgImage.width
+        let sourceHeight = cgImage.height
 
-        // Create or recreate texture if needed
+        // Create or recreate texture if needed (always at outputSize)
         if sourceTexture == nil ||
-           sourceTexture?.width != width ||
-           sourceTexture?.height != height {
+           sourceTexture?.width != targetSize ||
+           sourceTexture?.height != targetSize {
 
             let descriptor = MTLTextureDescriptor.texture2DDescriptor(
                 pixelFormat: .bgra8Unorm,
-                width: width,
-                height: height,
+                width: targetSize,
+                height: targetSize,
                 mipmapped: false
             )
             descriptor.usage = .shaderRead
             descriptor.storageMode = .shared
 
             sourceTexture = device.makeTexture(descriptor: descriptor)
+
+            if sourceWidth != targetSize || sourceHeight != targetSize {
+                LMLog.visual.info("🔧 Downsampling source \(sourceWidth)x\(sourceHeight) → \(targetSize)x\(targetSize)")
+            }
         }
 
         guard let texture = sourceTexture else { return }
 
-        // Convert CGImage to BGRA texture data
+        // Convert CGImage to BGRA texture data at target resolution
         let colorSpace = CGColorSpaceCreateDeviceRGB()
         let bytesPerPixel = 4
-        let bytesPerRow = bytesPerPixel * width
-        var pixelData = [UInt8](repeating: 0, count: width * height * bytesPerPixel)
+        let bytesPerRow = bytesPerPixel * targetSize
+        var pixelData = [UInt8](repeating: 0, count: targetSize * targetSize * bytesPerPixel)
 
         guard let context = CGContext(
             data: &pixelData,
-            width: width,
-            height: height,
+            width: targetSize,
+            height: targetSize,
             bitsPerComponent: 8,
             bytesPerRow: bytesPerRow,
             space: colorSpace,
             bitmapInfo: CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.premultipliedFirst.rawValue  // BGRA
         ) else { return }
 
-        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+        // High quality downsampling
+        context.interpolationQuality = .high
+
+        // Flip coordinate system: CGContext has origin at bottom-left,
+        // Metal textures expect top-left origin
+        context.translateBy(x: 0, y: CGFloat(targetSize))
+        context.scaleBy(x: 1.0, y: -1.0)
+
+        // Draw source image scaled to target size
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: targetSize, height: targetSize))
 
         texture.replace(
-            region: MTLRegionMake2D(0, 0, width, height),
+            region: MTLRegionMake2D(0, 0, targetSize, targetSize),
+            mipmapLevel: 0,
+            withBytes: pixelData,
+            bytesPerRow: bytesPerRow
+        )
+    }
+
+    /// Update the previous texture for GPU crossfade blending.
+    /// Called during transitions to provide the "from" image.
+    private func updatePreviousTexture(from cgImage: CGImage) {
+        let targetSize = outputSize
+
+        // Create or recreate texture if needed
+        if previousTexture == nil ||
+           previousTexture?.width != targetSize ||
+           previousTexture?.height != targetSize {
+
+            let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+                pixelFormat: .bgra8Unorm,
+                width: targetSize,
+                height: targetSize,
+                mipmapped: false
+            )
+            descriptor.usage = .shaderRead
+            descriptor.storageMode = .shared
+
+            previousTexture = device.makeTexture(descriptor: descriptor)
+        }
+
+        guard let texture = previousTexture else { return }
+
+        // Convert CGImage to BGRA texture data
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let bytesPerPixel = 4
+        let bytesPerRow = bytesPerPixel * targetSize
+        var pixelData = [UInt8](repeating: 0, count: targetSize * targetSize * bytesPerPixel)
+
+        guard let context = CGContext(
+            data: &pixelData,
+            width: targetSize,
+            height: targetSize,
+            bitsPerComponent: 8,
+            bytesPerRow: bytesPerRow,
+            space: colorSpace,
+            bitmapInfo: CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.premultipliedFirst.rawValue
+        ) else { return }
+
+        context.interpolationQuality = .high
+        context.translateBy(x: 0, y: CGFloat(targetSize))
+        context.scaleBy(x: 1.0, y: -1.0)
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: targetSize, height: targetSize))
+
+        texture.replace(
+            region: MTLRegionMake2D(0, 0, targetSize, targetSize),
             mipmapLevel: 0,
             withBytes: pixelData,
             bytesPerRow: bytesPerRow
