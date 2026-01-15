@@ -193,6 +193,17 @@ final class ImageQueue: ObservableObject {
     }
 
     private func startAsync(cacheOnly: Bool) async {
+        #if os(visionOS)
+        // visionOS: Use atomic pending queue
+        // In cache-only mode, start a background task to populate queue from cache
+        if cacheOnly {
+            LMLog.visual.info("Cache-only mode (visionOS): starting cache recycler")
+            startCacheRecycler()
+        } else {
+            startContinuousGeneration()
+        }
+        #else
+        // macOS: Use PlatformImage buffer via StateManager
         // Clear buffer - we start fresh each session
         await state.clearBuffer()
 
@@ -217,6 +228,7 @@ final class ImageQueue: ObservableObject {
         } else {
             LMLog.visual.info("Cache-only mode: skipping image generation")
         }
+        #endif
     }
 
     /// Stop generation and clear queue
@@ -247,6 +259,14 @@ final class ImageQueue: ObservableObject {
     }
 
     private func advanceAsync() async {
+        #if os(visionOS)
+        // visionOS: Advance from the atomic pending queue (CGImage-only, MainActor-free)
+        let advanced = imageBuffer.advanceFromQueue()
+        if !advanced {
+            LMLog.visual.debug("No pending images to advance (visionOS)")
+        }
+        #else
+        // macOS: Advance from the PlatformImage queue
         guard let nextPlatformImage = await state.removeFirstFromBuffer() else {
             LMLog.visual.warning("No images in queue to advance")
             return
@@ -276,6 +296,7 @@ final class ImageQueue: ObservableObject {
         if bufferCount < 2 && cachedCount > 0 {
             await refillFromCache()
         }
+        #endif
     }
 
     /// Request a new image be generated immediately (mood change trigger)
@@ -332,6 +353,72 @@ final class ImageQueue: ObservableObject {
         }
     }
 
+    #if os(visionOS)
+    /// visionOS cache recycler - upscales random cached images and queues them for display.
+    /// This runs in cache-only mode to maintain the advance() timing while pulling from cache.
+    private func startCacheRecycler() {
+        guard generationTask == nil || generationTask?.isCancelled == true else {
+            LMLog.visual.debug("🔄 [CacheRecycler] Already running, skipping")
+            return
+        }
+
+        LMLog.visual.info("🔄 [CacheRecycler] Starting cache recycler loop...")
+
+        generationTask = Task.detached { [weak self] in
+            guard let self = self else { return }
+
+            // Load all raw cached images
+            let rawImages = self.cache.loadAllRawAsCGImages()
+            guard !rawImages.isEmpty else {
+                LMLog.visual.warning("🔄 [CacheRecycler] No cached images found!")
+                return
+            }
+
+            LMLog.visual.info("🔄 [CacheRecycler] Loaded \(rawImages.count) raw images from cache")
+
+            var loopCount = 0
+            while !Task.isCancelled {
+                loopCount += 1
+
+                // Pick a random image from cache
+                guard let rawImage = rawImages.randomElement() else { continue }
+
+                LMLog.visual.info("🔄 [CacheRecycler] Iteration \(loopCount): upscaling \(rawImage.width)x\(rawImage.height)")
+
+                do {
+                    // Upscale it (MetalFX is fast ~0.02s on visionOS)
+                    let upscaled = try await self.upscaler.upscale(rawImage)
+
+                    // Queue it for the advance timer
+                    if self.imageBuffer.hasCurrent() {
+                        self.imageBuffer.queuePending(upscaled)
+                    } else {
+                        // First image - display immediately
+                        self.imageBuffer.storeCurrent(upscaled)
+                    }
+
+                    LMLog.visual.info("🔄 [CacheRecycler] ✅ Queued \(upscaled.width)x\(upscaled.height), pending=\(self.imageBuffer.pendingCount())")
+                } catch {
+                    LMLog.visual.error("🔄 [CacheRecycler] ❌ Upscale failed: \(error.localizedDescription)")
+                }
+
+                // Wait before next - keep queue topped up but don't overload
+                // Only queue more if pending count is low
+                let pendingCount = self.imageBuffer.pendingCount()
+                if pendingCount >= 3 {
+                    // Queue is full enough, wait longer
+                    try? await Task.sleep(nanoseconds: 5_000_000_000)
+                } else {
+                    // Queue is low, upscale another quickly
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                }
+            }
+
+            LMLog.visual.warning("🔄 [CacheRecycler] Loop exited (cancelled)")
+        }
+    }
+    #endif
+
     /// Runs entirely off MainActor. Only touches MainActor briefly for @Published updates.
     /// CRITICAL: Uses CGImage throughout the pipeline to avoid MainActor starvation on visionOS.
     private func generateAndUpscaleOne() async {
@@ -372,9 +459,16 @@ final class ImageQueue: ObservableObject {
 
             guard !Task.isCancelled else { return }
 
-            // Step 3: Store upscaled CGImage in atomic buffer for display
-            LMLog.visual.info("🔄 [Pipeline] Step 3: Storing CGImage in buffer...")
-            imageBuffer.storeCurrent(upscaledCGImage)
+            // Step 3: Queue upscaled CGImage for display (respects advance timer)
+            // If no current image yet, store directly for immediate display
+            // Otherwise queue for the next advance() call
+            LMLog.visual.info("🔄 [Pipeline] Step 3: Queueing CGImage...")
+            if imageBuffer.hasCurrent() {
+                imageBuffer.queuePending(upscaledCGImage)
+            } else {
+                // First image - display immediately
+                imageBuffer.storeCurrent(upscaledCGImage)
+            }
 
             // Step 4: Cache the RAW PNG data (not upscaled!) - just write bytes, no UIImage
             LMLog.visual.info("🔄 [Pipeline] Step 4: Caching raw PNG data (\(rawResult.pngData.count) bytes)...")

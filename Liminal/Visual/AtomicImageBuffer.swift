@@ -47,6 +47,10 @@ final class AtomicImageBuffer: @unchecked Sendable {
     /// The next CGImage (for preloading morphs). Protected by lock.
     nonisolated(unsafe) private var _next: CGImage?
 
+    /// Pending queue for visionOS - generated images wait here until advance() is called.
+    /// This ensures visionOS respects the same timing as macOS.
+    nonisolated(unsafe) private var _pendingQueue: [CGImage] = []
+
     /// Generation counter - increments on each store, allows detecting changes.
     nonisolated(unsafe) private var _generation: UInt64 = 0
 
@@ -153,7 +157,59 @@ final class AtomicImageBuffer: @unchecked Sendable {
         lock.withLock {
             _current = nil
             _next = nil
+            _pendingQueue.removeAll()
             _generation &+= 1
+        }
+    }
+
+    // MARK: - Pending Queue (for visionOS timing parity)
+
+    /// Queue an image for later display. Used by visionOS generation pipeline.
+    /// Images wait here until advanceFromQueue() is called by the timer.
+    func queuePending(_ image: CGImage) {
+        let count = lock.withLock {
+            self._pendingQueue.append(image)
+            return self._pendingQueue.count
+        }
+        LMLog.visual.info("📦 AtomicBuffer QUEUE: \(image.width)x\(image.height), pending=\(count)")
+    }
+
+    /// Advance from pending queue to current display.
+    /// Called by the timer to maintain consistent timing across platforms.
+    /// Returns true if an image was advanced, false if queue was empty.
+    @discardableResult
+    func advanceFromQueue() -> Bool {
+        let result: (advanced: Bool, image: CGImage?, gen: UInt64, remaining: Int) = lock.withLock {
+            guard !self._pendingQueue.isEmpty else {
+                return (false, nil, 0, 0)
+            }
+
+            let image = self._pendingQueue.removeFirst()
+            self._current = image
+            self._generation &+= 1
+
+            return (true, image, self._generation, self._pendingQueue.count)
+        }
+
+        if result.advanced, let image = result.image {
+            LMLog.visual.info("📦 AtomicBuffer ADVANCE: \(image.width)x\(image.height), gen=\(result.gen), remaining=\(result.remaining)")
+        } else {
+            LMLog.visual.debug("📦 AtomicBuffer ADVANCE: queue empty, nothing to advance")
+        }
+        return result.advanced
+    }
+
+    /// Get the count of pending images in the queue.
+    func pendingCount() -> Int {
+        lock.withLock {
+            self._pendingQueue.count
+        }
+    }
+
+    /// Check if there's a current image to display.
+    func hasCurrent() -> Bool {
+        lock.withLock {
+            self._current != nil
         }
     }
 }
