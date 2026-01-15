@@ -116,23 +116,45 @@ final class ImageQueue: ObservableObject {
 
     private func loadCachedImages() async {
         LMLog.visual.info("📂 [ImageQueue] Loading cached images...")
+
+        #if os(visionOS)
+        // visionOS: Load raw CGImages and upscale on demand (no UIImage!)
+        let rawImages = cache.loadAllRawAsCGImages()
+        let count = rawImages.count
+        LMLog.visual.info("📂 [ImageQueue] Raw cache returned \(count) CGImages")
+
+        await MainActor.run {
+            totalCachedCount = count
+        }
+
+        if let randomRawImage = rawImages.randomElement() {
+            LMLog.visual.info("📂 [ImageQueue] Upscaling random cached image \(randomRawImage.width)x\(randomRawImage.height)...")
+            do {
+                let upscaled = try await upscaler.upscale(randomRawImage)
+                LMLog.visual.info("📂 [ImageQueue] ✅ Upscaled to \(upscaled.width)x\(upscaled.height), storing in buffer")
+                imageBuffer.storeCurrent(upscaled)
+            } catch {
+                LMLog.visual.error("📂 [ImageQueue] ❌ Failed to upscale cached image: \(error.localizedDescription)")
+            }
+        } else {
+            LMLog.visual.debug("📂 [ImageQueue] No raw cached images found - will generate fresh")
+        }
+
+        #else
+        // macOS: Load PlatformImages from legacy cache
         let loaded = cache.loadAll()
         await state.setCachedImages(loaded)
         let count = await state.cachedCount()
         LMLog.visual.info("📂 [ImageQueue] Cache returned \(loaded.count) images")
 
-        // Update MainActor state
         await MainActor.run {
             totalCachedCount = count
         }
 
         if !loaded.isEmpty {
-            // Pick ONE random cached image for initial display
             let randomImage = loaded.randomElement()
             LMLog.visual.debug("📂 [ImageQueue] Selected random image from cache")
 
-            // Store CGImage in atomic buffer FIRST (for render loop - no MainActor needed)
-            // CGImage extraction is thread-safe on both macOS and iOS/visionOS
             if let image = randomImage {
                 LMLog.visual.debug("📂 [ImageQueue] Extracting CGImage from cached image...")
                 if let cgImage = image.cgImageRepresentation {
@@ -143,7 +165,6 @@ final class ImageQueue: ObservableObject {
                 }
             }
 
-            // Also update @Published for UI (may be delayed, that's OK)
             await MainActor.run {
                 currentImage = randomImage
             }
@@ -151,6 +172,7 @@ final class ImageQueue: ObservableObject {
         } else {
             LMLog.visual.debug("📂 [ImageQueue] No cached images found - will generate fresh")
         }
+        #endif
     }
 
     // MARK: - Prompt Builder
@@ -332,6 +354,44 @@ final class ImageQueue: ObservableObject {
         LMLog.visual.debug("🔄 [Pipeline] Prompt ready: \(prompt.prefix(60))...")
 
         do {
+            #if os(visionOS)
+            // visionOS: 100% MainActor-free pipeline using CGImage throughout
+            // No UIImage/PlatformImage touches to avoid MainActor starvation
+
+            // Step 1: Generate from Gemini (returns raw PNG data + CGImage)
+            LMLog.visual.info("🔄 [Pipeline] Step 1: Calling Gemini (raw mode)...")
+            let rawResult = try await gemini.generateImageRaw(prompt: prompt)
+            LMLog.visual.info("🔄 [Pipeline] Step 1 COMPLETE: Raw image \(rawResult.cgImage.width)x\(rawResult.cgImage.height)")
+
+            guard !Task.isCancelled else { return }
+
+            // Step 2: Upscale the CGImage directly (no PlatformImage!)
+            LMLog.visual.info("🔄 [Pipeline] Step 2: Upscaling CGImage...")
+            let upscaledCGImage = try await upscaler.upscale(rawResult.cgImage)
+            LMLog.visual.info("🔄 [Pipeline] Step 2 COMPLETE: Upscaled to \(upscaledCGImage.width)x\(upscaledCGImage.height)")
+
+            guard !Task.isCancelled else { return }
+
+            // Step 3: Store upscaled CGImage in atomic buffer for display
+            LMLog.visual.info("🔄 [Pipeline] Step 3: Storing CGImage in buffer...")
+            imageBuffer.storeCurrent(upscaledCGImage)
+
+            // Step 4: Cache the RAW PNG data (not upscaled!) - just write bytes, no UIImage
+            LMLog.visual.info("🔄 [Pipeline] Step 4: Caching raw PNG data (\(rawResult.pngData.count) bytes)...")
+            do {
+                try cache.saveRawData(rawResult.pngData)
+                let cachedCount = cache.rawCount
+                await MainActor.run {
+                    totalCachedCount = cachedCount
+                }
+                LMLog.visual.info("🔄 Pipeline ✅ COMPLETE (visionOS) - cached=\(cachedCount)")
+            } catch {
+                LMLog.visual.warning("🔄 [Pipeline] Cache save failed: \(error.localizedDescription)")
+            }
+
+            #else
+            // macOS: Standard pipeline with PlatformImage
+
             // Step 1: Generate from Gemini (runs on its own queue)
             LMLog.visual.info("🔄 [Pipeline] Step 1: Calling Gemini API...")
             let rawImage = try await gemini.generateImage(prompt: prompt)
@@ -362,14 +422,6 @@ final class ImageQueue: ObservableObject {
             let bufferId = String(describing: ObjectIdentifier(imageBuffer))
             LMLog.visual.info("🔄 Pipeline Step 3: Checking atomic buffer id=\(bufferId)")
 
-            #if os(visionOS)
-            // visionOS: ALWAYS store new images directly to atomic buffer
-            // No cycling queue needed - the render loop reads directly from buffer
-            // Each new image replaces the previous one immediately
-            LMLog.visual.info("🔄 Pipeline (visionOS): 🎯 STORING CGImage (always replace)")
-            imageBuffer.storeCurrent(upscaledCGImage)
-            LMLog.visual.info("🔄 Pipeline ✅ COMPLETE (visionOS) - CGImage \(upscaledCGImage.width)x\(upscaledCGImage.height) stored")
-            #else
             let currentInBuffer = imageBuffer.loadCurrent()
             let needsCurrentImage = currentInBuffer == nil
             LMLog.visual.info("🔄 Pipeline: Atomic buffer \(currentInBuffer != nil ? "has image" : "EMPTY")")

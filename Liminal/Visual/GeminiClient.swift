@@ -1,5 +1,7 @@
 import Foundation
 import OSLog
+import CoreGraphics
+import ImageIO
 
 /// Client for Gemini API image generation using native multimodal output.
 ///
@@ -16,6 +18,17 @@ final class GeminiClient: Sendable {
     private let model = "gemini-2.5-flash-image"
     private let baseURL = "https://generativelanguage.googleapis.com/v1beta/models"
 
+    // MARK: - Result Types
+
+    /// Raw image result containing original PNG data and decoded CGImage.
+    /// Use this for caching - store the raw data (small), upscale the CGImage on demand.
+    struct RawImageResult: Sendable {
+        /// Original PNG bytes from Gemini (typically 1024x1024, ~1.5MB)
+        let pngData: Data
+        /// Decoded CGImage ready for upscaling
+        let cgImage: CGImage
+    }
+
     // MARK: - Errors
 
     enum GeminiError: LocalizedError {
@@ -25,6 +38,7 @@ final class GeminiClient: Sendable {
         case invalidResponse
         case noImageGenerated
         case apiError(String)
+        case cgImageCreationFailed
 
         var errorDescription: String? {
             switch self {
@@ -34,6 +48,7 @@ final class GeminiClient: Sendable {
             case .invalidResponse: return "Invalid response from API"
             case .noImageGenerated: return "No image in response"
             case .apiError(let message): return "API error: \(message)"
+            case .cgImageCreationFailed: return "Failed to create CGImage from data"
             }
         }
     }
@@ -215,6 +230,83 @@ final class GeminiClient: Sendable {
         }
 
         LMLog.visual.error("🌐 [Gemini] ❌ No valid image found in any parts")
+        throw GeminiError.noImageGenerated
+    }
+
+    /// Generate an image and return raw PNG data + CGImage for MainActor-free caching.
+    /// Use this on visionOS to avoid UIImage operations that can starve MainActor.
+    /// - Parameter prompt: The image generation prompt
+    /// - Returns: RawImageResult with PNG bytes and decoded CGImage
+    func generateImageRaw(prompt: String) async throws -> RawImageResult {
+        LMLog.visual.info("🌐 [Gemini] Starting raw image generation...")
+
+        guard EnvironmentService.shared.hasValidCredentials else {
+            throw GeminiError.missingAPIKey
+        }
+
+        let apiKey = EnvironmentService.shared.geminiKey
+        let urlString = "\(baseURL)/\(model):generateContent?key=\(apiKey)"
+
+        guard let url = URL(string: urlString) else {
+            throw GeminiError.invalidURL
+        }
+
+        // Build request
+        let request = GenerateContentRequest(
+            contents: [
+                GenerateContentRequest.ContentItem(
+                    parts: [GenerateContentRequest.PartItem(text: prompt)]
+                )
+            ],
+            generationConfig: GenerateContentRequest.GenerationConfig(
+                responseModalities: ["TEXT", "IMAGE"]
+            )
+        )
+
+        var urlRequest = URLRequest(url: url)
+        urlRequest.httpMethod = "POST"
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        urlRequest.httpBody = try JSONEncoder().encode(request)
+
+        LMLog.visual.info("🌐 [Gemini] Sending request...")
+        let startTime = Date()
+        let (data, response) = try await URLSession.shared.data(for: urlRequest)
+        let elapsed = Date().timeIntervalSince(startTime)
+        LMLog.visual.info("🌐 [Gemini] Response in \(String(format: "%.1f", elapsed))s")
+
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            throw GeminiError.invalidResponse
+        }
+
+        let result = try JSONDecoder().decode(GenerateContentResponse.self, from: data)
+
+        if let error = result.error {
+            throw GeminiError.apiError(error.message)
+        }
+
+        guard let parts = result.candidates?.first?.content?.parts else {
+            throw GeminiError.noImageGenerated
+        }
+
+        // Find image data and convert directly to CGImage (no UIImage!)
+        for part in parts {
+            if let inlineData = part.inlineData {
+                guard let imageData = Data(base64Encoded: inlineData.data) else {
+                    continue
+                }
+
+                // Use CGImageSource - completely MainActor-free!
+                guard let source = CGImageSourceCreateWithData(imageData as CFData, nil),
+                      let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+                    LMLog.visual.error("🌐 [Gemini] ❌ CGImageSource failed")
+                    throw GeminiError.cgImageCreationFailed
+                }
+
+                LMLog.visual.info("🌐 [Gemini] ✅ Raw image: \(cgImage.width)x\(cgImage.height), data: \(imageData.count) bytes")
+                return RawImageResult(pngData: imageData, cgImage: cgImage)
+            }
+        }
+
         throw GeminiError.noImageGenerated
     }
 }
