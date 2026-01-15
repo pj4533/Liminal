@@ -31,10 +31,14 @@ final class OffscreenEffectsRenderer {
     private var sourceTexture: MTLTexture?
     private var previousTexture: MTLTexture?  // For GPU crossfade blending
     private var outputTexture: MTLTexture?
-    private var feedbackTexture: MTLTexture?
     private var saliencyTexture: MTLTexture?
 
     private let outputSize: Int = 2048  // Output texture resolution
+
+    // MARK: - Ghost Taps
+
+    private var ghostTapBuffer: MTLBuffer?
+    private let ghostTapManager = GhostTapManager()
 
     // MARK: - DrawableQueue (Bridge to RealityKit)
 
@@ -132,7 +136,7 @@ final class OffscreenEffectsRenderer {
         }
         self.samplerState = sampler
 
-        // Create output and feedback textures
+        // Create output texture
         // Use sRGB format for output - Metal auto-applies gamma encoding on write
         let textureDescriptor = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .bgra8Unorm_srgb,
@@ -144,19 +148,10 @@ final class OffscreenEffectsRenderer {
         textureDescriptor.storageMode = .shared
 
         self.outputTexture = device.makeTexture(descriptor: textureDescriptor)
-        self.feedbackTexture = device.makeTexture(descriptor: textureDescriptor)
 
-        // Initialize feedback to black (prevents garbage on first frame)
-        if let feedback = self.feedbackTexture {
-            let blackData = [UInt8](repeating: 0, count: outputSize * outputSize * 4)
-            feedback.replace(
-                region: MTLRegion(origin: MTLOrigin(x: 0, y: 0, z: 0),
-                                  size: MTLSize(width: outputSize, height: outputSize, depth: 1)),
-                mipmapLevel: 0,
-                withBytes: blackData,
-                bytesPerRow: outputSize * 4
-            )
-        }
+        // Create ghost tap buffer (8 taps * 16 bytes each)
+        let ghostTapBufferSize = GhostTapManager.maxTaps * MemoryLayout<GhostTapData>.stride
+        self.ghostTapBuffer = device.makeBuffer(length: ghostTapBufferSize, options: .storageModeShared)
 
         // Create default saliency texture (1x1 neutral gray)
         // IMPORTANT: Prevents undefined behavior when sampling nil texture
@@ -439,8 +434,9 @@ final class OffscreenEffectsRenderer {
     ///   - sourceImage: The current source image
     ///   - previousImage: Optional previous image for GPU crossfade blending during transitions
     ///   - uniforms: Effect parameters (includes transitionProgress for blending)
+    ///   - delay: Delay slider value (0-1), controls ghost tap spawn frequency
     /// - Returns: True if rendering succeeded
-    func renderAndPresent(sourceImage: CGImage, previousImage: CGImage? = nil, uniforms: EffectsUniforms) -> Bool {
+    func renderAndPresent(sourceImage: CGImage, previousImage: CGImage? = nil, uniforms: EffectsUniforms, delay: Float) -> Bool {
         renderCount += 1
         perfFrameCount += 1
         let shouldLog = renderCount == 1 || renderCount % 300 == 0
@@ -502,7 +498,7 @@ final class OffscreenEffectsRenderer {
                 time: 0, kenBurnsScale: 1, kenBurnsOffsetX: 0, kenBurnsOffsetY: 0,
                 distortionAmplitude: 0, distortionSpeed: 0, hueBaseShift: 0,
                 hueWaveIntensity: 0, hueBlendAmount: 0, contrastBoost: 1, saturationBoost: 1,
-                feedbackAmount: 0, feedbackZoom: 1, feedbackDecay: 1, saliencyInfluence: 0, hasSaliencyMap: 0,
+                ghostTapMaxDistance: 0.25, saliencyInfluence: 0, hasSaliencyMap: 0,
                 transitionProgress: 0
             )
             encoder.setFragmentBytes(&dummyUniforms, length: MemoryLayout<EffectsUniforms>.size, index: 0)
@@ -572,10 +568,20 @@ final class OffscreenEffectsRenderer {
         // TIMING: GPU render phase
         let gpuRenderStart = Date()
 
-        guard let sourceTexture = sourceTexture else {
-            LMLog.visual.warning("⚠️ Source texture is nil after update")
+        guard let sourceTexture = sourceTexture,
+              let ghostTapBuffer = ghostTapBuffer else {
+            LMLog.visual.warning("⚠️ Source texture or ghost tap buffer is nil")
             return false
         }
+
+        // Update ghost taps based on current time and delay setting
+        let ghostTapData = ghostTapManager.update(currentTime: uniforms.time, delay: delay)
+
+        // Copy ghost tap data to GPU buffer
+        ghostTapBuffer.contents().copyMemory(
+            from: ghostTapData,
+            byteCount: GhostTapManager.maxTaps * MemoryLayout<GhostTapData>.stride
+        )
 
         guard let commandBuffer = commandQueue.makeCommandBuffer() else {
             LMLog.visual.warning("⚠️ Failed to create command buffer")
@@ -600,9 +606,11 @@ final class OffscreenEffectsRenderer {
         var mutableUniforms = uniforms
         encoder.setFragmentBytes(&mutableUniforms, length: MemoryLayout<EffectsUniforms>.size, index: 0)
 
+        // Set ghost tap buffer
+        encoder.setFragmentBuffer(ghostTapBuffer, offset: 0, index: 1)
+
         // Set textures
         encoder.setFragmentTexture(sourceTexture, index: 0)
-        encoder.setFragmentTexture(feedbackTexture, index: 1)
         encoder.setFragmentTexture(saliencyTexture, index: 2)
         // Previous texture for GPU crossfade (uses sourceTexture as fallback if no previous)
         encoder.setFragmentTexture(previousTexture ?? sourceTexture, index: 3)
@@ -625,13 +633,6 @@ final class OffscreenEffectsRenderer {
                 destinationLevel: 0,
                 destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0)
             )
-            blitEncoder.endEncoding()
-        }
-
-        // Copy output to feedback for next frame's trails
-        if let feedbackTexture = feedbackTexture,
-           let blitEncoder = commandBuffer.makeBlitCommandEncoder() {
-            blitEncoder.copy(from: outputTexture, to: feedbackTexture)
             blitEncoder.endEncoding()
         }
 

@@ -276,7 +276,6 @@ struct VisualDisplayView: View {
     private var effectUniforms: EffectsUniforms {
         var uniforms = EffectsUniformsComputer.compute(
             time: Float(effectController.time),
-            delay: settings.delay,
             transitionProgress: Float(transitionManager.transitionProgress),
             hasSaliencyMap: transitionManager.currentSaliencyMap != nil
         )
@@ -291,13 +290,14 @@ struct VisualDisplayView: View {
                 // Background
                 Color.black
 
-                // Metal view with all effects + feedback trails
+                // Metal view with all effects + ghost tap trails
                 if transitionManager.currentFrame != nil {
                     EffectsMetalViewRepresentable(
                         sourceImage: transitionManager.currentFrame,
                         previousImage: transitionManager.previousFrame,  // GPU crossfade blending
                         saliencyMap: transitionManager.currentSaliencyMap,
-                        uniforms: effectUniforms
+                        uniforms: effectUniforms,
+                        delay: settings.delay
                     )
                     .frame(width: geometry.size.width, height: geometry.size.height)
 

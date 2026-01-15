@@ -17,13 +17,11 @@ enum EffectsUniformsComputer {
     /// Compute complete uniforms for rendering.
     /// - Parameters:
     ///   - time: Current animation time in seconds
-    ///   - delay: Delay slider value (0-1) from settings - controls feedback trails
     ///   - transitionProgress: Optional crossfade transition progress (0-1) for distortion boost
     ///   - hasSaliencyMap: Whether a saliency texture is available
     /// - Returns: Complete EffectsUniforms ready for the shader
     static func compute(
         time: Float,
-        delay: Float,
         transitionProgress: Float = 0,
         hasSaliencyMap: Bool = false
     ) -> EffectsUniforms {
@@ -33,9 +31,6 @@ enum EffectsUniformsComputer {
 
         // Distortion with optional transition boost
         let distortion = computeDistortion(transitionProgress: transitionProgress)
-
-        // Feedback from delay slider
-        let feedbackAmount = delay * 0.85  // 0-1 maps to 0-0.85 for usable range
 
         return EffectsUniforms(
             time: time,
@@ -49,9 +44,7 @@ enum EffectsUniformsComputer {
             hueBlendAmount: 0.65,
             contrastBoost: 1.4,
             saturationBoost: 1.3,
-            feedbackAmount: feedbackAmount,
-            feedbackZoom: 0.96,
-            feedbackDecay: 0.5,
+            ghostTapMaxDistance: 0.06,  // Ghost taps travel 6% of image size - slow drift
             saliencyInfluence: hasSaliencyMap ? 0.6 : 0,
             hasSaliencyMap: hasSaliencyMap ? 1.0 : 0.0,
             transitionProgress: transitionProgress
@@ -105,11 +98,4 @@ enum EffectsUniformsComputer {
         return DistortionParams(amplitude: amplitude, speed: 0.08)
     }
 
-    // MARK: - Individual Components (for partial updates)
-
-    /// Compute just feedback amount from delay slider.
-    /// Useful when only feedback needs updating.
-    static func feedbackAmount(from delay: Float) -> Float {
-        return delay * 0.85
-    }
 }

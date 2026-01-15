@@ -98,13 +98,21 @@ struct EffectsUniforms {
     float hueBlendAmount;
     float contrastBoost;
     float saturationBoost;
-    float feedbackAmount;       // 0 = no trails, 1 = full trails
-    float feedbackZoom;         // slight zoom on feedback (1.0 = no zoom)
-    float feedbackDecay;        // darken feedback each frame
+    float ghostTapMaxDistance;  // how far ghost taps travel (0.25 = 25% of image)
     float saliencyInfluence;    // how much saliency affects hue (0 = none, 1 = full)
     float hasSaliencyMap;       // 1.0 if saliency map available, 0.0 otherwise
     float transitionProgress;   // 0-1 for GPU crossfade blending between images
 };
+
+// Ghost tap data - passed in separate buffer as array of 8
+struct GhostTap {
+    float progress;     // 0 = just spawned, 1 = expired
+    float directionX;   // normalized direction X component
+    float directionY;   // normalized direction Y component
+    float active;       // 1.0 if active, 0.0 if slot empty
+};
+
+constant int MAX_GHOST_TAPS = 8;
 
 // MARK: - DEBUG: Simple Passthrough Fragment (no effects)
 // Use this to verify shader pipeline is working before debugging effects
@@ -151,10 +159,10 @@ vertex VertexOut effectsVertex(uint vertexID [[vertex_id]]) {
 fragment half4 effectsFragment(
     VertexOut in [[stage_in]],
     texture2d<half> sourceTexture [[texture(0)]],
-    texture2d<half> feedbackTexture [[texture(1)]],
     texture2d<half> saliencyTexture [[texture(2)]],
     texture2d<half> previousTexture [[texture(3)]],
-    constant EffectsUniforms &uniforms [[buffer(0)]]
+    constant EffectsUniforms &uniforms [[buffer(0)]],
+    constant GhostTap *ghostTaps [[buffer(1)]]
 ) {
     constexpr sampler texSampler(address::clamp_to_edge, filter::linear);
 
@@ -284,47 +292,30 @@ fragment half4 effectsFragment(
     // Mix with original based on blend amount
     half3 currentColor = mix(color.rgb, saturated, half(uniforms.hueBlendAmount));
 
-    // === 4. FEEDBACK TRAILS - Drifting Echoes ===
-    float2 feedbackUV = in.texCoord;
-    float2 fbCenter = float2(0.5, 0.5);
-    float2 fbCentered = feedbackUV - fbCenter;
+    // === 4. GHOST TAPS - Discrete Delay Echoes ===
+    // Each ghost tap spawns at the image, animates outward, and fades.
+    // Multiple taps flow in similar directions, creating streaming trails.
+    for (int i = 0; i < MAX_GHOST_TAPS; i++) {
+        GhostTap tap = ghostTaps[i];
+        if (tap.active < 0.5) continue;
 
-    // DIRECTIONAL DRIFT - trails expand outward
-    // Tighter spacing but still visible movement
-    float driftAngle = uniforms.time * 0.12 + sin(uniforms.time * 0.07) * 2.0;
-    float driftMagnitude = 0.03 * uniforms.feedbackAmount;  // moderate drift
-    float2 drift = float2(cos(driftAngle), sin(driftAngle)) * driftMagnitude;
+        // Compute offset from progress and direction
+        // Ghost starts at center (progress=0), moves outward (progress=1)
+        float2 offset = float2(tap.directionX, tap.directionY)
+                      * tap.progress * uniforms.ghostTapMaxDistance;
+        float2 ghostUV = uv + offset;
+        ghostUV = clamp(ghostUV, float2(0.001), float2(0.999));
 
-    // Rotation for spiral effect - aggressive
-    float rotation = sin(uniforms.time * 0.15) * 0.08 + sin(uniforms.time * 0.23) * 0.04;
-    float cosR = cos(rotation);
-    float sinR = sin(rotation);
-    float2 rotated = float2(
-        fbCentered.x * cosR - fbCentered.y * sinR,
-        fbCentered.x * sinR + fbCentered.y * cosR
-    );
+        // Sample source at ghost's offset position
+        half4 ghostSample = sourceTexture.sample(texSampler, ghostUV);
 
-    // Zoom for depth - more aggressive
-    rotated *= uniforms.feedbackZoom;
+        // Alpha fade: stronger at start (progress=0), transparent at end (progress=1)
+        // Use ease-out curve for smoother fade
+        half ghostAlpha = half(1.0 - tap.progress * tap.progress);
 
-    // Apply drift AFTER rotation/zoom so echoes visibly separate
-    feedbackUV = rotated + fbCenter + drift;
-    feedbackUV = clamp(feedbackUV, float2(0.001), float2(0.999));
-
-    half4 feedback = feedbackTexture.sample(texSampler, feedbackUV);
-
-    // Check if feedback has any content (not black)
-    half feedbackBrightness = dot(feedback.rgb, half3(0.299h, 0.587h, 0.114h));
-
-    // Only blend if we have feedback content AND feedbackAmount > 0
-    if (uniforms.feedbackAmount > 0.001 && feedbackBrightness > 0.01h) {
-        // Transparency fade: reduce blend amount rather than darkening RGB
-        // This makes ghosts transparent rather than dim
-        half effectiveAmount = half(uniforms.feedbackAmount * uniforms.feedbackDecay);
-
-        // Blend: ghosts at full brightness but reduced opacity (via blend amount)
-        half3 trailsBlended = mix(currentColor, feedback.rgb, effectiveAmount);
-        currentColor = trailsBlended;
+        // Blend ghost with current color
+        // Very subtle - ghosts should be background whispers, not dominant
+        currentColor = mix(currentColor, ghostSample.rgb, ghostAlpha * 0.15h);
     }
 
     return half4(currentColor, 1.0h);

@@ -16,10 +16,7 @@ final class EffectsMetalView: MTKView {
     private var commandQueue: MTLCommandQueue?
     private var pipelineState: MTLRenderPipelineState?
     private var uniformBuffer: MTLBuffer?
-
-    // Double-buffered feedback textures
-    private var feedbackTextures: [MTLTexture] = []
-    private var currentFeedbackIndex = 0
+    private var ghostTapBuffer: MTLBuffer?
 
     // Source texture (from morphPlayer - current/target image)
     private var sourceTexture: MTLTexture?
@@ -33,6 +30,9 @@ final class EffectsMetalView: MTKView {
     // Saliency texture (from DepthAnalyzer)
     private var saliencyTexture: MTLTexture?
     private var lastSaliencyImageHash: Int = 0
+
+    // Ghost tap manager for discrete delay echoes
+    private let ghostTapManager = GhostTapManager()
 
     // MARK: - Effect Parameters
 
@@ -49,13 +49,14 @@ final class EffectsMetalView: MTKView {
         hueBlendAmount: 0.65,
         contrastBoost: 1.4,
         saturationBoost: 1.3,
-        feedbackAmount: 0.5,
-        feedbackZoom: 0.96,
-        feedbackDecay: 0.5,
+        ghostTapMaxDistance: 0.25,
         saliencyInfluence: 0.6,
         hasSaliencyMap: 0,
         transitionProgress: 0
     )
+
+    /// Delay setting from slider (0-1), controls ghost tap spawn frequency
+    var delay: Float = 0.5
 
     // Track if we have a valid source
     private var hasValidSource = false
@@ -144,44 +145,16 @@ final class EffectsMetalView: MTKView {
         if uniformBuffer != nil {
             LMLog.visual.debug("✅ Uniform buffer created: \(MemoryLayout<EffectsUniforms>.size) bytes")
         }
+
+        // Create ghost tap buffer (8 taps * 16 bytes each)
+        let ghostTapBufferSize = GhostTapManager.maxTaps * MemoryLayout<GhostTapData>.stride
+        ghostTapBuffer = device.makeBuffer(length: ghostTapBufferSize, options: .storageModeShared)
+        if ghostTapBuffer != nil {
+            LMLog.visual.debug("✅ Ghost tap buffer created: \(ghostTapBufferSize) bytes")
+        }
     }
 
     // MARK: - Texture Management
-
-    private func createFeedbackTextures(width: Int, height: Int) {
-        guard let device = self.device else { return }
-
-        // Only recreate if size changed
-        if let existing = feedbackTextures.first,
-           existing.width == width && existing.height == height {
-            return
-        }
-
-        feedbackTextures.removeAll()
-
-        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: .bgra8Unorm,
-            width: width,
-            height: height,
-            mipmapped: false
-        )
-        descriptor.usage = [.shaderRead, .shaderWrite, .renderTarget]
-        descriptor.storageMode = .private
-
-        // Create two textures for double buffering
-        for i in 0..<2 {
-            guard let texture = device.makeTexture(descriptor: descriptor) else {
-                LMLog.visual.error("❌ Failed to create feedback texture \(i)")
-                continue
-            }
-            feedbackTextures.append(texture)
-            LMLog.visual.debug("📦 Created feedback texture \(i): \(width)x\(height)")
-        }
-
-        currentFeedbackIndex = 0
-        let count = feedbackTextures.count
-        LMLog.visual.info("📦 Feedback textures ready: \(width)x\(height), count=\(count)")
-    }
 
     /// Update the source image from morphPlayer - ONLY if image changed
     func updateSourceImage(_ image: NSImage?) {
@@ -229,7 +202,6 @@ final class EffectsMetalView: MTKView {
             if let src = sourceTexture {
                 let updateNum = textureUpdateCount
                 LMLog.visual.debug("🖼️ Source texture updated: \(src.width)x\(src.height) in \(String(format: "%.1f", loadTime))ms (update #\(updateNum))")
-                createFeedbackTextures(width: src.width, height: src.height)
             }
         } catch {
             LMLog.visual.error("❌ Failed to create texture: \(error.localizedDescription)")
@@ -354,81 +326,54 @@ final class EffectsMetalView: MTKView {
             return
         }
 
-        guard let uniformBuffer = uniformBuffer else {
-            LMLog.visual.error("❌ Skipping draw: uniformBuffer nil")
+        guard let uniformBuffer = uniformBuffer,
+              let ghostTapBuffer = ghostTapBuffer else {
+            LMLog.visual.error("❌ Skipping draw: buffer nil")
             return
         }
 
-        guard feedbackTextures.count >= 2 else {
-            let fbCount = feedbackTextures.count
-            LMLog.visual.error("❌ Skipping draw: only \(fbCount) feedback textures")
-            return
-        }
+        // Update ghost taps based on current time and delay setting
+        let ghostTapData = ghostTapManager.update(currentTime: uniforms.time, delay: delay)
 
-        // Copy uniforms to GPU buffer (uniforms are set externally via the uniforms property)
-        // Update hasSaliencyMap based on current saliency texture state
+        // Copy ghost tap data to GPU buffer
+        ghostTapBuffer.contents().copyMemory(
+            from: ghostTapData,
+            byteCount: GhostTapManager.maxTaps * MemoryLayout<GhostTapData>.stride
+        )
+
+        // Copy uniforms to GPU buffer
         var uniformsCopy = uniforms
         uniformsCopy.hasSaliencyMap = saliencyTexture != nil ? 1.0 : 0.0
         memcpy(uniformBuffer.contents(), &uniformsCopy, MemoryLayout<EffectsUniforms>.size)
-
-        // Get feedback textures (read from current, write to next)
-        let readFeedback = feedbackTextures[currentFeedbackIndex]
-        let writeFeedbackIndex = (currentFeedbackIndex + 1) % 2
-        let writeFeedback = feedbackTextures[writeFeedbackIndex]
 
         guard let commandBuffer = commandQueue.makeCommandBuffer() else {
             LMLog.visual.error("❌ Failed to create command buffer")
             return
         }
 
-        // === PASS 1: Render with feedback to writeFeedback texture ===
-        let feedbackPassDescriptor = MTLRenderPassDescriptor()
-        feedbackPassDescriptor.colorAttachments[0].texture = writeFeedback
-        feedbackPassDescriptor.colorAttachments[0].loadAction = .clear
-        feedbackPassDescriptor.colorAttachments[0].storeAction = .store
-        feedbackPassDescriptor.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
+        // Single render pass with ghost taps
+        let renderPassDescriptor = MTLRenderPassDescriptor()
+        renderPassDescriptor.colorAttachments[0].texture = drawable.texture
+        renderPassDescriptor.colorAttachments[0].loadAction = .clear
+        renderPassDescriptor.colorAttachments[0].storeAction = .store
+        renderPassDescriptor.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
 
-        if let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: feedbackPassDescriptor) {
+        if let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) {
             encoder.setRenderPipelineState(pipelineState)
             encoder.setFragmentTexture(sourceTexture, index: 0)
-            encoder.setFragmentTexture(readFeedback, index: 1)
             if let saliencyTex = saliencyTexture {
                 encoder.setFragmentTexture(saliencyTex, index: 2)
             }
             // Previous texture for GPU crossfade (falls back to source if no transition)
             encoder.setFragmentTexture(previousTexture ?? sourceTexture, index: 3)
             encoder.setFragmentBuffer(uniformBuffer, offset: 0, index: 0)
-            encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
-            encoder.endEncoding()
-        }
-
-        // === PASS 2: Copy writeFeedback (which now has trails) to screen ===
-        // BUG FIX: Was using readFeedback, should use writeFeedback for trails to show
-        let screenPassDescriptor = MTLRenderPassDescriptor()
-        screenPassDescriptor.colorAttachments[0].texture = drawable.texture
-        screenPassDescriptor.colorAttachments[0].loadAction = .clear
-        screenPassDescriptor.colorAttachments[0].storeAction = .store
-        screenPassDescriptor.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
-
-        if let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: screenPassDescriptor) {
-            encoder.setRenderPipelineState(pipelineState)
-            encoder.setFragmentTexture(sourceTexture, index: 0)
-            encoder.setFragmentTexture(writeFeedback, index: 1)  // USE writeFeedback for trails!
-            if let saliencyTex = saliencyTexture {
-                encoder.setFragmentTexture(saliencyTex, index: 2)
-            }
-            // Previous texture for GPU crossfade (falls back to source if no transition)
-            encoder.setFragmentTexture(previousTexture ?? sourceTexture, index: 3)
-            encoder.setFragmentBuffer(uniformBuffer, offset: 0, index: 0)
+            encoder.setFragmentBuffer(ghostTapBuffer, offset: 0, index: 1)
             encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
             encoder.endEncoding()
         }
 
         commandBuffer.present(drawable)
         commandBuffer.commit()
-
-        // Swap feedback buffers for next frame
-        currentFeedbackIndex = writeFeedbackIndex
 
         // Track frame timing
         frameCount += 1
@@ -441,26 +386,12 @@ final class EffectsMetalView: MTKView {
             let avgDrawTime = totalDrawTime / Double(frameCount)
             let fps = Double(frameCount) / timeSinceLastLog
 
-            // Extract values for logging (now from uniforms struct)
-            let fbPct = uniforms.feedbackAmount * 100
             let srcW = sourceTexture.width
             let srcH = sourceTexture.height
-            let fbIdx = currentFeedbackIndex
             let texUpdates = textureUpdateCount
+            let delayPct = delay * 100
 
-            LMLog.visual.info("📊 METAL PERF: fps=\(String(format: "%.1f", fps)) avgDraw=\(String(format: "%.2f", avgDrawTime))ms fb=\(String(format: "%.0f", fbPct))% src=\(srcW)x\(srcH) fbIdx=\(fbIdx) texUpdates=\(texUpdates)")
-
-            // Log uniforms once per second for debugging
-            let t = uniforms.time
-            let kb = uniforms.kenBurnsScale
-            let kbX = uniforms.kenBurnsOffsetX
-            let kbY = uniforms.kenBurnsOffsetY
-            let dist = uniforms.distortionAmplitude
-            let hue = uniforms.hueBaseShift
-            let fb = uniforms.feedbackAmount
-            let fbZoom = uniforms.feedbackZoom
-            let fbDecay = uniforms.feedbackDecay
-            LMLog.visual.debug("🎛️ UNIFORMS: t=\(String(format: "%.1f", t)) kb=\(String(format: "%.2f", kb)) kbOff=(\(String(format: "%.2f", kbX)),\(String(format: "%.2f", kbY))) dist=\(String(format: "%.3f", dist)) hue=\(String(format: "%.2f", hue)) fb=\(String(format: "%.2f", fb)) fbZoom=\(String(format: "%.3f", fbZoom)) fbDecay=\(String(format: "%.2f", fbDecay))")
+            LMLog.visual.info("📊 METAL PERF: fps=\(String(format: "%.1f", fps)) avgDraw=\(String(format: "%.2f", avgDrawTime))ms delay=\(String(format: "%.0f", delayPct))% src=\(srcW)x\(srcH) texUpdates=\(texUpdates)")
 
             // Reset counters
             frameCount = 0
@@ -470,11 +401,10 @@ final class EffectsMetalView: MTKView {
         }
     }
 
-    /// Reset the feedback buffer (call when stopping playback)
-    func resetFeedback() {
-        feedbackTextures.removeAll()
-        currentFeedbackIndex = 0
-        LMLog.visual.info("🔄 Feedback buffer reset")
+    /// Reset ghost taps (call when stopping playback)
+    func resetGhostTaps() {
+        ghostTapManager.reset()
+        LMLog.visual.info("🔄 Ghost taps reset")
     }
 }
 
@@ -485,6 +415,7 @@ struct EffectsMetalViewRepresentable: NSViewRepresentable {
     let previousImage: NSImage?  // For GPU crossfade blending
     let saliencyMap: NSImage?
     let uniforms: EffectsUniforms  // Single struct - matches visionOS pattern
+    let delay: Float  // Delay slider value (0-1), controls ghost tap spawn frequency
 
     func makeNSView(context: Context) -> EffectsMetalView {
         let view = EffectsMetalView()
@@ -502,8 +433,9 @@ struct EffectsMetalViewRepresentable: NSViewRepresentable {
         // Update saliency map (internally checks if changed)
         nsView.updateSaliencyMap(saliencyMap)
 
-        // Pass uniforms directly - single assignment, platform parity with visionOS
+        // Pass uniforms and delay
         nsView.uniforms = uniforms
+        nsView.delay = delay
     }
 }
 

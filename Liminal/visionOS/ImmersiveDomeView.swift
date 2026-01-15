@@ -283,7 +283,6 @@ struct ImmersiveDomeView: View {
                 // Compute uniforms
                 let uniforms = EffectsUniformsComputer.compute(
                     time: effectTime,
-                    delay: settings.delay,
                     transitionProgress: transitionState.easedProgress,
                     hasSaliencyMap: false
                 )
@@ -291,7 +290,7 @@ struct ImmersiveDomeView: View {
                 // Render frame - pass previous image for GPU crossfade when transitioning
                 let renderStartTime = Date()
                 let previousImage = transitionState.isTransitioning ? transitionState.previousImage : nil
-                _ = renderer.renderAndPresent(sourceImage: cgImage, previousImage: previousImage, uniforms: uniforms)
+                _ = renderer.renderAndPresent(sourceImage: cgImage, previousImage: previousImage, uniforms: uniforms, delay: settings.delay)
                 let renderTime = Date().timeIntervalSince(renderStartTime) * 1000
                 totalRenderTime += renderTime
                 maxRenderTime = max(maxRenderTime, renderTime)
