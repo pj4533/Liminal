@@ -33,11 +33,20 @@ struct CGImageTransitionState {
 
     private let crossfadeDuration: Double = 1.5
 
+    /// Raw linear transition progress (0-1)
     var transitionProgress: Float {
         guard let startTime = transitionStartTime else { return 0 }
         let elapsed = Date().timeIntervalSince(startTime)
         let progress = min(elapsed / crossfadeDuration, 1.0)
         return Float(progress)
+    }
+
+    /// Eased transition progress for smoother perceptual transitions.
+    /// Uses ease-out cubic: smoother deceleration at end.
+    var easedProgress: Float {
+        let t = transitionProgress
+        // Ease-out cubic: 1 - (1 - t)^3
+        return 1 - pow(1 - t, 3)
     }
 
     var isTransitioning: Bool {
@@ -275,7 +284,7 @@ struct ImmersiveDomeView: View {
                 let uniforms = EffectsUniformsComputer.compute(
                     time: effectTime,
                     delay: settings.delay,
-                    transitionProgress: transitionState.transitionProgress,
+                    transitionProgress: transitionState.easedProgress,
                     hasSaliencyMap: false
                 )
 

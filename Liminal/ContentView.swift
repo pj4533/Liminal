@@ -268,7 +268,7 @@ struct VisualDisplayView: View {
     @ObservedObject var visualEngine: VisualEngine
     @ObservedObject var settings: SettingsService
     let isPlaying: Bool
-    @StateObject private var morphPlayer = MorphPlayer()
+    @StateObject private var transitionManager = TimerDrivenCrossfade()
     @StateObject private var effectController = EffectController()
     @State private var lastLoggedSecond: Int = -1
 
@@ -277,8 +277,8 @@ struct VisualDisplayView: View {
         var uniforms = EffectsUniformsComputer.compute(
             time: Float(effectController.time),
             delay: settings.delay,
-            transitionProgress: Float(morphPlayer.transitionProgress),
-            hasSaliencyMap: morphPlayer.currentSaliencyMap != nil
+            transitionProgress: Float(transitionManager.transitionProgress),
+            hasSaliencyMap: transitionManager.currentSaliencyMap != nil
         )
         // Add time-based hue shift (macOS-specific for now)
         uniforms.hueBaseShift = Float(effectController.time * 0.03)
@@ -292,11 +292,11 @@ struct VisualDisplayView: View {
                 Color.black
 
                 // Metal view with all effects + feedback trails
-                if morphPlayer.currentFrame != nil {
+                if transitionManager.currentFrame != nil {
                     EffectsMetalViewRepresentable(
-                        sourceImage: morphPlayer.currentFrame,
-                        previousImage: morphPlayer.previousFrame,  // GPU crossfade blending
-                        saliencyMap: morphPlayer.currentSaliencyMap,
+                        sourceImage: transitionManager.currentFrame,
+                        previousImage: transitionManager.previousFrame,  // GPU crossfade blending
+                        saliencyMap: transitionManager.currentSaliencyMap,
                         uniforms: effectUniforms
                     )
                     .frame(width: geometry.size.width, height: geometry.size.height)
@@ -324,10 +324,10 @@ struct VisualDisplayView: View {
                 } else {
                     // Placeholder
                     VStack(spacing: 12) {
-                        if visualEngine.isGenerating || morphPlayer.isMorphing {
+                        if visualEngine.isGenerating || transitionManager.isMorphing {
                             ProgressView()
                                 .scaleEffect(1.5)
-                            Text(morphPlayer.isMorphing ? "Morphing..." : "Generating...")
+                            Text(transitionManager.isMorphing ? "Morphing..." : "Generating...")
                                 .font(.caption)
                                 .foregroundStyle(.white.opacity(0.6))
                         } else {
@@ -346,16 +346,16 @@ struct VisualDisplayView: View {
         }
         .onChange(of: visualEngine.currentImage) { _, newImage in
             if let image = newImage {
-                morphPlayer.transitionTo(image)
+                transitionManager.transitionTo(image)
             }
         }
         // nextImage handler removed - preloading not needed with new morph architecture
         // Morphs trigger only when currentImage changes
         .onAppear {
-            morphPlayer.start()
+            transitionManager.start()
             // Effects start when Play is pressed, not on appear
             if let image = visualEngine.currentImage {
-                morphPlayer.setInitialImage(image)
+                transitionManager.setInitialImage(image)
             }
         }
         .onChange(of: isPlaying) { _, playing in
@@ -372,12 +372,12 @@ struct VisualDisplayView: View {
             if currentSecond > lastLoggedSecond {
                 lastLoggedSecond = currentSecond
                 let uniforms = effectUniforms
-                let morphing = morphPlayer.isMorphing
+                let morphing = transitionManager.isMorphing
                 LMLog.visual.debug("📐 KB t=\(String(format: "%.1f", newTime)) scale=\(String(format: "%.3f", uniforms.kenBurnsScale)) offset=(\(String(format: "%.1f", uniforms.kenBurnsOffsetX)),\(String(format: "%.1f", uniforms.kenBurnsOffsetY))) morph=\(morphing)")
             }
         }
         .onDisappear {
-            morphPlayer.stop()
+            transitionManager.stop()
             effectController.stop()
         }
     }

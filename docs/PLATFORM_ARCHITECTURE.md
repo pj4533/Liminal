@@ -9,7 +9,7 @@ This document explains the architectural differences between Liminal's macOS and
 | **Rendering API** | MTKView (direct Metal) | Offscreen Metal → DrawableQueue → RealityKit | MTKView unavailable on visionOS; RealityKit is native |
 | **Display Surface** | Window framebuffer | Curved dome mesh (110°×75°) | visionOS is spatial/immersive |
 | **Frame Rate** | 60fps display link | 90fps RealityKit timeline | Platform requirements differ |
-| **Image Blending** | Core Image (CIDissolveTransition) | GPU shader (fragment blend) | Core Image too slow at 90fps |
+| **Image Blending** | GPU shader (fragment blend) | GPU shader (fragment blend) | Same approach, platform-optimal delivery |
 | **State Management** | @Published properties | AtomicImageBuffer (lock-free) | 90fps starves MainActor |
 | **Upscaling** | CoreML (RealESRGAN) | MetalFX (GPU scaler) | CoreML competes with RealityKit for GPU |
 | **Coordinate Origin** | View-centered | Floor-centered (y=1.5m for eyes) | visionOS spatial coordinate system |
@@ -56,27 +56,22 @@ final class AtomicImageBuffer: @unchecked Sendable {
 
 **Why macOS doesn't need this**: At 60fps, there's sufficient MainActor capacity for @Published observation. The starvation only occurs at visionOS's 90fps rate.
 
-### Problem 3: Core Image Performance
+### GPU Shader Crossfade (Both Platforms)
 
-**macOS approach**: `MorphPlayer` uses `CIDissolveTransition` for crossfades:
-```swift
-let filter = CIFilter.dissolveTransition()
-filter.inputImage = fromCI
-filter.targetImage = toCI
-filter.time = Float(progress)
-let output = context.createCGImage(filter.outputImage!, from: rect)
-```
+Both platforms now use GPU shader blending for crossfades. The shader receives:
+- `sourceTexture` - the current (target) image
+- `previousTexture` - the previous (from) image
+- `transitionProgress` - 0.0 to 1.0 progress value
 
-**Why this fails on visionOS**: Core Image requires `CIContext.createCGImage()` per frame. At 90fps, this is too slow and causes frame drops.
-
-**Solution**: GPU shader blending via `transitionProgress` uniform:
 ```metal
-// In fragment shader
+// In fragment shader - identical on both platforms
 float eased = easeInOutCubic(uniforms.transitionProgress);
 float4 sourceColor = sourceTexture.sample(s, uv);
 float4 prevColor = previousTexture.sample(s, uv);
 float4 blended = mix(prevColor, sourceColor, eased);
 ```
+
+**Previous approach** (deprecated): macOS previously used Core Image `CIDissolveTransition`, but this has been removed in favor of the unified GPU approach for consistency and performance.
 
 ### Problem 4: Texture Bridging
 
@@ -126,7 +121,7 @@ The actual visual effects are 100% identical on both platforms. The same Metal s
 | `LiminalApp.swift` | App entry point with WindowGroup |
 | `ContentView.swift` | Main UI with sidebar controls |
 | `Visual/EffectsMetalView.swift` | MTKView-based Metal rendering |
-| MorphPlayer Core Image path | CIDissolveTransition blending |
+| `Visual/TimerDrivenCrossfade.swift` | Timer-driven transition manager (tracks progress for GPU shader) |
 
 ### visionOS Only
 
@@ -134,9 +129,11 @@ The actual visual effects are 100% identical on both platforms. The same Metal s
 |------|---------|
 | `visionOS/LiminalVisionApp.swift` | App entry point with ImmersiveSpace |
 | `visionOS/ControlsView.swift` | Floating controls window |
-| `visionOS/ImmersiveDomeView.swift` | RealityKit curved panel + render loop |
+| `visionOS/ImmersiveDomeView.swift` | RealityKit curved panel + render loop + `CGImageTransitionState` |
 | `visionOS/OffscreenEffectsRenderer.swift` | Metal → DrawableQueue bridge |
 | `Visual/AtomicImageBuffer.swift` | Lock-free image passing |
+
+**Note**: `CGImageTransitionState` is a lightweight struct embedded in `ImmersiveDomeView.swift` that tracks transitions without @Published overhead. It includes an `easedProgress` property for smoother perceptual transitions.
 
 ---
 
@@ -146,11 +143,11 @@ The actual visual effects are 100% identical on both platforms. The same Metal s
 ```
 ImageQueue (@Published)
     ↓
-MorphPlayer (Core Image blend)
+TimerDrivenCrossfade (tracks progress)
     ↓
 EffectsMetalView (MTKView)
     ↓
-EffectsRenderer.metal (shader)
+EffectsRenderer.metal (shader + GPU blend)
     ↓
 Window Framebuffer
 ```
