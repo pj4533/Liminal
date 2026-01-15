@@ -19,11 +19,13 @@ enum EffectsUniformsComputer {
     ///   - time: Current animation time in seconds
     ///   - transitionProgress: Optional crossfade transition progress (0-1) for distortion boost
     ///   - hasSaliencyMap: Whether a saliency texture is available
+    ///   - ghostTapCount: Number of active ghost taps (0-8) for optimized shader loop
     /// - Returns: Complete EffectsUniforms ready for the shader
     static func compute(
         time: Float,
         transitionProgress: Float = 0,
-        hasSaliencyMap: Bool = false
+        hasSaliencyMap: Bool = false,
+        ghostTapCount: Int = 0
     ) -> EffectsUniforms {
 
         // Ken Burns: smooth continuous motion
@@ -47,7 +49,8 @@ enum EffectsUniformsComputer {
             ghostTapMaxDistance: 0.06,  // Ghost taps travel 6% of image size - slow drift
             saliencyInfluence: hasSaliencyMap ? 0.6 : 0,
             hasSaliencyMap: hasSaliencyMap ? 1.0 : 0.0,
-            transitionProgress: transitionProgress
+            transitionProgress: transitionProgress,
+            ghostTapCount: Float(ghostTapCount)
         )
     }
 

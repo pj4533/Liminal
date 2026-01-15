@@ -102,6 +102,7 @@ struct EffectsUniforms {
     float saliencyInfluence;    // how much saliency affects hue (0 = none, 1 = full)
     float hasSaliencyMap;       // 1.0 if saliency map available, 0.0 otherwise
     float transitionProgress;   // 0-1 for GPU crossfade blending between images
+    float ghostTapCount;        // number of active ghost taps (0-8), avoids branch divergence
 };
 
 // Ghost tap data - passed in separate buffer as array of 8
@@ -295,9 +296,12 @@ fragment half4 effectsFragment(
     // === 4. GHOST TAPS - Discrete Delay Echoes ===
     // Each ghost tap spawns at the image, animates outward, and fades.
     // Multiple taps flow in similar directions, creating streaming trails.
-    for (int i = 0; i < MAX_GHOST_TAPS; i++) {
+    // Loop only over active taps (packed at front) to avoid branch divergence.
+    // IMPORTANT: Skip ghost taps during transitions - they sample sourceTexture (new image)
+    // which would bleed through before the crossfade completes.
+    int tapCount = (uniforms.transitionProgress > 0.001) ? 0 : int(uniforms.ghostTapCount);
+    for (int i = 0; i < tapCount; i++) {
         GhostTap tap = ghostTaps[i];
-        if (tap.active < 0.5) continue;
 
         // Compute offset from progress and direction
         // Ghost starts at center (progress=0), moves outward (progress=1)

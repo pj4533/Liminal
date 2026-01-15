@@ -50,7 +50,13 @@ final class OffscreenEffectsRenderer {
 
     // Image caching - only update texture when source actually changes
     private var lastImageIdentifier: ObjectIdentifier?
+    private var lastPreviousImageIdentifier: ObjectIdentifier?  // Track previous image too
     private var textureUpdateSkipCount: Int = 0
+
+    // PERFORMANCE: Reusable staging buffer to avoid 16MB allocation per texture update
+    // Allocated once, reused for all texture uploads
+    private var stagingBuffer: UnsafeMutableRawPointer?
+    private var stagingBufferSize: Int = 0
 
     // Performance tracking
     private var totalTextureUpdateTime: Double = 0
@@ -176,8 +182,21 @@ final class OffscreenEffectsRenderer {
             self.saliencyTexture = defaultSaliency
         }
 
+        // PERFORMANCE: Pre-allocate reusable staging buffer for texture uploads
+        // This eliminates the 16MB allocation per texture update that was causing frame drops
+        let bytesPerPixel = 4
+        let requiredSize = outputSize * outputSize * bytesPerPixel
+        self.stagingBuffer = UnsafeMutableRawPointer.allocate(byteCount: requiredSize, alignment: 16)
+        self.stagingBufferSize = requiredSize
+        LMLog.visual.info("🔧 Pre-allocated \(requiredSize / 1024 / 1024)MB staging buffer for texture uploads")
+
         let size = outputSize
         LMLog.visual.info("✅ OffscreenEffectsRenderer initialized - \(size)x\(size)")
+    }
+
+    deinit {
+        // Free the staging buffer
+        stagingBuffer?.deallocate()
     }
 
     // MARK: - DrawableQueue Setup
@@ -499,7 +518,7 @@ final class OffscreenEffectsRenderer {
                 distortionAmplitude: 0, distortionSpeed: 0, hueBaseShift: 0,
                 hueWaveIntensity: 0, hueBlendAmount: 0, contrastBoost: 1, saturationBoost: 1,
                 ghostTapMaxDistance: 0.25, saliencyInfluence: 0, hasSaliencyMap: 0,
-                transitionProgress: 0
+                transitionProgress: 0, ghostTapCount: 0
             )
             encoder.setFragmentBytes(&dummyUniforms, length: MemoryLayout<EffectsUniforms>.size, index: 0)
             encoder.setFragmentTexture(sourceTexture, index: 0)
@@ -559,7 +578,12 @@ final class OffscreenEffectsRenderer {
 
         // Update previous texture for GPU crossfade blending (only during transitions)
         if let previousImage = previousImage {
-            updatePreviousTexture(from: previousImage)
+            _ = updatePreviousTexture(from: previousImage)
+        } else {
+            // Not transitioning - clear previous texture so fallback to sourceTexture kicks in
+            // This prevents stale old image from showing when transitionProgress resets to 0
+            previousTexture = nil
+            lastPreviousImageIdentifier = nil
         }
 
         textureUpdateTime = Date().timeIntervalSince(textureUpdateStart) * 1000
@@ -574,12 +598,12 @@ final class OffscreenEffectsRenderer {
             return false
         }
 
-        // Update ghost taps based on current time and delay setting
-        let ghostTapData = ghostTapManager.update(currentTime: uniforms.time, delay: delay)
+        // Update ghost taps and get active count for optimized shader loop
+        let ghostTapResult = ghostTapManager.updateWithCount(currentTime: uniforms.time, delay: delay)
 
         // Copy ghost tap data to GPU buffer
         ghostTapBuffer.contents().copyMemory(
-            from: ghostTapData,
+            from: ghostTapResult.data,
             byteCount: GhostTapManager.maxTaps * MemoryLayout<GhostTapData>.stride
         )
 
@@ -602,8 +626,9 @@ final class OffscreenEffectsRenderer {
 
         encoder.setRenderPipelineState(pipelineState)
 
-        // Set uniforms
+        // Set uniforms with ghost tap count for optimized shader loop
         var mutableUniforms = uniforms
+        mutableUniforms.ghostTapCount = Float(ghostTapResult.activeCount)
         encoder.setFragmentBytes(&mutableUniforms, length: MemoryLayout<EffectsUniforms>.size, index: 0)
 
         // Set ghost tap buffer
@@ -712,16 +737,17 @@ final class OffscreenEffectsRenderer {
             }
         }
 
-        guard let texture = sourceTexture else { return }
+        guard let texture = sourceTexture,
+              let stagingBuffer = stagingBuffer else { return }
 
-        // Convert CGImage to BGRA texture data at target resolution
+        // PERFORMANCE: Use pre-allocated staging buffer instead of allocating new array
+        // This eliminates the 16MB allocation per texture update
         let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
         let bytesPerPixel = 4
         let bytesPerRow = bytesPerPixel * targetSize
-        var pixelData = [UInt8](repeating: 0, count: targetSize * targetSize * bytesPerPixel)
 
         guard let context = CGContext(
-            data: &pixelData,
+            data: stagingBuffer,
             width: targetSize,
             height: targetSize,
             bitsPerComponent: 8,
@@ -744,14 +770,21 @@ final class OffscreenEffectsRenderer {
         texture.replace(
             region: MTLRegionMake2D(0, 0, targetSize, targetSize),
             mipmapLevel: 0,
-            withBytes: pixelData,
+            withBytes: stagingBuffer,
             bytesPerRow: bytesPerRow
         )
     }
 
     /// Update the previous texture for GPU crossfade blending.
     /// Called during transitions to provide the "from" image.
-    private func updatePreviousTexture(from cgImage: CGImage) {
+    /// Returns true if texture was actually updated (image changed).
+    private func updatePreviousTexture(from cgImage: CGImage) -> Bool {
+        // Skip if previous image hasn't changed
+        let currentPreviousID = ObjectIdentifier(cgImage)
+        if currentPreviousID == lastPreviousImageIdentifier {
+            return false  // Already have this texture loaded
+        }
+
         let targetSize = outputSize
 
         // Create or recreate texture if needed
@@ -771,23 +804,23 @@ final class OffscreenEffectsRenderer {
             previousTexture = device.makeTexture(descriptor: descriptor)
         }
 
-        guard let texture = previousTexture else { return }
+        guard let texture = previousTexture,
+              let stagingBuffer = stagingBuffer else { return false }
 
-        // Convert CGImage to BGRA texture data
+        // PERFORMANCE: Use pre-allocated staging buffer
         let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
         let bytesPerPixel = 4
         let bytesPerRow = bytesPerPixel * targetSize
-        var pixelData = [UInt8](repeating: 0, count: targetSize * targetSize * bytesPerPixel)
 
         guard let context = CGContext(
-            data: &pixelData,
+            data: stagingBuffer,
             width: targetSize,
             height: targetSize,
             bitsPerComponent: 8,
             bytesPerRow: bytesPerRow,
             space: colorSpace,
             bitmapInfo: CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.premultipliedFirst.rawValue
-        ) else { return }
+        ) else { return false }
 
         context.interpolationQuality = .high
         context.translateBy(x: 0, y: CGFloat(targetSize))
@@ -797,9 +830,12 @@ final class OffscreenEffectsRenderer {
         texture.replace(
             region: MTLRegionMake2D(0, 0, targetSize, targetSize),
             mipmapLevel: 0,
-            withBytes: pixelData,
+            withBytes: stagingBuffer,
             bytesPerRow: bytesPerRow
         )
+
+        lastPreviousImageIdentifier = currentPreviousID
+        return true
     }
 
     /// Update the saliency texture for effects that use it.

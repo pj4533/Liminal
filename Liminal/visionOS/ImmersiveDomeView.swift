@@ -281,9 +281,12 @@ struct ImmersiveDomeView: View {
                 }
 
                 // Compute uniforms
+                // Use raw transitionProgress - shader applies easing (matches macOS)
+                // IMPORTANT: Pass 0 when not transitioning, otherwise ghost taps stay disabled forever
+                // (transitionProgress stays at 1.0 after transition completes)
                 let uniforms = EffectsUniformsComputer.compute(
                     time: effectTime,
-                    transitionProgress: transitionState.easedProgress,
+                    transitionProgress: transitionState.isTransitioning ? transitionState.transitionProgress : 0,
                     hasSaliencyMap: false
                 )
 
@@ -315,8 +318,15 @@ struct ImmersiveDomeView: View {
                 // This is the key fix - without yield, the while loop monopolizes MainActor
                 await Task.yield()
 
-                // Target ~60fps
-                try? await Task.sleep(nanoseconds: 16_666_667)
+                // ADAPTIVE FRAME TIMING: Sleep only for remaining time to hit 60fps target
+                // This prevents drift from accumulated render time variations
+                let targetFrameTimeNs: UInt64 = 16_666_667  // ~60fps
+                let frameElapsedNs = UInt64(Date().timeIntervalSince(frameStartTime) * 1_000_000_000)
+                if frameElapsedNs < targetFrameTimeNs {
+                    let sleepTime = targetFrameTimeNs - frameElapsedNs
+                    try? await Task.sleep(nanoseconds: sleepTime)
+                }
+                // If frame took longer than target, don't sleep - catch up on next frame
             }
         }
     }

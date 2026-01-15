@@ -84,12 +84,24 @@ final class GhostTapManager {
 
     // MARK: - Update
 
+    /// Result of ghost tap update - contains packed data and active count.
+    struct UpdateResult {
+        let data: [GhostTapData]  // Always exactly 8 elements, active taps packed first
+        let activeCount: Int      // Number of active taps (0-8)
+    }
+
     /// Update ghost taps for the current frame.
     /// - Parameters:
     ///   - currentTime: Current animation time in seconds
     ///   - delay: Delay slider value (0-1), controls spawn frequency
     /// - Returns: Array of exactly 8 GhostTapData structs for the shader
     func update(currentTime: Float, delay: Float) -> [GhostTapData] {
+        return updateWithCount(currentTime: currentTime, delay: delay).data
+    }
+
+    /// Update ghost taps and return both data and active count.
+    /// Use this for optimized shader loops that skip inactive slots.
+    func updateWithCount(currentTime: Float, delay: Float) -> UpdateResult {
         // Remove expired taps
         taps.removeAll { $0.isExpired(at: currentTime) }
 
@@ -111,8 +123,8 @@ final class GhostTapManager {
             }
         }
 
-        // Convert to shader data (always return exactly 8 elements)
-        return buildShaderData(at: currentTime)
+        let activeCount = min(taps.count, Self.maxTaps)
+        return UpdateResult(data: buildShaderData(at: currentTime), activeCount: activeCount)
     }
 
     /// Reset all ghost taps (call when stopping playback)

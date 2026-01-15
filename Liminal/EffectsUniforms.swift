@@ -24,6 +24,7 @@ struct EffectsUniforms {
     var saliencyInfluence: Float
     var hasSaliencyMap: Float  // 1.0 if saliency map is available, 0.0 otherwise
     var transitionProgress: Float  // 0-1, for GPU crossfade blending
+    var ghostTapCount: Float  // Number of active ghost taps (0-8), as float for Metal alignment
 }
 
 /// Ghost tap data for shader. Must match Metal struct layout.

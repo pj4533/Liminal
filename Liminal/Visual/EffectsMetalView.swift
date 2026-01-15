@@ -52,7 +52,8 @@ final class EffectsMetalView: MTKView {
         ghostTapMaxDistance: 0.25,
         saliencyInfluence: 0.6,
         hasSaliencyMap: 0,
-        transitionProgress: 0
+        transitionProgress: 0,
+        ghostTapCount: 0
     )
 
     /// Delay setting from slider (0-1), controls ghost tap spawn frequency
@@ -332,18 +333,19 @@ final class EffectsMetalView: MTKView {
             return
         }
 
-        // Update ghost taps based on current time and delay setting
-        let ghostTapData = ghostTapManager.update(currentTime: uniforms.time, delay: delay)
+        // Update ghost taps and get active count for optimized shader loop
+        let ghostTapResult = ghostTapManager.updateWithCount(currentTime: uniforms.time, delay: delay)
 
         // Copy ghost tap data to GPU buffer
         ghostTapBuffer.contents().copyMemory(
-            from: ghostTapData,
+            from: ghostTapResult.data,
             byteCount: GhostTapManager.maxTaps * MemoryLayout<GhostTapData>.stride
         )
 
-        // Copy uniforms to GPU buffer
+        // Copy uniforms to GPU buffer with ghost tap count
         var uniformsCopy = uniforms
         uniformsCopy.hasSaliencyMap = saliencyTexture != nil ? 1.0 : 0.0
+        uniformsCopy.ghostTapCount = Float(ghostTapResult.activeCount)
         memcpy(uniformBuffer.contents(), &uniformsCopy, MemoryLayout<EffectsUniforms>.size)
 
         guard let commandBuffer = commandQueue.makeCommandBuffer() else {
