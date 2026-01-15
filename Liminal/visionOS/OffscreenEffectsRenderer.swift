@@ -97,7 +97,7 @@ final class OffscreenEffectsRenderer {
         let pipelineDescriptor = MTLRenderPipelineDescriptor()
         pipelineDescriptor.vertexFunction = vertexFunc
         pipelineDescriptor.fragmentFunction = fragmentFunc
-        pipelineDescriptor.colorAttachments[0].pixelFormat = .bgra8Unorm
+        pipelineDescriptor.colorAttachments[0].pixelFormat = .bgra8Unorm_srgb
 
         do {
             pipelineState = try device.makeRenderPipelineState(descriptor: pipelineDescriptor)
@@ -110,7 +110,7 @@ final class OffscreenEffectsRenderer {
         let passthroughDescriptor = MTLRenderPipelineDescriptor()
         passthroughDescriptor.vertexFunction = vertexFunc
         passthroughDescriptor.fragmentFunction = passthroughFragFunc
-        passthroughDescriptor.colorAttachments[0].pixelFormat = .bgra8Unorm
+        passthroughDescriptor.colorAttachments[0].pixelFormat = .bgra8Unorm_srgb
 
         do {
             passthroughPipelineState = try device.makeRenderPipelineState(descriptor: passthroughDescriptor)
@@ -133,8 +133,9 @@ final class OffscreenEffectsRenderer {
         self.samplerState = sampler
 
         // Create output and feedback textures
+        // Use sRGB format for output - Metal auto-applies gamma encoding on write
         let textureDescriptor = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: .bgra8Unorm,
+            pixelFormat: .bgra8Unorm_srgb,
             width: outputSize,
             height: outputSize,
             mipmapped: false
@@ -191,8 +192,9 @@ final class OffscreenEffectsRenderer {
     func setupDrawableQueue() async throws {
         let size = outputSize
 
+        // Use sRGB format - Metal auto-applies linear→sRGB on write to match macOS
         let descriptor = TextureResource.DrawableQueue.Descriptor(
-            pixelFormat: .bgra8Unorm,
+            pixelFormat: .bgra8Unorm_srgb,
             width: size,
             height: size,
             usage: [.renderTarget, .shaderRead, .shaderWrite],
@@ -217,7 +219,7 @@ final class OffscreenEffectsRenderer {
     }
 
     private func createPlaceholderImage(width: Int, height: Int) -> CGImage {
-        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
         let bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)
 
         guard let context = CGContext(
@@ -371,7 +373,7 @@ final class OffscreenEffectsRenderer {
         }
 
         // Render CGImage to staging texture
-        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
         let bytesPerPixel = 4
         let bytesPerRow = bytesPerPixel * drawableWidth
         var pixelData = [UInt8](repeating: 0, count: drawableWidth * drawableHeight * bytesPerPixel)
@@ -712,7 +714,7 @@ final class OffscreenEffectsRenderer {
         guard let texture = sourceTexture else { return }
 
         // Convert CGImage to BGRA texture data at target resolution
-        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
         let bytesPerPixel = 4
         let bytesPerRow = bytesPerPixel * targetSize
         var pixelData = [UInt8](repeating: 0, count: targetSize * targetSize * bytesPerPixel)
@@ -771,7 +773,7 @@ final class OffscreenEffectsRenderer {
         guard let texture = previousTexture else { return }
 
         // Convert CGImage to BGRA texture data
-        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
         let bytesPerPixel = 4
         let bytesPerRow = bytesPerPixel * targetSize
         var pixelData = [UInt8](repeating: 0, count: targetSize * targetSize * bytesPerPixel)
