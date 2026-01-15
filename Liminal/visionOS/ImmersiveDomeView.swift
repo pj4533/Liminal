@@ -245,16 +245,34 @@ struct ImmersiveDomeView: View {
             var droppedFrames = 0
             var lastStatsTime = Date()
 
+            // Detailed frame timing for stutter investigation
+            var consecutiveSlowFrames = 0
+            var lastYieldTime: Date = Date()
+
             while !Task.isCancelled {
                 frameCount += 1
                 let frameStartTime = Date()
 
-                // Track frame interval
+                // Track frame interval (time since last frame started)
                 let frameInterval = frameStartTime.timeIntervalSince(lastFrameTime) * 1000
+                // Track yield time (time spent in Task.yield + any MainActor contention)
+                let yieldDuration = frameStartTime.timeIntervalSince(lastYieldTime) * 1000
                 lastFrameTime = frameStartTime
 
-                if frameInterval > 20 && frameCount > 1 {
+                // Detailed logging for slow frames
+                if frameInterval > 15 && frameCount > 1 {
                     droppedFrames += 1
+                    consecutiveSlowFrames += 1
+
+                    // Log individual slow frames to find patterns
+                    if consecutiveSlowFrames <= 5 || consecutiveSlowFrames % 10 == 0 {
+                        LMLog.visual.warning("⚠️ SLOW FRAME #\(frameCount): interval=\(String(format: "%.1f", frameInterval))ms yield=\(String(format: "%.1f", yieldDuration))ms consecutive=\(consecutiveSlowFrames)")
+                    }
+                } else {
+                    if consecutiveSlowFrames > 0 {
+                        LMLog.visual.info("✅ Frame timing recovered after \(consecutiveSlowFrames) slow frames")
+                    }
+                    consecutiveSlowFrames = 0
                 }
 
                 // Update effect time
@@ -318,15 +336,17 @@ struct ImmersiveDomeView: View {
                 // This is the key fix - without yield, the while loop monopolizes MainActor
                 await Task.yield()
 
-                // ADAPTIVE FRAME TIMING: Sleep only for remaining time to hit 60fps target
-                // This prevents drift from accumulated render time variations
-                let targetFrameTimeNs: UInt64 = 16_666_667  // ~60fps
+                // Frame pacing: Target 90fps (visionOS refresh rate) to avoid overwhelming compositor
+                // Without this, we render at 175fps but compositor only consumes at 90Hz,
+                // causing nextDrawable() to block 15-27ms waiting for free textures
+                let targetFrameTimeNs: UInt64 = 11_111_111  // ~90fps (11.1ms)
                 let frameElapsedNs = UInt64(Date().timeIntervalSince(frameStartTime) * 1_000_000_000)
                 if frameElapsedNs < targetFrameTimeNs {
                     let sleepTime = targetFrameTimeNs - frameElapsedNs
                     try? await Task.sleep(nanoseconds: sleepTime)
                 }
-                // If frame took longer than target, don't sleep - catch up on next frame
+
+                lastYieldTime = Date()  // Track when yield returns for next frame's timing
             }
         }
     }

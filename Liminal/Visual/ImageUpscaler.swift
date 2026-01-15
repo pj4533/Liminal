@@ -273,6 +273,7 @@ final class ImageUpscaler {
     private static var metalFXInitialized = false
 
     /// Upscale using MetalFX on visionOS (doesn't compete with RealityKit)
+    /// NOTE: MetalFX now runs ASYNC - doesn't block GPU, allowing parallel render loop execution
     private func upscaleWithMetalFX(_ cgImage: CGImage) async throws -> CGImage {
         // Initialize MetalFX upscaler once
         if !Self.metalFXInitialized {
@@ -289,7 +290,9 @@ final class ImageUpscaler {
         }
 
         do {
-            return try upscaler.upscale(cgImage)
+            // MetalFX.upscale() is now async - uses completion handler instead of waitUntilCompleted()
+            // This allows the render loop's GPU commands to run in parallel with upscaling
+            return try await upscaler.upscale(cgImage)
         } catch {
             LMLog.visual.error("🔬 [Upscaler] ⚠️🚨⚠️ MetalFX upscale FAILED: \(error.localizedDescription)")
             return cgImage

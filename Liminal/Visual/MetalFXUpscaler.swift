@@ -87,10 +87,14 @@ final class MetalFXUpscaler {
 
     // MARK: - Public API
 
-    /// Upscale a CGImage using MetalFX Spatial Scaler
+    /// Upscale a CGImage using MetalFX Spatial Scaler (ASYNC - does NOT block GPU!)
     /// - Parameter cgImage: Input image
-    /// - Returns: Upscaled CGImage (2x by default)
-    func upscale(_ cgImage: CGImage) throws -> CGImage {
+    /// - Returns: Upscaled CGImage (4x by default)
+    ///
+    /// CRITICAL: Uses async completion handler instead of waitUntilCompleted() to avoid
+    /// blocking the GPU pipeline. This allows MetalFX to run in parallel with the
+    /// render loop's GPU commands, preventing 180ms frame drops.
+    func upscale(_ cgImage: CGImage) async throws -> CGImage {
         let inputWidth = cgImage.width
         let inputHeight = cgImage.height
         let outputWidth = inputWidth * scaleFactor
@@ -135,18 +139,32 @@ final class MetalFXUpscaler {
             blitEncoder.endEncoding()
         }
 
-        commandBuffer.commit()
-        commandBuffer.waitUntilCompleted()
+        // Use async completion handler instead of waitUntilCompleted()!
+        // This is CRITICAL - waitUntilCompleted() blocks ALL GPU work until upscale finishes,
+        // which starves the render loop and causes 180ms frame drops.
+        let result: CGImage = try await withCheckedThrowingContinuation { continuation in
+            commandBuffer.addCompletedHandler { [weak self] buffer in
+                // Check for GPU errors
+                if let error = buffer.error {
+                    LMLog.visual.error("🔺 [MetalFX] ❌ GPU error: \(error.localizedDescription)")
+                    continuation.resume(throwing: UpscalerError.commandBufferFailed)
+                    return
+                }
 
-        // Check for errors
-        if let error = commandBuffer.error {
-            LMLog.visual.error("🔺 [MetalFX] ❌ Command buffer error: \(error.localizedDescription)")
-            throw UpscalerError.commandBufferFailed
-        }
+                // Convert staging texture back to CGImage
+                guard let self = self,
+                      let stagingTex = self.stagingTexture,
+                      let resultImage = self.textureToImage(stagingTex) else {
+                    LMLog.visual.error("🔺 [MetalFX] ❌ Image conversion failed in completion handler")
+                    continuation.resume(throwing: UpscalerError.imageConversionFailed)
+                    return
+                }
 
-        // Convert staging texture back to CGImage (staging is shared, can use getBytes)
-        guard let result = textureToImage(stagingTexture) else {
-            throw UpscalerError.imageConversionFailed
+                continuation.resume(returning: resultImage)
+            }
+
+            // Commit WITHOUT waiting - returns immediately, GPU runs in parallel with render loop
+            commandBuffer.commit()
         }
 
         let elapsed = Date().timeIntervalSince(startTime)

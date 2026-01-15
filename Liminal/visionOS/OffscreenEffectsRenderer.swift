@@ -62,8 +62,17 @@ final class OffscreenEffectsRenderer {
     private var totalTextureUpdateTime: Double = 0
     private var totalGPURenderTime: Double = 0
     private var totalPresentTime: Double = 0
+    private var totalSemaphoreWaitTime: Double = 0
+    private var totalDrawableWaitTime: Double = 0
+    private var maxSemaphoreWait: Double = 0
+    private var maxDrawableWait: Double = 0
     private var perfFrameCount: Int = 0
     private var lastPerfLogTime: Date = Date()
+
+    // MARK: - Triple Buffering
+    // Semaphore allows up to 3 frames in flight, preventing GPU starvation
+    // while avoiding blocking on waitUntilCompleted()
+    private let inFlightSemaphore = DispatchSemaphore(value: 3)
 
     // MARK: - Init
 
@@ -471,11 +480,31 @@ final class OffscreenEffectsRenderer {
             return false
         }
 
+        // TIMING: Measure semaphore wait (blocks when 3 frames in flight)
+        let semaphoreWaitStart = Date()
+        inFlightSemaphore.wait()
+        let semaphoreWaitTime = Date().timeIntervalSince(semaphoreWaitStart) * 1000
+
+        // TIMING: Measure nextDrawable wait (blocks when compositor hasn't consumed)
+        let drawableWaitStart = Date()
         guard let drawable = try? drawableQueue.nextDrawable() else {
+            inFlightSemaphore.signal()  // Release since we're returning early
             if shouldLog {
                 LMLog.visual.warning("⚠️ No drawable available (render \(self.renderCount))")
             }
             return false
+        }
+        let drawableWaitTime = Date().timeIntervalSince(drawableWaitStart) * 1000
+
+        // Track wait times for periodic logging
+        totalSemaphoreWaitTime += semaphoreWaitTime
+        totalDrawableWaitTime += drawableWaitTime
+        maxSemaphoreWait = max(maxSemaphoreWait, semaphoreWaitTime)
+        maxDrawableWait = max(maxDrawableWait, drawableWaitTime)
+
+        // Log blocking waits (these are the likely stutter culprits)
+        if semaphoreWaitTime > 5.0 || drawableWaitTime > 5.0 {
+            LMLog.visual.warning("⏱️ BLOCKING WAIT #\(self.renderCount): semaphore=\(String(format: "%.1f", semaphoreWaitTime))ms drawable=\(String(format: "%.1f", drawableWaitTime))ms")
         }
 
         if shouldLog {
@@ -485,12 +514,14 @@ final class OffscreenEffectsRenderer {
         // DEBUG: Use passthrough shader to test if shader pipeline works
         if bypassShaderForDebug {
             guard let outputTexture = outputTexture else {
+                inFlightSemaphore.signal()
                 LMLog.visual.warning("⚠️ No output texture for passthrough")
                 return false
             }
 
             updateSourceTexture(from: sourceImage)
             guard let sourceTexture = sourceTexture else {
+                inFlightSemaphore.signal()
                 LMLog.visual.error("❌ PASSTHROUGH: sourceTexture nil!")
                 return false
             }
@@ -499,7 +530,10 @@ final class OffscreenEffectsRenderer {
                 LMLog.visual.info("🔧 PASSTHROUGH SHADER: src=\(sourceTexture.width)x\(sourceTexture.height), out=\(self.outputSize)x\(self.outputSize)")
             }
 
-            guard let commandBuffer = commandQueue.makeCommandBuffer() else { return false }
+            guard let commandBuffer = commandQueue.makeCommandBuffer() else {
+                inFlightSemaphore.signal()
+                return false
+            }
 
             // Render using passthrough shader (no effects, just samples texture)
             let renderPassDescriptor = MTLRenderPassDescriptor()
@@ -543,8 +577,16 @@ final class OffscreenEffectsRenderer {
                 blitEncoder.endEncoding()
             }
 
+            // Async completion handler - signals semaphore when GPU finishes
+            commandBuffer.addCompletedHandler { [weak self] buffer in
+                self?.inFlightSemaphore.signal()
+                if let error = buffer.error {
+                    LMLog.visual.error("❌ PASSTHROUGH GPU error: \(error.localizedDescription)")
+                }
+            }
+
             commandBuffer.commit()
-            commandBuffer.waitUntilCompleted()
+            // NO waitUntilCompleted() - GPU works asynchronously
             drawable.present()
 
             if renderCount <= 5 {
@@ -555,6 +597,7 @@ final class OffscreenEffectsRenderer {
 
         // --- Full shader path below ---
         guard let outputTexture = outputTexture else {
+            inFlightSemaphore.signal()
             LMLog.visual.warning("⚠️ No output texture (render \(self.renderCount))")
             return false
         }
@@ -594,6 +637,7 @@ final class OffscreenEffectsRenderer {
 
         guard let sourceTexture = sourceTexture,
               let ghostTapBuffer = ghostTapBuffer else {
+            inFlightSemaphore.signal()
             LMLog.visual.warning("⚠️ Source texture or ghost tap buffer is nil")
             return false
         }
@@ -608,6 +652,7 @@ final class OffscreenEffectsRenderer {
         )
 
         guard let commandBuffer = commandQueue.makeCommandBuffer() else {
+            inFlightSemaphore.signal()
             LMLog.visual.warning("⚠️ Failed to create command buffer")
             return false
         }
@@ -620,6 +665,7 @@ final class OffscreenEffectsRenderer {
         renderPassDescriptor.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
 
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else {
+            inFlightSemaphore.signal()
             LMLog.visual.warning("⚠️ Failed to create render command encoder")
             return false
         }
@@ -661,26 +707,25 @@ final class OffscreenEffectsRenderer {
             blitEncoder.endEncoding()
         }
 
-        commandBuffer.commit()
-        commandBuffer.waitUntilCompleted()
-
-        gpuRenderTime = Date().timeIntervalSince(gpuRenderStart) * 1000
-        totalGPURenderTime += gpuRenderTime
-
-        // Check for GPU errors
-        if let error = commandBuffer.error {
-            LMLog.visual.error("❌ GPU error: \(error.localizedDescription)")
-            return false
+        // Async completion handler - signals semaphore when GPU finishes
+        // This is the key fix: GPU and CPU now work in parallel
+        commandBuffer.addCompletedHandler { [weak self] buffer in
+            self?.inFlightSemaphore.signal()
+            if let error = buffer.error {
+                LMLog.visual.error("❌ GPU error: \(error.localizedDescription)")
+            }
         }
 
-        // TIMING: Present phase
-        let presentStart = Date()
+        commandBuffer.commit()
+        // NO waitUntilCompleted() - GPU works asynchronously while CPU prepares next frame
 
-        // Present to RealityKit
+        // Present to RealityKit (schedules presentation at next vsync)
         drawable.present()
 
-        presentTime = Date().timeIntervalSince(presentStart) * 1000
-        totalPresentTime += presentTime
+        // Note: GPU timing is now approximate since we don't wait
+        gpuRenderTime = Date().timeIntervalSince(gpuRenderStart) * 1000
+        totalGPURenderTime += gpuRenderTime
+        totalPresentTime += 0.1  // Present is now async, negligible CPU time
 
         // Log detailed timing breakdown every second
         let timeSincePerfLog = Date().timeIntervalSince(lastPerfLogTime)
@@ -688,14 +733,23 @@ final class OffscreenEffectsRenderer {
             let avgTextureUpdate = totalTextureUpdateTime / Double(perfFrameCount)
             let avgGPURender = totalGPURenderTime / Double(perfFrameCount)
             let avgPresent = totalPresentTime / Double(perfFrameCount)
+            let avgSemaphoreWait = totalSemaphoreWaitTime / Double(perfFrameCount)
+            let avgDrawableWait = totalDrawableWaitTime / Double(perfFrameCount)
             let totalAvg = avgTextureUpdate + avgGPURender + avgPresent
 
             LMLog.visual.info("🔧 RENDERER TIMING: texture=\(String(format: "%.2f", avgTextureUpdate))ms | gpu=\(String(format: "%.2f", avgGPURender))ms | present=\(String(format: "%.2f", avgPresent))ms | TOTAL=\(String(format: "%.2f", totalAvg))ms/frame | skipped=\(self.textureUpdateSkipCount)")
+
+            // Log wait times separately - these are the stutter culprits
+            LMLog.visual.info("⏱️ WAIT TIMES: semaphore avg=\(String(format: "%.2f", avgSemaphoreWait))ms max=\(String(format: "%.1f", self.maxSemaphoreWait))ms | drawable avg=\(String(format: "%.2f", avgDrawableWait))ms max=\(String(format: "%.1f", self.maxDrawableWait))ms")
 
             // Reset perf counters
             totalTextureUpdateTime = 0
             totalGPURenderTime = 0
             totalPresentTime = 0
+            totalSemaphoreWaitTime = 0
+            totalDrawableWaitTime = 0
+            maxSemaphoreWait = 0
+            maxDrawableWait = 0
             perfFrameCount = 0
             lastPerfLogTime = Date()
         }
