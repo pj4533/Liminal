@@ -21,12 +21,12 @@ struct ControlsView: View {
     @State private var showingSettings = false
 
     var body: some View {
-        VStack(spacing: 24) {
-            // Title with settings gear
+        VStack(spacing: 20) {
+            // Header with title and settings
             HStack {
                 Text("Liminal")
-                    .font(.largeTitle)
-                    .fontWeight(.light)
+                    .font(.title)
+                    .fontWeight(.medium)
 
                 Spacer()
 
@@ -40,7 +40,7 @@ struct ControlsView: View {
             }
 
             // Play/Stop controls
-            HStack(spacing: 20) {
+            HStack(spacing: 16) {
                 Button(action: {
                     if audioEngine.isRunning {
                         audioEngine.stop()
@@ -54,11 +54,10 @@ struct ControlsView: View {
                         audioEngine.isRunning ? "Stop" : "Play",
                         systemImage: audioEngine.isRunning ? "stop.fill" : "play.fill"
                     )
-                    .font(.title2)
+                    .font(.title3)
                 }
                 .buttonStyle(.borderedProminent)
 
-                // Immersive Space toggle
                 Button(action: {
                     Task {
                         if isImmersed {
@@ -76,34 +75,31 @@ struct ControlsView: View {
                         isImmersed ? "Exit Dome" : "Enter Dome",
                         systemImage: isImmersed ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right"
                     )
-                    .font(.title2)
+                    .font(.title3)
                 }
                 .buttonStyle(.bordered)
             }
 
             Divider()
 
-            // Audio Parameters - bound to settings (persisted)
-            VStack(alignment: .leading, spacing: 16) {
+            // Audio Parameters
+            VStack(alignment: .leading, spacing: 12) {
                 Text("Audio")
                     .font(.headline)
 
-                // Delay (0-1 range)
-                VStack(alignment: .leading) {
+                VStack(alignment: .leading, spacing: 4) {
                     Text("Delay: \(Int(settings.delay * 100))%")
                         .font(.caption)
                     Slider(value: $settings.delay, in: 0...1)
                 }
 
-                // Reverb (0-1 range)
-                VStack(alignment: .leading) {
+                VStack(alignment: .leading, spacing: 4) {
                     Text("Reverb: \(Int(settings.reverb * 100))%")
                         .font(.caption)
                     Slider(value: $settings.reverb, in: 0...1)
                 }
 
-                // Notes (0-1 range)
-                VStack(alignment: .leading) {
+                VStack(alignment: .leading, spacing: 4) {
                     Text("Notes: \(Int(settings.notes * 100))%")
                         .font(.caption)
                     Slider(value: $settings.notes, in: 0...1)
@@ -112,7 +108,7 @@ struct ControlsView: View {
 
             Divider()
 
-            // Scale Picker - bound to settings (persisted)
+            // Scale Picker
             VStack(alignment: .leading, spacing: 8) {
                 Text("Scale")
                     .font(.headline)
@@ -138,7 +134,6 @@ struct ControlsView: View {
 
                 Spacer()
 
-                // Cached image count
                 HStack(spacing: 4) {
                     Image(systemName: "photo.stack")
                         .font(.caption2)
@@ -156,16 +151,12 @@ struct ControlsView: View {
             }
         }
         .padding(24)
-        .frame(width: 320, height: 500)
-        .glassBackgroundEffect()
         .onAppear {
-            // Apply saved settings to audio engine on launch
             audioEngine.delay = settings.delay
             audioEngine.reverb = settings.reverb
             audioEngine.notes = settings.notes
             audioEngine.currentScale = settings.currentScale
         }
-        // Settings -> AudioEngine: propagate changes immediately
         .onChange(of: settings.delay) { _, newValue in audioEngine.delay = newValue }
         .onChange(of: settings.reverb) { _, newValue in audioEngine.reverb = newValue }
         .onChange(of: settings.notes) { _, newValue in audioEngine.notes = newValue }
@@ -190,7 +181,6 @@ struct VisionSettingsSheetView: View {
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 24) {
-                // API Status
                 VStack(alignment: .leading, spacing: 12) {
                     Label("API", systemImage: "antenna.radiowaves.left.and.right")
                         .font(.headline)
@@ -207,7 +197,6 @@ struct VisionSettingsSheetView: View {
 
                 Divider()
 
-                // Visual Settings
                 VStack(alignment: .leading, spacing: 12) {
                     Label("Visuals", systemImage: "sparkles")
                         .font(.headline)
@@ -222,7 +211,6 @@ struct VisionSettingsSheetView: View {
 
                 Divider()
 
-                // Reset Button
                 VStack(alignment: .leading, spacing: 12) {
                     Label("Reset", systemImage: "arrow.counterclockwise")
                         .font(.headline)

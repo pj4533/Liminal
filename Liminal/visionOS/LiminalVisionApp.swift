@@ -21,7 +21,8 @@ struct LiminalVisionApp: App {
         WindowGroup {
             ControlsView(audioEngine: audioEngine, visualEngine: visualEngine)
         }
-        .windowStyle(.plain)
+        // Use automatic (default) window style - system handles glass and chrome
+        .defaultSize(width: 320, height: 560)
 
         ImmersiveSpace(id: "liminalDome") {
             ImmersiveDomeView(visualEngine: visualEngine, settings: settings)
