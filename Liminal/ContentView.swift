@@ -186,9 +186,15 @@ struct SettingsSheetView: View {
     @ObservedObject private var settings = SettingsService.shared
     @ObservedObject var audioEngine: GenerativeEngine
     @Environment(\.dismiss) private var dismiss
+    @State private var cacheCount: Int = 0
 
     private var apiKeyStatus: String {
         EnvironmentService.shared.hasValidCredentials ? "✓ Gemini API ready" : "✗ Missing API key"
+    }
+
+    private func refreshCacheCount() {
+        let cache = ImageCache()
+        cacheCount = cache.count + cache.rawCount
     }
 
     var body: some View {
@@ -227,7 +233,37 @@ struct SettingsSheetView: View {
                 Toggle("Cache Only Mode", isOn: $settings.cacheOnly)
                     .toggleStyle(.checkbox)
 
+                if settings.cacheOnly && cacheCount == 0 {
+                    HStack(spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.yellow)
+                        Text("No cached images! Nothing will display.")
+                            .font(.caption)
+                            .foregroundStyle(.yellow)
+                    }
+                }
+
                 Text("When enabled, only cached images are used - no new images will be generated. Useful for testing effects without API costs.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Divider()
+
+            // Cache Management
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Cache")
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
+
+                Button("Clear Image Cache") {
+                    let cache = ImageCache()
+                    cache.clearAll()
+                    cache.clearAllRaw()
+                }
+                .foregroundStyle(.red)
+
+                Text("Deletes all cached images. New images will be generated on next play.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -258,7 +294,13 @@ struct SettingsSheetView: View {
             Spacer()
         }
         .padding(20)
-        .frame(width: 400, height: 380)
+        .frame(width: 400, height: 480)
+        .onAppear {
+            refreshCacheCount()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .imageCacheCleared)) { _ in
+            refreshCacheCount()
+        }
     }
 }
 
@@ -347,6 +389,9 @@ struct VisualDisplayView: View {
         .onChange(of: visualEngine.currentImage) { _, newImage in
             if let image = newImage {
                 transitionManager.transitionTo(image)
+            } else {
+                // Image was cleared (e.g., cache cleared) - reset transition manager
+                transitionManager.reset()
             }
         }
         // nextImage handler removed - preloading not needed with new morph architecture

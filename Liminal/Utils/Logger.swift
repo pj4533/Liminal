@@ -13,4 +13,5 @@ public enum LMLog {
     public static let state = Logger(subsystem: subsystem, category: "State")
     public static let ui = Logger(subsystem: subsystem, category: "UI")
     public static let gemini = Logger(subsystem: subsystem, category: "Gemini")
+    public static let prompt = Logger(subsystem: subsystem, category: "Prompt")
 }

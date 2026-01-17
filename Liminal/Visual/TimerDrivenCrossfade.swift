@@ -111,6 +111,21 @@ final class TimerDrivenCrossfade: ObservableObject {
         }
     }
 
+    /// Reset all state - used when cache is cleared
+    func reset() {
+        currentFrame = nil
+        previousFrame = nil
+        currentSaliencyMap = nil
+        isMorphing = false
+        transitionProgress = 0
+        poolSize = 0
+        fromImage = nil
+        toImage = nil
+        crossfadeStartTime = nil
+        imageHistory.removeAll()
+        LMLog.visual.info("TimerDrivenCrossfade reset")
+    }
+
     // MARK: - Private
 
     private func addToHistory(_ image: PlatformImage) {

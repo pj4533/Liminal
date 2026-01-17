@@ -173,9 +173,15 @@ struct VisionSettingsSheetView: View {
     @ObservedObject private var settings = SettingsService.shared
     @ObservedObject var audioEngine: GenerativeEngine
     @Environment(\.dismiss) private var dismiss
+    @State private var cacheCount: Int = 0
 
     private var apiKeyStatus: String {
         EnvironmentService.shared.hasValidCredentials ? "Gemini API ready" : "Missing API key"
+    }
+
+    private func refreshCacheCount() {
+        let cache = ImageCache()
+        cacheCount = cache.count + cache.rawCount
     }
 
     var body: some View {
@@ -204,7 +210,35 @@ struct VisionSettingsSheetView: View {
 
                     Toggle("Cache Only Mode", isOn: $settings.cacheOnly)
 
+                    if settings.cacheOnly && cacheCount == 0 {
+                        HStack(spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.yellow)
+                            Text("No cached images! Nothing will display.")
+                                .font(.caption)
+                                .foregroundStyle(.yellow)
+                        }
+                    }
+
                     Text("When enabled, only cached images are used. No new images will be generated.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 12) {
+                    Label("Cache", systemImage: "photo.stack")
+                        .font(.headline)
+                        .foregroundStyle(.secondary)
+
+                    Button("Clear Image Cache", role: .destructive) {
+                        let cache = ImageCache()
+                        cache.clearAll()
+                        cache.clearAllRaw()
+                    }
+
+                    Text("Deletes all cached images. New images will be generated on next play.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -241,7 +275,13 @@ struct VisionSettingsSheetView: View {
                 }
             }
         }
-        .frame(width: 380, height: 400)
+        .frame(width: 380, height: 500)
+        .onAppear {
+            refreshCacheCount()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .imageCacheCleared)) { _ in
+            refreshCacheCount()
+        }
     }
 }
 

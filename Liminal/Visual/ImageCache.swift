@@ -3,6 +3,11 @@ import OSLog
 import CoreGraphics
 import ImageIO
 
+/// Notification posted when cache is cleared
+extension Notification.Name {
+    static let imageCacheCleared = Notification.Name("imageCacheCleared")
+}
+
 /// Manages persistent cache of images.
 ///
 /// Two cache directories:
@@ -116,6 +121,7 @@ final class ImageCache: @unchecked Sendable {
             }
 
             LMLog.visual.info("Cleared image cache")
+            NotificationCenter.default.post(name: .imageCacheCleared, object: nil)
         } catch {
             LMLog.visual.error("Failed to clear cache: \(error.localizedDescription)")
         }
@@ -206,6 +212,7 @@ final class ImageCache: @unchecked Sendable {
             }
 
             LMLog.visual.info("Cleared raw image cache")
+            NotificationCenter.default.post(name: .imageCacheCleared, object: nil)
         } catch {
             LMLog.visual.error("Failed to clear raw cache: \(error.localizedDescription)")
         }

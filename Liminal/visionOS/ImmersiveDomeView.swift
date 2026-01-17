@@ -91,42 +91,52 @@ struct ImmersiveDomeView: View {
     // Simple CGImage transition tracking (no @Observable overhead)
     @State private var transitionState = CGImageTransitionState()
 
+    // Breathing mesh data (MeshResource.replace approach for reliable visual updates)
+    @State private var meshResource: MeshResource?
+    @State private var basePositions: [SIMD3<Float>] = []
+    @State private var baseNormals: [SIMD3<Float>] = []
+    @State private var baseUVs: [SIMD2<Float>] = []
+    @State private var meshIndices: [UInt32] = []
+
     // DEBUG: Test with solid color first to verify pipeline
     private let debugSolidColorTest = false
 
-    // Curved panel parameters (static to enable mesh caching)
+    // Curved panel parameters
     private static let panelRadius: Float = 2.0
     private static let horizontalArc: Float = 110.0
     private static let verticalArc: Float = 75.0
-    private static let horizontalSegments: Int = 32
-    private static let verticalSegments: Int = 24
+    // Increased segments for smoother breathing deformation
+    private static let horizontalSegments: Int = 48
+    private static let verticalSegments: Int = 36
 
-    // Cached mesh (generated once, reused across view recreations)
+    // Panel breathing parameters
+    private static let breathingAmplitude: Float = 0.06  // Start aggressive, dial back later
+    private static let breathingSpeed: Float = 0.4       // Slow, meditative
+
+    // Cached STATIC mesh (used only when breathing is disabled)
     private static var cachedMesh: MeshResource?
 
     var body: some View {
         ZStack {
             RealityView { content in
-                LMLog.visual.info("🎬 CURVED PANEL: Creating mesh with effects pipeline...")
+                LMLog.visual.info("🎬 CURVED PANEL: Creating placeholder entity...")
 
-                guard let mesh = createCurvedPanelMesh() else {
-                    LMLog.visual.error("❌ CURVED PANEL: Failed to create mesh!")
-                    return
-                }
+                // Create placeholder mesh (will be replaced with LowLevelMesh in setup)
+                let placeholderMesh = MeshResource.generatePlane(width: 0.01, height: 0.01)
 
                 var material = UnlitMaterial(applyPostProcessToneMap: false)
                 material.color = .init(tint: .red)
 
-                let entity = ModelEntity(mesh: mesh, materials: [material])
+                let entity = ModelEntity(mesh: placeholderMesh, materials: [material])
                 entity.position = SIMD3<Float>(0, 1.5, 0)
 
                 content.add(entity)
                 panelEntity = entity
 
-                LMLog.visual.info("🎬 CURVED PANEL: Entity added, starting effects setup...")
+                LMLog.visual.info("🎬 CURVED PANEL: Placeholder entity added, setup will create real mesh...")
             }
             .task {
-                await setupEffectsRenderer()
+                await setupEffectsRendererWithBreathingMesh()
             }
             .onDisappear {
                 renderTask?.cancel()
@@ -153,7 +163,23 @@ struct ImmersiveDomeView: View {
     // MARK: - Effects Setup
 
     @MainActor
-    private func setupEffectsRenderer() async {
+    private func setupEffectsRendererWithBreathingMesh() async {
+        loadingState = "Creating breathing mesh..."
+        LMLog.visual.info("🫁 Creating breathing mesh (MeshResource.replace approach)...")
+
+        // Create the mesh and store base data for runtime displacement
+        guard let meshData = createBreathingMeshData() else {
+            loadingState = "❌ Mesh creation failed!"
+            LMLog.visual.error("❌ Failed to create breathing mesh!")
+            return
+        }
+
+        meshResource = meshData.meshResource
+        basePositions = meshData.basePositions
+        baseNormals = meshData.baseNormals
+        baseUVs = meshData.baseUVs
+        meshIndices = meshData.indices
+
         loadingState = "Creating renderer..."
         LMLog.visual.info("🎨 Setting up OffscreenEffectsRenderer...")
 
@@ -181,10 +207,11 @@ struct ImmersiveDomeView: View {
             return
         }
 
+        // Apply the breathing mesh and texture to the entity
         var material = UnlitMaterial(applyPostProcessToneMap: false)
         material.color = .init(texture: .init(textureResource))
-        entity.model?.materials = [material]
-        LMLog.visual.info("🎨 ✅ Applied DrawableQueue texture to panel!")
+        entity.model = ModelComponent(mesh: meshData.meshResource, materials: [material])
+        LMLog.visual.info("🎨 ✅ Applied breathing mesh + DrawableQueue texture to panel!")
 
         // Wait for first image
         if debugSolidColorTest {
@@ -278,6 +305,9 @@ struct ImmersiveDomeView: View {
                 // Update effect time
                 effectTime = Float(Date().timeIntervalSince(startTime))
 
+                // Update panel mesh with breathing animation (in-place vertex updates)
+                updateBreathingMesh(time: effectTime)
+
                 // Check for new images from AtomicImageBuffer (thread-safe)
                 let (rawImage, generation) = visualEngine.imageBuffer.loadWithGeneration()
                 if let rawImage = rawImage, generation != transitionState.lastGeneration {
@@ -351,25 +381,30 @@ struct ImmersiveDomeView: View {
         }
     }
 
-    // MARK: - Mesh Generation
+    // MARK: - Mesh Generation (MeshResource.replace approach for reliable visual updates)
 
-    /// Creates or returns cached curved panel mesh.
-    /// Mesh is cached as static property to avoid regeneration on view recreation.
-    private func createCurvedPanelMesh() -> MeshResource? {
-        // Return cached mesh if available
-        if let cached = Self.cachedMesh {
-            LMLog.visual.debug("🎬 CURVED PANEL: Using cached mesh")
-            return cached
-        }
+    /// Result of mesh creation containing mesh and base geometry data
+    struct BreathingMeshData {
+        let meshResource: MeshResource
+        let basePositions: [SIMD3<Float>]
+        let baseNormals: [SIMD3<Float>]
+        let baseUVs: [SIMD2<Float>]
+        let indices: [UInt32]
+    }
 
-        LMLog.visual.info("🎬 CURVED PANEL: Generating new mesh...")
+    // Breathing logging throttle
+    private static var lastBreathingLogTime: Date = .distantPast
+    private static var breathingUpdateCount: Int = 0
 
+    /// Creates the breathing mesh with base geometry data for runtime updates
+    private func createBreathingMeshData() -> BreathingMeshData? {
         let hArc = Self.horizontalArc * .pi / 180.0
         let vArc = Self.verticalArc * .pi / 180.0
 
         let startH = -hArc / 2
         let startV = -vArc / 2
 
+        // Build base positions, normals, and UVs
         var positions: [SIMD3<Float>] = []
         var normals: [SIMD3<Float>] = []
         var uvs: [SIMD2<Float>] = []
@@ -387,12 +422,15 @@ struct ImmersiveDomeView: View {
                 let y = Self.panelRadius * tan(vAngle)
                 let z = -Self.panelRadius * cos(hAngle)
 
+                let normal = normalize(SIMD3<Float>(-x, 0, -z))
+
                 positions.append(SIMD3<Float>(x, y, z))
-                normals.append(normalize(SIMD3<Float>(-x, 0, -z)))
+                normals.append(normal)
                 uvs.append(SIMD2<Float>(hFrac, 1.0 - vFrac))
             }
         }
 
+        // Build indices
         let rowSize = Self.horizontalSegments + 1
         for v in 0..<Self.verticalSegments {
             for h in 0..<Self.horizontalSegments {
@@ -406,20 +444,102 @@ struct ImmersiveDomeView: View {
             }
         }
 
-        var descriptor = MeshDescriptor(name: "CurvedPanel")
-        descriptor.positions = MeshBuffer(positions)
-        descriptor.normals = MeshBuffer(normals)
-        descriptor.textureCoordinates = MeshBuffer(uvs)
-        descriptor.primitives = .triangles(indices)
+        // Create initial MeshResource using MeshDescriptor
+        var meshDescriptor = MeshDescriptor()
+        meshDescriptor.positions = MeshBuffers.Positions(positions)
+        meshDescriptor.normals = MeshBuffers.Normals(normals)
+        meshDescriptor.textureCoordinates = MeshBuffers.TextureCoordinates(uvs)
+        meshDescriptor.primitives = .triangles(indices)
 
         do {
-            let mesh = try MeshResource.generate(from: [descriptor])
-            Self.cachedMesh = mesh  // Cache for future use
-            LMLog.visual.info("🎬 CURVED PANEL: Mesh cached (\(positions.count) vertices, \(indices.count/3) triangles)")
-            return mesh
+            let meshResource = try MeshResource.generate(from: [meshDescriptor])
+            LMLog.visual.info("🫁 BREATHING: MeshResource created - \(positions.count) vertices, \(indices.count/3) triangles")
+
+            return BreathingMeshData(
+                meshResource: meshResource,
+                basePositions: positions,
+                baseNormals: normals,
+                baseUVs: uvs,
+                indices: indices
+            )
+
         } catch {
-            LMLog.visual.error("❌ MeshResource.generate failed: \(error.localizedDescription)")
+            LMLog.visual.error("❌ MeshResource creation failed: \(error.localizedDescription)")
             return nil
+        }
+    }
+
+    /// Updates mesh by replacing contents with displaced vertices (MeshResource.replace approach)
+    @MainActor
+    private func updateBreathingMesh(time: Float) {
+        guard let mesh = meshResource else {
+            return
+        }
+
+        let breathTime = time * Self.breathingSpeed
+        let vertexCount = basePositions.count
+
+        // Track displacement range for logging
+        var minDisplacement: Float = Float.greatestFiniteMagnitude
+        var maxDisplacement: Float = -Float.greatestFiniteMagnitude
+
+        // Calculate displaced positions
+        var displacedPositions: [SIMD3<Float>] = []
+        displacedPositions.reserveCapacity(vertexCount)
+
+        for i in 0..<vertexCount {
+            let basePos = basePositions[i]
+            let normal = baseNormals[i]
+
+            // Calculate UV-like coordinates for wave functions
+            let v = i / (Self.horizontalSegments + 1)
+            let h = i % (Self.horizontalSegments + 1)
+            let hFrac = Float(h) / Float(Self.horizontalSegments)
+            let vFrac = Float(v) / Float(Self.verticalSegments)
+
+            // BREATHING: Multiple overlapping sine waves
+            let wave1 = sin(hFrac * 6.0 + breathTime * 1.0) * 0.4
+            let wave2 = sin(vFrac * 5.0 + breathTime * 0.7) * 0.3
+            let wave3 = sin((hFrac + vFrac) * 4.0 + breathTime * 0.5) * 0.2
+            let centerDist = sqrt(pow(hFrac - 0.5, 2) + pow(vFrac - 0.5, 2))
+            let wave4 = sin(centerDist * 8.0 - breathTime * 0.8) * 0.1
+
+            let displacement = (wave1 + wave2 + wave3 + wave4) * Self.breathingAmplitude
+
+            minDisplacement = min(minDisplacement, displacement)
+            maxDisplacement = max(maxDisplacement, displacement)
+
+            // Calculate displaced position
+            displacedPositions.append(basePos + normal * displacement)
+        }
+
+        // Create new mesh descriptor with displaced positions
+        var meshDescriptor = MeshDescriptor()
+        meshDescriptor.positions = MeshBuffers.Positions(displacedPositions)
+        meshDescriptor.normals = MeshBuffers.Normals(baseNormals)
+        meshDescriptor.textureCoordinates = MeshBuffers.TextureCoordinates(baseUVs)
+        meshDescriptor.primitives = .triangles(meshIndices)
+
+        // Generate new mesh and replace the stored reference
+        // Using generate() + replace() approach since direct Contents manipulation is complex
+        do {
+            let newMesh = try MeshResource.generate(from: [meshDescriptor])
+            let contents = newMesh.contents
+            try mesh.replace(with: contents)
+        } catch {
+            // Only log errors occasionally to avoid spam
+            if Self.breathingUpdateCount == 0 {
+                LMLog.visual.error("❌ Mesh replace failed: \(error.localizedDescription)")
+            }
+        }
+
+        // Log breathing stats once per second
+        Self.breathingUpdateCount += 1
+        let now = Date()
+        if now.timeIntervalSince(Self.lastBreathingLogTime) >= 1.0 {
+            LMLog.visual.info("🫁 BREATHING: updates/sec=\(Self.breathingUpdateCount) time=\(String(format: "%.2f", time)) displacement=[\(String(format: "%.4f", minDisplacement))...\(String(format: "%.4f", maxDisplacement))]")
+            Self.breathingUpdateCount = 0
+            Self.lastBreathingLogTime = now
         }
     }
 }

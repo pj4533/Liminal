@@ -129,66 +129,114 @@ final class VisualEngine: ObservableObject {
     // MARK: - Prompt Building
 
     private func buildPrompt() -> String {
-        // Start with strong visual anchors - actual things to render
-        var descriptors: [String] = [
-            "digital art",
-            "4k wallpaper",
-            "abstract landscape"
+        // SURREALIST SCENES - impossible but photographically real
+        // Full environments and landscapes, not single objects
+        let scenes = [
+            // Infinite spaces and impossible architecture
+            "endless hallway stretching to infinity with doors on both sides that open to different dimensions",
+            "staircase that loops back on itself defying gravity in an MC Escher style building",
+            "vast desert landscape where the sand dunes transform into ocean waves mid-motion",
+            "cathedral interior where the columns are made of frozen lightning and the ceiling is open sky",
+            "room where gravity pulls in multiple directions with furniture on walls and ceiling",
+
+            // Reality bending landscapes
+            "forest where the trees are melting like candle wax into pools of color",
+            "mountain range that folds into itself like origami against a fractal sky",
+            "city skyline reflected in water but the reflection shows a completely different city",
+            "field of flowers where each petal contains a tiny universe with stars and galaxies",
+            "canyon where the rock layers are actually stacked moments in time showing different eras",
+
+            // Psychedelic environments
+            "jungle where bioluminescent patterns pulse through every leaf and vine in waves",
+            "cave system where crystalline formations project geometric mandalas on the walls",
+            "underwater temple overgrown with coral that glows with inner light",
+            "ancient library where the books float and their pages form fractal spirals in the air",
+            "garden where the plants grow in sacred geometry patterns and emit visible energy",
+
+            // Liminal and dreamscape spaces
+            "abandoned swimming pool filled with clouds instead of water under a starfield ceiling",
+            "train station platform that extends infinitely in both directions into fog",
+            "hotel corridor where each door opens to a different biome visible through the cracks",
+            "empty theater where the stage shows a window into deep space",
+            "greenhouse at night where the glass reflects an alien landscape instead of outside",
+
+            // Cosmic and interdimensional vistas
+            "cliff edge overlooking an ocean of swirling galaxies instead of water",
+            "portal in a meadow showing through to an identical meadow in reverse colors",
+            "observatory dome open to reveal nested spheres of different realities",
+            "bridge spanning between two moons over a gas giant atmosphere",
+            "valley where aurora borealis touches the ground and becomes liquid light rivers",
+
+            // Transformation scenes
+            "beach at sunset where the waves are made of liquid mercury reflecting impossible colors",
+            "winter forest where snowflakes are tiny geometric crystals visible to the naked eye",
+            "desert oasis where the water surface shows the view from outer space looking down",
+            "volcanic landscape where the lava flows in slow spiraling fractal patterns",
+            "moss-covered ruins being slowly consumed by geometric crystal growth"
         ]
 
-        // Pick a random visual subject for variety - psychedelic and symbolic
-        let subjects = [
-            "glowing mushrooms in mystical forest",
-            "sacred geometry mandala",
-            "third eye opening cosmic vision",
-            "psychedelic mushroom kingdom",
-            "fractal spiral infinite zoom",
-            "lotus flower blooming light rays",
-            "serpent coiled around tree of life",
-            "melting clock surrealist landscape",
-            "kaleidoscope butterfly wings",
-            "ancient temple overgrown with vines",
-            "all-seeing eye pyramid",
-            "bioluminescent jellyfish swarm",
-            "crystalline cave with glowing minerals",
-            "phoenix rising from flames",
-            "moon phases celestial diagram",
-            "entheogenic plant spirits",
-            "aztec sun stone glowing",
-            "dmt entity geometric beings",
-            "ayahuasca vine patterns",
-            "ouroboros snake eating tail"
+        // Photographic framing for surreal scenes
+        let framings = [
+            "wide angle establishing shot",
+            "cinematic landscape photograph",
+            "environmental portrait perspective",
+            "panoramic vista capture",
+            "intimate scene documentation",
+            "dramatic low angle composition",
+            "atmospheric long shot"
         ]
-        descriptors.append(subjects.randomElement()!)
 
-        // Random style variations
-        let styles = [
-            ["dark moody palette", "deep blues and purples", "noir lighting"],
-            ["luminous", "golden hour light", "ethereal glow"],
-            ["twilight colors", "muted tones", "dusk atmosphere"],
-            ["vibrant neon", "electric colors", "psychedelic glow"],
-            ["soft pastels", "dreamy atmosphere", "gentle gradients"]
+        // Lighting that grounds the surreal in reality
+        let lighting = [
+            "golden hour sunlight casting long shadows",
+            "overcast diffused daylight with soft shadows",
+            "dramatic storm light breaking through clouds",
+            "blue hour twilight with emerging stars",
+            "harsh midday sun creating deep contrast",
+            "bioluminescent glow as primary illumination",
+            "mixed natural and artificial light sources",
+            "fog diffused lighting creating depth layers"
         ]
-        descriptors.append(contentsOf: styles.randomElement()!)
 
-        // Random complexity
-        let complexities = [
-            ["intricate details", "complex textures", "layered depth"],
-            ["minimalist", "negative space", "clean lines"],
-            ["balanced composition", "focused detail"]
+        // Photorealistic rendering cues
+        let realism = [
+            "captured on medium format film with natural grain",
+            "shot on full frame mirrorless with tack sharp detail",
+            "large format photography with extreme depth",
+            "35mm film aesthetic with subtle color shift",
+            "IMAX documentary footage frame grab"
         ]
-        descriptors.append(contentsOf: complexities.randomElement()!)
 
-        // Random movement feel
-        let movements = [
-            ["motion blur", "flowing energy", "swirling"],
-            ["still and calm", "frozen moment", "meditative"],
-            ["gentle movement", "subtle flow"]
+        // Atmosphere and mood
+        let moods = [
+            "haunting and dreamlike atmosphere",
+            "serene but deeply unsettling feeling",
+            "awe-inspiring cosmic scale",
+            "intimate yet infinite space",
+            "calm before transformation moment",
+            "timeless and eternal presence"
         ]
-        descriptors.append(contentsOf: movements.randomElement()!)
 
-        let prompt = descriptors.joined(separator: ", ")
-        LMLog.visual.debug("Built prompt: \(prompt.prefix(80))...")
+        // Build prompt
+        let scene = scenes.randomElement()!
+        let framing = framings.randomElement()!
+        let light = lighting.randomElement()!
+        let realistic = realism.randomElement()!
+        let mood = moods.randomElement()!
+
+        // Construct narrative prompt - surreal scene, photographic execution
+        let prompt = """
+            Photorealistic \(framing) of \(scene). \
+            \(light.capitalized). \(mood.capitalized). \
+            \(realistic.capitalized). \
+            Hyper-detailed environment with realistic materials and physics. \
+            Looks like an actual photograph of an impossible place. \
+            Not illustration, not digital art, not CGI render. \
+            Real camera, real film, surreal subject.
+            """
+
+        // Log full prompt with dedicated category
+        LMLog.prompt.info("🎨 \(prompt)")
         return prompt
     }
 }

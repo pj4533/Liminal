@@ -88,10 +88,13 @@ final class ImageQueue: ObservableObject {
             imageBuffer.removeAll()
         }
 
-        func refillBufferFromCache() {
+        func refillBufferFromCache(excluding currentlyDisplayed: PlatformImage?) {
             let shuffled = cachedImages.shuffled()
             for image in shuffled {
-                if !imageBuffer.contains(where: { $0 === image }) {
+                // Don't add if already in buffer OR if it's the currently displayed image
+                let isInBuffer = imageBuffer.contains(where: { $0 === image })
+                let isCurrentlyDisplayed = currentlyDisplayed != nil && image === currentlyDisplayed
+                if !isInBuffer && !isCurrentlyDisplayed {
                     imageBuffer.append(image)
                 }
             }
@@ -109,6 +112,31 @@ final class ImageQueue: ObservableObject {
     init() {
         Task {
             await loadCachedImages()
+        }
+
+        // Listen for cache clear events to update UI
+        NotificationCenter.default.addObserver(
+            forName: .imageCacheCleared,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self = self else { return }
+            // Clear the atomic image buffer (for render loop)
+            self.imageBuffer.clear()
+
+            Task { @MainActor in
+                // Clear @Published properties (for UI)
+                self.totalCachedCount = 0
+                self.currentImage = nil
+                self.nextImage = nil
+                self.queuedCount = 0
+            }
+            Task {
+                // Clear internal state
+                await self.state.setCachedImages([])
+                await self.state.clearBuffer()
+                LMLog.visual.info("Cache cleared - all images reset")
+            }
         }
     }
 
@@ -291,10 +319,10 @@ final class ImageQueue: ObservableObject {
 
         LMLog.visual.debug("Advanced to next image, \(bufferCount) remaining in queue")
 
-        // If buffer is low, refill from cache
+        // If buffer is low, refill from cache (excluding currently displayed image)
         let cachedCount = await state.cachedCount()
         if bufferCount < 2 && cachedCount > 0 {
-            await refillFromCache()
+            await refillFromCache(excluding: nextPlatformImage)
         }
         #endif
     }
@@ -312,8 +340,8 @@ final class ImageQueue: ObservableObject {
 
     // MARK: - Private
 
-    private func refillFromCache() async {
-        await state.refillBufferFromCache()
+    private func refillFromCache(excluding currentlyDisplayed: PlatformImage?) async {
+        await state.refillBufferFromCache(excluding: currentlyDisplayed)
         let count = await state.bufferCount()
         await MainActor.run {
             queuedCount = count
@@ -542,12 +570,17 @@ final class ImageQueue: ObservableObject {
             }
 
             // Step 6: Add to buffer via our actor (NOT MainActor)
+            // CRITICAL: Only add to queue if NOT already displaying this image!
+            // If needsCurrentImage was true, we already set currentImage to this image,
+            // so adding to buffer would cause it to show again on first advance().
             LMLog.visual.info("🔄 Pipeline Step 6: Adding to state buffers...")
-            await state.appendToBuffer(upscaledPlatformImage)
+            if !needsCurrentImage {
+                await state.appendToBuffer(upscaledPlatformImage)
+            }
             await state.appendToCached(upscaledPlatformImage)
             let bufferCount = await state.bufferCount()
             let cachedCount = await state.cachedCount()
-            LMLog.visual.info("🔄 Pipeline Step 6 COMPLETE: buffer=\(bufferCount), cached=\(cachedCount)")
+            LMLog.visual.info("🔄 Pipeline Step 6 COMPLETE: buffer=\(bufferCount), cached=\(cachedCount), addedToQueue=\(!needsCurrentImage)")
 
             // Step 7: Update @Published for UI (may be delayed, that's OK now)
             LMLog.visual.info("🔄 Pipeline Step 7: Updating @Published...")
