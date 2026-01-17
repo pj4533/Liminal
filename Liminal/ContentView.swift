@@ -319,7 +319,8 @@ struct VisualDisplayView: View {
         var uniforms = EffectsUniformsComputer.compute(
             time: Float(effectController.time),
             transitionProgress: Float(transitionManager.transitionProgress),
-            hasSaliencyMap: transitionManager.currentSaliencyMap != nil
+            hasSaliencyMap: transitionManager.currentSaliencyMap != nil,
+            reverb: settings.reverb
         )
         // Add time-based hue shift (macOS-specific for now)
         uniforms.hueBaseShift = Float(effectController.time * 0.03)

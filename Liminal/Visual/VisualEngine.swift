@@ -172,7 +172,35 @@ final class VisualEngine: ObservableObject {
             "winter forest where snowflakes are tiny geometric crystals visible to the naked eye",
             "desert oasis where the water surface shows the view from outer space looking down",
             "volcanic landscape where the lava flows in slow spiraling fractal patterns",
-            "moss-covered ruins being slowly consumed by geometric crystal growth"
+            "moss-covered ruins being slowly consumed by geometric crystal growth",
+
+            // Mycelia and fungal consciousness
+            "bioluminescent mushroom forest with glowing mycelia networks visible through translucent soil",
+            "cathedral-sized mushroom caps in morning mist with gills dripping luminescent spores",
+            "forest floor cross-section revealing vast fungal networks connecting every tree root",
+            "ancient mushroom ring where the fruiting bodies pulse with synchronized inner light",
+            "decaying log transformed into a galaxy of tiny glowing fungi mapping neural pathways",
+
+            // Interconnection and unity
+            "forest at golden hour where visible threads of light connect every living thing",
+            "redwood grove with root systems forming luminous neural networks beneath glass-like ground",
+            "ocean surface that is simultaneously a membrane showing sky and water as one substance",
+            "night sky where constellations are connected to flowers below by streams of descending starlight",
+            "web of morning dew spanning a meadow where each droplet reflects all other droplets infinitely",
+
+            // Philosophical dissolution
+            "figure dissolving into particles that become birds that become clouds that become thoughts",
+            "mirror room where each reflection shows a different possible version of the same moment",
+            "hourglass landscape where the sand grains are memories flowing between past and future",
+            "doorway standing alone in a field opening to show the same field from the perspective of every blade of grass",
+            "library where readers are slowly becoming the books they read molecules exchanging across the boundary",
+
+            // Ego death and rebirth
+            "human silhouette made entirely of interconnected mycelium threads against cosmic backdrop",
+            "ancient tree with visible sap flowing that contains tiny galaxies and nebulae",
+            "meditation space where the meditator and the room have begun merging at the edges",
+            "chrysalis moment captured where caterpillar matter is neither one thing nor the other",
+            "cave painting that shows the painter painting themselves painting the cave"
         ]
 
         // Photographic framing for surreal scenes
@@ -217,19 +245,51 @@ final class VisualEngine: ObservableObject {
             "timeless and eternal presence"
         ]
 
-        // Build prompt
+        // Photographic technique variations (all hyperrealistic, neutral colors)
+        let techniques = [
+            "tack sharp focus throughout with extreme depth of field",
+            "shallow depth of field with creamy bokeh isolating subject",
+            "macro-level detail visible in textures and surfaces",
+            "wide angle lens capturing vast scale",
+            "telephoto compression flattening layers dramatically",
+            "perfect exposure balancing highlights and shadows",
+            "natural lens characteristics with subtle vignette"
+        ]
+
+        // Wildcard elements to inject variety
+        let wildcards = [
+            "tiny figures in distance for scale",
+            "single impossible object as focal point",
+            "repeating patterns that shift on close inspection",
+            "visible energy or light particles in air",
+            "reflective surfaces showing alternate realities",
+            "organic and geometric forms in tension",
+            "decay and growth happening simultaneously",
+            "time appearing to flow at different speeds",
+            "boundaries between substances dissolving",
+            "fractals emerging from natural forms",
+            "", "", "" // empty options for sometimes no wildcard
+        ]
+
+        // Build prompt with variation
         let scene = scenes.randomElement()!
         let framing = framings.randomElement()!
         let light = lighting.randomElement()!
         let realistic = realism.randomElement()!
         let mood = moods.randomElement()!
+        let technique = techniques.randomElement()!
+        let wildcard = wildcards.randomElement()!
 
-        // Construct narrative prompt - surreal scene, photographic execution
+        // Build wildcard clause only if not empty
+        let wildcardClause = wildcard.isEmpty ? "" : " \(wildcard.capitalized)."
+
+        // Construct narrative prompt - surreal scene, hyperrealistic photographic execution
         let prompt = """
             Photorealistic \(framing) of \(scene). \
             \(light.capitalized). \(mood.capitalized). \
+            \(technique.capitalized).\(wildcardClause) \
             \(realistic.capitalized). \
-            Hyper-detailed environment with realistic materials and physics. \
+            Natural, realistic colors. Hyper-detailed environment with realistic materials and physics. \
             Looks like an actual photograph of an impossible place. \
             Not illustration, not digital art, not CGI render. \
             Real camera, real film, surreal subject.

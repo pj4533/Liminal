@@ -65,6 +65,10 @@ final class ImageQueue: ObservableObject {
             LMLog.visual.info("👁️ DISPLAY HISTORY RESET")
         }
 
+        func getDisplayedHashes() -> Set<Int> {
+            return self.displayedImageHashes
+        }
+
         func appendToBuffer(_ image: PlatformImage) {
             self.imageBuffer.append(image)
             let imgId = self.shortId(image)
@@ -319,15 +323,18 @@ final class ImageQueue: ObservableObject {
         // Clear buffer - we start fresh each session
         await state.clearBuffer()
 
-        // Load cached images into buffer
+        // Load cached images into buffer, excluding already-displayed images
         let cachedImages = await state.getCachedImages()
         if !cachedImages.isEmpty {
-            await state.setImageBuffer(cachedImages.shuffled())
+            // Filter out images that have already been displayed (including the initial random one)
+            let displayedHashes = await state.getDisplayedHashes()
+            let filteredImages = cachedImages.filter { !displayedHashes.contains($0.hash) }
+            await state.setImageBuffer(filteredImages.shuffled())
             let count = await state.bufferCount()
             await MainActor.run {
                 queuedCount = count
             }
-            LMLog.visual.debug("Loaded \(count) cached images into buffer")
+            LMLog.visual.debug("Loaded \(count) cached images into buffer (excluded \(cachedImages.count - filteredImages.count) already displayed)")
         } else {
             await MainActor.run {
                 queuedCount = 0
