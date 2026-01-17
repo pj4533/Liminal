@@ -46,10 +46,23 @@ final class ImageQueue: ObservableObject {
     private actor StateManager {
         var imageBuffer: [PlatformImage] = []
         var cachedImages: [PlatformImage] = []
+        var displayedImageHashes: Set<Int> = []  // Track which images have been shown
 
         // Helper to get short ID for an image (last 4 chars of hash)
         private func shortId(_ image: PlatformImage) -> String {
             String(format: "%04X", abs(image.hash) % 0xFFFF)
+        }
+
+        func markAsDisplayed(_ image: PlatformImage) {
+            self.displayedImageHashes.insert(image.hash)
+            let imgId = self.shortId(image)
+            let count = self.displayedImageHashes.count
+            LMLog.visual.debug("👁️ DISPLAYED: \(imgId) (total displayed: \(count))")
+        }
+
+        func resetDisplayHistory() {
+            self.displayedImageHashes.removeAll()
+            LMLog.visual.info("👁️ DISPLAY HISTORY RESET")
         }
 
         func appendToBuffer(_ image: PlatformImage) {
@@ -114,26 +127,51 @@ final class ImageQueue: ObservableObject {
             LMLog.visual.info("📥 QUEUE CLEARED")
         }
 
-        func refillBufferFromCache(excluding currentlyDisplayed: PlatformImage?) {
+        func refillBufferFromCache(excluding currentlyDisplayed: PlatformImage?, cacheOnlyMode: Bool) {
             let excludeId = currentlyDisplayed != nil ? self.shortId(currentlyDisplayed!) : "none"
             let cachedCount = self.cachedImages.count
             let bufferCount = self.imageBuffer.count
-            LMLog.visual.info("🔄 REFILL START: cached=\(cachedCount), buffer=\(bufferCount), excluding=\(excludeId)")
+            let displayedCount = self.displayedImageHashes.count
+            LMLog.visual.info("🔄 REFILL START: cached=\(cachedCount), buffer=\(bufferCount), displayed=\(displayedCount), excluding=\(excludeId), cacheOnly=\(cacheOnlyMode)")
 
             let shuffled = self.cachedImages.shuffled()
             var added = 0
             for image in shuffled {
-                // Don't add if already in buffer OR if it's the currently displayed image
+                // Don't add if already in buffer or currently displayed
+                // In cache-only mode, allow previously displayed images (that's all we have)
                 let isInBuffer = self.imageBuffer.contains(where: { $0 === image })
                 let isCurrentlyDisplayed = currentlyDisplayed != nil && image === currentlyDisplayed
-                if !isInBuffer && !isCurrentlyDisplayed {
+                let wasDisplayed = cacheOnlyMode ? false : self.displayedImageHashes.contains(image.hash)
+                if !isInBuffer && !isCurrentlyDisplayed && !wasDisplayed {
                     self.imageBuffer.append(image)
                     added += 1
                     let imgId = self.shortId(image)
                     LMLog.visual.debug("🔄 REFILL: added \(imgId)")
                 } else {
                     let imgId = self.shortId(image)
-                    LMLog.visual.debug("🔄 REFILL: skipped \(imgId) (inBuffer=\(isInBuffer), displayed=\(isCurrentlyDisplayed))")
+                    LMLog.visual.debug("🔄 REFILL: skipped \(imgId) (inBuffer=\(isInBuffer), current=\(isCurrentlyDisplayed), wasDisplayed=\(wasDisplayed))")
+                }
+            }
+
+            // If we couldn't add ANY images (all have been displayed), reset and try again
+            // This only applies in normal mode - cache-only mode already ignores displayed history
+            if added == 0 && cachedCount > 0 && !cacheOnlyMode {
+                LMLog.visual.info("🔄 REFILL: All cached images displayed, resetting history...")
+                self.displayedImageHashes.removeAll()
+                // Keep the currently displayed one in history so we don't immediately repeat it
+                if let current = currentlyDisplayed {
+                    self.displayedImageHashes.insert(current.hash)
+                }
+                // Recurse to try again with fresh history
+                for image in shuffled {
+                    let isInBuffer = self.imageBuffer.contains(where: { $0 === image })
+                    let isCurrentlyDisplayed = currentlyDisplayed != nil && image === currentlyDisplayed
+                    if !isInBuffer && !isCurrentlyDisplayed {
+                        self.imageBuffer.append(image)
+                        added += 1
+                        let imgId = self.shortId(image)
+                        LMLog.visual.debug("🔄 REFILL (after reset): added \(imgId)")
+                    }
                 }
             }
 
@@ -177,6 +215,7 @@ final class ImageQueue: ObservableObject {
                 // Clear internal state
                 await self.state.setCachedImages([])
                 await self.state.clearBuffer()
+                await self.state.resetDisplayHistory()
                 LMLog.visual.info("Cache cleared - all images reset")
             }
         }
@@ -226,6 +265,9 @@ final class ImageQueue: ObservableObject {
             LMLog.visual.debug("📂 [ImageQueue] Selected random image from cache")
 
             if let image = randomImage {
+                // Mark this initial image as displayed so we don't cycle back to it
+                await state.markAsDisplayed(image)
+
                 LMLog.visual.debug("📂 [ImageQueue] Extracting CGImage from cached image...")
                 if let cgImage = image.cgImageRepresentation {
                     LMLog.visual.info("📂 [ImageQueue] ✅ Storing cached CGImage in atomic buffer: \(cgImage.width)x\(cgImage.height)")
@@ -342,6 +384,13 @@ final class ImageQueue: ObservableObject {
             return
         }
 
+        // Mark this image as displayed so we don't cycle back to it
+        // Only track in normal mode - cache-only mode allows repeats since that's all we have
+        let cacheOnly = await MainActor.run { SettingsService.shared.cacheOnly }
+        if !cacheOnly {
+            await state.markAsDisplayed(nextPlatformImage)
+        }
+
         let bufferCount = await state.bufferCount()
         let firstInBuffer = await state.getFirstFromBuffer()
 
@@ -362,9 +411,18 @@ final class ImageQueue: ObservableObject {
         LMLog.visual.debug("Advanced to next image, \(bufferCount) remaining in queue")
 
         // If buffer is low, refill from cache (excluding currently displayed image)
+        // BUT: Don't refill if we're actively generating - let generation add to queue naturally
+        // This prevents the "all displayed, reset history" from adding old images back
+        // when a new image is about to finish generating
         let cachedCount = await state.cachedCount()
-        if bufferCount < 2 && cachedCount > 0 {
-            await refillFromCache(excluding: nextPlatformImage)
+        let currentlyGenerating = await MainActor.run { self.isGenerating }
+        let generationTaskActive = generationTask != nil && generationTask?.isCancelled == false
+        LMLog.visual.info("📊 ADVANCE STATE: buffer=\(bufferCount), cached=\(cachedCount), isGenerating=\(currentlyGenerating), taskActive=\(generationTaskActive)")
+
+        if bufferCount < 2 && cachedCount > 0 && (cacheOnly || !generationTaskActive) {
+            await refillFromCache(excluding: nextPlatformImage, cacheOnlyMode: cacheOnly)
+        } else if bufferCount < 2 && generationTaskActive {
+            LMLog.visual.info("⏳ Skipping refill - generation task active, will add to queue soon")
         }
         #endif
     }
@@ -382,8 +440,8 @@ final class ImageQueue: ObservableObject {
 
     // MARK: - Private
 
-    private func refillFromCache(excluding currentlyDisplayed: PlatformImage?) async {
-        await state.refillBufferFromCache(excluding: currentlyDisplayed)
+    private func refillFromCache(excluding currentlyDisplayed: PlatformImage?, cacheOnlyMode: Bool) async {
+        await state.refillBufferFromCache(excluding: currentlyDisplayed, cacheOnlyMode: cacheOnlyMode)
         let count = await state.bufferCount()
         await MainActor.run {
             queuedCount = count
@@ -621,7 +679,12 @@ final class ImageQueue: ObservableObject {
                 await state.appendToBuffer(upscaledPlatformImage)
                 LMLog.visual.info("🔄 Pipeline Step 6: ✅ ADDED \(imageId) to queue")
             } else {
-                LMLog.visual.info("🔄 Pipeline Step 6: ⏭️ SKIPPED \(imageId) (already displaying)")
+                // First image stored directly - mark as displayed so refill doesn't add it back!
+                let cacheOnly = await MainActor.run { SettingsService.shared.cacheOnly }
+                if !cacheOnly {
+                    await state.markAsDisplayed(upscaledPlatformImage)
+                }
+                LMLog.visual.info("🔄 Pipeline Step 6: ⏭️ SKIPPED \(imageId) (already displaying, marked)")
             }
             await state.appendToCached(upscaledPlatformImage)
             let bufferCount = await state.bufferCount()
