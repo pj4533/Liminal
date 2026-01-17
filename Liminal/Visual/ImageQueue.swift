@@ -47,17 +47,37 @@ final class ImageQueue: ObservableObject {
         var imageBuffer: [PlatformImage] = []
         var cachedImages: [PlatformImage] = []
 
+        // Helper to get short ID for an image (last 4 chars of hash)
+        private func shortId(_ image: PlatformImage) -> String {
+            String(format: "%04X", abs(image.hash) % 0xFFFF)
+        }
+
         func appendToBuffer(_ image: PlatformImage) {
-            imageBuffer.append(image)
+            self.imageBuffer.append(image)
+            let imgId = self.shortId(image)
+            let count = self.imageBuffer.count
+            let ids = self.imageBuffer.map { self.shortId($0) }.joined(separator: ",")
+            LMLog.visual.info("📥 QUEUE ADD: \(imgId) → buffer=[\(ids)] count=\(count)")
         }
 
         func appendToCached(_ image: PlatformImage) {
-            cachedImages.append(image)
+            self.cachedImages.append(image)
+            let imgId = self.shortId(image)
+            let count = self.cachedImages.count
+            LMLog.visual.debug("💾 CACHED ADD: \(imgId) → total cached=\(count)")
         }
 
         func removeFirstFromBuffer() -> PlatformImage? {
-            guard !imageBuffer.isEmpty else { return nil }
-            return imageBuffer.removeFirst()
+            guard !self.imageBuffer.isEmpty else {
+                LMLog.visual.warning("📤 QUEUE REMOVE: buffer empty!")
+                return nil
+            }
+            let removed = self.imageBuffer.removeFirst()
+            let imgId = self.shortId(removed)
+            let count = self.imageBuffer.count
+            let ids = self.imageBuffer.map { self.shortId($0) }.joined(separator: ",")
+            LMLog.visual.info("📤 QUEUE REMOVE: \(imgId) → buffer=[\(ids)] count=\(count)")
+            return removed
         }
 
         func getFirstFromBuffer() -> PlatformImage? {
@@ -73,7 +93,9 @@ final class ImageQueue: ObservableObject {
         }
 
         func setCachedImages(_ images: [PlatformImage]) {
-            cachedImages = images
+            self.cachedImages = images
+            let count = images.count
+            LMLog.visual.debug("💾 CACHED SET: \(count) images")
         }
 
         func getCachedImages() -> [PlatformImage] {
@@ -81,23 +103,43 @@ final class ImageQueue: ObservableObject {
         }
 
         func setImageBuffer(_ images: [PlatformImage]) {
-            imageBuffer = images
+            self.imageBuffer = images
+            let count = images.count
+            let ids = images.map { self.shortId($0) }.joined(separator: ",")
+            LMLog.visual.info("📥 QUEUE SET: [\(ids)] count=\(count)")
         }
 
         func clearBuffer() {
-            imageBuffer.removeAll()
+            self.imageBuffer.removeAll()
+            LMLog.visual.info("📥 QUEUE CLEARED")
         }
 
         func refillBufferFromCache(excluding currentlyDisplayed: PlatformImage?) {
-            let shuffled = cachedImages.shuffled()
+            let excludeId = currentlyDisplayed != nil ? self.shortId(currentlyDisplayed!) : "none"
+            let cachedCount = self.cachedImages.count
+            let bufferCount = self.imageBuffer.count
+            LMLog.visual.info("🔄 REFILL START: cached=\(cachedCount), buffer=\(bufferCount), excluding=\(excludeId)")
+
+            let shuffled = self.cachedImages.shuffled()
+            var added = 0
             for image in shuffled {
                 // Don't add if already in buffer OR if it's the currently displayed image
-                let isInBuffer = imageBuffer.contains(where: { $0 === image })
+                let isInBuffer = self.imageBuffer.contains(where: { $0 === image })
                 let isCurrentlyDisplayed = currentlyDisplayed != nil && image === currentlyDisplayed
                 if !isInBuffer && !isCurrentlyDisplayed {
-                    imageBuffer.append(image)
+                    self.imageBuffer.append(image)
+                    added += 1
+                    let imgId = self.shortId(image)
+                    LMLog.visual.debug("🔄 REFILL: added \(imgId)")
+                } else {
+                    let imgId = self.shortId(image)
+                    LMLog.visual.debug("🔄 REFILL: skipped \(imgId) (inBuffer=\(isInBuffer), displayed=\(isCurrentlyDisplayed))")
                 }
             }
+
+            let finalCount = self.imageBuffer.count
+            let ids = self.imageBuffer.map { self.shortId($0) }.joined(separator: ",")
+            LMLog.visual.info("🔄 REFILL DONE: added=\(added), buffer=[\(ids)] count=\(finalCount)")
         }
     }
 
@@ -573,14 +615,18 @@ final class ImageQueue: ObservableObject {
             // CRITICAL: Only add to queue if NOT already displaying this image!
             // If needsCurrentImage was true, we already set currentImage to this image,
             // so adding to buffer would cause it to show again on first advance().
-            LMLog.visual.info("🔄 Pipeline Step 6: Adding to state buffers...")
+            let imageId = String(format: "%04X", abs(upscaledPlatformImage.hash) % 0xFFFF)
+            LMLog.visual.info("🔄 Pipeline Step 6: img=\(imageId) needsCurrentImage=\(needsCurrentImage)")
             if !needsCurrentImage {
                 await state.appendToBuffer(upscaledPlatformImage)
+                LMLog.visual.info("🔄 Pipeline Step 6: ✅ ADDED \(imageId) to queue")
+            } else {
+                LMLog.visual.info("🔄 Pipeline Step 6: ⏭️ SKIPPED \(imageId) (already displaying)")
             }
             await state.appendToCached(upscaledPlatformImage)
             let bufferCount = await state.bufferCount()
             let cachedCount = await state.cachedCount()
-            LMLog.visual.info("🔄 Pipeline Step 6 COMPLETE: buffer=\(bufferCount), cached=\(cachedCount), addedToQueue=\(!needsCurrentImage)")
+            LMLog.visual.info("🔄 Pipeline Step 6 COMPLETE: img=\(imageId) buffer=\(bufferCount), cached=\(cachedCount)")
 
             // Step 7: Update @Published for UI (may be delayed, that's OK now)
             LMLog.visual.info("🔄 Pipeline Step 7: Updating @Published...")
