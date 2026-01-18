@@ -20,14 +20,12 @@ enum EffectsUniformsComputer {
     ///   - transitionProgress: Optional crossfade transition progress (0-1) for distortion boost
     ///   - hasSaliencyMap: Whether a saliency texture is available
     ///   - ghostTapCount: Number of active ghost taps (0-8) for optimized shader loop
-    ///   - reverb: Reverb slider value (0-1) - controls color effect intensity
     /// - Returns: Complete EffectsUniforms ready for the shader
     static func compute(
         time: Float,
         transitionProgress: Float = 0,
         hasSaliencyMap: Bool = false,
-        ghostTapCount: Int = 0,
-        reverb: Float = 0.65
+        ghostTapCount: Int = 0
     ) -> EffectsUniforms {
 
         // Ken Burns: smooth continuous motion
@@ -36,9 +34,10 @@ enum EffectsUniformsComputer {
         // Distortion with optional transition boost
         let distortion = computeDistortion(transitionProgress: transitionProgress)
 
-        // Hue effects scale with reverb: 0 = original colors, 1 = full psychedelic
-        let hueBlend = reverb * 0.8  // Max blend at 80% to preserve some original color
-        let hueWave = reverb * 0.6   // Spatial wave intensity also scales with reverb
+        // Autonomous color cycling - smooth oscillator produces organic, non-repeating patterns
+        let colorCycle = SmoothOscillator.value(at: time)
+        let hueBlend = colorCycle * 0.8  // Max blend at 80% to preserve some original color
+        let hueWave = colorCycle * 0.6   // Spatial wave intensity also scales with color cycle
 
         return EffectsUniforms(
             time: time,
