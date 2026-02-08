@@ -58,30 +58,27 @@ float snoise2d(float2 v) {
     return 130.0 * dot(m, g);
 }
 
-// MARK: - fBM for distortion
+// MARK: - Turbulence Distortion (XorDev technique)
+// Layered perpendicular sine waves create organic fluid-like motion.
+// Cheaper than fBM (just sine waves, no noise function) and more organic.
+// See: https://mini.gmshaders.com/p/turbulence
 
-float fbm_distort(float2 p, float time, int octaves) {
-    float value = 0.0;
-    float amplitude = 0.5;
-    float frequency = 1.0;
-    float lacunarity = 2.0;
-    float persistence = 0.5;
+float2 turbulence_distort(float2 pos, float time, float speed) {
+    float2 result = pos;
+    float freq = 2.0;
 
-    float angle = sin(time * 0.03) * 0.5 + sin(time * 0.017) * 0.3;
-    float2x2 rot = float2x2(cos(angle), -sin(angle), sin(angle), cos(angle));
+    // Rotation matrix (~53 degrees) for perpendicular wave interference
+    float2x2 rot = float2x2(0.6, -0.8, 0.8, 0.6);
 
-    for (int i = 0; i < octaves; i++) {
-        float2 animatedP = p * frequency + float2(
-            sin(time * 0.02) * 2.0 + sin(time * 0.013) * 1.5,
-            cos(time * 0.015) * 2.0 + cos(time * 0.021) * 1.5
-        );
-        animatedP = rot * animatedP;
-        value += amplitude * snoise2d(animatedP);
-        frequency *= lacunarity;
-        amplitude *= persistence;
+    for (float i = 0.0; i < 8.0; i++) {
+        float phase = freq * (rot * result).y + speed * time + i;
+        result += rot[0] * sin(phase) / freq;
+        rot = rot * float2x2(0.6, -0.8, 0.8, 0.6);
+        freq *= 1.4;
     }
 
-    return value;
+    // Return displacement (difference from original position)
+    return result - pos;
 }
 
 // MARK: - Uniforms
@@ -189,11 +186,10 @@ fragment half4 effectsFragment(
     return sourceTexture.sample(texSampler, uv);
     #endif
 
-    // === 2. DREAMY DISTORTION (fBM) ===
-    float2 noiseCoord = uv * 3.0;  // frequency
-    float noiseX = fbm_distort(noiseCoord, uniforms.time * uniforms.distortionSpeed, 5);
-    float noiseY = fbm_distort(noiseCoord + float2(100.0, 100.0), uniforms.time * uniforms.distortionSpeed, 5);
-    float2 displacement = float2(noiseX, noiseY) * uniforms.distortionAmplitude;
+    // === 2. DREAMY DISTORTION (Turbulence) ===
+    // XorDev's layered sine wave turbulence — organic fluid motion
+    float2 displacement = turbulence_distort(uv * 3.0, uniforms.time, uniforms.distortionSpeed)
+                        * uniforms.distortionAmplitude;
     uv += displacement;
 
     // Clamp UV to valid range

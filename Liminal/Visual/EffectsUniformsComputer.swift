@@ -96,7 +96,7 @@ enum EffectsUniformsComputer {
     /// - Parameter transitionProgress: 0-1 progress through crossfade (0 = no transition)
     /// - Returns: Distortion amplitude and speed
     static func computeDistortion(transitionProgress: Float = 0) -> DistortionParams {
-        let baseAmplitude: Float = 0.012
+        let baseAmplitude: Float = 0.08
         let boostMultiplier: Float = 10.0
 
         // Boost during transitions (sine curve peaks at 50% through)
