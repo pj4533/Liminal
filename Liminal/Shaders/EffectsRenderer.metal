@@ -100,6 +100,7 @@ struct EffectsUniforms {
     float hasSaliencyMap;       // 1.0 if saliency map available, 0.0 otherwise
     float transitionProgress;   // 0-1 for GPU crossfade blending between images
     float ghostTapCount;        // number of active ghost taps (0-8), avoids branch divergence
+    float chromaticAmount;      // radial chromatic aberration strength (0 = off, 0.01 = subtle)
 };
 
 // Ghost tap data - passed in separate buffer as array of 8
@@ -195,9 +196,22 @@ fragment half4 effectsFragment(
     // Clamp UV to valid range
     uv = clamp(uv, float2(0.001), float2(0.999));
 
-    // Sample source texture (current image) and previous texture
-    half4 sourceColor = sourceTexture.sample(texSampler, uv);
-    half4 prevColor = previousTexture.sample(texSampler, uv);
+    // === CHROMATIC ABERRATION ===
+    // Sample RGB channels at slightly offset UVs for prismatic fringing.
+    // Radial: stronger at edges, zero at center.
+    float2 chromOffset = (uv - 0.5) * uniforms.chromaticAmount;
+    half4 sourceColor = half4(
+        sourceTexture.sample(texSampler, uv + chromOffset).r,
+        sourceTexture.sample(texSampler, uv).g,
+        sourceTexture.sample(texSampler, uv - chromOffset).b,
+        1.0h
+    );
+    half4 prevColor = half4(
+        previousTexture.sample(texSampler, uv + chromOffset).r,
+        previousTexture.sample(texSampler, uv).g,
+        previousTexture.sample(texSampler, uv - chromOffset).b,
+        1.0h
+    );
 
     // === GPU CROSSFADE BLENDING ===
     // Always blend - when not transitioning, previousTexture == sourceTexture (fallback)

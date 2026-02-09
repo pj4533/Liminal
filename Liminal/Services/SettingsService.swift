@@ -59,6 +59,9 @@ final class SettingsService: ObservableObject {
         didSet { defaults.set(cacheOnly, forKey: Keys.cacheOnly) }
     }
 
+    /// Generic debug toggle for testing new effects (not persisted)
+    @Published var debugEffectEnabled: Bool = true
+
     // MARK: - Init
 
     private init() {

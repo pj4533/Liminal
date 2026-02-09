@@ -55,7 +55,8 @@ enum EffectsUniformsComputer {
             saliencyInfluence: hasSaliencyMap ? 0.6 : 0,
             hasSaliencyMap: hasSaliencyMap ? 1.0 : 0.0,
             transitionProgress: transitionProgress,
-            ghostTapCount: Float(ghostTapCount)
+            ghostTapCount: Float(ghostTapCount),
+            chromaticAmount: computeChromatic(time: time, transitionProgress: transitionProgress)
         )
     }
 
@@ -90,6 +91,25 @@ enum EffectsUniformsComputer {
     struct DistortionParams {
         let amplitude: Float
         let speed: Float
+    }
+
+    // MARK: - Chromatic Aberration
+
+    /// Compute chromatic aberration amount.
+    /// Oscillates organically between low and high values, with extra boost during transitions.
+    static func computeChromatic(time: Float, transitionProgress: Float = 0) -> Float {
+        let low: Float = 0.003
+        let high: Float = 0.015
+
+        // Organic oscillation using golden ratio offset from color cycle
+        let phi: Float = 1.618034
+        let wave = (sin(time * 0.07 * phi) + sin(time * 0.03) * 0.6) / 1.6  // -1..1
+        let t = (wave + 1) / 2  // 0..1
+        let base = low + (high - low) * t
+
+        // Boost during transitions
+        let transitionBoost = sin(transitionProgress * .pi)
+        return base * (1.0 + 3.0 * transitionBoost)
     }
 
     /// Compute fBM distortion parameters.

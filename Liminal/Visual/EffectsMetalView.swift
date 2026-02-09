@@ -53,7 +53,8 @@ final class EffectsMetalView: MTKView {
         saliencyInfluence: 0.6,
         hasSaliencyMap: 0,
         transitionProgress: 0,
-        ghostTapCount: 0
+        ghostTapCount: 0,
+        chromaticAmount: 0.006
     )
 
     /// Delay setting from slider (0-1), controls ghost tap spawn frequency

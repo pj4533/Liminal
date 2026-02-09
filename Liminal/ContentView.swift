@@ -143,6 +143,12 @@ struct ContentView: View {
 
                 Spacer()
 
+                // Debug effect toggle
+                Toggle("Debug Effect", isOn: $settings.debugEffectEnabled)
+                    .toggleStyle(.switch)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal)
+
                 // Play/Stop
                 Button(audioEngine.isRunning ? "Stop" : "Play") {
                     if audioEngine.isRunning {
@@ -323,6 +329,10 @@ struct VisualDisplayView: View {
         )
         // Add time-based hue shift (macOS-specific for now)
         uniforms.hueBaseShift = Float(effectController.time * 0.03)
+        // Debug toggle controls the effect currently being tested
+        if !settings.debugEffectEnabled {
+            uniforms.chromaticAmount = 0
+        }
         return uniforms
     }
 

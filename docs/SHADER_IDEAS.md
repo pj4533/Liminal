@@ -411,7 +411,7 @@ Based on psychedelic impact, implementation difficulty, and synergy with Liminal
 | Priority | Effect | Impact | Effort | Notes |
 |----------|--------|--------|--------|-------|
 | 1 | **Turbulence** | 10/10 | Low | ~~Replaces fBM distortion, cheaper and better~~ **DONE** - Implemented in `EffectsRenderer.metal`, base amplitude 0.08 |
-| 2 | **Chromatic Aberration** | 9/10 | Very Low | 3 extra texture samples, huge visual payoff |
+| 2 | **Chromatic Aberration** | 9/10 | Very Low | ~~3 extra texture samples, huge visual payoff~~ **DONE** - Radial CA with golden-ratio oscillation (0.003-0.015), transition boost |
 | 3 | **Feedback Warping** | 10/10 | Low | Infrastructure exists, just add warp to UV lookup |
 | 4 | **Stochastic Bloom** | 8/10 | Very Low | 1 extra texture sample, instant dream quality |
 | 5 | **Combustion Overlay** | 9/10 | Medium | Turbulence + color mapping + blend mode |
