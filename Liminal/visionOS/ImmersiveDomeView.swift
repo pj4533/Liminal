@@ -335,8 +335,7 @@ struct ImmersiveDomeView: View {
                 let uniforms = EffectsUniformsComputer.compute(
                     time: effectTime,
                     transitionProgress: transitionState.isTransitioning ? transitionState.transitionProgress : 0,
-                    hasSaliencyMap: false,
-                    reverb: settings.reverb
+                    hasSaliencyMap: false
                 )
 
                 // Render frame - pass previous image for GPU crossfade when transitioning
