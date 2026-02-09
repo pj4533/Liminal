@@ -31,8 +31,8 @@ enum EffectsUniformsComputer {
         // Ken Burns: smooth continuous motion
         let kenBurns = computeKenBurns(time: time)
 
-        // Distortion with optional transition boost
-        let distortion = computeDistortion(transitionProgress: transitionProgress)
+        // Distortion with organic oscillation and optional transition boost
+        let distortion = computeDistortion(time: time, transitionProgress: transitionProgress)
 
         // Autonomous color cycling - smooth oscillator produces organic, non-repeating patterns
         let colorCycle = SmoothOscillator.value(at: time)
@@ -116,11 +116,23 @@ enum EffectsUniformsComputer {
         return base * (1.0 + 3.0 * transitionBoost)
     }
 
-    /// Compute fBM distortion parameters.
-    /// - Parameter transitionProgress: 0-1 progress through crossfade (0 = no transition)
+    /// Compute turbulence distortion parameters.
+    /// Amplitude oscillates organically over time using layered sine waves with
+    /// golden-ratio-offset frequencies for non-repeating motion.
+    /// - Parameters:
+    ///   - time: Current animation time in seconds
+    ///   - transitionProgress: 0-1 progress through crossfade (0 = no transition)
     /// - Returns: Distortion amplitude and speed
-    static func computeDistortion(transitionProgress: Float = 0) -> DistortionParams {
-        let baseAmplitude: Float = 0.08
+    static func computeDistortion(time: Float, transitionProgress: Float = 0) -> DistortionParams {
+        let low: Float = 0.02
+        let high: Float = 0.08
+
+        // Organic oscillation: layered sine waves at irrational frequency ratios
+        let phi: Float = 1.618034
+        let wave = (sin(time * 0.04 * phi) + sin(time * 0.025) * 0.7 + sin(time * 0.06 / phi) * 0.4) / 2.1  // -1..1
+        let t = (wave + 1) / 2  // 0..1
+        let baseAmplitude = low + (high - low) * t
+
         let boostMultiplier: Float = 10.0
 
         // Boost during transitions (sine curve peaks at 50% through)
