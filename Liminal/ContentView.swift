@@ -331,7 +331,7 @@ struct VisualDisplayView: View {
         uniforms.hueBaseShift = Float(effectController.time * 0.03)
         // Debug toggle controls the effect currently being tested
         if !settings.debugEffectEnabled {
-            uniforms.feedbackMix = 0
+            uniforms.bloomAmount = 0
         }
         return uniforms
     }

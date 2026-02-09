@@ -28,6 +28,8 @@ struct EffectsUniforms {
     var chromaticAmount: Float  // Radial chromatic aberration strength (0 = off, 0.01 = subtle)
     var feedbackWarpAmount: Float  // Turbulence displacement on feedback UV lookup
     var feedbackMix: Float  // How much previous frame bleeds through (0 = none, 0.3 = trails)
+    var bloomRadius: Float  // Stochastic bloom sample offset radius
+    var bloomAmount: Float  // Bloom intensity (0 = off)
 }
 
 /// Ghost tap data for shader. Must match Metal struct layout.

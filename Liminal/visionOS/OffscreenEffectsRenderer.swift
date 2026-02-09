@@ -554,7 +554,8 @@ final class OffscreenEffectsRenderer {
                 ghostTapMaxDistance: 0.25, saliencyInfluence: 0, hasSaliencyMap: 0,
                 transitionProgress: 0, ghostTapCount: 0,
                 chromaticAmount: 0,
-                feedbackWarpAmount: 0, feedbackMix: 0
+                feedbackWarpAmount: 0, feedbackMix: 0,
+                bloomRadius: 0, bloomAmount: 0
             )
             encoder.setFragmentBytes(&dummyUniforms, length: MemoryLayout<EffectsUniforms>.size, index: 0)
             encoder.setFragmentTexture(sourceTexture, index: 0)

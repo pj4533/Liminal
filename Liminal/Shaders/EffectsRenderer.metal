@@ -103,6 +103,8 @@ struct EffectsUniforms {
     float chromaticAmount;      // radial chromatic aberration strength (0 = off, 0.01 = subtle)
     float feedbackWarpAmount;   // turbulence displacement applied to feedback UV lookup
     float feedbackMix;          // how much previous frame bleeds through (0 = none, 0.3 = trails)
+    float bloomRadius;          // stochastic bloom sample offset radius
+    float bloomAmount;          // bloom intensity (0 = off)
 };
 
 // Ghost tap data - passed in separate buffer as array of 8
@@ -335,7 +337,24 @@ fragment half4 effectsFragment(
         currentColor = mix(currentColor, ghostSample.rgb, ghostAlpha * 0.15h);
     }
 
-    // === 5. FEEDBACK WARPING ===
+    // === 5. STOCHASTIC BLOOM ===
+    // Single random-offset sample weighted by brightness — dreamy glow around bright areas.
+    // Noise varies per pixel and per frame so the bloom shimmers organically.
+    if (uniforms.bloomAmount > 0.001) {
+        float2 fc = in.position.xy;
+        // Animated pseudo-noise: varies per pixel (fc) and per frame (time)
+        float2 noise = fract(sin(float2(
+            dot(fc, float2(127.1, 311.7)) + uniforms.time * 43.7,
+            dot(fc, float2(269.5, 183.3)) + uniforms.time * 71.3
+        )) * 43758.5453) * 2.0 - 1.0;
+        float2 bloomUV = clamp(uv + noise * uniforms.bloomRadius, float2(0.001), float2(0.999));
+        half3 bloomSample = sourceTexture.sample(texSampler, bloomUV).rgb;
+        half brightness = dot(bloomSample, half3(0.299h, 0.587h, 0.114h));
+        currentColor += bloomSample * brightness * half(uniforms.bloomAmount);
+        currentColor = clamp(currentColor, 0.0h, 1.0h);
+    }
+
+    // === 6. FEEDBACK WARPING ===
     // Sample previous frame output with turbulence-warped UVs.
     // Each frame compounds the warp, creating evolving fractal trails.
     if (uniforms.feedbackMix > 0.001) {

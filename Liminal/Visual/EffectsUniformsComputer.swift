@@ -58,7 +58,9 @@ enum EffectsUniformsComputer {
             ghostTapCount: Float(ghostTapCount),
             chromaticAmount: computeChromatic(time: time, transitionProgress: transitionProgress),
             feedbackWarpAmount: 0.03,
-            feedbackMix: 0.3
+            feedbackMix: 0.3,
+            bloomRadius: 0.04,
+            bloomAmount: 0.5
         )
     }
 
