@@ -56,7 +56,9 @@ enum EffectsUniformsComputer {
             hasSaliencyMap: hasSaliencyMap ? 1.0 : 0.0,
             transitionProgress: transitionProgress,
             ghostTapCount: Float(ghostTapCount),
-            chromaticAmount: computeChromatic(time: time, transitionProgress: transitionProgress)
+            chromaticAmount: computeChromatic(time: time, transitionProgress: transitionProgress),
+            feedbackWarpAmount: 0.03,
+            feedbackMix: 0.3
         )
     }
 

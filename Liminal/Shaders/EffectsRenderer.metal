@@ -101,6 +101,8 @@ struct EffectsUniforms {
     float transitionProgress;   // 0-1 for GPU crossfade blending between images
     float ghostTapCount;        // number of active ghost taps (0-8), avoids branch divergence
     float chromaticAmount;      // radial chromatic aberration strength (0 = off, 0.01 = subtle)
+    float feedbackWarpAmount;   // turbulence displacement applied to feedback UV lookup
+    float feedbackMix;          // how much previous frame bleeds through (0 = none, 0.3 = trails)
 };
 
 // Ghost tap data - passed in separate buffer as array of 8
@@ -160,6 +162,7 @@ fragment half4 effectsFragment(
     texture2d<half> sourceTexture [[texture(0)]],
     texture2d<half> saliencyTexture [[texture(2)]],
     texture2d<half> previousTexture [[texture(3)]],
+    texture2d<half> feedbackTexture [[texture(4)]],
     constant EffectsUniforms &uniforms [[buffer(0)]],
     constant GhostTap *ghostTaps [[buffer(1)]]
 ) {
@@ -330,6 +333,17 @@ fragment half4 effectsFragment(
         // Blend ghost with current color
         // Very subtle - ghosts should be background whispers, not dominant
         currentColor = mix(currentColor, ghostSample.rgb, ghostAlpha * 0.15h);
+    }
+
+    // === 5. FEEDBACK WARPING ===
+    // Sample previous frame output with turbulence-warped UVs.
+    // Each frame compounds the warp, creating evolving fractal trails.
+    if (uniforms.feedbackMix > 0.001) {
+        float2 feedbackUV = uv + turbulence_distort(uv * 2.0, uniforms.time, 0.05)
+                          * uniforms.feedbackWarpAmount;
+        feedbackUV = clamp(feedbackUV, float2(0.001), float2(0.999));
+        half3 feedbackColor = feedbackTexture.sample(texSampler, feedbackUV).rgb;
+        currentColor = mix(currentColor, feedbackColor, half(uniforms.feedbackMix));
     }
 
     return half4(currentColor, 1.0h);

@@ -31,6 +31,9 @@ final class EffectsMetalView: MTKView {
     private var saliencyTexture: MTLTexture?
     private var lastSaliencyImageHash: Int = 0
 
+    // Feedback texture for frame-to-frame recursive warping
+    private var feedbackTexture: MTLTexture?
+
     // Ghost tap manager for discrete delay echoes
     private let ghostTapManager = GhostTapManager()
 
@@ -54,7 +57,9 @@ final class EffectsMetalView: MTKView {
         hasSaliencyMap: 0,
         transitionProgress: 0,
         ghostTapCount: 0,
-        chromaticAmount: 0.006
+        chromaticAmount: 0.006,
+        feedbackWarpAmount: 0.03,
+        feedbackMix: 0.3
     )
 
     /// Delay setting from slider (0-1), controls ghost tap spawn frequency
@@ -293,6 +298,28 @@ final class EffectsMetalView: MTKView {
         }
     }
 
+    // MARK: - Feedback Texture
+
+    /// Ensure feedback texture matches the drawable size
+    private func ensureFeedbackTexture(width: Int, height: Int) {
+        if let existing = feedbackTexture, existing.width == width, existing.height == height {
+            return
+        }
+        guard let device = self.device else { return }
+        let desc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: self.colorPixelFormat,
+            width: width,
+            height: height,
+            mipmapped: false
+        )
+        desc.usage = [.shaderRead, .shaderWrite]
+        desc.storageMode = .private
+        feedbackTexture = device.makeTexture(descriptor: desc)
+        if feedbackTexture != nil {
+            LMLog.visual.info("🔁 Feedback texture created: \(width)x\(height)")
+        }
+    }
+
     // MARK: - Rendering
 
     override func draw(_ dirtyRect: NSRect) {
@@ -354,7 +381,10 @@ final class EffectsMetalView: MTKView {
             return
         }
 
-        // Single render pass with ghost taps
+        // Ensure feedback texture matches drawable size
+        ensureFeedbackTexture(width: drawable.texture.width, height: drawable.texture.height)
+
+        // Single render pass with ghost taps + feedback
         let renderPassDescriptor = MTLRenderPassDescriptor()
         renderPassDescriptor.colorAttachments[0].texture = drawable.texture
         renderPassDescriptor.colorAttachments[0].loadAction = .clear
@@ -369,10 +399,28 @@ final class EffectsMetalView: MTKView {
             }
             // Previous texture for GPU crossfade (falls back to source if no transition)
             encoder.setFragmentTexture(previousTexture ?? sourceTexture, index: 3)
+            // Feedback texture for recursive warping (previous frame's output)
+            if let fbTex = feedbackTexture {
+                encoder.setFragmentTexture(fbTex, index: 4)
+            }
             encoder.setFragmentBuffer(uniformBuffer, offset: 0, index: 0)
             encoder.setFragmentBuffer(ghostTapBuffer, offset: 0, index: 1)
             encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
             encoder.endEncoding()
+        }
+
+        // Blit rendered result to feedback texture for next frame
+        if let fbTex = feedbackTexture {
+            if let blitEncoder = commandBuffer.makeBlitCommandEncoder() {
+                let size = MTLSize(width: min(drawable.texture.width, fbTex.width),
+                                   height: min(drawable.texture.height, fbTex.height),
+                                   depth: 1)
+                blitEncoder.copy(from: drawable.texture, sourceSlice: 0, sourceLevel: 0,
+                                 sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0), sourceSize: size,
+                                 to: fbTex, destinationSlice: 0, destinationLevel: 0,
+                                 destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
+                blitEncoder.endEncoding()
+            }
         }
 
         commandBuffer.present(drawable)
