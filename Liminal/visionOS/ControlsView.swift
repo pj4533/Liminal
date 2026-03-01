@@ -18,6 +18,7 @@ struct ControlsView: View {
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
 
     @State private var isImmersed = false
+    @State private var isDioramaActive = false
     @State private var showingSettings = false
 
     var body: some View {
@@ -64,6 +65,11 @@ struct ControlsView: View {
                             await dismissImmersiveSpace()
                             isImmersed = false
                         } else {
+                            // Dismiss diorama if active
+                            if isDioramaActive {
+                                await dismissImmersiveSpace()
+                                isDioramaActive = false
+                            }
                             let result = await openImmersiveSpace(id: "liminalDome")
                             if case .opened = result {
                                 isImmersed = true
@@ -74,6 +80,32 @@ struct ControlsView: View {
                     Label(
                         isImmersed ? "Exit Dome" : "Enter Dome",
                         systemImage: isImmersed ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right"
+                    )
+                    .font(.title3)
+                }
+                .buttonStyle(.bordered)
+
+                Button(action: {
+                    Task {
+                        if isDioramaActive {
+                            await dismissImmersiveSpace()
+                            isDioramaActive = false
+                        } else {
+                            // Dismiss dome if active
+                            if isImmersed {
+                                await dismissImmersiveSpace()
+                                isImmersed = false
+                            }
+                            let result = await openImmersiveSpace(id: "liminalDiorama")
+                            if case .opened = result {
+                                isDioramaActive = true
+                            }
+                        }
+                    }
+                }) {
+                    Label(
+                        isDioramaActive ? "Exit Diorama" : "Spatial Diorama",
+                        systemImage: isDioramaActive ? "cube.transparent" : "cube.transparent.fill"
                     )
                     .font(.title3)
                 }

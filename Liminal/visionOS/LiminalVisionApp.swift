@@ -28,6 +28,11 @@ struct LiminalVisionApp: App {
             ImmersiveDomeView(visualEngine: visualEngine, settings: settings)
         }
         .immersionStyle(selection: $immersionStyle, in: .progressive, .full)
+
+        ImmersiveSpace(id: "liminalDiorama") {
+            SpatialDioramaView(imageBuffer: visualEngine.imageBuffer)
+        }
+        .immersionStyle(selection: $immersionStyle, in: .progressive)
     }
 }
 

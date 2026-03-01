@@ -20,8 +20,8 @@ final class OffscreenEffectsRenderer {
 
     // MARK: - Metal Objects
 
-    private let device: MTLDevice
-    private let commandQueue: MTLCommandQueue
+    let device: MTLDevice
+    let commandQueue: MTLCommandQueue
     private let pipelineState: MTLRenderPipelineState
     private let passthroughPipelineState: MTLRenderPipelineState  // DEBUG: Simple passthrough
     private let samplerState: MTLSamplerState
@@ -32,6 +32,7 @@ final class OffscreenEffectsRenderer {
     private var previousTexture: MTLTexture?  // For GPU crossfade blending
     private var outputTexture: MTLTexture?
     private var saliencyTexture: MTLTexture?
+    private(set) var depthTexture: MTLTexture?  // ML depth map (r8Unorm)
 
     private let outputSize: Int = 2048  // Output texture resolution
 
@@ -555,7 +556,8 @@ final class OffscreenEffectsRenderer {
                 transitionProgress: 0, ghostTapCount: 0,
                 chromaticAmount: 0,
                 feedbackWarpAmount: 0, feedbackMix: 0,
-                bloomRadius: 0, bloomAmount: 0
+                bloomRadius: 0, bloomAmount: 0,
+                stereoOffset: 0
             )
             encoder.setFragmentBytes(&dummyUniforms, length: MemoryLayout<EffectsUniforms>.size, index: 0)
             encoder.setFragmentTexture(sourceTexture, index: 0)
@@ -688,6 +690,10 @@ final class OffscreenEffectsRenderer {
         encoder.setFragmentTexture(saliencyTexture, index: 2)
         // Previous texture for GPU crossfade (uses sourceTexture as fallback if no previous)
         encoder.setFragmentTexture(previousTexture ?? sourceTexture, index: 3)
+        // Depth texture for volumetric atmosphere (index 5)
+        if let depthTex = depthTexture {
+            encoder.setFragmentTexture(depthTex, index: 5)
+        }
         encoder.setFragmentSamplerState(samplerState, index: 0)
 
         // Draw fullscreen quad (shader generates vertices from vertexID)
@@ -761,6 +767,150 @@ final class OffscreenEffectsRenderer {
             LMLog.visual.info("🎬 GPU render \(self.renderCount) complete - presented to DrawableQueue")
         }
 
+        return true
+    }
+
+    // MARK: - Stereo Rendering
+
+    /// Render effects to two separate drawable queues for stereo per-eye output.
+    /// Each eye gets a slightly different UV offset based on depth for parallax.
+    /// - Parameters:
+    ///   - sourceImage: The current source image
+    ///   - previousImage: Optional previous image for GPU crossfade
+    ///   - uniforms: Effect parameters
+    ///   - delay: Delay slider value
+    ///   - leftQueue: DrawableQueue for left eye
+    ///   - rightQueue: DrawableQueue for right eye
+    ///   - stereoOffset: Per-eye UV offset magnitude (oscillates for depth breathing)
+    /// - Returns: True if both eyes rendered
+    func renderStereoAndPresent(
+        sourceImage: CGImage,
+        previousImage: CGImage? = nil,
+        uniforms: EffectsUniforms,
+        delay: Float,
+        leftQueue: TextureResource.DrawableQueue,
+        rightQueue: TextureResource.DrawableQueue,
+        stereoOffset: Float = 0.003
+    ) -> Bool {
+        renderCount += 1
+        perfFrameCount += 1
+
+        // Update textures (shared between both eyes)
+        let currentImageID = ObjectIdentifier(sourceImage)
+        if currentImageID != lastImageIdentifier {
+            updateSourceTexture(from: sourceImage)
+            lastImageIdentifier = currentImageID
+        }
+        if let previousImage = previousImage {
+            _ = updatePreviousTexture(from: previousImage)
+        } else {
+            previousTexture = nil
+            lastPreviousImageIdentifier = nil
+        }
+
+        // Update ghost taps
+        let ghostTapResult = ghostTapManager.updateWithCount(currentTime: uniforms.time, delay: delay)
+        if let ghostTapBuffer = ghostTapBuffer {
+            ghostTapBuffer.contents().copyMemory(
+                from: ghostTapResult.data,
+                byteCount: GhostTapManager.maxTaps * MemoryLayout<GhostTapData>.stride
+            )
+        }
+
+        guard let sourceTexture = sourceTexture,
+              let outputTexture = outputTexture,
+              let ghostTapBuffer = ghostTapBuffer else {
+            return false
+        }
+
+        // Render both eyes
+        let leftOk = renderEyeToDrawable(
+            queue: leftQueue,
+            sourceTexture: sourceTexture,
+            outputTexture: outputTexture,
+            ghostTapBuffer: ghostTapBuffer,
+            uniforms: uniforms,
+            ghostTapCount: ghostTapResult.activeCount,
+            eyeOffset: -stereoOffset  // Left eye shifts left
+        )
+
+        let rightOk = renderEyeToDrawable(
+            queue: rightQueue,
+            sourceTexture: sourceTexture,
+            outputTexture: outputTexture,
+            ghostTapBuffer: ghostTapBuffer,
+            uniforms: uniforms,
+            ghostTapCount: ghostTapResult.activeCount,
+            eyeOffset: stereoOffset  // Right eye shifts right
+        )
+
+        return leftOk && rightOk
+    }
+
+    /// Render a single eye pass to a drawable queue.
+    private func renderEyeToDrawable(
+        queue: TextureResource.DrawableQueue,
+        sourceTexture: MTLTexture,
+        outputTexture: MTLTexture,
+        ghostTapBuffer: MTLBuffer,
+        uniforms: EffectsUniforms,
+        ghostTapCount: Int,
+        eyeOffset: Float
+    ) -> Bool {
+        guard let drawable = try? queue.nextDrawable(),
+              let commandBuffer = commandQueue.makeCommandBuffer() else {
+            return false
+        }
+
+        // Render to output texture
+        let renderPassDescriptor = MTLRenderPassDescriptor()
+        renderPassDescriptor.colorAttachments[0].texture = outputTexture
+        renderPassDescriptor.colorAttachments[0].loadAction = .clear
+        renderPassDescriptor.colorAttachments[0].storeAction = .store
+        renderPassDescriptor.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
+
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else {
+            return false
+        }
+
+        encoder.setRenderPipelineState(pipelineState)
+
+        // Stereo parallax is applied in-shader using depth + this signed eye offset.
+        var mutableUniforms = uniforms
+        mutableUniforms.ghostTapCount = Float(ghostTapCount)
+        mutableUniforms.stereoOffset = depthTexture != nil ? eyeOffset : 0
+        encoder.setFragmentBytes(&mutableUniforms, length: MemoryLayout<EffectsUniforms>.size, index: 0)
+
+        encoder.setFragmentBuffer(ghostTapBuffer, offset: 0, index: 1)
+        encoder.setFragmentTexture(sourceTexture, index: 0)
+        encoder.setFragmentTexture(saliencyTexture, index: 2)
+        encoder.setFragmentTexture(previousTexture ?? sourceTexture, index: 3)
+        if let depthTex = depthTexture {
+            encoder.setFragmentTexture(depthTex, index: 5)
+        }
+        encoder.setFragmentSamplerState(samplerState, index: 0)
+
+        encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+        encoder.endEncoding()
+
+        // Copy to drawable
+        if let blitEncoder = commandBuffer.makeBlitCommandEncoder() {
+            blitEncoder.copy(
+                from: outputTexture,
+                sourceSlice: 0,
+                sourceLevel: 0,
+                sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+                sourceSize: MTLSize(width: outputSize, height: outputSize, depth: 1),
+                to: drawable.texture,
+                destinationSlice: 0,
+                destinationLevel: 0,
+                destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0)
+            )
+            blitEncoder.endEncoding()
+        }
+
+        commandBuffer.commit()
+        drawable.present()
         return true
     }
 
@@ -938,6 +1088,59 @@ final class OffscreenEffectsRenderer {
             bitmapInfo: CGImageAlphaInfo.none.rawValue
         ) else { return }
 
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+
+        texture.replace(
+            region: MTLRegionMake2D(0, 0, width, height),
+            mipmapLevel: 0,
+            withBytes: pixelData,
+            bytesPerRow: bytesPerRow
+        )
+    }
+
+    /// Update the depth texture from a depth map CGImage.
+    /// The depth map is grayscale (0=far, 1=near).
+    func updateDepthTexture(from cgImage: CGImage) {
+        let width = cgImage.width
+        let height = cgImage.height
+
+        // Create or recreate texture if needed
+        if depthTexture == nil ||
+           depthTexture?.width != width ||
+           depthTexture?.height != height {
+
+            let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+                pixelFormat: .r8Unorm,
+                width: width,
+                height: height,
+                mipmapped: false
+            )
+            descriptor.usage = .shaderRead
+            descriptor.storageMode = .shared
+
+            depthTexture = device.makeTexture(descriptor: descriptor)
+            LMLog.visual.info("🗺️ Created depth texture \(width)x\(height)")
+        }
+
+        guard let texture = depthTexture else { return }
+
+        // Convert to single-channel grayscale
+        let bytesPerRow = width
+        var pixelData = [UInt8](repeating: 0, count: width * height)
+
+        guard let context = CGContext(
+            data: &pixelData,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: bytesPerRow,
+            space: CGColorSpaceCreateDeviceGray(),
+            bitmapInfo: CGImageAlphaInfo.none.rawValue
+        ) else { return }
+
+        // Match source texture orientation so depth samples align with color samples.
+        context.translateBy(x: 0, y: CGFloat(height))
+        context.scaleBy(x: 1.0, y: -1.0)
         context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
 
         texture.replace(

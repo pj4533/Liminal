@@ -60,7 +60,8 @@ enum EffectsUniformsComputer {
             feedbackWarpAmount: 0.03,
             feedbackMix: 0.3,
             bloomRadius: 0.04,
-            bloomAmount: 0.5
+            bloomAmount: 0.5,
+            stereoOffset: 0
         )
     }
 

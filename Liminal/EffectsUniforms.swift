@@ -30,6 +30,7 @@ struct EffectsUniforms {
     var feedbackMix: Float  // How much previous frame bleeds through (0 = none, 0.3 = trails)
     var bloomRadius: Float  // Stochastic bloom sample offset radius
     var bloomAmount: Float  // Bloom intensity (0 = off)
+    var stereoOffset: Float  // Per-eye UV shift, scaled by depth (0 in mono mode)
 }
 
 /// Ghost tap data for shader. Must match Metal struct layout.

@@ -47,6 +47,12 @@ final class AtomicImageBuffer: @unchecked Sendable {
     /// The next CGImage (for preloading morphs). Protected by lock.
     nonisolated(unsafe) private var _next: CGImage?
 
+    /// The current depth map CGImage (grayscale, 0=far, 1=near). Protected by lock.
+    nonisolated(unsafe) private var _currentDepth: CGImage?
+
+    /// Generation counter for depth maps - independent from image generation.
+    nonisolated(unsafe) private var _depthGeneration: UInt64 = 0
+
     /// Pending queue for visionOS - generated images wait here until advance() is called.
     /// This ensures visionOS respects the same timing as macOS.
     nonisolated(unsafe) private var _pendingQueue: [CGImage] = []
@@ -157,8 +163,36 @@ final class AtomicImageBuffer: @unchecked Sendable {
         lock.withLock {
             _current = nil
             _next = nil
+            _currentDepth = nil
             _pendingQueue.removeAll()
             _generation &+= 1
+            _depthGeneration &+= 1
+        }
+    }
+
+    // MARK: - Depth Map Storage
+
+    /// Store a depth map CGImage. Called from background depth inference.
+    func storeDepth(_ depth: CGImage) {
+        let gen = lock.withLock {
+            self._currentDepth = depth
+            self._depthGeneration &+= 1
+            return self._depthGeneration
+        }
+        LMLog.visual.info("🗺️ AtomicBuffer STORE depth: \(depth.width)x\(depth.height), depthGen=\(gen)")
+    }
+
+    /// Load depth map and its generation counter atomically.
+    func loadDepthWithGeneration() -> (depth: CGImage?, generation: UInt64) {
+        lock.withLock {
+            (_currentDepth, _depthGeneration)
+        }
+    }
+
+    /// Load the current depth map.
+    func loadDepth() -> CGImage? {
+        lock.withLock {
+            _currentDepth
         }
     }
 

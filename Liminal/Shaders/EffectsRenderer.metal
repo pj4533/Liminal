@@ -105,6 +105,7 @@ struct EffectsUniforms {
     float feedbackMix;          // how much previous frame bleeds through (0 = none, 0.3 = trails)
     float bloomRadius;          // stochastic bloom sample offset radius
     float bloomAmount;          // bloom intensity (0 = off)
+    float stereoOffset;         // signed per-eye UV shift, scaled by depth
 };
 
 // Ghost tap data - passed in separate buffer as array of 8
@@ -165,6 +166,7 @@ fragment half4 effectsFragment(
     texture2d<half> saliencyTexture [[texture(2)]],
     texture2d<half> previousTexture [[texture(3)]],
     texture2d<half> feedbackTexture [[texture(4)]],
+    texture2d<half> depthTexture [[texture(5)]],
     constant EffectsUniforms &uniforms [[buffer(0)]],
     constant GhostTap *ghostTaps [[buffer(1)]]
 ) {
@@ -200,6 +202,16 @@ fragment half4 effectsFragment(
 
     // Clamp UV to valid range
     uv = clamp(uv, float2(0.001), float2(0.999));
+
+    // === STEREO DEPTH PARALLAX ===
+    // Per-eye shift scaled by depth so near subjects separate more than distant background.
+    if (abs(uniforms.stereoOffset) > 0.000001) {
+        constexpr sampler depthSampler(address::clamp_to_edge, filter::linear);
+        float depthVal = float(depthTexture.sample(depthSampler, uv).r);  // 0=far, 1=near
+        float boostedDepth = pow(clamp(depthVal, 0.0, 1.0), 0.75);
+        float parallax = uniforms.stereoOffset * boostedDepth;
+        uv.x = clamp(uv.x + parallax, 0.001, 0.999);
+    }
 
     // === CHROMATIC ABERRATION ===
     // Sample RGB channels at slightly offset UVs for prismatic fringing.
