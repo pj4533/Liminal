@@ -16,6 +16,7 @@ final class VoiceLayer {
         var attackTime: Float = 2.0          // seconds
         var releaseTime: Float = 8.0         // seconds
         var amplitude: Float = 0.15
+        var waveform: Table = Table(.sine)
     }
 
     // MARK: - Audio Nodes
@@ -45,12 +46,9 @@ final class VoiceLayer {
     // MARK: - Setup
 
     private func setupOscillators() {
-        // Create sine wavetable
-        let sineTable = Table(.sine)
-
         // Create multiple oscillators with slight detuning
         for i in 0..<config.oscillatorCount {
-            let osc = Oscillator(waveform: sineTable)
+            let osc = Oscillator(waveform: config.waveform)
 
             // Spread detune: -detune to +detune
             let detuneRange = config.detuneAmount
@@ -97,6 +95,10 @@ final class VoiceLayer {
         LMLog.audio.info("🛑 Voice stopping (release phase)")
     }
 
+    // Note: Use AUParameter.value directly to avoid AudioKit's legacy
+    // AudioUnitSetParameter C API path which triggers kAudioUnitErr_InvalidParameter
+    // on AUv3 nodes. The AUv3 path works correctly.
+
     func setFrequency(_ freq: Float) {
         baseFrequency = freq
 
@@ -104,12 +106,33 @@ final class VoiceLayer {
         for (i, osc) in oscillators.enumerated() {
             let normalizedPosition = Float(i) / Float(max(1, oscillators.count - 1))
             let detuneFactor = 1.0 + (normalizedPosition * 2 - 1) * config.detuneAmount
-            osc.frequency = AUValue(freq * detuneFactor)
+            osc.$frequency.parameter?.value = AUValue(freq * detuneFactor)
         }
     }
 
     func setAmplitude(_ amp: Float) {
         let perOscAmp = amp / Float(oscillators.count)
-        oscillators.forEach { $0.amplitude = AUValue(perOscAmp) }
+        oscillators.forEach { $0.$amplitude.parameter?.value = AUValue(perOscAmp) }
+    }
+
+    /// Split oscillators: half play root, half play an interval frequency.
+    /// Pass nil to return all oscillators to unison at the current base frequency.
+    func setIntervalFrequency(_ intervalFreq: Float?) {
+        guard oscillators.count >= 2 else { return }
+
+        let halfCount = oscillators.count / 2
+
+        for (i, osc) in oscillators.enumerated() {
+            let normalizedPosition = Float(i) / Float(max(1, oscillators.count - 1))
+            let detuneFactor = 1.0 + (normalizedPosition * 2 - 1) * config.detuneAmount
+
+            if let intervalFreq, i >= halfCount {
+                // Second half plays interval
+                osc.$frequency.parameter?.value = AUValue(intervalFreq * detuneFactor)
+            } else {
+                // First half (or all when nil) plays root
+                osc.$frequency.parameter?.value = AUValue(baseFrequency * detuneFactor)
+            }
+        }
     }
 }

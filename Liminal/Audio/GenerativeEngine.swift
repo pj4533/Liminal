@@ -1,4 +1,5 @@
 import AudioKit
+import AudioKitEX
 import SoundpipeAudioKit
 import Foundation
 import Combine
@@ -25,6 +26,7 @@ final class GenerativeEngine: ObservableObject {
         let noteChangeInterval: ClosedRange<Double>
         let noteDuration: ClosedRange<Double>?
         let silenceGap: ClosedRange<Double>?
+        let waveform: Table
     }
 
     // MARK: - Audio Components
@@ -39,6 +41,8 @@ final class GenerativeEngine: ObservableObject {
 
     private var scale: Scale
     private var noteTimers: [Timer] = []
+    private var drift: ParameterDrift?
+    private var driftTimer: Timer?
 
     // Mutable shimmer gap - controlled by notes slider
     private var shimmerGapRange: ClosedRange<Double> = 2.0...5.0
@@ -115,7 +119,8 @@ final class GenerativeEngine: ObservableObject {
                 detuneAmount: config.detuneAmount,
                 attackTime: config.attackTime,
                 releaseTime: config.releaseTime,
-                amplitude: config.amplitude
+                amplitude: config.amplitude,
+                waveform: config.waveform
             )
             let voice = VoiceLayer(config: voiceConfig)
             voices.append(voice)
@@ -225,6 +230,7 @@ final class GenerativeEngine: ObservableObject {
             }
 
             isRunning = true
+            startDrift()
             LMLog.audio.info("🎵 Engine started")
         } catch {
             LMLog.audio.error("❌ Failed to start: \(error.localizedDescription)")
@@ -232,6 +238,7 @@ final class GenerativeEngine: ObservableObject {
     }
 
     func stop() {
+        stopDrift()
         noteTimers.forEach { $0.invalidate() }
         noteTimers.removeAll()
         voices.forEach { $0.stop() }
@@ -257,6 +264,9 @@ final class GenerativeEngine: ObservableObject {
         noteTimers.append(timer)
     }
 
+    /// Consonant intervals in semitones for harmonic splitting
+    private static let consonantIntervals: [Int] = [7, 12, 3, 4]  // P5, octave, m3, M3
+
     private func changeNote(voiceIndex: Int, config: VoiceConfig) {
         guard isRunning, voiceIndex < voices.count, voiceIndex < chains.count else { return }
 
@@ -267,14 +277,25 @@ final class GenerativeEngine: ObservableObject {
         guard !availableNotes.isEmpty else { return }
 
         let noteIndex = degree % availableNotes.count
-        let newNote = availableNotes[noteIndex]
-        let frequency = Scale.midiToFrequency(newNote)
+        var newNote = availableNotes[noteIndex]
 
+        // Octave displacement: ~10% chance for bass (0) or mid (1) voices
+        if voiceIndex <= 1 && Double.random(in: 0...1) < 0.10 {
+            let octaveShifted = newNote + 12
+            // Only shift if it stays within a reasonable range
+            if octaveShifted <= config.highMIDI + 12 {
+                newNote = octaveShifted
+                LMLog.audio.debug("🎵 Octave jump: \(config.name) MIDI \(newNote - 12) → \(newNote)")
+            }
+        }
+
+        let frequency = Scale.midiToFrequency(newNote)
         let voice = voices[voiceIndex]
 
         if let noteDurationRange = config.noteDuration {
             // Staccato voice (shimmer)
             voice.setFrequency(frequency)
+            voice.setIntervalFrequency(nil)
             voice.start()
 
             let noteDuration = Double.random(in: noteDurationRange)
@@ -304,8 +325,78 @@ final class GenerativeEngine: ObservableObject {
         } else {
             // Sustained voice
             voice.setFrequency(frequency)
+
+            // Harmonic intervals: ~25% chance for mid voice (index 1)
+            if voiceIndex == 1 && Double.random(in: 0...1) < 0.25 {
+                let interval = Self.consonantIntervals.randomElement() ?? 7
+                let intervalNote = newNote + interval
+                let intervalFreq = Scale.midiToFrequency(intervalNote)
+                voice.setIntervalFrequency(intervalFreq)
+                LMLog.audio.debug("🎶 Interval: Mid MIDI \(newNote) + \(interval) semitones")
+            } else {
+                voice.setIntervalFrequency(nil)
+            }
+
             scheduleNoteChanges(voiceIndex: voiceIndex, config: config)
         }
+    }
+
+    // MARK: - Parameter Drift
+
+    private var driftStartTime: Date = Date()
+
+    private func startDrift() {
+        drift = ParameterDrift()
+        driftStartTime = Date()
+
+        // Fire at 10Hz — smooth enough for parameter changes, light on CPU
+        driftTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.applyDrift()
+            }
+        }
+        LMLog.audio.debug("🌊 Parameter drift started")
+    }
+
+    private func stopDrift() {
+        driftTimer?.invalidate()
+        driftTimer = nil
+        drift = nil
+    }
+
+    private func applyDrift() {
+        guard let drift else { return }
+
+        let t = Float(Date().timeIntervalSince(driftStartTime))
+
+        // Effects parameter drift — modulate ±15% around slider center
+        let reverbCenter = 0.3 + reverb * 0.6
+        let driftedReverb = ParameterDrift.apply(center: reverbCenter, drift: drift.reverbMix.value(at: t), range: 0.15)
+        effects?.setReverbMix(driftedReverb)
+
+        let delayFbCenter = 0.3 + delay * 0.5
+        let driftedDelayFb = ParameterDrift.apply(center: delayFbCenter, drift: drift.delayFeedback.value(at: t), range: 0.15)
+        effects?.setDelayFeedback(driftedDelayFb)
+
+        let delayMixCenter = 0.2 + delay * 0.5
+        let driftedDelayMix = ParameterDrift.apply(center: delayMixCenter, drift: drift.delayMix.value(at: t), range: 0.15)
+        effects?.setDelayMix(driftedDelayMix)
+
+        // Filter cutoff sweep: 3000-12000Hz mapped from drift 0..1
+        let filterDrift = (drift.filterCutoff.value(at: t) + 1.0) / 2.0  // normalize to 0..1
+        let cutoff = 3000.0 + filterDrift * 9000.0
+        effects?.setFilterCutoff(cutoff)
+
+        // Voice amplitude breathing
+        guard voices.count >= 3 else { return }
+        let bassAmp = ParameterDrift.applyAmplitude(center: 0.25, drift: drift.bassAmplitude.value(at: t), low: 0.18, high: 0.28)
+        voices[0].setAmplitude(bassAmp)
+
+        let midAmp = ParameterDrift.applyAmplitude(center: 0.20, drift: drift.midAmplitude.value(at: t), low: 0.14, high: 0.23)
+        voices[1].setAmplitude(midAmp)
+
+        let shimmerAmp = ParameterDrift.applyAmplitude(center: 0.08, drift: drift.shimmerAmplitude.value(at: t), low: 0.05, high: 0.10)
+        voices[2].setAmplitude(shimmerAmp)
     }
 
     // MARK: - Helpers
@@ -315,15 +406,15 @@ final class GenerativeEngine: ObservableObject {
             VoiceConfig(name: "Bass", oscillatorCount: 2, detuneAmount: 0.008,
                        attackTime: 4.0, releaseTime: 8.0, amplitude: 0.25,
                        lowMIDI: 36, highMIDI: 48, noteChangeInterval: 8.0...15.0,
-                       noteDuration: nil, silenceGap: nil),
+                       noteDuration: nil, silenceGap: nil, waveform: Table(.sine)),
             VoiceConfig(name: "Mid", oscillatorCount: 4, detuneAmount: 0.015,
                        attackTime: 2.5, releaseTime: 6.0, amplitude: 0.2,
                        lowMIDI: 48, highMIDI: 72, noteChangeInterval: 4.0...8.0,
-                       noteDuration: nil, silenceGap: nil),
+                       noteDuration: nil, silenceGap: nil, waveform: Table(.triangle)),
             VoiceConfig(name: "Shimmer", oscillatorCount: 1, detuneAmount: 0.0,
                        attackTime: 0.01, releaseTime: 0.3, amplitude: 0.08,
                        lowMIDI: 72, highMIDI: 84, noteChangeInterval: 3.0...6.0,
-                       noteDuration: 0.05...0.15, silenceGap: nil)
+                       noteDuration: 0.05...0.15, silenceGap: nil, waveform: Table(.sine))
         ]
     }
 }
