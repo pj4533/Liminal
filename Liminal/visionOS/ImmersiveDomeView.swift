@@ -128,6 +128,7 @@ struct ImmersiveDomeView: View {
 
                 let entity = ModelEntity(mesh: placeholderMesh, materials: [material])
                 entity.position = SIMD3<Float>(0, 1.5, 0)
+                entity.isEnabled = false  // Hidden until first frame is ready to render
 
                 content.add(entity)
                 panelEntity = entity
@@ -264,10 +265,12 @@ struct ImmersiveDomeView: View {
             transitionState.lastGeneration = visualEngine.imageBuffer.generation()
             LMLog.visual.info("🎬 Initial image set directly from CGImage (gen \(transitionState.lastGeneration))")
 
-            loadingState = "Generating initial depth..."
+            loadingState = "Preparing 3D depth..."
             await generateAndApplyDepth(for: cgImage, logLabel: "initial")
         }
 
+        // Everything is ready — show the dome and start rendering
+        panelEntity?.isEnabled = true
         loadingState = "Rendering!"
         LMLog.visual.info("🎨 ✅ Starting render loop (detached from MainActor)...")
         isSetupComplete = true
