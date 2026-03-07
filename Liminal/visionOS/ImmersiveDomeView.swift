@@ -407,7 +407,7 @@ struct ImmersiveDomeView: View {
                    let rightQueue = stereoBuilder.rightDrawableQueue {
                     // Stereo: render to left/right drawable queues with depth-based parallax
                     let stereoOsc = SmoothOscillator.value(at: effectTime)
-                    let stereoOffset = 0.005 + 0.010 * stereoOsc  // Moderate stereo separation
+                    let stereoOffset = 0.003 + 0.007 * stereoOsc  // Subtle stereo separation
                     _ = renderer.renderStereoAndPresent(
                         sourceImage: cgImage,
                         previousImage: previousImage,
