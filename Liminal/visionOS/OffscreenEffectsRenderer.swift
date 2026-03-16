@@ -557,7 +557,10 @@ final class OffscreenEffectsRenderer {
                 chromaticAmount: 0,
                 feedbackWarpAmount: 0, feedbackMix: 0,
                 bloomRadius: 0, bloomAmount: 0,
-                stereoOffset: 0
+                stereoOffset: 0,
+                logSphereAmount: 0,
+                fractalNoiseAmount: 0,
+                fractalHueAmount: 0
             )
             encoder.setFragmentBytes(&dummyUniforms, length: MemoryLayout<EffectsUniforms>.size, index: 0)
             encoder.setFragmentTexture(sourceTexture, index: 0)

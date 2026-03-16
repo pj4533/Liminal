@@ -31,6 +31,9 @@ struct EffectsUniforms {
     var bloomRadius: Float  // Stochastic bloom sample offset radius
     var bloomAmount: Float  // Bloom intensity (0 = off)
     var stereoOffset: Float  // Per-eye UV shift, scaled by depth (0 in mono mode)
+    var logSphereAmount: Float  // Log-spherical fractal distortion intensity
+    var fractalNoiseAmount: Float  // Sinusoidal interference noise distortion intensity
+    var fractalHueAmount: Float  // Fractal-driven hue cycling intensity
 }
 
 /// Ghost tap data for shader. Must match Metal struct layout.

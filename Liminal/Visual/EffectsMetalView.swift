@@ -62,7 +62,10 @@ final class EffectsMetalView: MTKView {
         feedbackMix: 0.3,
         bloomRadius: 0.04,
         bloomAmount: 0.5,
-        stereoOffset: 0
+        stereoOffset: 0,
+        logSphereAmount: 0,
+        fractalNoiseAmount: 0,
+        fractalHueAmount: 0
     )
 
     /// Delay setting from slider (0-1), controls ghost tap spawn frequency

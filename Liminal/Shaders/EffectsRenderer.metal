@@ -81,6 +81,80 @@ float2 turbulence_distort(float2 pos, float time, float speed) {
     return result - pos;
 }
 
+// MARK: - HSV Conversion (for Nishitsuji fractal hue cycling)
+
+float3 hsv2rgb(float h, float s, float v) {
+    float3 k = float3(1.0, 2.0/3.0, 1.0/3.0);
+    float3 p = abs(fract(float3(h) + k) * 6.0 - 3.0);
+    return v * mix(float3(1.0), clamp(p - 1.0, 0.0, 1.0), s);
+}
+
+// MARK: - Nishitsuji Sinusoidal Interference Noise
+// Crystalline noise using swizzled sin/cos dot products — distinct from XorDev turbulence.
+// See: docs/NISHITSUJI_SHADERS.md
+
+float nishitsujiNoise(float3 pos, int octaves) {
+    float e = 0.0;
+    float s = 1.0;
+    for (int j = 0; j < octaves; j++) {
+        e += abs(dot(sin(pos.yzx * s), cos(pos.xzz * s))) / s * 0.6;
+        s *= 2.0;
+    }
+    return e;
+}
+
+// Flowing/organic variant (from the viral fractal tweets)
+float nishitsujiNoiseFlowing(float3 pos, int octaves) {
+    float e = 0.0;
+    float s = 1.0;
+    for (int j = 0; j < octaves; j++) {
+        float3 sinP = sin(pos.zxy * s) - 0.5;
+        float3 cosP = 1.0 - cos(pos.yxz * s);
+        e += sin(dot(sinP, cosP)) / s;
+        s *= 2.0;
+    }
+    return e;
+}
+
+// MARK: - Log-Spherical Transform (Nishitsuji's signature viral technique)
+// UV distortion through logarithmic-spherical coordinates — infinite-depth kaleidoscopic warping.
+// 9-octave sinusoidal noise in log-polar space.
+
+float3 logSphericalTransform(float2 uv, float time, float intensity) {
+    float2 centered = uv - 0.5;
+    float R = length(centered);
+
+    // Logarithmic-spherical mapping
+    float logR = log2(max(R, 0.001));
+    float angle = atan2(centered.y, centered.x);
+
+    // Animate through fractal space
+    float3 p = float3(
+        logR - time * 0.3,
+        exp(1.0 - centered.y / max(R, 0.001)),
+        angle + cos(time * 0.5) * 0.2
+    );
+
+    // 9-octave sinusoidal noise (Nishitsuji's custom fBM)
+    float e = p.y - 1.0;
+    float s = 1.0;
+    for (int j = 0; j < 9; j++) {
+        float3 sinP = sin(p.zxy * s) - 0.5;
+        float3 cosP = 1.0 - cos(p.yxz * s);
+        e += sin(dot(sinP, cosP)) / s;
+        s *= 2.0;
+    }
+
+    // UV displacement along radial direction
+    float displacement = e * intensity;
+    float2 offset = float2(
+        cos(angle) * displacement,
+        sin(angle) * displacement
+    );
+
+    return float3(offset, e);
+}
+
 // MARK: - Uniforms
 
 struct EffectsUniforms {
@@ -106,6 +180,9 @@ struct EffectsUniforms {
     float bloomRadius;          // stochastic bloom sample offset radius
     float bloomAmount;          // bloom intensity (0 = off)
     float stereoOffset;         // signed per-eye UV shift, scaled by depth
+    float logSphereAmount;      // log-spherical fractal distortion intensity
+    float fractalNoiseAmount;   // sinusoidal interference noise distortion intensity
+    float fractalHueAmount;     // fractal-driven hue cycling intensity
 };
 
 // Ghost tap data - passed in separate buffer as array of 8
@@ -199,6 +276,25 @@ fragment half4 effectsFragment(
     float2 displacement = turbulence_distort(uv * 3.0, uniforms.time, uniforms.distortionSpeed)
                         * uniforms.distortionAmplitude;
     uv += displacement;
+
+    // === 2.5 LOG-SPHERICAL DISTORTION (Nishitsuji signature technique) ===
+    // Kaleidoscopic warping through log-polar fractal space
+    if (uniforms.logSphereAmount > 0.001) {
+        float3 fractalResult = logSphericalTransform(
+            uv, uniforms.time, uniforms.logSphereAmount
+        );
+        uv += fractalResult.xy;
+    }
+
+    // === 2.7 SINUSOIDAL INTERFERENCE NOISE (Nishitsuji crystalline distortion) ===
+    // Refracting, prismatic texture — complements XorDev's smoky turbulence
+    if (uniforms.fractalNoiseAmount > 0.001) {
+        float3 noisePos = float3(uv * 6.0, uniforms.time * 0.15);
+        float noiseX = nishitsujiNoiseFlowing(noisePos, 8);
+        float noiseY = nishitsujiNoiseFlowing(noisePos + float3(17.0, 31.0, 7.0), 8);
+        float amount = uniforms.fractalNoiseAmount;
+        uv += float2(noiseX, noiseY) * amount;
+    }
 
     // Clamp UV to valid range
     uv = clamp(uv, float2(0.001), float2(0.999));
@@ -319,6 +415,43 @@ fragment half4 effectsFragment(
 
     // Mix with original based on blend amount
     half3 currentColor = mix(color.rgb, saturated, half(uniforms.hueBlendAmount));
+
+    // === 6.5 FRACTAL HUE CYCLING (Nishitsuji organic color shifts) ===
+    // Spatially-varying hue shifts driven by sinusoidal interference noise.
+    // Depth-map aware: foreground shifts more than background.
+    if (uniforms.fractalHueAmount > 0.001) {
+        // Sample depth for foreground/background modulation
+        float depth = float(depthTexture.sample(texSampler, uv).r);
+
+        // Fractal noise for hue modulation
+        float3 noisePos = float3(uv * 5.0, uniforms.time * 0.1);
+        float fractalValue = nishitsujiNoiseFlowing(noisePos, 6);
+
+        // Convert current color to HSV (full float precision)
+        float3 rgb = float3(currentColor);
+        float cMax = max(rgb.r, max(rgb.g, rgb.b));
+        float cMin = min(rgb.r, min(rgb.g, rgb.b));
+        float delta = cMax - cMin;
+
+        float hue = 0.0;
+        if (delta > 0.001) {
+            if (cMax == rgb.r) hue = fmod((rgb.g - rgb.b) / delta, 6.0) / 6.0;
+            else if (cMax == rgb.g) hue = ((rgb.b - rgb.r) / delta + 2.0) / 6.0;
+            else hue = ((rgb.r - rgb.g) / delta + 4.0) / 6.0;
+        }
+        float sat = (cMax > 0.001) ? delta / cMax : 0.0;
+        float val = cMax;
+
+        // Shift hue by fractal pattern, modulated by depth (more shift in foreground)
+        float hueShift = fractalValue * uniforms.fractalHueAmount;
+        hueShift *= mix(0.3, 1.0, depth);
+        hue = fract(hue + hueShift);
+
+        // Boost saturation slightly at fractal high-points
+        sat = clamp(sat * (1.0 + abs(fractalValue) * 0.3), 0.0, 1.0);
+
+        currentColor = half3(hsv2rgb(hue, sat, val));
+    }
 
     // === 4. GHOST TAPS - Discrete Delay Echoes ===
     // Each ghost tap spawns at the image, animates outward, and fades.

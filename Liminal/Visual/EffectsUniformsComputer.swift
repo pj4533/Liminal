@@ -61,7 +61,10 @@ enum EffectsUniformsComputer {
             feedbackMix: 0.3,
             bloomRadius: 0.04,
             bloomAmount: 0.5,
-            stereoOffset: 0
+            stereoOffset: 0,
+            logSphereAmount: computeLogSphere(time: time, transitionProgress: transitionProgress),
+            fractalNoiseAmount: computeFractalNoise(time: time, transitionProgress: transitionProgress),
+            fractalHueAmount: computeFractalHue(time: time)
         )
     }
 
@@ -115,6 +118,59 @@ enum EffectsUniformsComputer {
         // Boost during transitions
         let transitionBoost = sin(transitionProgress * .pi)
         return base * (1.0 + 3.0 * transitionBoost)
+    }
+
+    // MARK: - Log-Spherical Distortion
+
+    /// Compute log-spherical fractal distortion amount.
+    /// Oscillates organically with transition boost for kaleidoscopic warping.
+    static func computeLogSphere(time: Float, transitionProgress: Float = 0) -> Float {
+        let low: Float = 0.01
+        let high: Float = 0.05
+
+        // Golden ratio offset decorrelated from existing oscillators
+        let phi: Float = 1.618034
+        let wave = (sin(time * 0.035 * phi * phi) + sin(time * 0.022 / phi) * 0.7) / 1.7  // -1..1
+        let t = (wave + 1) / 2  // 0..1
+        let base = low + (high - low) * t
+
+        // 4x boost during transitions
+        let transitionBoost = sin(transitionProgress * .pi)
+        return base * (1.0 + 3.0 * transitionBoost)
+    }
+
+    // MARK: - Sinusoidal Interference Noise
+
+    /// Compute sinusoidal interference noise distortion amount.
+    /// Crystalline distortion that complements XorDev's smoky turbulence.
+    static func computeFractalNoise(time: Float, transitionProgress: Float = 0) -> Float {
+        let low: Float = 0.005
+        let high: Float = 0.03
+
+        // Golden ratio offset decorrelated from log-sphere and existing oscillators
+        let phi: Float = 1.618034
+        let wave = (sin(time * 0.028 * phi) + sin(time * 0.045 / (phi * phi)) * 0.6) / 1.6  // -1..1
+        let t = (wave + 1) / 2  // 0..1
+        let base = low + (high - low) * t
+
+        // 5x boost during transitions
+        let transitionBoost = sin(transitionProgress * .pi)
+        return base * (1.0 + 4.0 * transitionBoost)
+    }
+
+    // MARK: - Fractal Hue Cycling
+
+    /// Compute fractal hue cycling amount.
+    /// No transition boost — color surges during crossfade feel jarring.
+    static func computeFractalHue(time: Float) -> Float {
+        let low: Float = 0.05
+        let high: Float = 0.25
+
+        // Golden ratio offset decorrelated from all other oscillators
+        let phi: Float = 1.618034
+        let wave = (sin(time * 0.032 / phi) + sin(time * 0.05 * phi * phi) * 0.5) / 1.5  // -1..1
+        let t = (wave + 1) / 2  // 0..1
+        return low + (high - low) * t
     }
 
     /// Compute turbulence distortion parameters.
