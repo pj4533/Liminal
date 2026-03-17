@@ -125,8 +125,8 @@ enum EffectsUniformsComputer {
     /// Compute log-spherical fractal distortion amount.
     /// Oscillates organically with transition boost for kaleidoscopic warping.
     static func computeLogSphere(time: Float, transitionProgress: Float = 0) -> Float {
-        let low: Float = 0.01
-        let high: Float = 0.05
+        let low: Float = 0.003
+        let high: Float = 0.02
 
         // Golden ratio offset decorrelated from existing oscillators
         let phi: Float = 1.618034
@@ -134,9 +134,9 @@ enum EffectsUniformsComputer {
         let t = (wave + 1) / 2  // 0..1
         let base = low + (high - low) * t
 
-        // 4x boost during transitions
+        // 3x boost during transitions
         let transitionBoost = sin(transitionProgress * .pi)
-        return base * (1.0 + 3.0 * transitionBoost)
+        return base * (1.0 + 2.0 * transitionBoost)
     }
 
     // MARK: - Sinusoidal Interference Noise
