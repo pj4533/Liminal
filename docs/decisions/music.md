@@ -455,14 +455,14 @@ Made while building PASS 1 (conductor, harmony, scenes, mix bus, drone/pad/lead/
   - Seed 202: bypass peak -2.36 -> -3.58 dBFS (limiter idle, true peak identical), centroid 1411 -> 1291 Hz, above-2 kHz share 0.147 -> 0.110. 0 gating failures (`fix3-202` with its bypass twin, full table).
   - Seed 101: peak -3.75 -> -4.77, centroid 1120 -> 1019. 0 failures.
   - Seed 55 (D87 near miss at 1427 Hz): centroid 1372, peak -3.89. 0 failures.
-  - Seeds 11, 22, 33, 404: 0 failures; peaks -4.0, -5.0, -4.6, -3.7.
+  - Seeds 11, 22, 33, 404: 0 failures; peaks -4.0, -5.0, -4.6, -3.7. Seeds 11, 33, 404 (and 303, 505 below) were measured in the `r4` batch, before the last small step (drip ratio chance 0.5 -> 0.35 and the reverb / delay top cutoffs); 202, 101, 55, 22 and 77 were re-run on the final code.
   - 3-minute sanity (`fix3-3min`, seed 1): peak -4.26, RMS -26.65, centroid 912; only `scene_changes_10m` fails, which needs 10 minutes (as in D87).
   - RMS mean moved by 0.2 dB or less (202: -25.9 -> -26.1; lowest seen, seed 55: -26.6, gate -27). Onsets within 3 per 5 minutes of before.
   - CPU: no new nodes. 19-23x realtime in the r5 batch; 15-18x in the final batch while the machine's load average was 9 (other workstreams), same code.
 - Tried and reverted: a steeper level tilt for high grains (-2.7 dB at C7). It moved seed 55's centroid by 5 Hz and pushed dark seed 77 under the 1.5 % above-2 kHz floor and under 150 onsets.
 - Still open (seed-dependent, not caused by this change, not in the D88 failure list):
-  - Self-similarity mean: seed 77 0.659 and seed 303 0.656 against the 0.65 gate (77 was 0.660 in D87). Across 11 seeds the mean is about 0.61.
+  - Self-similarity mean: seed 77 0.659 and seed 303 0.656 against the 0.65 gate (77 was 0.660 in D87). Across the 10 seeds the mean is about 0.61.
   - Sub-120 Hz stereo correlation: seed 505 0.863 (gate 0.9). The first two minutes are drift scenes with the pad, whose detuned pair is panned +-0.6 with its floor at C3 (D74). A proper fix is a mono low band on the master (two more filter nodes) or narrowing the low pad voices; narrowing the whole pad would push L/R correlation over its 0.8 ceiling (0.74-0.79 now).
   - Seed 55's centroid (1372) and seeds 22 and 77's onset counts (154, 151) are still close to their gates. Seed 55's brightness comes from two bloom scenes and a constellation scene with no pad or air bed, not from one bright source.
-  - With about 37 gates and several with seed-dependent tails, a new random seed has a real chance of missing one gate narrowly. 8 of the 11 seeds tried here pass everything.
+  - With about 37 gates and several with seed-dependent tails, a new random seed has a real chance of missing one gate narrowly. 7 of the 10 seeds tried here at 10 minutes pass everything (202, 101, 11, 22, 55, 33, 404; not 77, 303, 505).
 - Alternatives: a soft clipper before the limiter (hides the gain staging the bypass gate exists to check); lowering the brightness bias weight back to 0.3 (undoes D86's section contrast); a low-pass on the drips strip (one more node, and it would dull dark scenes too).
