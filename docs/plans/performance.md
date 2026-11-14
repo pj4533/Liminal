@@ -168,3 +168,141 @@ Items 2, 5 and 6 edit the same shader and stack. Items 3, 4, 7 and 8 are indepen
 Compare candidate and reference **in the same session, interleaved** (A B A B A B), never against
 a number from an earlier session. For shader items use the item 1 benchmark as the GPU number and
 its PNG diff as the parity check; use `perf-run.sh` for errors, the 2048² log line and pacing.
+
+---
+
+## Round 2b analysis (2026-11-14): per-pixel plan from the deterministic bench
+
+Round 2 above was judged on the simulator and dropped every ALU item. This section re-plans the
+per-pixel work with `scripts/shader-bench.sh` (interleaved A/B, Apple M4, MRT both eyes at 2048²,
+reference about 6.5-7.0 ms/frame). Nothing in the app changed in this step; all variants were
+throw-away shader files in the scratchpad.
+
+### Where the frame goes (stage knock-outs, one interleaved run each, 4 x 300 frames)
+Each row removes one stage from the current shader and reads the B/A ratio. It is an upper bound on
+what any optimisation of that stage can save. A/A floor is about ±1.2%.
+
+| stage removed | B/A | share of frame |
+|---|---|---|
+| sinusoidal noise (2 fields x 5 octaves, shared by both eyes) | 0.807 | 19.3% |
+| fractal hue (4 octaves + float HSV + depth sample, per eye) | 0.858 | 14.2% |
+| ... of which the noise octaves (noise replaced by a constant) | 0.915 | 8.5% |
+| feedback (turbulence + sample + restoreChroma, per eye) | 0.873 | 12.7% |
+| ... of which the 8-iteration turbulence | 0.925 | 7.5% |
+| log-spherical (6 octaves + log2/atan2/exp, shared) | 0.876 | 12.4% |
+| bloom (hash + random-offset sample + screen, per eye) | 0.917 | 8.3% |
+| ... of which the random offset (sample at uv instead) | 0.987 | 1.3% |
+| ghost taps (2 active taps, per eye) | 0.920 | 8.0% |
+| hue waves (9 float sin, per eye) | 0.925 | 7.5% |
+| turbulence (8 iterations, shared) | 0.952 | 4.9% |
+| vibrance stage (gamutFit etc., per eye) | 0.958 | 4.2% |
+| three previousTexture samples | 0.997, 0.981 | 0-2% (inside noise) |
+| chromatic aberration as one tap instead of three | 1.005 | 0% |
+| all three distortion stages together | 0.620 | 38% |
+
+Reading it:
+- **Trig in the three Nishitsuji octave loops is 46% of the frame** (noise 19.3 + log-spherical 12.4 +
+  fractal hue 14.2). That is where the plan goes first.
+- **Texture sampling is cheap on this GPU.** Dropping three previous-texture samples or two of the
+  three chromatic taps is not measurable, and bloom's cache-hostile random offset costs 1.3%.
+  So skip-previous-samples and mip sampling, both dropped in round 1, were correctly low value on a
+  Mac GPU. Vision Pro may differ on texture cost; it cannot be shown here.
+- **Nothing can be compiled out.** Every stage amount is above its 0.001 threshold at all times in
+  `EffectsUniformsComputer`, and `hasSaliencyMap` is the only branch that is always false. Function
+  constants would strip one never-taken uniform branch.
+
+### Prototype already measured: double-angle octave recurrence
+All three loops evaluate `sin(p * s)` and `cos(p * s)` for s = 1, 2, 4, ... The components are only
+permuted (`sin(pos.zxy*s)`, `cos(pos.yxz*s)`), so one `sin(p)` and one `cos(p)` give every octave by
+`sin 2a = 2 sin a cos a`, `cos 2a = 1 - 2 sin² a`. The second noise field (`pos + (17,31,7)`) comes
+from the first by angle addition with compile-time constants.
+
+```metal
+#define DBL(S,C) { half3 _t = 2.0h * S * C; C = 1.0h - 2.0h * S * S; S = _t; }
+static inline half flowOctaves(half3 s1, half3 c1, int octaves) {
+    half e = 0.0h; half w = 1.0h;
+    for (int j = 0; j < octaves; j++) {
+        e += sin(dot(s1.zxy - 0.5h, 1.0h - c1.yxz)) * w;
+        DBL(s1, c1)
+        w *= 0.5h;
+    }
+    return e;
+}
+// sinusoidal noise:
+half3 ns = sin(noisePos), nc = cos(noisePos);
+const half3 ks = half3(-0.961397h, -0.404038h, 0.656987h);   // sin(17, 31, 7)
+const half3 kc = half3(-0.275163h,  0.914742h, 0.753902h);   // cos(17, 31, 7)
+float noiseX = float(flowOctaves(ns, nc, 5));
+float noiseY = float(flowOctaves(ns * kc + nc * ks, nc * kc - ns * ks, 5));
+// log-spherical: e += flowOctaves(sin(p), cos(p), 6);  offset = centered / R * displacement
+// fractal hue:   fractalValue = float(flowOctaves(sin(noisePos), cos(noisePos), 4));
+```
+
+| variant | trig per pixel pair | B/A run 1 | B/A run 2 |
+|---|---|---|---|
+| noise only | 70 -> 16 | 0.874 | 0.899 |
+| log-spherical only (+ `centered / R`) | 47 -> 15 | 0.929 | |
+| fractal hue only (per eye) | 2 x 28 -> 2 x 10 | 0.953 | |
+| **all three** | about 173 -> 51 | **0.784** | **0.749** |
+
+So the three together take the frame from about 6.5 ms to about 4.8-5.1 ms (-22 to -25%).
+
+Parity (worst file over 10 PNGs, both eyes, incl. the transition scenario):
+
+| pair | worst PSNR | worst max diff |
+|---|---|---|
+| current vs all-three prototype | 32.4 dB (mean abs 1.76 / 255) | 177 |
+| current vs "truth" (same direct trig, all in float) | 32.2 dB | 169 |
+| truth vs all-three prototype | 38.2 dB | 121 |
+
+The current shader is itself 32 dB from its own float evaluation: at the top octaves the half
+arguments reach 250-590, where a half step is 0.125-0.5 rad, so those octaves are quantised today.
+The recurrence removes that quantisation and lands closer to the float truth than the current shader
+does. It cannot pass the 50 dB exact-math rule, so it is a look change that needs eyes. Side-by-side
+560 px crops at 100% (t=113 steady and the mid-transition frame) show the same structure, grain and
+colour; the differences are thin lines along distortion contours.
+
+## Round 2b ranked plan
+
+Ranked by measured or bounded saving on the bench. Items 1-3 edit separate functions and stack
+(measured together). Verdict rule as logged: interleaved A/B, more than 2% in two runs.
+
+| # | id | item | expected (of frame) | parity |
+|---|---|---|---|---|
+| 1 | noise-double-angle | Sinusoidal noise: one sin/cos of `noisePos`, octaves by double-angle, second field by angle addition | -10 to -13% (measured 0.874, 0.899) | visual-equivalent |
+| 2 | logsphere-double-angle | Log-spherical: same recurrence over 6 octaves; radial direction as `centered / R` instead of cos/sin(atan2) | -7% (measured 0.929) | visual-equivalent |
+| 3 | fhue-double-angle-half-hsv | Fractal hue: same recurrence over 4 octaves per eye; then the float, branchy HSV round trip in half and branch-free | -5% measured (0.953) for the noise; up to -3% more from the remaining 5.7% | visual-equivalent (noise), near-exact (HSV) |
+| 4 | mrt-share-eye-independent | Compute once per pixel instead of once per eye: feedback-warp turbulence (at the shared uv), bloom hash, the three vertical hue waves, ghost offsets, crossfade easing | -4 to -6% (bounds: feedback turbulence 7.5%, hue waves 7.5%, bloom 8.3%) | exact except the feedback warp (visual-equivalent) |
+| 5 | per-eye-alu-half | Remaining per-eye float math: six x-dependent hue waves in half with the time phase wrapped in float; `pow(d, 0.75)` as two sqrt; turbulence rotation table as constants; one max/min shared by `restoreChroma`, `gamutFit` and vibrance | -2 to -4% | near-exact |
+| 6 | bloom-ghost-mip | Mipmapped source; bloom samples a coarse level, ghost taps one level down | 0 to -1.5% on M4 (bound 1.3% for bloom); possibly more on device | visual-equivalent |
+| 7 | specialise-and-skip-retest | Function constant for the saliency branch, skip previous-texture samples when `transitionProgress == 0` | 0 to -2% (bound measured 0.997, 0.981) | exact |
+
+Stacked expectation for 1-5: about -30 to -35% of the current frame on the bench.
+
+### Notes per item
+1. **noise-double-angle**: replaces `nishitsujiNoiseFlowing` calls in `distortedUV` with the snippet
+   above. Keep half; float was not needed (38 dB from truth is recurrence rounding in half; try
+   float `DBL` if the PNG check finds banding, it costs little). Shared by both eyes, so the
+   macOS/mono path gets it too.
+2. **logsphere-double-angle**: `p` stays as built today. Guard `centered / R` for R = 0
+   (`atan2(0,0)` gives angle 0, so use (1, 0)). `atan2` stays, it feeds `p.z`.
+3. **fhue-double-angle-half-hsv**: two commits so each can be judged: recurrence first, then HSV.
+   Do not reuse the parallax depth sample (it is taken before the parallax shift; a different texel).
+4. **mrt-share-eye-independent**: only `effectsFragmentStereo` changes; pass the shared values into
+   `shadeEye` (a small struct), and have `effectsFragment` compute them the old way so macOS and the
+   mono fallback stay bit-identical. The feedback turbulence moves from the per-eye uv to the shared
+   pre-parallax uv: the eyes' uv.x differ by at most 0.01, which changes the feedback lookup by about
+   1 px, compounded through the 0.3 feedback mix. A/B it on its own before merging with the exact parts.
+5. **per-eye-alu-half**: each sub-change separately through `--compare`; keep those above 50 dB.
+6. **bloom-ghost-mip**: needs mipmaps in the app upload path and in the bench (`generateMipmaps`
+   after upload, sampler with mip filter). Low on the Mac; listed because the round 1 note asked for a
+   device re-test and because coarser bloom taps may also look better.
+7. **specialise-and-skip-retest**: the round 1 items, now with a bench bound. Run one confirming A/B
+   pair and log the result. Ship only if it clears 2%.
+
+### Not planned
+- **Noise from a LUT texture**: after items 1-3 the loops are about 4 trig + 1 `sin` per octave; a
+  texture fetch per octave would not beat that and would change the pattern.
+- **Hoisting uniform-only trig to the CPU**: with the recurrence the time-only component costs one
+  sin and one cos per loop. Not worth a uniform layout change (Swift and Metal structs must match).
+- **Low-res pre-passes, effects below display rate, render size below 2048²**: as before.

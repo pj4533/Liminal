@@ -578,3 +578,42 @@ Measured (visionOS sim, medians of 3 x 30s runs) vs previous best (MRT stereo, 2
 - **Caveat**: these are Mac (M4) GPU numbers. They rank shader changes by ALU and texture cost on an
   Apple tile GPU, but they are not Vision Pro frame times.
 - **App runtime**: unchanged (tooling, docs and fixtures only); visionOS and macOS builds both succeed.
+
+---
+
+## 2026-11-14: Round 2b plan: stage cost attribution on the bench, double-angle prototype
+
+Planning step only. No app code or shader changed; variants were scratch files run through
+`scripts/shader-bench.sh --shader ref.metal --shader-b variant.metal --trials 4 --frames 300`.
+Full tables and the ranked plan are in `docs/plans/performance.md` ("Round 2b").
+
+- **What was measured**: 15 knock-out variants (one stage removed each) to bound what each stage can
+  give back, then 4 prototypes of one idea.
+- **Stage shares of the MRT frame** (1 - B/A): sinusoidal noise 19.3%, fractal hue 14.2% (noise part
+  8.5%), feedback 12.7% (turbulence part 7.5%), log-spherical 12.4%, bloom 8.3% (random offset part
+  1.3%), ghost taps 8.0%, hue waves 7.5%, turbulence 4.9%, vibrance 4.2%, previous-texture samples
+  0.3% and 1.9% (two runs, inside noise), single-tap chromatic 0%. All distortion stages: 38%.
+- **Decision 1: lead with trig in the octave loops, not with texture samples.** The three Nishitsuji
+  loops are 46% of the frame; removing 3 or 4 texture samples is not measurable on this GPU.
+- **Decision 2: the round 1 drops of skip-previous-samples, mip sampling and function-constant
+  specialisation are confirmed as low value on a Mac GPU** (bounds 0-2%, 1.3%, and nothing to strip
+  since every amount stays above its threshold). They stay in the plan as the last two items, for a
+  confirming A/B and a device note, not as expected wins.
+- **Decision 3: angle-addition noise, dropped in round 1 as "no gain", is the largest win** once
+  extended to a double-angle recurrence across octaves. Prototype B/A: noise 0.874 and 0.899,
+  log-spherical 0.929, fractal hue 0.953, all three 0.784 and 0.749 (about 6.5 -> 4.8-5.1 ms).
+- **Parity of the prototype**: worst PSNR 32.4 dB against the current shader (mean abs 1.76 / 255).
+  The current shader is 32.2 dB from an all-float version of itself, because its half arguments
+  reach 250-590 at the top octaves (half step 0.125-0.5 rad). The prototype is 38.2 dB from that
+  float version. So this is a look change by the 50 dB rule; it removes quantisation noise rather
+  than adding error. 100% crops at t=113 and mid-transition look the same by eye (my judgement; the
+  implementing step must repeat the PNG check).
+- **Alternatives considered**: float recurrence (not needed so far, kept as fallback if banding
+  shows); CPU/uniform hoist of time-only trig (2 trig per loop after the recurrence, not worth a
+  uniform layout change); LUT-texture noise (changes the pattern, no cheaper than the recurrence);
+  evaluating the fractal-hue noise once for both eyes (would pin the hue pattern at zero disparity
+  while the image has parallax; rejected as a stereo look change); reusing the parallax depth sample
+  for fractal hue (different texel, rejected).
+- **Limits**: single runs for most knock-outs (floor ±1.2%); two runs for the all-three prototype,
+  the noise prototype and the previous-sample knock-out. Mac M4 numbers; the texture-vs-ALU balance
+  on Vision Pro is unmeasured.
