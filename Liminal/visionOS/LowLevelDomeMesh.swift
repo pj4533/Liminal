@@ -2,17 +2,18 @@
 //  LowLevelDomeMesh.swift
 //  Liminal
 //
-//  GPU-driven dome mesh using LowLevelMesh for breathing displacement.
-//  Replaces CPU-side MeshResource.generate()/replace() with a Metal compute shader.
+//  Dome mesh using LowLevelMesh for breathing displacement.
+//  Breathing is computed on the CPU each frame and written straight into the
+//  LowLevelMesh vertex buffer (no compute pass / command buffer).
 //
 
 #if os(visionOS)
 
 import RealityKit
-import Metal
+import Metal  // vertex/index format enums used by LowLevelMesh descriptors
 import OSLog
 
-/// GPU-driven dome mesh wrapping LowLevelMesh for compute-shader breathing displacement.
+/// Dome mesh wrapping LowLevelMesh with CPU-computed breathing displacement.
 @MainActor
 final class LowLevelDomeMesh {
 
@@ -24,12 +25,15 @@ final class LowLevelDomeMesh {
     let horizontalArc: Float  // degrees
     let verticalArc: Float    // degrees
 
-    // MARK: - Metal Objects
+    // MARK: - Base Geometry (allocated once)
 
-    private let device: MTLDevice
-    private let commandQueue: MTLCommandQueue
-    private let computePipeline: MTLComputePipelineState
-    private let baseVertexBuffer: MTLBuffer  // Undeformed dome vertices
+    private let vertexCount: Int
+    /// Undeformed vertices: position(3) + normal(3) + uv(2) floats per vertex.
+    private let baseVertices: [Float]
+    /// Per-vertex grid fractions and distance from grid centre (precomputed).
+    private let hFracs: [Float]
+    private let vFracs: [Float]
+    private let centerDists: [Float]
 
     // MARK: - Mesh
 
@@ -41,30 +45,15 @@ final class LowLevelDomeMesh {
     /// Stride: float3 position (12) + float3 normal (12) + float2 uv (8) = 32 bytes
     static let vertexStride = 32
 
-    // MARK: - Breathing Parameters (matches Metal struct)
-
-    struct BreathingParams {
-        var time: Float
-        var amplitude: Float
-        var speed: Float
-        var vertexCount: UInt32
-        var horizontalSegments: UInt32
-        var verticalSegments: UInt32
-    }
-
     // MARK: - Init
 
     init?(
-        device: MTLDevice,
-        commandQueue: MTLCommandQueue,
         horizontalSegments: Int = 48,
         verticalSegments: Int = 36,
         panelRadius: Float = 2.0,
         horizontalArc: Float = 110.0,
         verticalArc: Float = 75.0
     ) {
-        self.device = device
-        self.commandQueue = commandQueue
         self.horizontalSegments = horizontalSegments
         self.verticalSegments = verticalSegments
         self.panelRadius = panelRadius
@@ -72,16 +61,8 @@ final class LowLevelDomeMesh {
         self.verticalArc = verticalArc
 
         let vertexCount = (horizontalSegments + 1) * (verticalSegments + 1)
+        self.vertexCount = vertexCount
         let indexCount = horizontalSegments * verticalSegments * 6
-
-        // Load compute pipeline
-        guard let library = device.makeDefaultLibrary(),
-              let function = library.makeFunction(name: "breathingDisplacement"),
-              let pipeline = try? device.makeComputePipelineState(function: function) else {
-            LMLog.visual.error("❌ LowLevelDomeMesh: Failed to create compute pipeline")
-            return nil
-        }
-        self.computePipeline = pipeline
 
         // Create LowLevelMesh descriptor
         let attributes: [LowLevelMesh.Attribute] = [
@@ -116,6 +97,10 @@ final class LowLevelDomeMesh {
         // Calculate vertices
         var vertexData = [Float]()
         vertexData.reserveCapacity(vertexCount * 8)  // 8 floats per vertex
+        var hFracData = [Float](), vFracData = [Float](), centerDistData = [Float]()
+        hFracData.reserveCapacity(vertexCount)
+        vFracData.reserveCapacity(vertexCount)
+        centerDistData.reserveCapacity(vertexCount)
 
         for v in 0...verticalSegments {
             let vFrac = Float(v) / Float(verticalSegments)
@@ -130,6 +115,11 @@ final class LowLevelDomeMesh {
                 let z = -panelRadius * cos(hAngle)
 
                 let normal = simd_normalize(SIMD3<Float>(-x, 0, -z))
+
+                hFracData.append(hFrac)
+                vFracData.append(vFrac)
+                let dh = hFrac - 0.5, dv = vFrac - 0.5
+                centerDistData.append((dh * dh + dv * dv).squareRoot())
 
                 // position (float3)
                 vertexData.append(x)
@@ -153,17 +143,10 @@ final class LowLevelDomeMesh {
             }
         }
 
-        // Create base vertex buffer (GPU-readable copy of undeformed positions)
-        let vertexBufferSize = vertexCount * Self.vertexStride
-        guard let baseBuffer = device.makeBuffer(
-            bytes: vertexData,
-            length: vertexBufferSize,
-            options: .storageModeShared
-        ) else {
-            LMLog.visual.error("❌ LowLevelDomeMesh: Failed to create base vertex buffer")
-            return nil
-        }
-        self.baseVertexBuffer = baseBuffer
+        self.baseVertices = vertexData
+        self.hFracs = hFracData
+        self.vFracs = vFracData
+        self.centerDists = centerDistData
 
         // Generate indices
         var indices = [UInt32]()
@@ -218,42 +201,51 @@ final class LowLevelDomeMesh {
         LMLog.visual.info("✅ LowLevelDomeMesh: \(vertexCount) vertices, \(indexCount / 3) triangles, stride=\(Self.vertexStride)")
     }
 
-    // MARK: - Breathing Update (GPU Compute)
+    // MARK: - Breathing Update (CPU)
 
-    /// Dispatch compute shader to update breathing displacement.
+    /// Displace every vertex along its normal on the CPU and write the full vertex buffer.
+    /// Same maths and constants as the former `breathingDisplacement` compute kernel.
+    /// ~1.8k vertices x 4 sines: tens of microseconds, no command buffer or GPU dispatch.
     func updateBreathing(time: Float, amplitude: Float = 0.06, speed: Float = 0.4) {
-        let vertexCount = (horizontalSegments + 1) * (verticalSegments + 1)
+        let breathTime = time * speed
+        let t1 = breathTime * 1.0
+        let t2 = breathTime * 0.7
+        let t3 = breathTime * 0.5
+        let t4 = breathTime * 0.8
+        let count = vertexCount
 
-        guard let commandBuffer = commandQueue.makeCommandBuffer(),
-              let encoder = commandBuffer.makeComputeCommandEncoder() else {
-            return
+        lowLevelMesh.withUnsafeMutableBytes(bufferIndex: 0) { rawBuffer in
+            guard rawBuffer.count >= count * Self.vertexStride else { return }
+            let dst = rawBuffer.bindMemory(to: Float.self)
+            baseVertices.withUnsafeBufferPointer { base in
+                hFracs.withUnsafeBufferPointer { hF in
+                vFracs.withUnsafeBufferPointer { vF in
+                centerDists.withUnsafeBufferPointer { cD in
+                    for i in 0..<count {
+                        let h = hF[i]
+                        let v = vF[i]
+                        let wave1 = sin(h * 6.0 + t1) * 0.4
+                        let wave2 = sin(v * 5.0 + t2) * 0.3
+                        let wave3 = sin((h + v) * 4.0 + t3) * 0.2
+                        let wave4 = sin(cD[i] * 8.0 - t4) * 0.1
+                        let d = (wave1 + wave2 + wave3 + wave4) * amplitude
+
+                        let o = i * 8
+                        let nx = base[o + 3], ny = base[o + 4], nz = base[o + 5]
+                        dst[o + 0] = base[o + 0] + nx * d
+                        dst[o + 1] = base[o + 1] + ny * d
+                        dst[o + 2] = base[o + 2] + nz * d
+                        dst[o + 3] = nx
+                        dst[o + 4] = ny
+                        dst[o + 5] = nz
+                        dst[o + 6] = base[o + 6]
+                        dst[o + 7] = base[o + 7]
+                    }
+                }
+                }
+                }
+            }
         }
-
-        let vertexBuffer = lowLevelMesh.replace(bufferIndex: 0, using: commandBuffer)
-
-        encoder.setComputePipelineState(computePipeline)
-        encoder.setBuffer(vertexBuffer, offset: 0, index: 0)
-        encoder.setBuffer(baseVertexBuffer, offset: 0, index: 1)
-
-        var params = BreathingParams(
-            time: time,
-            amplitude: amplitude,
-            speed: speed,
-            vertexCount: UInt32(vertexCount),
-            horizontalSegments: UInt32(horizontalSegments),
-            verticalSegments: UInt32(verticalSegments)
-        )
-        encoder.setBytes(&params, length: MemoryLayout<BreathingParams>.size, index: 2)
-
-        let threadgroupSize = min(computePipeline.maxTotalThreadsPerThreadgroup, 256)
-        let threadgroups = (vertexCount + threadgroupSize - 1) / threadgroupSize
-        encoder.dispatchThreadgroups(
-            MTLSize(width: threadgroups, height: 1, depth: 1),
-            threadsPerThreadgroup: MTLSize(width: threadgroupSize, height: 1, depth: 1)
-        )
-
-        encoder.endEncoding()
-        commandBuffer.commit()
     }
 }
 

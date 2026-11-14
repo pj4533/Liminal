@@ -89,7 +89,7 @@ final class StereoMaterialBuilder {
             pixelFormat: .bgra8Unorm_srgb,
             width: size,
             height: size,
-            usage: [.renderTarget, .shaderRead, .shaderWrite],
+            usage: [.renderTarget, .shaderRead],  // no .shaderWrite: allows lossless compression
             mipmapsMode: .none
         )
 

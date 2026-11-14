@@ -23,6 +23,9 @@ final class OffscreenEffectsRenderer {
     let device: MTLDevice
     let commandQueue: MTLCommandQueue
     private let pipelineState: MTLRenderPipelineState
+    /// Both eyes in one MRT pass (effectsFragmentStereo): attachment 0 = left, 1 = right.
+    private let stereoPipelineState: MTLRenderPipelineState
+    private var loggedStereoFallback = false
     private let passthroughPipelineState: MTLRenderPipelineState  // DEBUG: Simple passthrough
     private let samplerState: MTLSamplerState
 
@@ -30,7 +33,9 @@ final class OffscreenEffectsRenderer {
 
     private var sourceTexture: MTLTexture?
     private var previousTexture: MTLTexture?  // For GPU crossfade blending
-    private var outputTexture: MTLTexture?
+    // No intermediate output texture: each pass renders straight into its 2048² drawable.
+    private var loggedDrawableSize = false
+    private var loggedDrawableSizeMismatch = false
     private var saliencyTexture: MTLTexture?
     private(set) var depthTexture: MTLTexture?  // ML depth map (r8Unorm)
 
@@ -70,6 +75,10 @@ final class OffscreenEffectsRenderer {
     private var perfFrameCount: Int = 0
     private var lastPerfLogTime: Date = Date()
 
+    /// Per-pass GPU timing (MTLCommandBuffer gpuStart/EndTime). Shared with the dome mesh
+    /// compute pass; drained by the render loop's PERF log.
+    let gpuStats = GPUTimingStats()
+
     // MARK: - Triple Buffering
     // Semaphore allows up to 3 frames in flight, preventing GPU starvation
     // while avoiding blocking on waitUntilCompleted()
@@ -108,6 +117,11 @@ final class OffscreenEffectsRenderer {
             return nil
         }
 
+        guard let stereoFragmentFunc = library.makeFunction(name: "effectsFragmentStereo") else {
+            LMLog.visual.error("❌ Failed to load effectsFragmentStereo")
+            return nil
+        }
+
         guard let passthroughFragFunc = library.makeFunction(name: "passthroughFragment") else {
             LMLog.visual.error("❌ Failed to load passthroughFragment")
             return nil
@@ -123,6 +137,20 @@ final class OffscreenEffectsRenderer {
             pipelineState = try device.makeRenderPipelineState(descriptor: pipelineDescriptor)
         } catch {
             LMLog.visual.error("❌ Failed to create effects pipeline: \(error.localizedDescription)")
+            return nil
+        }
+
+        // Stereo MRT pipeline: shared distortion field, two eye outputs
+        let stereoDescriptor = MTLRenderPipelineDescriptor()
+        stereoDescriptor.vertexFunction = vertexFunc
+        stereoDescriptor.fragmentFunction = stereoFragmentFunc
+        stereoDescriptor.colorAttachments[0].pixelFormat = .bgra8Unorm_srgb
+        stereoDescriptor.colorAttachments[1].pixelFormat = .bgra8Unorm_srgb
+
+        do {
+            stereoPipelineState = try device.makeRenderPipelineState(descriptor: stereoDescriptor)
+        } catch {
+            LMLog.visual.error("❌ Failed to create stereo effects pipeline: \(error.localizedDescription)")
             return nil
         }
 
@@ -151,19 +179,6 @@ final class OffscreenEffectsRenderer {
             return nil
         }
         self.samplerState = sampler
-
-        // Create output texture
-        // Use sRGB format for output - Metal auto-applies gamma encoding on write
-        let textureDescriptor = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: .bgra8Unorm_srgb,
-            width: outputSize,
-            height: outputSize,
-            mipmapped: false
-        )
-        textureDescriptor.usage = [.renderTarget, .shaderRead]
-        textureDescriptor.storageMode = .shared
-
-        self.outputTexture = device.makeTexture(descriptor: textureDescriptor)
 
         // Create ghost tap buffer (8 taps * 16 bytes each)
         let ghostTapBufferSize = GhostTapManager.maxTaps * MemoryLayout<GhostTapData>.stride
@@ -221,7 +236,7 @@ final class OffscreenEffectsRenderer {
             pixelFormat: .bgra8Unorm_srgb,
             width: size,
             height: size,
-            usage: [.renderTarget, .shaderRead, .shaderWrite],
+            usage: [.renderTarget, .shaderRead],  // no .shaderWrite: allows lossless compression
             mipmapsMode: .none
         )
 
@@ -514,12 +529,6 @@ final class OffscreenEffectsRenderer {
 
         // DEBUG: Use passthrough shader to test if shader pipeline works
         if bypassShaderForDebug {
-            guard let outputTexture = outputTexture else {
-                inFlightSemaphore.signal()
-                LMLog.visual.warning("⚠️ No output texture for passthrough")
-                return false
-            }
-
             updateSourceTexture(from: sourceImage)
             guard let sourceTexture = sourceTexture else {
                 inFlightSemaphore.signal()
@@ -536,12 +545,8 @@ final class OffscreenEffectsRenderer {
                 return false
             }
 
-            // Render using passthrough shader (no effects, just samples texture)
-            let renderPassDescriptor = MTLRenderPassDescriptor()
-            renderPassDescriptor.colorAttachments[0].texture = outputTexture
-            renderPassDescriptor.colorAttachments[0].loadAction = .clear
-            renderPassDescriptor.colorAttachments[0].storeAction = .store
-            renderPassDescriptor.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
+            // Render using passthrough shader directly into the drawable (no effects, just samples texture)
+            let renderPassDescriptor = makeDrawablePassDescriptor(for: drawable.texture)
 
             guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else { return false }
 
@@ -569,22 +574,6 @@ final class OffscreenEffectsRenderer {
             encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
             encoder.endEncoding()
 
-            // Blit output to drawable
-            if let blitEncoder = commandBuffer.makeBlitCommandEncoder() {
-                blitEncoder.copy(
-                    from: outputTexture,
-                    sourceSlice: 0,
-                    sourceLevel: 0,
-                    sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
-                    sourceSize: MTLSize(width: outputSize, height: outputSize, depth: 1),
-                    to: drawable.texture,
-                    destinationSlice: 0,
-                    destinationLevel: 0,
-                    destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0)
-                )
-                blitEncoder.endEncoding()
-            }
-
             // Async completion handler - signals semaphore when GPU finishes
             commandBuffer.addCompletedHandler { [weak self] buffer in
                 self?.inFlightSemaphore.signal()
@@ -604,12 +593,6 @@ final class OffscreenEffectsRenderer {
         }
 
         // --- Full shader path below ---
-        guard let outputTexture = outputTexture else {
-            inFlightSemaphore.signal()
-            LMLog.visual.warning("⚠️ No output texture (render \(self.renderCount))")
-            return false
-        }
-
         // TIMING: Texture update phase
         let textureUpdateStart = Date()
 
@@ -665,12 +648,8 @@ final class OffscreenEffectsRenderer {
             return false
         }
 
-        // Render to our output texture
-        let renderPassDescriptor = MTLRenderPassDescriptor()
-        renderPassDescriptor.colorAttachments[0].texture = outputTexture
-        renderPassDescriptor.colorAttachments[0].loadAction = .clear
-        renderPassDescriptor.colorAttachments[0].storeAction = .store
-        renderPassDescriptor.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
+        // Render straight into the drawable (no intermediate texture, no copy)
+        let renderPassDescriptor = makeDrawablePassDescriptor(for: drawable.texture)
 
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else {
             inFlightSemaphore.signal()
@@ -703,21 +682,7 @@ final class OffscreenEffectsRenderer {
         encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         encoder.endEncoding()
 
-        // Copy output to drawable
-        if let blitEncoder = commandBuffer.makeBlitCommandEncoder() {
-            blitEncoder.copy(
-                from: outputTexture,
-                sourceSlice: 0,
-                sourceLevel: 0,
-                sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
-                sourceSize: MTLSize(width: outputSize, height: outputSize, depth: 1),
-                to: drawable.texture,
-                destinationSlice: 0,
-                destinationLevel: 0,
-                destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0)
-            )
-            blitEncoder.endEncoding()
-        }
+        gpuStats.track(commandBuffer, pass: "fx")
 
         // Async completion handler - signals semaphore when GPU finishes
         // This is the key fix: GPU and CPU now work in parallel
@@ -821,56 +786,122 @@ final class OffscreenEffectsRenderer {
         }
 
         guard let sourceTexture = sourceTexture,
-              let outputTexture = outputTexture,
               let ghostTapBuffer = ghostTapBuffer else {
             return false
         }
 
-        // Render both eyes
-        let leftOk = renderEyeToDrawable(
-            queue: leftQueue,
-            sourceTexture: sourceTexture,
-            outputTexture: outputTexture,
-            ghostTapBuffer: ghostTapBuffer,
-            uniforms: uniforms,
-            ghostTapCount: ghostTapResult.activeCount,
-            eyeOffset: -stereoOffset  // Left eye shifts left
-        )
+        // Acquire both drawables first so both eyes can be written by one MRT pass.
+        let leftDrawable = try? leftQueue.nextDrawable()
+        let rightDrawable = try? rightQueue.nextDrawable()
 
-        let rightOk = renderEyeToDrawable(
-            queue: rightQueue,
+        if let leftDrawable, let rightDrawable {
+            return renderBothEyes(
+                left: leftDrawable,
+                right: rightDrawable,
+                sourceTexture: sourceTexture,
+                ghostTapBuffer: ghostTapBuffer,
+                uniforms: uniforms,
+                ghostTapCount: ghostTapResult.activeCount,
+                stereoOffset: stereoOffset
+            )
+        }
+
+        // Fallback: only one eye's drawable was available. Render that eye on its own
+        // so it is not left showing a stale frame; the other eye catches up next frame.
+        if !loggedStereoFallback {
+            loggedStereoFallback = true
+            LMLog.visual.info("⚠️ Stereo MRT fallback: only \(leftDrawable != nil ? "left" : (rightDrawable != nil ? "right" : "no")) drawable available, rendering per-eye")
+        }
+
+        let leftOk = leftDrawable.map { renderEyeToDrawable(
+            drawable: $0,
             sourceTexture: sourceTexture,
-            outputTexture: outputTexture,
             ghostTapBuffer: ghostTapBuffer,
             uniforms: uniforms,
             ghostTapCount: ghostTapResult.activeCount,
-            eyeOffset: stereoOffset  // Right eye shifts right
-        )
+            eyeOffset: -stereoOffset,  // Left eye shifts left
+            passName: "L"
+        ) } ?? false
+
+        let rightOk = rightDrawable.map { renderEyeToDrawable(
+            drawable: $0,
+            sourceTexture: sourceTexture,
+            ghostTapBuffer: ghostTapBuffer,
+            uniforms: uniforms,
+            ghostTapCount: ghostTapResult.activeCount,
+            eyeOffset: stereoOffset,  // Right eye shifts right
+            passName: "R"
+        ) } ?? false
 
         return leftOk && rightOk
     }
 
-    /// Render a single eye pass to a drawable queue.
-    private func renderEyeToDrawable(
-        queue: TextureResource.DrawableQueue,
+    /// Render both eyes in one render pass with two colour attachments (MRT).
+    /// The distortion field is computed once per pixel and shared by both eyes.
+    private func renderBothEyes(
+        left: TextureResource.Drawable,
+        right: TextureResource.Drawable,
         sourceTexture: MTLTexture,
-        outputTexture: MTLTexture,
         ghostTapBuffer: MTLBuffer,
         uniforms: EffectsUniforms,
         ghostTapCount: Int,
-        eyeOffset: Float
+        stereoOffset: Float
     ) -> Bool {
-        guard let drawable = try? queue.nextDrawable(),
-              let commandBuffer = commandQueue.makeCommandBuffer() else {
+        guard let commandBuffer = commandQueue.makeCommandBuffer() else { return false }
+
+        let descriptor = makeDrawablePassDescriptor(for: left.texture)
+        validateDrawableSize(right.texture)
+        descriptor.colorAttachments[1].texture = right.texture
+        descriptor.colorAttachments[1].loadAction = .dontCare
+        descriptor.colorAttachments[1].storeAction = .store
+
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor) else {
             return false
         }
 
-        // Render to output texture
-        let renderPassDescriptor = MTLRenderPassDescriptor()
-        renderPassDescriptor.colorAttachments[0].texture = outputTexture
-        renderPassDescriptor.colorAttachments[0].loadAction = .clear
-        renderPassDescriptor.colorAttachments[0].storeAction = .store
-        renderPassDescriptor.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
+        encoder.setRenderPipelineState(stereoPipelineState)
+
+        // Shader applies -|offset| to the left eye and +|offset| to the right eye.
+        var mutableUniforms = uniforms
+        mutableUniforms.ghostTapCount = Float(ghostTapCount)
+        mutableUniforms.stereoOffset = depthTexture != nil ? abs(stereoOffset) : 0
+        encoder.setFragmentBytes(&mutableUniforms, length: MemoryLayout<EffectsUniforms>.size, index: 0)
+
+        encoder.setFragmentBuffer(ghostTapBuffer, offset: 0, index: 1)
+        encoder.setFragmentTexture(sourceTexture, index: 0)
+        encoder.setFragmentTexture(saliencyTexture, index: 2)
+        encoder.setFragmentTexture(previousTexture ?? sourceTexture, index: 3)
+        if let depthTex = depthTexture {
+            encoder.setFragmentTexture(depthTex, index: 5)
+        }
+        encoder.setFragmentSamplerState(samplerState, index: 0)
+
+        encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+        encoder.endEncoding()
+
+        gpuStats.track(commandBuffer, pass: "eyes")
+        commandBuffer.commit()
+        left.present()
+        right.present()
+        return true
+    }
+
+    /// Render a single eye pass to a drawable queue.
+    private func renderEyeToDrawable(
+        drawable: TextureResource.Drawable,
+        sourceTexture: MTLTexture,
+        ghostTapBuffer: MTLBuffer,
+        uniforms: EffectsUniforms,
+        ghostTapCount: Int,
+        eyeOffset: Float,
+        passName: String
+    ) -> Bool {
+        guard let commandBuffer = commandQueue.makeCommandBuffer() else {
+            return false
+        }
+
+        // Render straight into this eye's drawable (no intermediate texture, no copy)
+        let renderPassDescriptor = makeDrawablePassDescriptor(for: drawable.texture)
 
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else {
             return false
@@ -896,25 +927,37 @@ final class OffscreenEffectsRenderer {
         encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         encoder.endEncoding()
 
-        // Copy to drawable
-        if let blitEncoder = commandBuffer.makeBlitCommandEncoder() {
-            blitEncoder.copy(
-                from: outputTexture,
-                sourceSlice: 0,
-                sourceLevel: 0,
-                sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
-                sourceSize: MTLSize(width: outputSize, height: outputSize, depth: 1),
-                to: drawable.texture,
-                destinationSlice: 0,
-                destinationLevel: 0,
-                destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0)
-            )
-            blitEncoder.endEncoding()
-        }
-
+        // No copy to split out any more, so -LiminalPerfSplitPasses is a no-op here.
+        gpuStats.track(commandBuffer, pass: "eye" + passName)
         commandBuffer.commit()
         drawable.present()
         return true
+    }
+
+    /// Render pass that writes the effects quad straight into a drawable texture.
+    /// The fullscreen quad covers every pixel, so the old contents are never read (.dontCare).
+    private func makeDrawablePassDescriptor(for texture: MTLTexture) -> MTLRenderPassDescriptor {
+        validateDrawableSize(texture)
+        let descriptor = MTLRenderPassDescriptor()
+        descriptor.colorAttachments[0].texture = texture
+        descriptor.colorAttachments[0].loadAction = .dontCare
+        descriptor.colorAttachments[0].storeAction = .store
+        return descriptor
+    }
+
+    /// The render resolution must stay 2048² (user requirement); verify every drawable we write.
+    private func validateDrawableSize(_ texture: MTLTexture) {
+        let matches = texture.width == outputSize && texture.height == outputSize
+        if !loggedDrawableSize || !matches {
+            if matches {
+                loggedDrawableSize = true
+                LMLog.visual.info("🖼️ Direct drawable render: \(texture.width)x\(texture.height) format=\(texture.pixelFormat.rawValue)")
+            } else if !loggedDrawableSizeMismatch {
+                loggedDrawableSizeMismatch = true
+                LMLog.visual.error("❌ Drawable is \(texture.width)x\(texture.height), expected \(self.outputSize)x\(self.outputSize)")
+            }
+        }
+        assert(matches, "Drawable size must match outputSize")
     }
 
     // MARK: - Private
@@ -983,6 +1026,7 @@ final class OffscreenEffectsRenderer {
             withBytes: stagingBuffer,
             bytesPerRow: bytesPerRow
         )
+        optimizeForGPUAccess(texture, label: "Optimize source texture")
     }
 
     /// Update the previous texture for GPU crossfade blending.
@@ -1043,6 +1087,7 @@ final class OffscreenEffectsRenderer {
             withBytes: stagingBuffer,
             bytesPerRow: bytesPerRow
         )
+        optimizeForGPUAccess(texture, label: "Optimize previous texture")
 
         lastPreviousImageIdentifier = currentPreviousID
         return true
@@ -1152,6 +1197,20 @@ final class OffscreenEffectsRenderer {
             withBytes: pixelData,
             bytesPerRow: bytesPerRow
         )
+        optimizeForGPUAccess(texture, label: "Optimize depth texture")
+    }
+
+    /// Re-layout a CPU-written shared texture for faster GPU sampling (lossless; may enable
+    /// framebuffer-style compression on Apple GPUs). Runs once per image upload, not per frame.
+    /// Committed on `commandQueue` before the frame's render command buffer is created, so
+    /// Metal's in-order queue execution guarantees the render pass sees the optimized texture.
+    private func optimizeForGPUAccess(_ texture: MTLTexture, label: String) {
+        guard let commandBuffer = commandQueue.makeCommandBuffer(),
+              let blit = commandBuffer.makeBlitCommandEncoder() else { return }
+        commandBuffer.label = label
+        blit.optimizeContentsForGPUAccess(texture: texture)
+        blit.endEncoding()
+        commandBuffer.commit()
     }
 }
 

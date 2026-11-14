@@ -80,6 +80,10 @@ final class EffectsMetalView: MTKView {
     private var lastLogTime: Date = Date()
     private var totalDrawTime: Double = 0
     private var textureUpdateCount: Int = 0
+    private let gpuStats = GPUTimingStats()
+    private var lastDrawStart: Date?
+    private var frameIntervals: [Double] = []
+    private let perfLogInterval = DebugLaunchOptions.perfLogInterval
 
     // MARK: - Initialization
 
@@ -330,6 +334,10 @@ final class EffectsMetalView: MTKView {
 
     override func draw(_ dirtyRect: NSRect) {
         let drawStart = Date()
+        if let last = lastDrawStart {
+            frameIntervals.append(drawStart.timeIntervalSince(last) * 1000)
+        }
+        lastDrawStart = drawStart
 
         // Early exit checks with logging
         guard hasValidSource else {
@@ -429,6 +437,8 @@ final class EffectsMetalView: MTKView {
             }
         }
 
+        gpuStats.beginFrame()
+        gpuStats.track(commandBuffer, pass: "fx")
         commandBuffer.present(drawable)
         commandBuffer.commit()
 
@@ -439,7 +449,7 @@ final class EffectsMetalView: MTKView {
 
         // Log performance every second
         let timeSinceLastLog = Date().timeIntervalSince(lastLogTime)
-        if timeSinceLastLog >= 1.0 {
+        if timeSinceLastLog >= perfLogInterval {
             let avgDrawTime = totalDrawTime / Double(frameCount)
             let fps = Double(frameCount) / timeSinceLastLog
 
@@ -448,7 +458,13 @@ final class EffectsMetalView: MTKView {
             let texUpdates = textureUpdateCount
             let delayPct = delay * 100
 
-            LMLog.visual.info("📊 METAL PERF: fps=\(String(format: "%.1f", fps)) avgDraw=\(String(format: "%.2f", avgDrawTime))ms delay=\(String(format: "%.0f", delayPct))% src=\(srcW)x\(srcH) texUpdates=\(texUpdates)")
+            frameIntervals.sort()
+            let intervalP95 = GPUTimingStats.percentile(frameIntervals, 0.95)
+            frameIntervals.removeAll(keepingCapacity: true)
+            let gpuFragment = gpuStats.drain().logFragment
+
+            let perfLine = "📊 METAL PERF: fps=\(String(format: "%.1f", fps)) avgDraw=\(String(format: "%.2f", avgDrawTime))ms delay=\(String(format: "%.0f", delayPct))% src=\(srcW)x\(srcH) texUpdates=\(texUpdates) | interval p95=\(String(format: "%.2f", intervalP95))ms | \(gpuFragment)"
+            LMLog.visual.info("\(perfLine, privacy: .public)")
 
             // Reset counters
             frameCount = 0
