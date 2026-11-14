@@ -243,3 +243,12 @@ The dual-pipeline architecture exists because macOS and visionOS have fundamenta
 - **visionOS**: Spatial/immersive, 90fps, RealityKit-based with MainActor constraints
 
 The architecture maximizes code sharing (audio, shaders, uniforms, services) while respecting each platform's native patterns. This is the correct approach - unification would add complexity without benefit.
+
+## visionOS render path (post performance work)
+
+- Both eyes render in a single MRT pass directly into the two RealityKit `DrawableQueue` drawables
+  (2048x2048 each); there is no intermediate output texture or blit, and the distortion field is computed once.
+- Dome breathing is computed on the CPU (no per-frame compute command buffer).
+- Drawable queues no longer request `.shaderWrite`; uploaded source textures use `optimizeContentsForGPUAccess`.
+- GPU timing: `Utils/GPUTimingStats.swift`; DEBUG launch flags: `Utils/DebugLaunchOptions.swift`;
+  capture script: `scripts/perf-run.sh`. See `docs/decisions/performance.md`.

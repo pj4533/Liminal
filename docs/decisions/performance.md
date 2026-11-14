@@ -5,6 +5,49 @@ Hard constraints: the visionOS render target stays 2048x2048, and the effects mu
 (compare frozen-time screenshots). GPU time is the primary metric because the user believes the GPU
 is the bottleneck on a real Vision Pro. Simulator numbers are only for before/after comparison.
 
+
+## SUMMARY (final wrap-up, 2026-11-14)
+
+Simulator (host Mac GPU), median of 3 unfrozen 30 s runs, 15 s warm-up. GPU numbers are for relative
+comparison only; fps/interval are noisy host-jitter. Final runs: final-1/2/3 + frozen.
+
+| Metric | Baseline | Final | Change |
+|---|---|---|---|
+| fps mean | 49.9 | 76.5 | +53% |
+| frame interval p95 | 39.0 ms | 13.4 ms | -66% |
+| GPU ms mean/frame | 0.304 | 0.161 (0.157/0.161/0.207) | -47% |
+| GPU ms p95 | 0.550 | 0.31 | -44% |
+| dropped (>15 ms) per 5 s | 118.5 | 7.0 | -94% |
+| frozen GPU mean | 0.289 | 0.145 | -50% |
+| passes | dome 0.073 + eyeL 0.152 + eyeR 0.079 (3 cmd buffers/frame) | one "eyes" MRT pass 0.16 (1 cmd buffer/frame) | |
+
+Render size stays 2048x2048. Frozen screenshot (final-frozen, t=100) shows all effects (turbulence,
+chromatic fringing, grain, ghosting, hue shifts); a pixel diff against baseline is not meaningful because
+the source image is random per run, but the look matches by eye. UI sanity check (Exit/Enter dome,
+Stop) in the simulator worked, no errors in logs.
+
+### Kept
+- direct-drawable-render: render each eye straight into its drawable, no 2048² blit (GPU -48%).
+- mrt-stereo-single-pass: both eyes in one MRT pass, shared distortion math (fps +47%, p95 51->22 ms).
+- dome-breathing-cpu: breathing computed on CPU, per-frame compute pass removed (GPU -12%, drops 84->2.5).
+- texture-gpu-hygiene: no .shaderWrite on drawables, optimizeContentsForGPUAccess on uploads (GPU -14%).
+- Measurement tooling (GPUTimingStats, debug launch flags, scripts/perf-run.sh).
+
+### Dropped (measured, no gain or worse)
+feedback-dead-stage function constant; skip previousTexture samples; shared displacement pre-pass
+(+0.10 ms cost); hue-fields bake (+0.1-0.2 ms); single command buffer per frame; offline shader bench
+harness (recoverable via 51ae60c); exact ALU clean-ups; angle-addition noise; mip-sampled bloom/ghost;
+RealityKit-paced loop. Details in the sections below.
+
+### Device-testing recommendations
+- Run the same "PERF" log line on Vision Pro; simulator GPU timestamps may under-report (macOS shows ~0.9 ms
+  for a similar shader), so confirm absolute GPU ms against the ~11 ms (90 Hz) budget.
+- Re-test dropped ALU/sampling ideas (mip sampling, skip-previous-samples, dead stage) on device: they were
+  judged on noisy simulator GPU numbers and tile-based mobile GPUs may behave differently.
+- Use Xcode GPU capture / Metal System Trace on device to see per-stage cost; consider MTLCounterSampleBuffer.
+- Verify MRT stereo has no per-eye artifacts at the dome seam and no thermal throttling over 10+ minutes.
+- Debug flags are compiled out of Release; profile a Release build.
+
 ---
 
 ## 2026-11-14: Measurement infrastructure + baseline
