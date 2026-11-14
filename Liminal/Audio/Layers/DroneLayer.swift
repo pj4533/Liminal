@@ -21,6 +21,22 @@ nonisolated final class DroneLayer: BaseLayer {
     private var gliding = false
     /// Sub swell multiplier for the sub-pulse rare event (1 = none, +4 dB peak).
     private var subPulseEnv = SoftEnv(1)
+    /// Scene weight of the drone (decision D86): it leads in stillness and tide and recedes under the busy
+    /// scenes, so the pedal stops colouring every chord the same way and the bed changes between sections.
+    private var sceneGain = SoftEnv(1)
+
+    override func sceneDidChange(_ scene: MusicScene, ctx: LayerContext) {
+        let db: Float = {
+            switch scene.kind {
+            case .stillness: return 4
+            case .tide: return 2.5
+            case .drift: return -3
+            case .bloom: return -6
+            case .constellation: return -8
+            }
+        }()
+        sceneGain.go(to: dbToGain(db), over: rng.range(18...30), now: ctx.time)
+    }
 
     /// Rare event: the sub partial swells +4 dB over 6 s and back over 6 s.
     func subPulse(ctx: LayerContext) {
@@ -39,7 +55,7 @@ nonisolated final class DroneLayer: BaseLayer {
         }
         let mix = Mixer(oscs)
         filter = LowPassButterworthFilter(mix, cutoffFrequency: 500)
-        let strip = LayerStrip(source: mix, filter: filter, trim: dbToGain(-27) * 1.414 / 0.45,
+        let strip = LayerStrip(source: mix, filter: filter, trim: dbToGain(-29) * 1.414 / 0.45,
                                reverb: 0.25, delay: 0)
         super.init(id: .drone, strip: strip, entryThreshold: 0)
         generators = oscs
@@ -124,7 +140,7 @@ nonisolated final class DroneLayer: BaseLayer {
             if pedal == 0 { pedal = ctx.field.pedalMIDI; retune(over: ParamRamp.minimum, ctx: ctx) }
             else { movePedal(to: ctx.field.pedalMIDI, ctx: ctx) }
         }
-        let g = glide.tick(t)
+        let g = glide.tick(t) * sceneGain.tick(t)
         let roam = roamEnv.tick(t)
         let depth = 0.3 + 0.4 * ctx.intensity
         for p in P.allCases {

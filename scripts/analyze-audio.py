@@ -71,10 +71,23 @@ res["centroid_per_30s"] = [round(float(cent[(t >= s) & (t < s+30)].mean())) for 
 
 # ---- onset density: spectral flux on log-magnitude (positive), peak-picked
 lm = np.log1p(100*mag[(f > 100) & (f < 8000)])
-flux = np.maximum(0, np.diff(lm, axis=1)).sum(0)
-flux = (flux - np.median(flux))
+flux0 = np.maximum(0, np.diff(lm, axis=1)).sum(0)
+# Legacy detector: one global median and one global MAD threshold for the whole file.
+flux = (flux0 - np.median(flux0))
 thr = np.median(np.abs(flux))*6 + 1e-9
-pk, _ = find_peaks(flux, height=thr, distance=int(0.2*sr/2048))
+pk_leg, _ = find_peaks(flux, height=thr, distance=int(0.2*sr/2048))
+res["onsets_total_legacy"] = int(len(pk_leg))
+# Adaptive detector (decision D82; moving-median threshold as in Bello et al. 2005): the flux is detrended
+# by a 3 s moving median and a peak must exceed 6x the moving MAD over 10 s. A global threshold measures the
+# difference in flux BASELINE between sections (a noise bed raises every frame's flux), so in a render that
+# alternates noisy and clean sections it sat above every note of both. The MAD is floored at half its
+# median so near-silent passages do not turn tiny fluctuations into onsets.
+from scipy.ndimage import median_filter
+fps = sr/2048
+dtr = flux0 - median_filter(flux0, size=int(3*fps) | 1, mode="nearest")
+mad = median_filter(np.abs(dtr), size=int(10*fps) | 1, mode="nearest")
+mad = np.maximum(mad, 0.5*np.median(mad)) + 1e-9
+pk, _ = find_peaks(dtr - 6*mad, height=0, distance=int(0.2*sr/2048))
 pt = t[1:][pk]
 res["onsets_total"] = int(len(pk))
 res["onsets_per_30s"] = [int(((pt >= s) & (pt < s+30)).sum()) for s in range(0, int(dur), 30)]
@@ -102,9 +115,19 @@ chroma /= chroma.sum(0, keepdims=True) + 1e-12
 hist = chroma.mean(1)
 names = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"]
 res["pitch_class_hist"] = {n: round(float(h), 3) for n, h in zip(names, hist)}
-res["pitch_classes_gt5pct"] = int((hist > 0.05).sum())
-hp = hist/hist.sum()
-res["pitch_class_entropy_bits"] = round(float(-(hp*np.log2(hp+1e-12)).sum()), 2)
+# The plan's gates are "per 5 minutes" (section 11): measured inside each complete 5-minute block and
+# averaged (decision D82). Whole-render values are kept as *_whole; a 10- or 30-minute render with key
+# moves covers more pitch classes than any 5 minutes of it does.
+def pc_stats(h):
+    hp = h/h.sum()
+    return int((h > 0.05).sum()), float(-(hp*np.log2(hp+1e-12)).sum())
+res["pitch_classes_gt5pct_whole"], ent_whole = pc_stats(hist)
+res["pitch_class_entropy_bits_whole"] = round(ent_whole, 2)
+blk = [pc_stats(chroma[:, (t >= s0) & (t < s0+300)].mean(1)) for s0 in range(0, int(dur) - 299, 300)] or [pc_stats(hist)]
+res["pitch_classes_gt5pct_blocks"] = [b[0] for b in blk]
+res["pitch_class_entropy_bits_blocks"] = [round(b[1], 2) for b in blk]
+res["pitch_classes_gt5pct"] = round(float(np.mean([b[0] for b in blk])), 1)
+res["pitch_class_entropy_bits"] = round(float(np.mean([b[1] for b in blk])), 2)
 # chord = best triad/power template per 2s window
 hop = t[1]-t[0]
 win = int(2.0/hop)
@@ -127,14 +150,20 @@ res["chord_sequence_head"] = [labels[c] for c in chords[:20]]
 def segvec(s0, s1):
     m = (t >= s0) & (t < s1)
     if m.sum() < 2: return None
-    spec = np.log(mag[:, m]).mean(1)[(f > 50) & (f < 10000)]
-    spec = spec/np.linalg.norm(spec)
+    raw = np.log(mag[:, m]).mean(1)[(f > 50) & (f < 10000)]
+    # Spectral SHAPE: the mean log level is removed before the cosine (a Pearson correlation of the
+    # log spectra). The uncentred cosine of all-negative log vectors is 0.98-1.0 for any two windows
+    # of any render (baseline included), which made the self-similarity floor about 0.49 and the
+    # minute novelty a rounding error (decision D82). The legacy value is still reported.
+    leg = raw/np.linalg.norm(raw)
+    spec = raw - raw.mean(); spec = spec/(np.linalg.norm(spec) + 1e-12)
     ch = chroma[:, m].mean(1); ch = ch/np.linalg.norm(ch)
-    return spec, ch
+    return spec, ch, leg
 mins = [segvec(s, s+60) for s in range(0, int(dur)-59, 60)]
 mins = [m for m in mins if m]
 res["novelty_between_minutes_chroma_cosdist"] = [round(1-float(mins[i][1] @ mins[i+1][1]), 3) for i in range(len(mins)-1)]
 res["novelty_between_minutes_spec_cosdist"] = [round(1-float(mins[i][0] @ mins[i+1][0]), 4) for i in range(len(mins)-1)]
+res["novelty_between_minutes_spec_cosdist_legacy"] = [round(1-float(mins[i][2] @ mins[i+1][2]), 4) for i in range(len(mins)-1)]
 # 10s-segment self-similarity: mean off-diagonal similarity (1 = totally static)
 segs = [segvec(s, s+10) for s in range(0, int(dur)-9, 10)]
 segs = [s for s in segs if s]
@@ -144,6 +173,10 @@ if len(segs) > 2:
     iu = np.triu_indices(len(S), 1)
     res["self_similarity_10s_mean_offdiag"] = round(float(S[iu].mean()), 4)
     res["self_similarity_10s_min"] = round(float(S[iu].min()), 4)
+    Fl = np.array([np.concatenate([s[2], s[1]]) for s in segs]); Fl /= np.linalg.norm(Fl, axis=1, keepdims=True)
+    Sl = Fl @ Fl.T
+    res["self_similarity_10s_mean_offdiag_legacy"] = round(float(Sl[iu].mean()), 4)
+    res["self_similarity_10s_min_legacy"] = round(float(Sl[iu].min()), 4)
 
 # ---- stereo
 mid, side = (L+R)/2, (L-R)/2
@@ -184,6 +217,7 @@ res["stereo_corr_below120"] = round(float(np.corrcoef(lL, lR)[0, 1]), 3)
 o30 = res["onsets_per_30s"]
 res["onsets_per30_max_over_min"] = round(max(o30)/max(1, min(o30)), 2) if o30 else 0
 res["onsets_per_5min"] = round(res["onsets_total"] / (dur/300), 1)
+res["onsets_per_5min_legacy"] = round(res["onsets_total_legacy"] / (dur/300), 1)
 # chord changes that persist >= 3 windows (6 s): ignores single-window template flicker
 stable, cur, runlen, changes_st = [], None, 0, 0
 for c in chords:
@@ -193,7 +227,14 @@ for c in chords:
         stable.append(c)
 res["chord_changes_per_min_stable"] = round(max(0, len(stable)-1)/(dur/60), 2)
 res["distinct_chords_stable"] = len(set(stable))
-res["distinct_chords_per_5min"] = round(len(set(chords)) / max(1, dur/300), 1)
+# Distinct chords per 5 minutes: count inside each complete 5-minute block, then average (decision D82).
+# The old value divided the whole render's distinct count by the number of blocks, which under-counts any
+# render longer than 5 minutes because chords recur across blocks.
+res["distinct_chords_per_5min_legacy"] = round(len(set(chords)) / max(1, dur/300), 1)
+per_blk = int(round(300/(win*hop)))
+blocks = [b for b in (chords[i:i+per_blk] for i in range(0, len(chords), per_blk)) if len(b) >= 0.9*per_blk] or [chords]
+res["distinct_chords_per_5min_blocks"] = [len(set(b)) for b in blocks]
+res["distinct_chords_per_5min"] = round(float(np.mean([len(set(b)) for b in blocks])), 1)
 # chroma-only 10 s self-similarity, and median chroma distance over all minute pairs
 if len(segs) > 2:
     C = np.array([s[1] for s in segs]); Sc = C @ C.T; iu = np.triu_indices(len(Sc), 1)
@@ -203,6 +244,8 @@ if len(mins) > 1:
     res["chroma_dist_minute_pairs_median"] = round(float(np.median(D[iu])), 3)
 nv = res["novelty_between_minutes_spec_cosdist"]
 res["spec_novelty_median"] = round(float(np.median(nv)), 4) if nv else 0
+nl = res["novelty_between_minutes_spec_cosdist_legacy"]
+res["spec_novelty_median_legacy"] = round(float(np.median(nl)), 4) if nl else 0
 nc = res["novelty_between_minutes_chroma_cosdist"]
 res["chroma_novelty_median"] = round(float(np.median(nc)), 3) if nc else 0
 # RMS envelope autocorrelation: max for lags 20-600 s

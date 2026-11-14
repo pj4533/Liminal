@@ -4,7 +4,7 @@ import SoundpipeAudioKit
 import Foundation
 
 /// The original shimmer voice, now a four-voice round-robin FM pool so notes overlap (decision D16).
-/// Clusters of 1-4 high chord tones on a 7-13 s loop. Each note fires `.noteOn` for `.drips`, which the
+/// Clusters of 1-4 high chord tones on a 2.5-6 s loop (D84). Each note fires `.noteOn` for `.drips`, which the
 /// facade forwards to `shimmerNotePlayed`.
 nonisolated final class DripsLayer: BaseLayer {
     static let poolSize = 4
@@ -27,16 +27,16 @@ nonisolated final class DripsLayer: BaseLayer {
         let mix = Mixer((0..<DripsLayer.poolSize).map { i -> Mixer in
             let m = Mixer(o[i]); m.pan = DripsLayer.voicePans[i]; return m
         })
-        let strip = LayerStrip(source: mix, trim: dbToGain(-14) * 1.414 / 0.5, reverb: 0.7, delay: 0.6)
+        let strip = LayerStrip(source: mix, trim: dbToGain(-12.5) * 1.414 / 0.5, reverb: 0.7, delay: 0.6)
         var tmp = SeededRNG(seed: 0)
-        loop = LoopClock(bounds: 5...10, rng: &tmp)
+        loop = LoopClock(bounds: 2.5...6, rng: &tmp)
         super.init(id: .drips, strip: strip, entryThreshold: 0.35)
         generators = oscs
     }
 
     override func prepare(rng: SeededRNG) {
         super.prepare(rng: rng)
-        loop = LoopClock(bounds: 5...10, rng: &self.rng)
+        loop = LoopClock(bounds: 2.5...6, rng: &self.rng)
     }
 
     override func didActivate(ctx: LayerContext) {
@@ -44,7 +44,7 @@ nonisolated final class DripsLayer: BaseLayer {
     }
 
     override func sceneDidChange(_ scene: MusicScene, ctx: LayerContext) {
-        loop.reroll(bounds: 5...10, rng: &rng)
+        loop.reroll(bounds: 2.5...6, rng: &rng)
         mallet = rng.chance(ctx.style.dripsMallet)
     }
 
@@ -58,7 +58,7 @@ nonisolated final class DripsLayer: BaseLayer {
         let period = loop.nextCycle(rng: &rng) * Double(1.5 - 0.9 * ctx.density)
         after(period, ctx: ctx) { [weak self] in self?.cycle(ctx: ctx) }
         guard isActive else { return }
-        if rng.chance(0.25 - 0.15 * ctx.density) { return }   // occasional empty cycle
+        if rng.chance(0.15 - 0.1 * ctx.density) { return }   // occasional empty cycle
         let count = 1 + rng.weighted([0.35, 0.3, 0.2, 0.15].map { $0 * (0.6 + ctx.density) })
         var t = 0.0
         for i in 0..<count {
@@ -86,7 +86,9 @@ nonisolated final class DripsLayer: BaseLayer {
         let ratio: Float = mallet ? 4 : (ctx.brightness > 0.55 && rng.chance(0.5) ? (rng.chance(0.5) ? 3 : 3.5) : 2)
         let index0: Float = mallet ? 1.5 * fm : (0.4 + 1.6 * ctx.brightness) * velocity * fm
         // High drips a little quieter (about -1.5 dB per 2 semitones above C6).
-        let peak = 0.5 * velocity * Float(max(0.45, 1 - 0.035 * Double(max(0, midi - 84))))
+        let now = ctx.time
+        let together = Float(max(1, pool.lastUsed.filter { now - $0 < 0.3 }.count))
+        let peak = 0.5 * velocity * Float(max(0.45, 1 - 0.035 * Double(max(0, midi - 84)))) / together.squareRoot()
         // Ramp envelope (D68): 8 ms attack, decay to 25 % (0.2 s mallet / 0.35 s blip), hold, release.
         let hold = mallet ? rng.range(0.03...0.08) : rng.range(0.05...0.15)
         let decay = mallet ? 0.2 : 0.35
@@ -98,17 +100,22 @@ nonisolated final class DripsLayer: BaseLayer {
             guard let self, self.pool.isCurrent(v, tok) else { return }
             ParamRamp.set(osc.$baseFrequency, Scale.midiToFrequency(midi), over: ParamRamp.minimum)
             ParamRamp.set(osc.$modulatingMultiplier, ratio, over: ParamRamp.minimum)
-            ParamRamp.set(osc.$modulationIndex, index0, over: ParamRamp.minimum)
+            // Strike transient (decision D85): +0.9 index for the first 60 ms.
+            ParamRamp.set(osc.$modulationIndex, index0 + 0.9 * fm, over: ParamRamp.minimum)
             self.after(0.022, ctx: ctx) { [weak self] in
                 guard let self, self.pool.isCurrent(v, tok) else { return }
                 ParamRamp.set(osc.$amplitude, peak, over: 0.008)
-                ParamRamp.set(osc.$modulationIndex, isMallet ? 0 : 0.05, over: indexTime)
+                ParamRamp.set(osc.$modulationIndex, index0, over: 0.06)
+                self.after(0.06, ctx: ctx) { [weak self] in
+                    guard let self, self.pool.isCurrent(v, tok) else { return }
+                    ParamRamp.set(osc.$modulationIndex, isMallet ? 0 : 0.05, over: indexTime)
+                }
                 ctx.emit(.noteOn, layer: .drips, midi: midi, velocity: velocity)
-                self.after(0.008, ctx: ctx) { [weak self] in
+                self.after(ParamRamp.nextTick, ctx: ctx) { [weak self] in
                     guard let self, self.pool.isCurrent(v, tok) else { return }
                     ParamRamp.set(osc.$amplitude, peak * 0.25, over: decay)
                 }
-                self.after(0.008 + max(hold, decay), ctx: ctx) { [weak self] in
+                self.after(ParamRamp.nextTick + max(hold, decay), ctx: ctx) { [weak self] in
                     guard let self, self.pool.isCurrent(v, tok) else { return }
                     ParamRamp.set(osc.$amplitude, 0, over: release)
                 }

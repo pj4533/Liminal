@@ -40,7 +40,7 @@ nonisolated final class PadLayer: BaseLayer {
         let rp = Mixer(right); rp.pan = 0.6
         let mix = Mixer(lp, rp)
         ladder = MoogLadder(mix, cutoffFrequency: 1200, resonance: 0.1)
-        let strip = LayerStrip(source: mix, filter: ladder, trim: dbToGain(-7) * 1.414 / 0.5,
+        let strip = LayerStrip(source: mix, filter: ladder, trim: dbToGain(-12.5) * 1.414 / 0.5,
                                reverb: 0.5, delay: 0.1)
         super.init(id: .pad, strip: strip, entryThreshold: 0.2)
         generators = left + right

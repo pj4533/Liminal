@@ -170,7 +170,7 @@ nonisolated final class MusicConductor: @unchecked Sendable {
         mix.setMaster(MusicConductor.masterGain, over: 3)
         lastKeyMove = t
         sessionStart = t
-        keyInterval = rng.range(180...480)
+        keyInterval = rng.range(100...220)
         began = true
         startScene(at: t)
         scheduleChord(from: t)
@@ -225,7 +225,7 @@ nonisolated final class MusicConductor: @unchecked Sendable {
             }
         case .pinScale(let s):
             if let change = harmony.setPinned(s) { broadcast(change); logKey() }
-            if s != nil { keyInterval = .infinity } else if keyInterval == .infinity { keyInterval = rng.range(180...480); lastKeyMove = scheduler.now }
+            if s != nil { keyInterval = .infinity } else if keyInterval == .infinity { keyInterval = rng.range(100...220); lastKeyMove = scheduler.now }
         case .visualMood(let m): ctx.coupling.setTarget(m)
         case .imageDidChange(let d): imageDidChange(transition: d)
         case .visualActivity(let a): activityTarget = min(max(a, 0), 1)
@@ -264,7 +264,7 @@ nonisolated final class MusicConductor: @unchecked Sendable {
         if s.keyMoveAtEnd, let f = harmony.proposeKeyMove(brightnessBias: keyBias()) {
             broadcast(harmony.apply(field: f))
             lastKeyMove = scheduler.now
-            keyInterval = rng.range(180...480)
+            keyInterval = rng.range(100...220)
             logKey()
             scheduleChord(from: scheduler.now)
         }
@@ -277,12 +277,13 @@ nonisolated final class MusicConductor: @unchecked Sendable {
 
     // MARK: Harmony
 
-    /// Master trim at full: +3 dB over PASS 1 (decision D72), so sparse scenes stay above -27 dBFS RMS.
-    static let masterGain: Float = dbToGain(3)
+    /// Master trim at full: +4.5 dB over PASS 1 (decisions D72, D86), so sparse scenes stay above -27 dBFS RMS
+    /// with the beds (pad, drone) lowered.
+    static let masterGain: Float = dbToGain(4.5)
 
-    /// Harmonic rhythm lerp(30, 12, intensity) +-25 %, clamped 10-40 s (D43, retuned in D72).
+    /// Harmonic rhythm lerp(27, 11, intensity) +-25 %, clamped 10-40 s (D43, retuned in D72 and D86).
     private func chordLength(_ i: Float) -> Double {
-        let base = 30 + (12 - 30) * Double(min(max(i, 0), 1))
+        let base = 27 + (11 - 27) * Double(min(max(i, 0), 1))
         return min(max(rng.jitter(base, 0.25), 10), 40)
     }
 
@@ -378,7 +379,7 @@ nonisolated final class MusicConductor: @unchecked Sendable {
         var intensity = MusicScene.floor
         for s in scenes { intensity = max(intensity, s.intensity(at: t)) }
         let bias = newest?.brightness ?? 0
-        let b = 0.5 + 0.3 * bias + 0.3 * (intensity - 0.4) + cpl.brightnessNudge + 0.12 * colorDrift.value(at: t)
+        let b = 0.5 + 0.6 * bias + 0.35 * (intensity - 0.4) + cpl.brightnessNudge + 0.12 * colorDrift.value(at: t)
         ctx.intensity = intensity
         ctx.brightness = min(max(b, 0), 1)
         ctx.density = min(max(density * cpl.energyScale, 0), 1)
@@ -466,7 +467,7 @@ nonisolated final class MusicConductor: @unchecked Sendable {
         if kind == .noteOn {
             state.lastOnsetTime = t
             state.lastOnsetVelocity = velocity
-            scoreLog?.note(layer)
+            scoreLog?.note(layer, t: t, velocity: velocity)
             if realtime { onNote?(layer, midi) }
         }
         if began { publish(t) }
@@ -528,7 +529,12 @@ nonisolated final class ScoreLog {
         keys.append(["t": Self.r(t), "tonic": f.tonic, "mode": f.mode.rawValue, "pedal": f.pedalMIDI])
     }
     func pedal(_ t: Double, _ midi: Int) { pedals.append(["t": Self.r(t), "pedal": midi]) }
-    func note(_ id: LayerID) { notes["\(id)", default: 0] += 1 }
+    /// Every note onset (layer, time, velocity): lets the analysis check which notes the onset detector finds.
+    private var onsets: [[Any]] = []
+    func note(_ id: LayerID, t: Double, velocity: Float) {
+        notes["\(id)", default: 0] += 1
+        onsets.append([Self.r(t), "\(id)", Self.r(velocity)])
+    }
     func rare(_ t: Double, _ k: RareEventKind) { rareEvents.append(["t": Self.r(t), "kind": k.name]) }
     func sample(_ t: Double, intensity: Float, brightness: Float, layers: [MusicLayer]) {
         var lv: [String: Double] = [:]
@@ -538,7 +544,7 @@ nonisolated final class ScoreLog {
 
     func write(to url: URL, seed: UInt64, initialKey: HarmonicField?, perf: [String: Any]) throws {
         var root: [String: Any] = ["seed": seed, "scenes": scenes, "layerEvents": layerEvents, "chords": chords,
-                                   "keys": keys, "pedals": pedals, "samples": samples, "notes": notes, "rareEvents": rareEvents, "perf": perf]
+                                   "keys": keys, "pedals": pedals, "samples": samples, "notes": notes, "onsets": onsets, "rareEvents": rareEvents, "perf": perf]
         if let k = initialKey { root["initialKey"] = ["tonic": k.tonic, "mode": k.mode.rawValue] }
         let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
         try data.write(to: url)

@@ -181,11 +181,20 @@ nonisolated final class HarmonyEngine {
         return Chord(rootDegree: 0, shape: .openFifth)
     }
 
-    /// Next chord: Markov root motion plus tension-weighted shape, filtered by the clash rule.
+    /// Roots of the last chords in this key (newest last), for the anti-repetition rule below.
+    private var recentRoots: [Int] = []
+
+    /// Next chord: Markov root motion plus tension-weighted shape, filtered by the clash rule. A root used in
+    /// the last three chords is refused 60 % of the time (decision D86), so the progression keeps visiting new
+    /// degrees instead of circling one family of chords (seed 11 spent six minutes on V, vi and iii).
     func nextChord(tension: Float) -> Chord {
         let weights = shapeWeights(tension)
-        for _ in 0..<16 {
+        for attempt in 0..<16 {
             let root = roots.next(using: &rng)
+            if attempt < 12 && recentRoots.suffix(3).contains(root) && rng.chance(0.6) {
+                roots.reset(to: field.chord.rootDegree)
+                continue
+            }
             let shape = ChordShape(rawValue: UInt8(rng.weighted(weights))) ?? .triad
             let c = Chord(rootDegree: root, shape: shape)
             if c != field.chord && isValid(c, in: field) { return c }
@@ -205,6 +214,8 @@ nonisolated final class HarmonyEngine {
         let old = field.chord
         field.chord = chord
         roots.reset(to: chord.rootDegree)
+        recentRoots.append(chord.rootDegree)
+        if recentRoots.count > 4 { recentRoots.removeFirst() }
         return .chord(old: old, new: chord)
     }
 
@@ -232,10 +243,17 @@ nonisolated final class HarmonyEngine {
             for tonic in 0..<12 {
                 if tonic == field.tonic && mode == field.mode { continue }
                 let m = mode.pitchClassMask(tonic: tonic)
-                if (m ^ cur).nonzeroBitCount > 2 { continue }
+                // One changed note (2 bits) as before, or two (4 bits) at lower weight (decision D86): with only
+                // one-note neighbours a 10-minute session stayed inside one family of keys and every minute
+                // shared most of its pitch content with every other.
+                let diff = (m ^ cur).nonzeroBitCount
+                if diff > 4 { continue }
                 var w = expf(1.6 * brightnessBias * (HarmonyEngine.brightness(of: mode) - 0.5) * 2)
+                if diff > 2 { w *= 0.85 }
                 if recentKeys.contains(where: { $0.0 == tonic && $0.1 == mode }) { w *= 0.15 }
-                if tonic != field.tonic { w *= 1.2 }    // the pedal moving is the more audible change
+                // The pedal moving is the more audible change (x2.5, was x1.2, decision D86): same-tonic modal
+                // shifts kept a whole 10-minute render on one tonic.
+                if tonic != field.tonic { w *= 2.5 }
                 cands.append((tonic, mode)); weights.append(w)
             }
         }
@@ -266,6 +284,7 @@ nonisolated final class HarmonyEngine {
         pedalOnFifth = false
         roots = MarkovChain.chordRoots(degreeCount: new.degreeCount)
         roots.reset(to: new.chord.rootDegree)
+        recentRoots = [new.chord.rootDegree]
         recentKeys.append((new.tonic, new.mode))
         if recentKeys.count > 3 { recentKeys.removeFirst() }
         return .key(old: old, new: field)

@@ -8,6 +8,12 @@ import AudioToolbox
 /// ramps when the parameter can ramp (all AudioKit/Soundpipe DSP parameters), else a direct value.
 nonisolated enum ParamRamp {
     static let minimum: Double = 0.02
+    /// Minimum spacing between two writes to the same parameter when the second must not cancel the first
+    /// (decision D85). The conductor runs every block due inside a 20 ms tick at the start of that tick, and
+    /// an `Immediate` ramp replaces any ramp still running, so a decay scheduled 8-12 ms after an attack
+    /// used to start in the same render quantum and override the attack: notes swelled in over 0.3-0.6 s
+    /// instead of being struck. Anything at least this far apart lands in a later tick.
+    static let nextTick: Double = 0.025
 
     static func set(_ p: NodeParameter, _ value: Float, over: Double) {
         guard let param = p.parameter else { return }

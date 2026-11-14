@@ -135,8 +135,8 @@ nonisolated final class SceneDirector {
     static let thresholdRanges: [LayerID: ClosedRange<Float>] = [
         // Lead, grains and pluck lower than the plan (0.35-0.6, 0.55-0.8, 0.4-0.65): with the plan's ranges
         // they sounded 12-16 % of a 30-minute session against 50-60 % for keys and drips (decision D71).
-        .drone: 0...0, .pad: 0.15...0.3, .lead: 0.28...0.5, .keys: 0.3...0.55, .drips: 0.25...0.5,
-        .air: 0.05...0.4, .grains: 0.42...0.65, .pluck: 0.32...0.55,
+        .drone: 0...0, .pad: 0.15...0.3, .lead: 0.28...0.5, .keys: 0.25...0.45, .drips: 0.2...0.4,
+        .air: 0.05...0.4, .grains: 0.42...0.65, .pluck: 0.25...0.45,
     ]
 
     /// Session curve: 0.7 ... 1.0, periods of 437 s and 1151 s, so blooms vary over 7-19 minutes.
@@ -237,9 +237,15 @@ nonisolated final class SceneDirector {
         if features.isEmpty { features = [.lead] }
         switch kind {
         case .stillness:
-            var s: Set<LayerID> = [.drone, .air]
-            if rng.chance(0.35 * style.weight(.drips)) { s.insert(.drips) }
-            if rng.chance(0.25 * style.weight(.keys)) { s.insert(.keys) }
+            // Air in most but not all still scenes (decision D86): a constant hiss made every section share its top octave.
+            var s: Set<LayerID> = [.drone]
+            if rng.chance(0.8 * min(1, style.weight(.air))) { s.insert(.air) }
+            // A few points of light even in the stillest scene (decision D84): drips or keys almost always.
+            if rng.chance(0.55 * style.weight(.drips)) { s.insert(.drips) }
+            if rng.chance(0.35 * style.weight(.keys)) { s.insert(.keys) }
+            if !s.contains(.drips) && !s.contains(.keys) && rng.chance(0.85) {
+                s.insert(rng.chance(0.6) ? .drips : .keys)
+            }
             return s
         case .drift:
             var s: Set<LayerID> = [.drone]
@@ -264,9 +270,18 @@ nonisolated final class SceneDirector {
             if rng.chance(0.3 * style.weight(.air)) { s.insert(.air) }
             return s
         case .tide:
-            var s: Set<LayerID> = [.drone, .air]
+            var s: Set<LayerID> = [.drone]
+            if rng.chance(0.75 * min(1, style.weight(.air))) { s.insert(.air) }
             if keep(.pad) || rng.chance(0.5) { s.insert(.pad) }
             if rng.chance(0.3 * style.weight(.grains)) { s.insert(.grains) }
+            // One slow pointed voice under the swell (decision D84): the pluck's tide pulse, low bells, or drips.
+            // Without it a tide scene was 2-3 minutes of beds with no attacks at all.
+            var pointed: [LayerID] = [.pluck, .keys, .drips].filter { available.contains($0) }
+            let w: [LayerID: Float] = [.pluck: 0.5, .keys: 0.3, .drips: 0.2]
+            if !pointed.isEmpty {
+                let i = rng.weighted(pointed.map { (w[$0] ?? 0.3) * style.weight($0) })
+                s.insert(pointed.remove(at: i))
+            }
             return s
         }
     }

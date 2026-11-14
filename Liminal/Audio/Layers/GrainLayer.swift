@@ -68,8 +68,8 @@ nonisolated final class GrainLayer: BaseLayer {
         guard !tones.isEmpty else { return }
         var m = rng.pick(tones)
         let o = rng.unit()
-        if o < 0.15 { m -= 12 } else if o > 0.88 { m += 12 }
-        m = min(max(m, 64), 103)
+        if o < 0.12 { m -= 12 } else if o > 0.78 { m += 12 }
+        m = min(max(m, 64), 106)
         let cents = Double(rng.rangeF(-6...6))
         let (v, tok) = pool.take(now: ctx.time)
         let osc = oscs[v]
@@ -79,8 +79,10 @@ nonisolated final class GrainLayer: BaseLayer {
         let attack = glint ? rng.range(0.012...0.03) : rng.range(0.06...0.15)
         let release = glint ? rng.range(0.25...0.6) : rng.range(0.15...0.4)
         let tilt = Float(1 - 0.012 * Double(max(0, m - 76)))
-        let peak = amp * vel * tilt
-        let hold = attack + rng.range(0...0.08)
+        // Constant-loudness cloud (decision D84): above 2 grains/s each grain is scaled by sqrt(2 / rate), so
+        // thick clouds add texture rather than level (overlapping grains peaked the bypassed mix at -0.4 dBFS).
+        let peak = amp * vel * tilt * Float(min(1, (2 / rate(ctx)).squareRoot()))
+        let hold = max(attack, ParamRamp.minimum) + ParamRamp.nextTick + rng.range(0...0.08)
         ParamRamp.set(osc.$amplitude, 0, over: ParamRamp.minimum)
         after(0.025, ctx: ctx) { [weak self] in
             guard let self, self.pool.isCurrent(v, tok) else { return }
