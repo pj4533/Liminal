@@ -8,6 +8,7 @@
 #if os(visionOS)
 
 import SwiftUI
+import OSLog
 
 struct ControlsView: View {
     @ObservedObject var audioEngine: GenerativeEngine
@@ -188,6 +189,7 @@ struct ControlsView: View {
             audioEngine.reverb = settings.reverb
             audioEngine.notes = settings.notes
             audioEngine.currentScale = settings.currentScale
+            applyDebugLaunchOptions()
         }
         .onChange(of: settings.delay) { _, newValue in audioEngine.delay = newValue }
         .onChange(of: settings.reverb) { _, newValue in audioEngine.reverb = newValue }
@@ -195,6 +197,33 @@ struct ControlsView: View {
         .onChange(of: settings.currentScale) { _, newValue in audioEngine.currentScale = newValue }
         .sheet(isPresented: $showingSettings) {
             VisionSettingsSheetView(audioEngine: audioEngine)
+        }
+    }
+}
+
+// MARK: - DEBUG launch options (perf harness)
+
+extension ControlsView {
+    /// Honors -LiminalAutoPlay / -LiminalOpenDome (always false in Release builds).
+    fileprivate func applyDebugLaunchOptions() {
+        DebugLaunchOptions.logApplied()
+        if DebugLaunchOptions.autoPlay, !audioEngine.isRunning {
+            audioEngine.start()
+            visualEngine.start()
+            LMLog.general.info("🧪 DEBUG: auto-play started")
+        }
+        if DebugLaunchOptions.openDome, !isImmersed {
+            Task {
+                // Give the window a moment to finish presenting before requesting the space.
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                let result = await openImmersiveSpace(id: "liminalDome")
+                if case .opened = result {
+                    isImmersed = true
+                    LMLog.general.info("🧪 DEBUG: auto-opened liminalDome immersive space")
+                } else {
+                    LMLog.general.error("🧪 DEBUG: auto-open of liminalDome failed: \(String(describing: result), privacy: .public)")
+                }
+            }
         }
     }
 }

@@ -36,6 +36,9 @@ final class LowLevelDomeMesh {
     let lowLevelMesh: LowLevelMesh
     let meshResource: MeshResource
 
+    /// Optional GPU timing sink (the effects renderer's stats; same command queue).
+    var gpuStats: GPUTimingStats?
+
     // MARK: - Vertex Layout Constants
 
     /// Stride: float3 position (12) + float3 normal (12) + float2 uv (8) = 32 bytes
@@ -253,6 +256,7 @@ final class LowLevelDomeMesh {
         )
 
         encoder.endEncoding()
+        gpuStats?.track(commandBuffer, pass: "dome")
         commandBuffer.commit()
     }
 }

@@ -191,6 +191,7 @@ struct ImmersiveDomeView: View {
             LMLog.visual.error("❌ Failed to create LowLevelDomeMesh!")
             return
         }
+        mesh.gpuStats = renderer.gpuStats
         domeMesh = mesh
 
         loadingState = "Setting up DrawableQueue..."
@@ -299,6 +300,10 @@ struct ImmersiveDomeView: View {
             var maxRenderTime: Double = 0
             var droppedFrames = 0
             var lastStatsTime = Date()
+            var frameIntervals: [Double] = []
+            frameIntervals.reserveCapacity(512)
+            let perfLogInterval = DebugLaunchOptions.perfLogInterval
+            DebugLaunchOptions.logApplied()
 
             // Detailed frame timing for stutter investigation
             var consecutiveSlowFrames = 0
@@ -313,6 +318,7 @@ struct ImmersiveDomeView: View {
                 // Track yield time (time spent in Task.yield + any MainActor contention)
                 let yieldDuration = frameStartTime.timeIntervalSince(lastYieldTime) * 1000
                 lastFrameTime = frameStartTime
+                if frameCount > 1 { frameIntervals.append(frameInterval) }
 
                 // Detailed logging for slow frames
                 if frameInterval > 15 && frameCount > 1 {
@@ -330,8 +336,11 @@ struct ImmersiveDomeView: View {
                     consecutiveSlowFrames = 0
                 }
 
-                // Update effect time
-                effectTime = Float(Date().timeIntervalSince(startTime))
+                // Update effect time (DEBUG: -LiminalFreezeTime pins it for deterministic captures)
+                effectTime = DebugLaunchOptions.effectTime(Float(Date().timeIntervalSince(startTime)))
+
+                // Tag this frame's command buffers (dome compute + eyes) for GPU timing
+                effectsRenderer?.gpuStats.beginFrame()
 
                 // Update panel mesh with GPU-driven breathing
                 domeMesh?.updateBreathing(
@@ -427,7 +436,7 @@ struct ImmersiveDomeView: View {
 
                 // Log stats every second
                 let timeSinceStats = Date().timeIntervalSince(lastStatsTime)
-                if timeSinceStats >= 1.0 {
+                if timeSinceStats >= perfLogInterval {
                     let avgRenderTime = totalRenderTime / Double(frameCount)
                     let actualFPS = Double(frameCount) / timeSinceStats
                     let fpsPercent = (actualFPS / 60.0) * 100
@@ -435,13 +444,19 @@ struct ImmersiveDomeView: View {
                     let hasDepth = effectsRenderer?.depthTexture != nil
                     let hasStereo = stereoMaterialBuilder != nil
 
-                    LMLog.visual.info("📊 visionOS PERF: fps=\(String(format: "%.1f", actualFPS)) (\(String(format: "%.0f", fpsPercent))% of 60) | render avg=\(String(format: "%.1f", avgRenderTime))ms max=\(String(format: "%.1f", maxRenderTime))ms | dropped=\(droppedFrames) | transition=\(String(format: "%.0f", transitionState.transitionProgress * 100))%")
+                    frameIntervals.sort()
+                    let intervalP95 = GPUTimingStats.percentile(frameIntervals, 0.95)
+                    let gpuFragment = effectsRenderer?.gpuStats.drain().logFragment ?? "gpu n=0"
+
+                    let perfLine = "📊 visionOS PERF: fps=\(String(format: "%.1f", actualFPS)) (\(String(format: "%.0f", fpsPercent))% of 60) | render avg=\(String(format: "%.1f", avgRenderTime))ms max=\(String(format: "%.1f", maxRenderTime))ms | dropped=\(droppedFrames) | transition=\(String(format: "%.0f", transitionState.transitionProgress * 100))% | interval p95=\(String(format: "%.2f", intervalP95))ms | \(gpuFragment)"
+                    LMLog.visual.info("\(perfLine, privacy: .public)")
                     LMLog.visual.info("🔮 3D STATUS: depth=\(hasDepth) stereo=\(hasStereo) gen=\(transitionState.lastGeneration)")
 
                     frameCount = 0
                     totalRenderTime = 0
                     maxRenderTime = 0
                     droppedFrames = 0
+                    frameIntervals.removeAll(keepingCapacity: true)
                     lastStatsTime = Date()
                 }
 

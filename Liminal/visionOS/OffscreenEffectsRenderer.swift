@@ -70,6 +70,10 @@ final class OffscreenEffectsRenderer {
     private var perfFrameCount: Int = 0
     private var lastPerfLogTime: Date = Date()
 
+    /// Per-pass GPU timing (MTLCommandBuffer gpuStart/EndTime). Shared with the dome mesh
+    /// compute pass; drained by the render loop's PERF log.
+    let gpuStats = GPUTimingStats()
+
     // MARK: - Triple Buffering
     // Semaphore allows up to 3 frames in flight, preventing GPU starvation
     // while avoiding blocking on waitUntilCompleted()
@@ -719,6 +723,8 @@ final class OffscreenEffectsRenderer {
             blitEncoder.endEncoding()
         }
 
+        gpuStats.track(commandBuffer, pass: "fx")
+
         // Async completion handler - signals semaphore when GPU finishes
         // This is the key fix: GPU and CPU now work in parallel
         commandBuffer.addCompletedHandler { [weak self] buffer in
@@ -834,7 +840,8 @@ final class OffscreenEffectsRenderer {
             ghostTapBuffer: ghostTapBuffer,
             uniforms: uniforms,
             ghostTapCount: ghostTapResult.activeCount,
-            eyeOffset: -stereoOffset  // Left eye shifts left
+            eyeOffset: -stereoOffset,  // Left eye shifts left
+            passName: "L"
         )
 
         let rightOk = renderEyeToDrawable(
@@ -844,7 +851,8 @@ final class OffscreenEffectsRenderer {
             ghostTapBuffer: ghostTapBuffer,
             uniforms: uniforms,
             ghostTapCount: ghostTapResult.activeCount,
-            eyeOffset: stereoOffset  // Right eye shifts right
+            eyeOffset: stereoOffset,  // Right eye shifts right
+            passName: "R"
         )
 
         return leftOk && rightOk
@@ -858,7 +866,8 @@ final class OffscreenEffectsRenderer {
         ghostTapBuffer: MTLBuffer,
         uniforms: EffectsUniforms,
         ghostTapCount: Int,
-        eyeOffset: Float
+        eyeOffset: Float,
+        passName: String
     ) -> Bool {
         guard let drawable = try? queue.nextDrawable(),
               let commandBuffer = commandQueue.makeCommandBuffer() else {
@@ -896,8 +905,16 @@ final class OffscreenEffectsRenderer {
         encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         encoder.endEncoding()
 
+        // DEBUG perf option: time the copy separately by giving it its own command buffer.
+        var blitBuffer: MTLCommandBuffer = commandBuffer
+        if DebugLaunchOptions.splitPasses, let separate = commandQueue.makeCommandBuffer() {
+            gpuStats.track(commandBuffer, pass: "fx" + passName)
+            commandBuffer.commit()
+            blitBuffer = separate
+        }
+
         // Copy to drawable
-        if let blitEncoder = commandBuffer.makeBlitCommandEncoder() {
+        if let blitEncoder = blitBuffer.makeBlitCommandEncoder() {
             blitEncoder.copy(
                 from: outputTexture,
                 sourceSlice: 0,
@@ -912,7 +929,8 @@ final class OffscreenEffectsRenderer {
             blitEncoder.endEncoding()
         }
 
-        commandBuffer.commit()
+        gpuStats.track(blitBuffer, pass: blitBuffer === commandBuffer ? "eye" + passName : "blit" + passName)
+        blitBuffer.commit()
         drawable.present()
         return true
     }

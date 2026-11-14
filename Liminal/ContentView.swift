@@ -174,6 +174,14 @@ struct ContentView: View {
             audioEngine.reverb = settings.reverb
             audioEngine.notes = settings.notes
             audioEngine.currentScale = settings.currentScale
+
+            // DEBUG perf harness: -LiminalAutoPlay YES (always false in Release)
+            DebugLaunchOptions.logApplied()
+            if DebugLaunchOptions.autoPlay, !audioEngine.isRunning {
+                audioEngine.start()
+                visualEngine.start()
+                LMLog.general.info("🧪 DEBUG: auto-play started")
+            }
         }
         // Settings -> AudioEngine: propagate changes immediately
         .onChange(of: settings.delay) { _, newValue in audioEngine.delay = newValue }
@@ -322,13 +330,14 @@ struct VisualDisplayView: View {
 
     // Single uniforms struct - matches visionOS pattern for platform parity
     private var effectUniforms: EffectsUniforms {
+        let effectTime = DebugLaunchOptions.effectTime(Float(effectController.time))
         var uniforms = EffectsUniformsComputer.compute(
-            time: Float(effectController.time),
+            time: effectTime,
             transitionProgress: Float(transitionManager.transitionProgress),
             hasSaliencyMap: transitionManager.currentSaliencyMap != nil
         )
         // Add time-based hue shift (macOS-specific for now)
-        uniforms.hueBaseShift = Float(effectController.time * 0.03)
+        uniforms.hueBaseShift = effectTime * 0.03
         // Debug toggle controls the effect currently being tested
         if !settings.debugEffectEnabled {
             uniforms.bloomAmount = 0
