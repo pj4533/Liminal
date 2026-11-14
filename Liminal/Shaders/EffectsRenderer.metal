@@ -64,21 +64,24 @@ float snoise2d(float2 v) {
 // See: https://mini.gmshaders.com/p/turbulence
 
 float2 turbulence_distort(float2 pos, float time, float speed) {
-    float2 result = pos;
-    float freq = 2.0;
+    half2 result = half2(pos);
+    half freq = 2.0h;
 
     // Rotation matrix (~53 degrees) for perpendicular wave interference
-    float2x2 rot = float2x2(0.6, -0.8, 0.8, 0.6);
+    half2x2 rot = half2x2(0.6h, -0.8h, 0.8h, 0.6h);
+    // Wrap in float before converting: half loses sub-second precision past ~2048s.
+    // Seamless because time only enters through sin(), which has period 2π.
+    half htime = half(fmod(speed * time, 6.2831853));
 
-    for (float i = 0.0; i < 8.0; i++) {
-        float phase = freq * (rot * result).y + speed * time + i;
+    for (half i = 0.0h; i < 8.0h; i++) {
+        half phase = freq * (rot * result).y + htime + i;
         result += rot[0] * sin(phase) / freq;
-        rot = rot * float2x2(0.6, -0.8, 0.8, 0.6);
-        freq *= 1.4;
+        rot = rot * half2x2(0.6h, -0.8h, 0.8h, 0.6h);
+        freq *= 1.4h;
     }
 
     // Return displacement (difference from original position)
-    return result - pos;
+    return float2(result) - pos;
 }
 
 // MARK: - HSV Conversion (for Nishitsuji fractal hue cycling)
@@ -93,66 +96,67 @@ float3 hsv2rgb(float h, float s, float v) {
 // Crystalline noise using swizzled sin/cos dot products — distinct from XorDev turbulence.
 // See: docs/NISHITSUJI_SHADERS.md
 
-float nishitsujiNoise(float3 pos, int octaves) {
-    float e = 0.0;
-    float s = 1.0;
+float nishitsujiNoise(half3 pos, int octaves) {
+    half e = 0.0h;
+    half s = 1.0h;
     for (int j = 0; j < octaves; j++) {
-        e += abs(dot(sin(pos.yzx * s), cos(pos.xzz * s))) / s * 0.6;
-        s *= 2.0;
+        e += abs(dot(sin(pos.yzx * s), cos(pos.xzz * s))) / s * 0.6h;
+        s *= 2.0h;
     }
-    return e;
+    return float(e);
 }
 
 // Flowing/organic variant (from the viral fractal tweets)
-float nishitsujiNoiseFlowing(float3 pos, int octaves) {
-    float e = 0.0;
-    float s = 1.0;
+float nishitsujiNoiseFlowing(half3 pos, int octaves) {
+    half e = 0.0h;
+    half s = 1.0h;
     for (int j = 0; j < octaves; j++) {
-        float3 sinP = sin(pos.zxy * s) - 0.5;
-        float3 cosP = 1.0 - cos(pos.yxz * s);
+        half3 sinP = sin(pos.zxy * s) - 0.5h;
+        half3 cosP = 1.0h - cos(pos.yxz * s);
         e += sin(dot(sinP, cosP)) / s;
-        s *= 2.0;
+        s *= 2.0h;
     }
-    return e;
+    return float(e);
 }
 
 // MARK: - Log-Spherical Transform (Nishitsuji's signature viral technique)
 // UV distortion through logarithmic-spherical coordinates — infinite-depth kaleidoscopic warping.
-// 9-octave sinusoidal noise in log-polar space.
+// 6-octave sinusoidal noise in log-polar space (higher octaves are sub-pixel at 2048²).
 
 float3 logSphericalTransform(float2 uv, float time, float intensity) {
     float2 centered = uv - 0.5;
     float R = length(centered);
 
-    // Logarithmic-spherical mapping
+    // Logarithmic-spherical mapping (float for UV precision)
     float logR = log2(max(R, 0.001));
     float angle = atan2(centered.y, centered.x);
 
-    // Animate through fractal space
-    float3 p = float3(
-        logR - time * 0.3,
-        exp(1.0 - centered.y / max(R, 0.001)),
-        angle + cos(time * 0.5) * 0.2
+    // Animate through fractal space — convert to half for noise evaluation
+    half3 p = half3(
+        logR - fmod(time * 0.3, 6.2831853),  // wrap: p.x only feeds sin/cos at integer multiples
+        exp(half(1.0 - centered.y / max(R, 0.001))),
+        angle + half(cos(time * 0.5)) * 0.2h
     );
 
-    // 9-octave sinusoidal noise (Nishitsuji's custom fBM)
-    float e = p.y - 1.0;
-    float s = 1.0;
-    for (int j = 0; j < 9; j++) {
-        float3 sinP = sin(p.zxy * s) - 0.5;
-        float3 cosP = 1.0 - cos(p.yxz * s);
+    // 6-octave sinusoidal noise in half precision (Apple GPU runs FP16 at 2x rate)
+    half e = p.y - 1.0h;
+    half s = 1.0h;
+    for (int j = 0; j < 6; j++) {
+        half3 sinP = sin(p.zxy * s) - 0.5h;
+        half3 cosP = 1.0h - cos(p.yxz * s);
         e += sin(dot(sinP, cosP)) / s;
-        s *= 2.0;
+        s *= 2.0h;
     }
 
-    // UV displacement along radial direction
-    float displacement = e * intensity;
+    // UV displacement along radial direction (back to float for UV math)
+    float ef = float(e);
+    float displacement = ef * intensity;
     float2 offset = float2(
         cos(angle) * displacement,
         sin(angle) * displacement
     );
 
-    return float3(offset, e);
+    return float3(offset, ef);
 }
 
 // MARK: - Uniforms
@@ -289,9 +293,9 @@ fragment half4 effectsFragment(
     // === 2.7 SINUSOIDAL INTERFERENCE NOISE (Nishitsuji crystalline distortion) ===
     // Refracting, prismatic texture — complements XorDev's smoky turbulence
     if (uniforms.fractalNoiseAmount > 0.001) {
-        float3 noisePos = float3(uv * 6.0, uniforms.time * 0.15);
-        float noiseX = nishitsujiNoiseFlowing(noisePos, 8);
-        float noiseY = nishitsujiNoiseFlowing(noisePos + float3(17.0, 31.0, 7.0), 8);
+        half3 noisePos = half3(half2(uv * 6.0), half(fmod(uniforms.time * 0.15, 6.2831853)));
+        float noiseX = nishitsujiNoiseFlowing(noisePos, 5);
+        float noiseY = nishitsujiNoiseFlowing(noisePos + half3(17.0h, 31.0h, 7.0h), 5);
         float amount = uniforms.fractalNoiseAmount;
         uv += float2(noiseX, noiseY) * amount;
     }
@@ -424,8 +428,8 @@ fragment half4 effectsFragment(
         float depth = float(depthTexture.sample(texSampler, uv).r);
 
         // Fractal noise for hue modulation
-        float3 noisePos = float3(uv * 5.0, uniforms.time * 0.1);
-        float fractalValue = nishitsujiNoiseFlowing(noisePos, 6);
+        half3 noisePos = half3(half2(uv * 5.0), half(fmod(uniforms.time * 0.1, 6.2831853)));
+        float fractalValue = nishitsujiNoiseFlowing(noisePos, 4);
 
         // Convert current color to HSV (full float precision)
         float3 rgb = float3(currentColor);
