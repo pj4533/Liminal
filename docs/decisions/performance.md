@@ -749,3 +749,18 @@ Full tables and the ranked plan are in `docs/plans/performance.md` ("Round 2b").
   but would be a parity-below-50 dB change; it would need its own evaluation with the 35 dB visual-equivalent
   bar. Not pursued here. The derived lesson: moving cheap eye-independent math into a shared struct costs more
   in register pressure than it saves; only the turbulence (heavy trig) sharing is worth testing.
+
+## 2026-11-14: Round 3 item (per-eye-alu-half): benchmark result - NOT KEPT
+
+- **Item**: half x-dependent hue waves, sqrt depth boost, turbulence octave table, shared max/min (commit 5a63757,
+  reverted; branch reset to bf5a2bf, so the implementation entry for it is gone with the commit).
+- **Bench**: interleaved A/B (pre bf5a2bf vs post 5a63757 shader), 5 trials x 300 frames, two runs.
+  Overall B/A 0.976 and 0.945, median-of-trials 0.956 and 0.950 (about -2.4% to -5.5%; noise floor about +-1.2%).
+  Median GPU ms (B) 4.82 and 5.47. Per-trial spread was wide in run 1 (0.945-1.027).
+- **Parity**: FAILED. `--compare`: worst PSNR 25.5 dB, worst max abs diff 215; t37 30.9 dB, t113 35.0 dB, t260 36.9 dB.
+  Bar for "near-exact" is 45 dB. Differences touch 90-97% of pixels (mean abs 2-3.8/255), so at least one
+  sub-change is not near-exact (suspects: the half hue-wave phases, or the turbulence table's `.zw` / phase
+  convention changing the displacement, since turbulence feeds the whole frame).
+- **Decision**: not kept (parity bar missed, gain in the 2-5% range, borderline against the 4% bar). Reset to bf5a2bf.
+- **Follow-up**: bisect the four sub-changes individually; the shared max/min and sqrt depth boost are the
+  likely exact ones, and could be re-applied alone, but expected gain is below the 4% bar.
