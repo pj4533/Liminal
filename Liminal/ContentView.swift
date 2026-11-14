@@ -13,17 +13,20 @@ import AppKit
 
 // MARK: - Window Aspect Ratio Constraint
 
-/// Enforces window resizing so visual area stays square (width = height + controlPanelWidth)
+/// Enforces window resizing so the visual area keeps the image aspect ratio
+/// (width = height * visualAspect + controlPanelWidth). Images are 3:2 since
+/// the Gemini 3.1 switch (docs/decisions/images.md D4).
 final class SquareVisualWindowDelegate: NSObject, NSWindowDelegate {
     static let controlPanelWidth: CGFloat = 281  // 280 panel + 1 divider
+    static let visualAspect: CGFloat = 1.5       // 3:2, matches generated images
 
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
         // Calculate title bar height for this window
         let titleBarHeight = sender.frame.height - sender.contentRect(forFrameRect: sender.frame).height
         let contentHeight = frameSize.height - titleBarHeight
-        // Enforce: visual width = visual height (square)
+        // Enforce: visual width = visual height * aspect
         // Total content width = visual width + control panel width
-        let newWidth = contentHeight + Self.controlPanelWidth
+        let newWidth = (contentHeight * Self.visualAspect).rounded() + Self.controlPanelWidth
         return NSSize(width: newWidth, height: frameSize.height)
     }
 }
@@ -47,10 +50,10 @@ struct WindowAccessor: NSViewRepresentable {
             // Set our delegate (stored in coordinator so it won't be deallocated)
             window.delegate = context.coordinator.delegate
 
-            // Set initial frame to enforce square visual area
-            let titleBarHeight = window.frame.height - window.contentRect(forFrameRect: window.frame).height
+            // Set initial frame to enforce the 3:2 visual area
             let contentHeight = window.contentRect(forFrameRect: window.frame).height
-            let newWidth = contentHeight + SquareVisualWindowDelegate.controlPanelWidth
+            let newWidth = (contentHeight * SquareVisualWindowDelegate.visualAspect).rounded()
+                + SquareVisualWindowDelegate.controlPanelWidth
             let newFrame = NSRect(
                 x: window.frame.origin.x,
                 y: window.frame.origin.y,
@@ -181,7 +184,7 @@ struct ContentView: View {
         .onChange(of: settings.notes) { _, newValue in audioEngine.notes = newValue }
         .onChange(of: settings.currentScale) { _, newValue in audioEngine.currentScale = newValue }
         .sheet(isPresented: $showingSettings) {
-            SettingsSheetView(audioEngine: audioEngine)
+            SettingsSheetView(audioEngine: audioEngine, visualEngine: visualEngine)
         }
     }
 }
@@ -191,6 +194,7 @@ struct ContentView: View {
 struct SettingsSheetView: View {
     @ObservedObject private var settings = SettingsService.shared
     @ObservedObject var audioEngine: GenerativeEngine
+    @ObservedObject var visualEngine: VisualEngine
     @Environment(\.dismiss) private var dismiss
     @State private var cacheCount: Int = 0
 
@@ -199,8 +203,7 @@ struct SettingsSheetView: View {
     }
 
     private func refreshCacheCount() {
-        let cache = ImageCache()
-        cacheCount = cache.count + cache.rawCount
+        cacheCount = ImageStore.shared.imageCount()
     }
 
     var body: some View {
@@ -262,14 +265,9 @@ struct SettingsSheetView: View {
                     .font(.headline)
                     .foregroundStyle(.secondary)
 
-                Button("Clear Image Cache") {
-                    let cache = ImageCache()
-                    cache.clearAll()
-                    cache.clearAllRaw()
-                }
-                .foregroundStyle(.red)
+                ClearImagesSection(visualEngine: visualEngine)
 
-                Text("Deletes all cached images. New images will be generated on next play.")
+                Text("Deletes every cached image and its metadata. Settings are kept.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -300,7 +298,7 @@ struct SettingsSheetView: View {
             Spacer()
         }
         .padding(20)
-        .frame(width: 400, height: 480)
+        .frame(width: 400, height: 520)
         .onAppear {
             refreshCacheCount()
         }

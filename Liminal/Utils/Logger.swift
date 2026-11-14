@@ -3,7 +3,7 @@ import OSLog
 
 /// Centralized logging system for Liminal
 /// Usage: LMLog.audio.info("Message")
-public enum LMLog {
+nonisolated public enum LMLog {
     private static let subsystem = "com.saygoodnight.Liminal"
 
     // Loggers for each category

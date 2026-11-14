@@ -36,7 +36,7 @@ import OSLog
 /// Thread Safety: All mutable state is protected by `lock`. The `nonisolated(unsafe)`
 /// annotation tells the compiler we're managing thread safety manually via the lock,
 /// which is necessary because OSAllocatedUnfairLock.withLock uses @Sendable closures.
-final class AtomicImageBuffer: @unchecked Sendable {
+nonisolated final class AtomicImageBuffer: @unchecked Sendable {
 
     // MARK: - Storage (protected by lock)
 
@@ -55,7 +55,11 @@ final class AtomicImageBuffer: @unchecked Sendable {
 
     /// Pending queue for visionOS - generated images wait here until advance() is called.
     /// This ensures visionOS respects the same timing as macOS.
-    nonisolated(unsafe) private var _pendingQueue: [CGImage] = []
+    /// Each entry carries its metadata so advanceFromQueue() moves both together.
+    nonisolated(unsafe) private var _pendingQueue: [(image: CGImage, metadata: ImageMetadata?)] = []
+
+    /// Metadata for `_current` (style, palette, moods, measured colors). Protected by lock.
+    nonisolated(unsafe) private var _currentMetadata: ImageMetadata?
 
     /// Generation counter - increments on each store, allows detecting changes.
     nonisolated(unsafe) private var _generation: UInt64 = 0
@@ -73,10 +77,11 @@ final class AtomicImageBuffer: @unchecked Sendable {
 
     /// Store a new current CGImage. Called from background pipeline.
     /// This is O(1), fully thread-safe, and does NOT require MainActor.
-    func storeCurrent(_ image: CGImage) {
-        let (gen, wasEmpty, count) = lock.withLock {
+    func storeCurrent(_ image: CGImage, metadata: ImageMetadata? = nil) {
+        let (gen, wasEmpty, _) = lock.withLock {
             let wasEmpty = self._current == nil
             self._current = image
+            self._currentMetadata = metadata
             self._generation &+= 1
             self._storeCount += 1
             return (self._generation, wasEmpty, self._storeCount)
@@ -97,10 +102,11 @@ final class AtomicImageBuffer: @unchecked Sendable {
     }
 
     /// Store both current and next atomically.
-    func store(current: CGImage, next: CGImage?) {
+    func store(current: CGImage, next: CGImage?, metadata: ImageMetadata? = nil) {
         lock.withLock {
             let wasEmpty = self._current == nil
             self._current = current
+            self._currentMetadata = metadata
             self._next = next
             self._generation &+= 1
             self._storeCount += 1
@@ -164,6 +170,7 @@ final class AtomicImageBuffer: @unchecked Sendable {
             _current = nil
             _next = nil
             _currentDepth = nil
+            _currentMetadata = nil
             _pendingQueue.removeAll()
             _generation &+= 1
             _depthGeneration &+= 1
@@ -200,9 +207,9 @@ final class AtomicImageBuffer: @unchecked Sendable {
 
     /// Queue an image for later display. Used by visionOS generation pipeline.
     /// Images wait here until advanceFromQueue() is called by the timer.
-    func queuePending(_ image: CGImage) {
+    func queuePending(_ image: CGImage, metadata: ImageMetadata? = nil) {
         let count = lock.withLock {
-            self._pendingQueue.append(image)
+            self._pendingQueue.append((image, metadata))
             return self._pendingQueue.count
         }
         LMLog.visual.info("📦 AtomicBuffer QUEUE: \(image.width)x\(image.height), pending=\(count)")
@@ -218,8 +225,9 @@ final class AtomicImageBuffer: @unchecked Sendable {
                 return (false, nil, 0, 0)
             }
 
-            let image = self._pendingQueue.removeFirst()
+            let (image, metadata) = self._pendingQueue.removeFirst()
             self._current = image
+            self._currentMetadata = metadata
             self._generation &+= 1
 
             return (true, image, self._generation, self._pendingQueue.count)
@@ -238,6 +246,18 @@ final class AtomicImageBuffer: @unchecked Sendable {
         lock.withLock {
             self._pendingQueue.count
         }
+    }
+
+    // MARK: - Metadata
+
+    /// Metadata for the image currently displayed (nil for images without a sidecar).
+    func loadCurrentMetadata() -> ImageMetadata? {
+        lock.withLock { _currentMetadata }
+    }
+
+    /// Current image, its metadata and the generation counter, read atomically.
+    func loadCurrentWithMetadata() -> (image: CGImage?, metadata: ImageMetadata?, generation: UInt64) {
+        lock.withLock { (_current, _currentMetadata, _generation) }
     }
 
     /// Check if there's a current image to display.
