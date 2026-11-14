@@ -478,7 +478,8 @@ static inline half4 shadeEye(
 
         // Fractal noise for hue modulation
         half3 noisePos = half3(half2(uv * 5.0), half(fmod(uniforms.time * 0.1, 6.2831853)));
-        float fractalValue = nishitsujiNoiseFlowing(noisePos, 4);
+        // One sin/cos of noisePos; octaves 2..4 by double-angle recurrence (flowOctaves).
+        float fractalValue = float(flowOctaves(sin(noisePos), cos(noisePos), 4));
 
         // Convert current color to HSV (full float precision)
         float3 rgb = float3(currentColor);

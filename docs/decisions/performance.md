@@ -691,3 +691,22 @@ Full tables and the ranked plan are in `docs/plans/performance.md` ("Round 2b").
   distortion feedback). Expected class "visual-equivalent" (>= 35 dB): met with ~10 dB margin.
   Side-by-side views of t113-L and trans113-L show an identical look.
 - Verdict: KEPT, no reset.
+
+---
+
+## 2026-11-14: Round 2b item 3 (fhue-double-angle-half-hsv), commit 1: fractal-hue noise recurrence
+
+- **What**: stage 6.5 of `shadeEye()` replaces `nishitsujiNoiseFlowing(noisePos, 4)` with
+  `float(flowOctaves(sin(noisePos), cos(noisePos), 4))`. Same helper and half precision as item 1.
+  Trig per pixel per eye drops from 4 x (3 sin + 3 cos + 1 sin) = 28 to 3 + 3 + 4 = 10.
+- **Why**: the fractal-hue noise part is 8.5% of the MRT frame; the Round 2b prototype for this
+  stage measured B/A 0.953.
+- **Kept per eye**: the noise is still evaluated in each eye at that eye's uv. Evaluating it once
+  for both eyes was rejected (pins the hue pattern at zero disparity while the image has parallax).
+- **`nishitsujiNoiseFlowing`**: now has no callers. Kept in the file as the reference definition
+  that `flowOctaves` reproduces (the comment above `flowOctaves` points at it); it costs nothing
+  when unused.
+- **Parity**: visual-equivalent (same reasoning as item 1: 4 octaves, half arguments up to ~8x the
+  base, so the old version's top octave is also half-quantised).
+- **Verification in this step**: visionOS Simulator and macOS builds succeed. The A/B (two runs,
+  >2% to count) and PSNR/PNG review are run separately by the benchmarking step.
