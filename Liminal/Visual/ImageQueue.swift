@@ -499,6 +499,6 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
         let display = await upscaleIfNeeded(trimmed)
         guard clearGeneration == store.clearGeneration, !Task.isCancelled else { return }
         await enqueue(DisplayItem(id: metadata.id, cgImage: display, image: Self.platformImage(display), metadata: metadata))
-        LMLog.visual.info("🔄 [Pipeline] ✅ \(spec.styleID)/\(spec.paletteID) \(display.width)x\(display.height) via \(generated.model)")
+        LMLog.visual.info("🔄 [Pipeline] ✅ \(spec.styleID, privacy: .public)/\(spec.paletteID, privacy: .public) \(display.width)x\(display.height) via \(generated.model)")
     }
 }

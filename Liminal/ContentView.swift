@@ -329,7 +329,7 @@ struct VisualDisplayView: View {
         music.setVisualMood(mood)
         if imageChanged { music.imageDidChange(transitionDuration: VisualMoodBuilder.crossfadeDuration) }
         sync.lastMood = mood
-        LMLog.visual.info("🎼 setVisualMood b=\(String(format: "%.2f", mood.brightness)) w=\(String(format: "%.2f", mood.warmth)) s=\(String(format: "%.2f", mood.saturation)) e=\(String(format: "%.2f", mood.energy)) words=\(mood.moodWords.joined(separator: ","), privacy: .public) imageDidChange=\(imageChanged)")
+        LMLog.visual.info("🎼 setVisualMood b=\(String(format: "%.2f", mood.brightness), privacy: .public) w=\(String(format: "%.2f", mood.warmth), privacy: .public) s=\(String(format: "%.2f", mood.saturation), privacy: .public) e=\(String(format: "%.2f", mood.energy), privacy: .public) words=\(mood.moodWords.joined(separator: ","), privacy: .public) imageDidChange=\(imageChanged)")
     }
 
     var body: some View {

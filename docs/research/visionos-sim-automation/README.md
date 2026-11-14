@@ -184,6 +184,8 @@ Verified end-to-end with no code changes to the app:
 
 `scripts/sim-tap.sh <x> <y>` takes coordinates in **simulator-screenshot pixels**. It reads the Simulator window bounds through Peekaboo and maps them to screen points. The display is 16:9 at window width, and the remaining space above it is window chrome. Workflow: screenshot → find the element's pixel position → `sim-tap.sh`.
 
+Sliders do not respond to a tap, and they ignore `peekaboo drag`. To move them, use `scripts/sim-drag.sh <x0> <y0> <x1> <y1>`, which takes the same pixel coordinates. It posts CGEvent drags through `scripts/sim-drag.swift`, and the Simulator only responds when those events carry `mouseEventDeltaX/Y`. The slider moves less than the pointer, so overshoot and check the screenshot: dragging +160 px moved the value by 11 to 22 points in testing. Picker menus such as Scale open with a tap, and a second tap picks an item.
+
 Caveats:
 - The Simulator window must stay visible and on-screen. The window is resizable, and the script re-reads its bounds on every tap.
 - The PERF line's `render` time is CPU encode time, not GPU time. For shader optimization work, add GPU timing (`MTLCommandBuffer.gpuStartTime/gpuEndTime`) to the PERF line (see 04-performance-measurement.md).
