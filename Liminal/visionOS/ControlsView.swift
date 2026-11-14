@@ -120,22 +120,29 @@ struct ControlsView: View {
                 Text("Audio")
                     .font(.headline)
 
+                Picker("Style", selection: $settings.style) {
+                    ForEach(MusicStyle.ID.allCases, id: \.self) { style in
+                        Text(style.title).tag(style)
+                    }
+                }
+                .pickerStyle(.segmented)
+
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Delay: \(Int(settings.delay * 100))%")
+                    Text("Density: \(Int(settings.notes * 100))%")
                         .font(.caption)
-                    Slider(value: $settings.delay, in: 0...1)
+                    Slider(value: $settings.notes, in: 0...1)
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Reverb: \(Int(settings.reverb * 100))%")
+                    Text("Space: \(Int(settings.reverb * 100))%")
                         .font(.caption)
                     Slider(value: $settings.reverb, in: 0...1)
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Notes: \(Int(settings.notes * 100))%")
+                    Text("Echo: \(Int(settings.delay * 100))%")
                         .font(.caption)
-                    Slider(value: $settings.notes, in: 0...1)
+                    Slider(value: $settings.delay, in: 0...1)
                 }
             }
 
@@ -146,9 +153,10 @@ struct ControlsView: View {
                 Text("Scale")
                     .font(.headline)
 
-                Picker("Scale", selection: $settings.currentScale) {
+                Picker("Scale", selection: settings.scaleSelection) {
+                    Text("Auto (evolving)").tag(ScaleType?.none)
                     ForEach(ScaleType.allCases, id: \.self) { scale in
-                        Text(scale.rawValue).tag(scale)
+                        Text(scale.rawValue).tag(ScaleType?.some(scale))
                     }
                 }
                 .pickerStyle(.menu)
@@ -185,16 +193,14 @@ struct ControlsView: View {
         }
         .padding(24)
         .onAppear {
-            audioEngine.delay = settings.delay
-            audioEngine.reverb = settings.reverb
-            audioEngine.notes = settings.notes
-            audioEngine.currentScale = settings.currentScale
+            audioEngine.apply(settings)
             applyDebugLaunchOptions()
         }
         .onChange(of: settings.delay) { _, newValue in audioEngine.delay = newValue }
-        .onChange(of: settings.reverb) { _, newValue in audioEngine.reverb = newValue }
-        .onChange(of: settings.notes) { _, newValue in audioEngine.notes = newValue }
-        .onChange(of: settings.currentScale) { _, newValue in audioEngine.currentScale = newValue }
+        .onChange(of: settings.reverb) { _, newValue in audioEngine.space = newValue }
+        .onChange(of: settings.notes) { _, newValue in audioEngine.density = newValue }
+        .onChange(of: settings.style) { _, newValue in audioEngine.style = newValue }
+        .onChange(of: settings.pinnedScale) { _, newValue in audioEngine.pinnedScale = newValue }
         .sheet(isPresented: $showingSettings) {
             VisionSettingsSheetView(audioEngine: audioEngine, visualEngine: visualEngine)
         }
@@ -309,10 +315,7 @@ struct VisionSettingsSheetView: View {
 
                     Button("Reset All to Defaults", role: .destructive) {
                         settings.resetToDefaults()
-                        audioEngine.delay = settings.delay
-                        audioEngine.reverb = settings.reverb
-                        audioEngine.notes = settings.notes
-                        audioEngine.currentScale = settings.currentScale
+                        audioEngine.apply(settings)
                     }
 
                     Text("Resets all audio and visual settings to defaults.")

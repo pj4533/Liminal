@@ -1,59 +1,47 @@
 import Foundation
 
 /// Autonomous parameter drift using golden-ratio multi-sine oscillation.
-/// Each parameter drifts at incommensurable rates so they never sync up.
-/// Produces values in 0...1 range that modulate around a center point.
-final class ParameterDrift {
+/// Each channel drifts at incommensurable rates so channels never sync up.
+/// Runs on conductor time (seconds, Double) so offline renders are exact.
+nonisolated enum ParameterDrift {
 
-    /// A single drifting parameter with its own phase offsets and rates.
+    static let phi = 1.618033988749895
+
+    /// A single drifting value with its own period and phase.
     struct Channel {
-        let baseRate: Float       // Fundamental oscillation rate
-        let phaseOffset: Float    // Unique phase offset
+        let rate: Double          // radians per second of the fundamental
+        let phase: Double
 
-        /// Returns a drift value in -1...1 at the given time.
-        func value(at time: Float) -> Float {
-            let phi: Float = 1.618034
+        /// - period: seconds of the fundamental; the two upper partials are at phi and phi^2 times faster.
+        init(period: Double, phase: Double) {
+            self.rate = 2 * Double.pi / max(0.01, period)
+            self.phase = phase
+        }
 
-            let w1 = sin(time * baseRate + phaseOffset)
-            let w2 = sin(time * baseRate * phi + phaseOffset * 2.3)
-            let w3 = sin(time * baseRate * phi * phi + phaseOffset * 0.7)
+        /// -1...1 (approximately; the three partials sum to at most 1).
+        func value(at time: Double) -> Float {
+            let w1 = sin(time * rate + phase)
+            let w2 = sin(time * rate * phi + phase * 2.3)
+            let w3 = sin(time * rate * phi * phi + phase * 0.7)
+            return Float((w1 + w2 * 0.6 + w3 * 0.4) / 2.0)
+        }
 
-            return (w1 + w2 * 0.6 + w3 * 0.4) / 2.0
+        /// 0...1
+        func unit(at time: Double) -> Float { 0.5 + 0.5 * value(at: time) }
+    }
+
+    /// `count` channels with periods spread over `periods` on a golden-ratio sequence, random phases.
+    static func channels(_ count: Int, periods: ClosedRange<Double>, rng: inout MusicRNG) -> [Channel] {
+        let span = periods.upperBound - periods.lowerBound
+        let offset = rng.unitD()
+        return (0..<count).map { i in
+            let frac = (offset + Double(i) * (phi - 1)).truncatingRemainder(dividingBy: 1)
+            return Channel(period: periods.lowerBound + span * frac, phase: rng.range(0...(2 * Double.pi)))
         }
     }
 
-    // MARK: - Channels
-
-    /// Reverb mix drift — very slow, ±15%
-    let reverbMix = Channel(baseRate: 0.07, phaseOffset: 0.0)
-
-    /// Delay feedback drift — slow, ±15%
-    let delayFeedback = Channel(baseRate: 0.05, phaseOffset: 1.7)
-
-    /// Delay mix drift — slow, ±15%
-    let delayMix = Channel(baseRate: 0.06, phaseOffset: 3.1)
-
-    /// Filter cutoff drift — medium, drives spectral sweep
-    let filterCutoff = Channel(baseRate: 0.04, phaseOffset: 5.3)
-
-    /// Per-voice amplitude drift (bass, mid, shimmer) — prime-period based
-    let bassAmplitude = Channel(baseRate: Float.pi / 17.0, phaseOffset: 0.0)
-    let midAmplitude = Channel(baseRate: Float.pi / 23.0, phaseOffset: 2.1)
-    let shimmerAmplitude = Channel(baseRate: Float.pi / 31.0, phaseOffset: 4.7)
-
-    // MARK: - Helpers
-
-    /// Apply drift around a center value with a given range.
-    /// When center is 0, returns 0 (no drift when slider is off).
+    /// Drift around a center value with a given range, clamped to 0...1.
     static func apply(center: Float, drift: Float, range: Float) -> Float {
-        guard center > 0.001 else { return 0 }
-        return max(0, min(1, center + drift * range))
-    }
-
-    /// Apply drift for amplitude with custom min/max bounds.
-    static func applyAmplitude(center: Float, drift: Float, low: Float, high: Float) -> Float {
-        let halfRange = (high - low) / 2.0
-        let mid = (high + low) / 2.0
-        return max(low, min(high, mid + drift * halfRange))
+        max(0, min(1, center + drift * range))
     }
 }

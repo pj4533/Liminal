@@ -89,11 +89,12 @@ Liminal/
 │   ├── SecretsTemplate.swift        # API key placeholder
 │   │
 │   ├── Audio/
-│   │   ├── GenerativeEngine.swift   # Main audio coordinator
-│   │   ├── VoiceLayer.swift         # Single voice with oscillators
-│   │   ├── EffectsChain.swift       # Reverb + Delay
-│   │   ├── MarkovChain.swift        # Note selection
-│   │   └── Scale.swift              # Scale definitions
+│   │   ├── GenerativeEngine.swift   # Facade (UI, settings, hooks)
+│   │   ├── MusicConductor.swift     # Off-main scheduler, scenes, layers
+│   │   ├── MusicState.swift         # Lock-free state bus for visuals
+│   │   ├── MixBus.swift             # Sends, reverb, delay, shimmer, limiter
+│   │   ├── Layers/                  # Drone, Pad, Lead, Keys, Drips, Air, Grains, Pluck
+│   │   └── Harmony.swift, SceneDirector.swift, Scale.swift, ...
 │   │
 │   ├── Visual/
 │   │   ├── VisualEngine.swift       # Coordinates image generation
@@ -127,22 +128,9 @@ Liminal/
 
 ### Audio System
 
-**GenerativeEngine** - Coordinates three voice layers playing continuously:
-- **Bass Voice**: Low drone (MIDI 36-48), 2 detuned oscillators, 4s attack, 8s release
-- **Mid Voice**: Pad layer (MIDI 48-72), 4 detuned oscillators, 2.5s attack, 6s release
-- **Shimmer Voice**: High pings (MIDI 72-84), single oscillator, short staccato notes
+**GenerativeEngine** is a facade over `MusicConductor` (own serial queue, 20 ms tick, nothing on MainActor). Eight synthesized layers (drone, pad, lead, keys, drips, air, grains, pluck) are shaped by a SceneDirector (stillness, drift, bloom, constellation, tide), a drifting harmonic field and rare events, and mixed through Zita reverb, delay, shimmer and a limiter. Full description: `docs/plans/music-current.md`; decisions: `docs/decisions/music.md`. The render loop can read `engine.musicState` (lock-free `MusicState`) and the image pipeline can call `setVisualMood`, `imageDidChange`, `setVisualActivity` (not yet wired).
 
-**Controls** (via SettingsService):
-| Slider | Audio Effect |
-|--------|--------------|
-| Delay | Delay feedback (0.3-0.8) and mix (0.2-0.7) |
-| Reverb | Reverb mix (0.3-0.9) |
-| Notes | Shimmer note frequency (gap between pings) |
-
-**Scale System**: Markov chains select notes within the current scale. Available scales:
-- Pentatonic Major/Minor
-- Major, Natural Minor
-- Dorian, Mixolydian, Lydian
+**Controls** (via SettingsService): Style (`audio.style`), Density (`audio.notes`), Space (`audio.reverb`), Echo (`audio.delay`, also the visual trail), Scale with Auto (`audio.scaleAuto`, `audio.scale`).
 
 ### Visual System
 

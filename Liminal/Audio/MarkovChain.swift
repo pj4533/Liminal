@@ -1,8 +1,8 @@
 import Foundation
 
 /// A Markov chain for probabilistic note selection.
-/// Transitions between scale degrees based on weighted probabilities.
-final class MarkovChain {
+/// Transitions between scale degrees based on weighted probabilities. Seeded: callers pass their RNG.
+nonisolated final class MarkovChain {
 
     /// Transition matrix: [fromDegree][toDegree] = probability weight
     private var transitions: [[Float]]
@@ -31,10 +31,18 @@ final class MarkovChain {
     }
 
     /// Get next degree based on transition probabilities
-    func next() -> Int {
-        let probabilities = transitions[currentDegree]
-        currentDegree = weightedRandomChoice(weights: probabilities)
+    func next(using rng: inout MusicRNG) -> Int {
+        currentDegree = rng.weighted(transitions[currentDegree])
         return currentDegree
+    }
+
+    var count: Int { degreeCount }
+
+    /// Set a whole row of weights at once (relative weights are kept exactly).
+    func setRow(_ from: Int, weights: [Float]) {
+        guard from < degreeCount, weights.count == degreeCount else { return }
+        transitions[from] = weights
+        normalizeRow(from)
     }
 
     /// Reset to a specific degree
@@ -50,23 +58,36 @@ final class MarkovChain {
         transitions[row] = transitions[row].map { $0 / sum }
     }
 
-    private func weightedRandomChoice(weights: [Float]) -> Int {
-        let total = weights.reduce(0, +)
-        var random = Float.random(in: 0..<total)
-
-        for (index, weight) in weights.enumerated() {
-            random -= weight
-            if random <= 0 {
-                return index
-            }
-        }
-        return weights.count - 1
-    }
 }
 
 // MARK: - Preset Chains
 
-extension MarkovChain {
+nonisolated extension MarkovChain {
+
+    /// Chord roots (scale degrees). Seven-note modes favour I, IV, V, vi, ii; motion by a fourth or a
+    /// second is preferred, repeating the same root is rare (decision D21).
+    static func chordRoots(degreeCount n: Int) -> MarkovChain {
+        let chain = MarkovChain(degreeCount: n)
+        let base: [Float]
+        switch n {
+        case 7: base = [1.6, 1.6, 0.9, 2.2, 1.8, 2.0, 0.3]
+        case 5: base = [1.8, 1.5, 1.2, 1.8, 1.5]
+        default: base = (0..<n).map { $0 == 0 ? 1.8 : 1.0 }
+        }
+        let fourth = max(1, Int((Double(n) * 3 / 7).rounded()))  // 3 of 7, 2 of 5
+        for from in 0..<n {
+            let row: [Float] = (0..<n).map { to in
+                let up = (to - from + n) % n
+                var w = base[to]
+                if up == 0 { w *= 0.05 }
+                else if up == fourth || up == n - fourth { w *= 1.6 }
+                else if up == 1 || up == n - 1 { w *= 1.3 }
+                return w
+            }
+            chain.setRow(from, weights: row)
+        }
+        return chain
+    }
 
     /// Bass drone: heavily favors root (0) and fifth (4 in 7-note, 3 in 5-note)
     /// Slow movement, gravitates back to root
