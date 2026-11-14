@@ -1,51 +1,67 @@
-# Current music engine (baseline, before the music rewrite)
+# Current music engine
 
-Packages resolved (Package.resolved): AudioKit 5.6.5, AudioKitEX 5.6.2, SoundpipeAudioKit 5.7.3, KissFFT, Tonic 2.1.0.
-**DunneAudioKit is NOT a dependency** (so no DunneAudioKit Sampler/Synth/Chorus/Flanger/StereoDelay/TransientShaper). Chorus/flanger-like effects must be built from `VariableDelay`/`Vibrato`/`Ensemble`/`Phaser`.
+State after PASS 1 and PASS 2 of the rewrite (`docs/plans/music.md`; decisions in `docs/decisions/music.md`, D3-D78). The three-voice engine this replaced is described briefly at the end, together with its baseline measurements.
 
-Active class: `GenerativeEngine` (`@MainActor ObservableObject`, Liminal/Audio/GenerativeEngine.swift). `AudioEngine.swift` (`LiminalAudioEngine`, one pad voice) is an older prototype and is not referenced by the UI.
+Packages resolved (Package.resolved): AudioKit 5.6.5, AudioKitEX 5.6.2, SoundpipeAudioKit 5.7.3, KissFFT, Tonic 2.1.0. DunneAudioKit is not a dependency. Everything is synthesized: no samples, no services.
 
-## Signal graph
+## Shape
+
+- `GenerativeEngine` (`@MainActor ObservableObject`, Liminal/Audio/GenerativeEngine.swift) is a facade. It builds the static audio graph once, starts and stops the AVAudioEngine and forwards controls to `MusicConductor` with `post(_:)`, never waiting on it.
+- `MusicConductor` (MusicConductor.swift) runs on its own serial queue `liminal.music` from a 20 ms `DispatchSourceTimer`. It owns time, the seeded RNG, harmony, scenes, layers, rare events and visual coupling, and it is the only writer of AU parameters. Offline renders call the same `advance(to:)` every 20 ms of rendered audio. Nothing on the music path touches MainActor.
+- `MusicStateBus` (MusicState.swift) is a seqlock the render loop can read from any thread: scene, phase, intensity, brightness, key, chord, layer levels, shimmer level, last onset and a ring of the last 8 events.
+
+## Signal graph (static, built once)
 
 ```
-Voice 0 Bass    : 2x Oscillator(sine, detune +-0.8%)    -> Mixer -> AmplitudeEnvelope(A 4s, R 8s)  --\
-Voice 1 Mid pad : 4x Oscillator(triangle, +-1.5%)       -> Mixer -> AmplitudeEnvelope(A 2.5s, R 6s) --+-> voiceMixer (Mixer)
-Voice 2 Shimmer : 1x Oscillator(sine)                   -> Mixer -> AmplitudeEnvelope(A 10ms, R 0.3s)--/
-voiceMixer -> [VariableDelay(0.5s) mixed by DryWetMixer(balance=delayMix)]
-           -> MoogLadder(cutoff 3k-12k, res 0.15)
-           -> CostelloReverb(fb 0.92, cutoff 8k) ; DryWetMixer(filter, reverb, balance=reverbMix)
-           -> engine.output  (AudioKit AudioEngine -> AVAudioEngine mainMixer)
+8 layers -> 9 LayerStrips (Lead has a second strip for its answer voice)
+  strip = source [-> layer filter] -> Fader(level) -> Panner(pan) --+--> dryBus
+                                                                    +--> Fader(reverbSend) -> reverbBus
+                                                                    +--> Fader(delaySend)  -> delayBus
+delayBus  -> VariableDelay(0.85-1.35 s, wow 0.2 %) -> LPF 2.5-5 kHz -> delayReturn --+--> master
+                                                                                     +--> Fader(0.5) -> reverbBus
+reverbBus -> ZitaReverb (wet; predelay 60 ms, RT60 3-8 s) -> reverbReturn -> master
+reverbBus -> HPF 400 -> PitchShifter +12 -> LPF 5 kHz -> CostelloReverb(fb 0.9) -> shimmerReturn (<= -12 dB, bloom -8 dB) -> master
+master Mixer -> HPF 28 Hz -> masterTrim (+3 dB) -> PeakLimiter -> Fader(-1.5 dB) -> engine.output
 ```
-Everything is mono-sourced oscillators; no panning, so stereo width comes only from CostelloReverb's decorrelated tails. No limiter/compressor on the master bus. Amplitudes: bass 0.25, mid 0.2, shimmer 0.08 (divided across oscillators) - these are summed, the feedback delay + reverb add gain, so headroom is thin (baseline peak -0.14 dBFS).
 
-Oscillators run continuously (`Oscillator` with `Table(.sine/.triangle)`); an `AmplitudeEnvelope` gates audibility. Oscillators are plain wavetable `Oscillator` (not Dynamic, due to click issue noted in code).
+| Layer | File | Sound | Nodes |
+|---|---|---|---|
+| Drone | Layers/DroneLayer.swift | 6 `Oscillator`s on the pedal: sub, two beating roots, fifth, octave, a roaming partial; LPF 220-1100 Hz | 6 osc, LPF |
+| Pad | Layers/PadLayer.swift | 4 voices x detuned pair of `MorphingOscillator`s on 4 band-limited tables, `MoogLadder` 450-6000 Hz, voice-led one voice at a time | 8 osc, ladder |
+| Lead + answer | Layers/LeadLayer.swift | 2+2 `VoiceLayer`s (sine + triangle, ramp envelopes), developing motifs, answer replies 40 % of the time, mirrored pan | 8 osc, LPF, 2 strips |
+| Drips | Layers/DripsLayer.swift | 4 `FMOscillator`s, sine blip or mallet (1:4) preset per scene, fixed pans -0.8...0.8 | 4 FM |
+| Keys / bells | Layers/KeysLayer.swift | 6 `FMOscillator`s, soft keys 1:1 / bell 1:3.5 / glass 1:7, index decays per note, singles, dyads, rolls, phrases | 6 FM, LPF |
+| Air | Layers/AirLayer.swift | `PinkNoise` through a band-pass sweeping 300 Hz-5 kHz, pan walk +-0.7, riser for transitions | noise, BPF |
+| Grains | Layers/GrainLayer.swift | 8 sine grains (Poisson cloud, 0.5-10/s), 30 % sharp "glints", 4 fixed pan groups | 8 osc |
+| Pluck | Layers/PluckLayer.swift | 3 `PluckedString`s, broken chords 250-600 ms apart, mostly to the delay | 3 pluck, LPF |
 
-## Note generation
+Cost rules (D33, D68): envelopes are sample-accurate amplitude ramps on the generators, not `AmplitudeEnvelope` nodes; fixed pans use `Mixer.pan`, not `Panner` nodes; a layer silent for 5 s stops its generators; modulation runs at 10 Hz. Release offline render: about 20x realtime on the dev Mac (3.3x the old engine's wall time).
 
-- Scale: `Scale(type:, rootMIDI: 48)` (C3). 40+ `ScaleType`s in Scale.swift (modes, pentatonics, Japanese, Arabic, symmetric...). Default pentatonic major. Scale is selectable (`currentScale`); the root never changes (no key changes/modulation).
-- Per voice a `MarkovChain` over scale *degrees* (bassDrone / midPad / highShimmer presets). `changeNote` picks `degree = chain.next()`, then `availableNotes[degree % count]` within the voice's MIDI range (bass 36-48, mid 48-72, shimmer 72-84). Note: the degree indexes into the range-filtered note list, so it is not a true scale degree - mapping is approximate and notes cluster at the low end of each range.
-- Timing (Swift `Timer` on the main run loop, one-shot, rescheduled each time): bass note every 8-15 s, mid every 4-8 s, shimmer every `noteDuration + gap` where gap is set by the "Notes" slider (0.5-2.5 .. 2-8 s) and noteDuration 50-150 ms (plucky blips, sine, 0.3 s release).
-- Frequency changes are **instant** `$frequency.parameter.value =` jumps (no glide) on sustained voices; the envelope is not retriggered, so bass/mid change pitch abruptly while sounding.
-- Harmonic intervals: mid voice 25% of the time splits its oscillators (upper half goes +P5/+oct/+m3/+M3). Octave displacement 10% for bass/mid.
-- No chords, no harmonic progression, no rhythm/meter, voices are independent (do not know each other's note).
-- Randomness: `Float.random` / `Double.random`, unseeded -> every run differs.
+## How the music is made
 
-## What varies over time vs. what is static
+- **Harmony** (Harmony.swift): one `HarmonicField` (tonic, mode, chord, pedal). Chords are scale-degree templates filtered by a semitone-clash rule; roots move by a Markov chain; chord length lerp(30, 12, intensity) s. The pad voice-leads by minimal motion. The drone pedal holds the tonic (or fifth), and after 40 s may step to the chord root or back (D73). Key and mode drift every 3-8 minutes by one-note pitch-set moves within the style palette, at scene boundaries.
+- **Form** (SceneDirector.swift): scenes (stillness, drift, bloom, constellation, tide) of 45-240 s with an intensity arc; layers enter when intensity passes per-scene thresholds; a session curve (7-19 min periods) scales the peaks. Each layer also leans in and out by +-4 dB on its own 45-110 s channel (D72).
+- **Rare events** (MusicEvents.swift): every 120-360 s (first after 75-180 s), 8-minute cooldown per kind: arpeggio cascade, shimmer bloom, air swell, sub pulse, bell toll, hush. Events can borrow layers that are not in the scene (`BaseLayer.borrow`).
+- **Styles**: Drift (default), Glass, Deep, Garden: palette, scene-kind weights, layer weights, register and brightness bias, form tempo, shimmer amount, keys presets, drips preset (D64).
+- **Visual coupling** (VisualCoupling.swift): `setVisualMood` (brightness, warmth, saturation, energy, mood words) is smoothed over 8 s and mapped to capped nudges: brightness and register, warmth tilt of drone/air +-3 dB and chord tension, FM index x0.7-1.4, density x0.7-1.4, shimmer, scene-kind weights and key-move bias from a mood-word table. `imageDidChange` makes an air swell over the transition, advances the chord at the midpoint, re-blooms pad voices and sometimes adds a keys or drips accent. `setVisualActivity` nudges pad detune and delay sends +-15 %. Calling these hooks from the image pipeline is a later integration step.
 
-Varies: note pitches (random Markov), shimmer onset timing, ParameterDrift at 10 Hz (`ParameterDrift`, golden-ratio 3-sine sum per channel): reverb mix +-0.15, delay feedback +-0.15, delay mix +-0.15 (all around slider centre), MoogLadder cutoff sweeps 3000-12000 Hz (period ~ 1.5 / 0.04 rad/s...), per-voice amplitude breathing (bass 0.18-0.28, mid 0.14-0.23, shimmer 0.05-0.10, prime-ish periods 17/23/31 s*pi).
-Static: timbre of oscillators (fixed waveform per voice, fixed detune), delay time (0.5 s), reverb feedback (0.92), filter resonance, scale/root, stereo image (no pan), voice count, overall density, dynamics/arc (no sections, no build/release), harmonic rhythm, no noise/texture layer, no modulation of the voices themselves (no vibrato, tremolo, FM).
+## Controls (ContentView.swift macOS, visionOS/ControlsView.swift)
 
-## Controls exposed (ControlsView.swift visionOS, ContentView.swift macOS)
+| Control | Setting key | Engine |
+|---|---|---|
+| Style picker (Drift, Glass, Deep, Garden) | `audio.style` | `style` |
+| Density slider | `audio.notes` | `density` |
+| Space slider | `audio.reverb` | `space` (reverb return and RT60, delay feedback, shimmer) |
+| Echo slider | `audio.delay` | `delay` (delay sends and feedback; also drives the visual ghost-tap trail) |
+| Scale picker, "Auto (evolving)" first | `audio.scaleAuto`, `audio.scale` | `pinnedScale` (nil = auto) |
 
-`GenerativeEngine` published: `delay` 0-1 (-> feedback 0.3-0.8, mix 0.2-0.7), `reverb` 0-1 (-> mix 0.3-0.9), `notes` 0-1 (shimmer gap), `currentScale`. Plus `shimmerNotePlayed` PassthroughSubject<Int,Never> (MIDI note) which the visuals can subscribe to (existing image link). `start()/stop()/shutdown()`.
+`GenerativeEngine.apply(_ settings:)` pushes all of them at launch and after a reset. `shimmerNotePlayed` still fires on the main queue for drips notes.
 
-## Threading
+## Offline render harness
 
-Whole class is `@MainActor`. Timers fire on main run loop, hop into `Task { @MainActor }`. Parameter writes use `AUParameter.value` (thread-safe, lock-free to the render thread). Drift timer = 10 Hz main-thread work (about a dozen parameter writes + `Date()`): cheap, but any main-thread stall delays note/param updates (audio render thread itself is unaffected). Audio render is AudioKit's AUv3 DSP on the system audio thread. visionOS: session `.playback + mixWithOthers`, 48 kHz, 100 ms IO buffer, spatial audio bypassed.
-
-## Baseline measurements (5 min, label `baseline`)
-
-See bottom of this file / `scripts/analyze-audio.py` output. Headlines: peak -0.14 dBFS (no clipping samples but only 0.14 dB of headroom), RMS wanders -45..-5 dBFS (std 8.6 dB, loudest at the end), centroid ~285 Hz (very dark, p5-p95 94-507 Hz), only 95 onsets in 5 min, 6 pitch classes, ~8.6 chord changes/min but low-register fifths, spectral novelty between minutes ~0.002 (nearly static timbre), stereo side/mid -5.4 dB.
+- `GenerativeEngine.renderOffline(seconds:to:limiterBypassed:configure:)` (OfflineRender.swift) renders in manual mode, calling `conductor.advance` every 20 ms, and writes `<label>.score.json` (scenes, layer entries, chords, keys, pedals, rare events, 1 Hz levels, note counts, tick perf) beside the WAV.
+- `scripts/render-music.sh <label> [seconds] [seed] [bypass]` (`CONFIG=Release` for realistic speed, `SOLO=<layer>` mutes the others and forces that layer on, `probe` runs the node probes), `scripts/analyze-audio.py`, `scripts/check-music.py <label> --pass 2 --dir <out>` (gates in `scripts/music-criteria.json`).
+- Config `mode=bench` prints a node cost table; build Release with `SWIFT_ACTIVE_COMPILATION_CONDITIONS=LIMINAL_BENCH` to bench optimized DSP. `mode=realtime` runs the realtime conductor path against a manual-rendering engine.
 
 ## Available DSP building blocks
 
@@ -77,13 +93,9 @@ All SoundpipeAudioKit nodes are AUv3 wrappers of Soundpipe C; params are `@Param
 AudioKitEX `NodeParameter.automate(events:)` / `ramp(to:duration:)` / `AutomationCurve` run sample-accurately on the audio thread - ideal for slow filter sweeps and swells without main-thread timers. `Sequencer`, `SequencerTrack`, `MIDI` on Sequencing (AudioKitEX sequencer works with `Triggerable` nodes, `MIDICallbackInstrument`).
 Taps (visual link): `AmplitudeTap`, `FFTTap`, `RawDataTap` (KissFFT) - can drive imagery from the audio.
 
-## Offline render harness
+## The three-voice engine (replaced)
 
-- `Liminal/Audio/OfflineRender.swift`: `OfflineClock` (simulated clock) and `GenerativeEngine.renderOffline(seconds:to:configure:)` - puts the AVAudioEngine in offline manual-rendering mode and steps 50 ms of audio at a time, advancing the clock (note timers) and calling `applyDrift()` every 100 ms. `GenerativeEngine` now schedules via `schedule(after:)` which uses the clock when `offlineClock != nil`, Timers otherwise (realtime behavior unchanged). Any new timed behavior must go through `schedule(after:)` to be rendered offline.
-- `LiminalTests/MusicRenderTests.swift`: no-op unless `/private/tmp/liminal-render-config.txt` says `enabled=1` (written by the script).
-- `scripts/render-music.sh <label> [seconds]` builds+runs the test (macOS), writes `music-eval/<label>.wav` (32-bit float stereo) and `<label>.json`, prints the analysis. A 60 s render takes ~20 s including incremental build; 5 min renders much faster than real time.
-- `scripts/analyze-audio.py file.wav [--json out]` (numpy+scipy only).
-- Caveats: renders are random (unseeded); the offline path skips the visionOS audio session and the real-time Timer jitter.
+Three independent voices (bass 2x sine, mid 4x triangle, shimmer 1x sine) each through an `AmplitudeEnvelope`, summed into a `VariableDelay`, `MoogLadder` and `CostelloReverb`. Per voice a Markov chain over scale degrees picked notes on main-thread Timers (bass every 8-15 s, mid 4-8 s, shimmer by the Notes slider), with instant frequency jumps, unseeded randomness, no chords, keys, sections or panning, and no limiter (peak -0.14 dBFS). Headlines of its 5-minute baseline: RMS std 8.6 dB, centroid 285 Hz, 95 onsets, 6 pitch classes, spectral novelty between minutes about 0.002, side/mid -5.4 dB.
 
 ### Baseline analysis JSON
 ```json

@@ -240,3 +240,127 @@ Made while building PASS 1 (conductor, harmony, scenes, mix bus, drone/pad/lead/
 
 ## D54. `AudioEngine.swift` removed in PASS 1, `EffectsChain.swift` kept until PASS 2
 - Why: the unused `LiminalAudioEngine` prototype called `VoiceLayer.start/stop`, which the ramped `VoiceLayer` no longer has; deleting it was cheaper than keeping dead code compiling (D36 planned its removal anyway). `EffectsChain` still compiles and is now unused; it goes in the PASS 2 cleanup as planned.
+
+# PASS 2 decisions (D55 onward)
+
+## D55. Layers can be "borrowed" outside their scene (additive boost level)
+- What: `LayerStrip` level is `trim x tilt x (fade x swell x motion + boost)`. `BaseLayer.borrow(level:attack:)` wakes a layer's generators and raises `boost`; `releaseBorrow` lowers it. The 5 s power-down only happens when fade and boost are both at rest.
+- Why: rare events (cascade, bell toll, air swell) and image-change accents must be able to sound in any scene. Activating the layer through the scene logic would also start its loop and fight the hysteresis.
+- Alternatives: dedicated event voices (more nodes, costs even when idle); only firing events whose layer is in the scene (events would be rare in sparse scenes, which is where they matter most).
+
+## D56. The Delay slider stays, renamed "Echo"
+- What: the UI shows Style, Density, Space, Echo and Scale. `audio.delay` keeps driving the delay amount.
+- Why: the plan (section 9) hid Delay, but `settings.delay` also drives the ghost-tap trail in both renderers (`EffectsMetalViewRepresentable(delay:)`, `ImmersiveDomeView`). Hiding it would remove a visual control that belongs to another workstream.
+- Alternatives: hide it and freeze the visual delay at its saved value (silently removes a feature); split into two settings (touches the visual pipeline).
+
+## D57. Shimmer is high-passed at 400 Hz before the pitch shifter
+- What: `reverbBus -> HPF 400 -> PitchShifter(+12, window 2048, crossfade 1024) -> LPF 5 kHz -> CostelloReverb(fb 0.9, cutoff 6.5 kHz) -> shimmerReturn`. Return: -26 dB at Space 0 to -12 dB at Space 1, times style and image scale, capped at -12 dB; the shimmer-bloom event lifts it to -8 dB over 8 s and back over 11 s.
+- Why: the reverb send includes the drone and low pad; pitch-shifting those smears the octave-up into a grainy mid-range wash and wastes the shimmer's level. The cap keeps the feed-forward chain from dominating.
+- Alternatives: a dedicated shimmer send per layer (3 more faders per strip); octave doubling in the pad (plan fallback, no reverb bloom).
+
+## D58. Tape character is wow on the delay time only; `TanhDistortion` dropped
+- What: the delay time is modulated by 0.2 % at 0.41 Hz plus 0.06 % at 0.13 Hz through 0.11 s ramps at 10 Hz (a few cents of pitch wobble on every echo). No saturation stage.
+- Why: measured in Release, a `TanhDistortion` costs as much as two faders (0.17 s per 60 s of audio, about 5 % of the total budget), and at the -20 dBFS levels the delay return runs at it had no audible effect.
+- Alternatives: keep it with a higher pregain (adds harmonics to every echo, which works against the soft character).
+
+## D59. Keys: six FM voices, three fixed pan groups, faster loop than the plan
+- What: soft keys (1:1, index 2 to 0.2 over 1.5 s), bell (1:3.5, 3 to 0.5), glass (1:7, 0.8 to 0.15). The preset is drawn per scene from the style's weights (glass more likely in constellation, bell in stillness and tide). Index scales with brightness and image saturation. Figures: single (with an occasional soft echo on the other side), dyad, rolled chord, and a 3-5 note phrase. Loop 9-19 s (plan: 19-41 s), rest 22 % at low density. Envelope: 3-12 ms attack, then three ramps (to 45 %, 15 %, 0 over 16/30/54 % of a 2.2-6 s decay), approximating an exponential decay. Also voices the cascade, bell-toll and accent gestures.
+- Why: the plan's 19-41 s loop gave 3-8 notes per 90 s scene, which is not audible as a layer. Pans are grouped (-0.6, 0, +0.6) because per-voice `Panner`s cost as much as an oscillator each (D68).
+- Alternatives: `MetalBar` physical model for bells (heavier, cannot morph between presets); per-voice panners (cost).
+
+## D60. Air: pink noise only, band-pass sweep, riser
+- What: `PinkNoise -> BandPassButterworth` with the centre on a 20-60 s channel plus brightness (300 Hz-5 kHz) and the bandwidth on its own channel, level normalised for narrow bands, pan walk +-0.7. `swell(rise:decay:cut:)` raises level and filter together; the air-swell event cuts at the top so the reverb carries the tail. The plan's Brownian rumble is not built.
+- Why: the rumble, panned with the air walk, pulled the sub-120 Hz stereo correlation below the 0.9 gate, and the drone already owns that register. Dropping it also removes two nodes (it is the plan's first perf fallback).
+- Alternatives: a mono rumble on its own strip (4 more nodes for an almost inaudible sound).
+
+## D61. Grains: pool of 8, Poisson cloud, 30 % glints
+- What: 8 sine voices (plan: 12; its first shrink step), 4 fixed pan groups (-0.7, -0.25, 0.25, 0.7) via `Mixer.pan`. Exponential inter-onset times, rate `(0.5 + 9.5 x above x cloud) x (0.6 + 0.8 D) x energy`, where `above` is how far intensity is over the threshold and `cloud` a 15-35 s channel that thickens and thins the texture. Pitches are chord tones in 74-98 with +-1 octave spread and +-6 cents. 30 % of grains are "glints" (12-30 ms attack instead of 60-150 ms).
+- Why: 8 voices were never exhausted at 10 grains/s with 0.2-0.7 s grains. Glints give the cloud audible points; with only soft attacks it read as a static shimmer.
+
+## D62. Pluck: three voices, faster loop
+- What: 3 `PluckedString`s (plan: 2), broken chords of 3-5 chord tones with an occasional passing tone, 250-600 ms apart, loop 15-31 s (plan: 23-47 s), LPF 1.8-4 kHz by brightness, mostly to the delay.
+- Why: with 2 voices each string is re-plucked one note later, cutting its ring; a `PluckedString` is the cheapest generator in the bench. The loop was shortened for the same reason as the keys (D59).
+
+## D63. Visual coupling is a value type with capped nudges and a mood-word table
+- What: `VisualCoupling` smooths the mood (8 s) and derives: brightness nudge (+-0.1 luminance, +-0.08 words), register 0-4 semitones, density x0.7-1.4 (energy plus word energy), FM index x0.7-1.4 (saturation), shimmer 0.6-1.6 (saturation, coolness, words), warmth +-3 dB on drone (air opposite), coolness lowering chord tension (more sus/quartal/open shapes), key-move bias. Eight keyword groups (calm, vast, dark, playful, water, crystal, energy, dream) map to valence, energy, scene-kind weights and shimmer.
+- Why: one place to read the whole mapping, testable without audio, and the caps keep Style and Density in charge as the plan requires.
+- Alternatives: NLP sentiment on the prompt (a service or a model, out of scope).
+
+## D64. Four styles as data; style switches move the key at the next scene boundary
+- What: `MusicStyle` gains shimmer, keys preset weights, drips mallet probability and a tension bias; layer weights are used for weighted draws in every scene kind (a weight below 1 also sometimes drops a layer, which is how Garden thins the pad). Changing style while the current mode is outside the new palette marks the current scene for a key move; `proposeKeyMove` then picks the nearest palette key (fewest changed notes) when no one-note move exists.
+- Why: switching from Drift (heptatonic) to Garden (pentatonic, hirajoshi) has no one-note move; jumping immediately would be an audible lurch mid-chord.
+
+## D65. Lead answer voice on its own strip; faster lead loop
+- What: two more `VoiceLayer`s (sine pair) on a second `LayerStrip` that follows the lead's fades, panned opposite the lead walk (plus 0.15 offset), more reverb and delay. 40 % of motifs get an answer 2-6 s after they end: transposed by -2...+3 degrees or inverted, gaps stretched 0-30 %, 6 dB quieter. Lead loop 13-23 s (plan: 17-29 s), rest probability 0.42 - 0.15 D.
+- Why: a separate strip is the only way to pan the answer opposite while lead tails overlap; it costs 4 nodes.
+
+## D66. Rare events: plan table, first event after 75-180 s
+- What: `RareEventDirector` as planned (120-360 s interval, 8-minute per-kind cooldown, intensity windows). Retries in 20-45 s when nothing is allowed. Each event is logged in the score log and emitted as `.rareEvent` with the kind's raw value. Hush ducks every strip except drone and air by 12 dB through the strip swell envelope.
+- Why: with a 120-360 s first wait, a typical short session would never hear one.
+
+## D67. Settings: `audio.style` and `audio.scaleAuto`, applied through one function
+- What: `SettingsService` gains `style` and `scaleAuto` (default true), a computed `pinnedScale` and a `scaleSelection` binding for the picker (nil = Auto). `GenerativeEngine.apply(_:)` pushes every music setting; both UIs call it on appear and after a reset. Existing keys are unchanged, so saved Density/Space/Echo values carry over. `GenerativeEngine.pinnedScale` is the new API; `currentScale` is kept for compatibility with the PASS 1 behaviour (D31).
+
+## D68. Envelopes are amplitude ramps; fixed pans use `Mixer.pan`
+- What: no `AmplitudeEnvelope` and no per-voice `Panner` anywhere. `VoiceLayer` opens and closes by ramping its oscillators' amplitude (attack/release); keys, drips and grains schedule ramp segments, guarded by a per-voice token (`VoicePool`) so a stolen voice ignores the previous note's segments. Fixed pans (pad pairs, keys groups, drips voices, grain groups) use `Mixer.pan` (AVAudioMixing balance on the input of the downstream mixer).
+- Why: Release bench, 60 s of audio: an idle `AmplitudeEnvelope` costs 0.03 s, a `Panner` 0.028 s, a `Fader` 0.013 s, a `Mixer` about 0.004 s. The first PASS 2 graph cost 3.22 s per 60 s with every generator stopped and rendered at 13.8x realtime (gate 15x, and 5x the baseline wall time, gate 4x). After the change the idle graph costs 1.93 s per 60 s and renders run at 19-21x realtime (3.3-3.7x baseline). Probe E (`probe-mixerpan.wav`) verified that `Mixer.pan` works in manual rendering (pan -0.7 gives R = 0.3 L) and that amplitude ramps are click-free linear envelopes.
+- Alternatives: the plan's node budget (did not meet the speed gate); fewer layers (against the brief).
+
+## D69. `PluckedString` is triggered with raw MIDI bytes
+- What: `PluckLayer` sets frequency and amplitude, then sends `0x90 64 127` straight to `au.scheduleMIDIEventBlock`.
+- Why: AudioKit's `trigger()` builds a `MIDIEvent`; the first construction in a process costs about 300 ms (measured in the bench: 299 ms, then 0.006 ms). It stalled one conductor tick for 580 ms (tick gate 2 ms), which in realtime would delay every note and ramp by over half a second.
+
+## D70. Session curve narrowed to 0.7-1.0
+- What: `0.85 + 0.15 x (0.6 sin(2 pi t / 437) + 0.4 sin(2 pi t / 1151))` instead of `0.75 + 0.25 x (...)`.
+- Why: with the plan's curve the first scenes peaked at 0.3-0.45, below most feature-layer thresholds, so the first five minutes were drone and pad with one late layer. Blooms still vary by about 30 % over 7-19 minutes.
+
+## D71. Texture continuity: shared layers stay through a handoff; never fewer than two layers
+- What: a sounding layer that the next scene also uses stays on while that scene emerges, instead of fading out on the old dissolve and back in on the new rise. If the arcs would leave only one layer, the newest scene's lowest-threshold layer (or a still-sounding one) is kept on. The first scene's pad threshold sits just above the floor, and the opening pad fades in over 6-10 s.
+- Why: the score logs showed 10-20 s gaps with only the drone between scenes, and the start of every session was a lone drone for 30 s (gate: at least 2 layers after 60 s).
+- Also: drift scenes now draw 2 features 75 % of the time (was 30 %) plus air 45 %, blooms draw 3-5 layers, constellations 2-4 point layers plus air 30 %, and tide may add grains (30 %). The plan's tide had no melody; grains are texture, so this keeps the intent.
+
+## D72. Layers lean in and out; master +3 dB; faster harmonic rhythm; rebalanced trims
+- What: each layer's level moves +-4 dB (drone +-2 dB) on its own 45-110 s channel. Master trim +3 dB. Chord length lerp(30, 12, intensity) +-25 %, clamped 10-40 s (D43 had lerp(42, 16)). Trims (peak-equivalent): pad -7, drone -27, lead -17 (answer -18; -14/-15 peaked a 30-minute render at -2.4 dBFS when two lead tails and the answer overlapped), keys -14, drips -14 with a high-note tilt, pluck -12, grains -15, air -7 dB.
+- Why: solo renders with a forced-on layer (`SOLO=<layer>`, which now also forces activation) showed the pad 10-20 dB above every new layer, the drone's pedal at 43-50 % of the chroma, and keys, pluck and air barely audible. Motion makes the balance shift inside a scene ("more animated") and raises minute-to-minute novelty. The master gain keeps sparse scenes above the -27 dBFS RMS gate with the drone and pad lower. Peaks: limiter-bypassed render of the loudest seed at -4.05 dBFS (gate -3).
+- Alternatives: a compressor on the master (pumping, plan D14 rejected it).
+
+## D73. The drone pedal follows the chord root occasionally
+- What: after a chord change, if the pedal has held 40 s and the scene is not stillness: back to the tonic with 60 % when away, else to the new chord's root with 45 %. The pedal move dips to 25 % (was 40 %) and glides 1.5-3 s (was 3-5 s).
+- Why: a tonic pedal under every chord made the harmony read as one chord (pitch-class entropy 2.4-2.5, gate 2.6). A slowly moving bass is a real harmonic change and adds pitch variety. The plan allowed pedal moves only at key moves and scene boundaries; this is a deliberate departure toward "more movement". The deeper, shorter dip keeps the glide from sounding like a slide.
+
+## D74. Sub-band mono: pad never below C3, shorter low-band reverb
+- What: the pad register floor is 48 even with negative register shifts; Zita low RT60 = mid RT60 - 2.5 s (was -1 s, minimum 1 s).
+- Why: seed 3 measured 0.76-0.82 L/R correlation below 120 Hz (gate 0.9) after the drone was lowered: the pad's detuned pair is split left/right and the stereo reverb tail of the low pad decorrelates the sub. After the change: 0.91-1.0.
+
+## D75. Rare events and image changes use typed layer references
+- What: the conductor finds `KeysLayer`, `AirLayer`, `DroneLayer`, `PadLayer`, `DripsLayer` by id and casts; `RareEventDirector` holds weak typed references and skips kinds whose layer is missing.
+- Why: keeps the `MusicLayer` protocol small (no event methods every layer must stub).
+
+## D76. Gates that remain unmet, and why
+- `self_similarity_10s_mean_offdiag` (0.77-0.83, gate 0.65) and `_min` (0.50-0.56, gate 0.35): as D53. Half the metric is a cosine of mean log spectra that is 0.99 for any two windows of any render, including the baseline. Proposal stands: replace with chroma novelty plus the 30-minute key-change and minute-pair chroma gates.
+- `spec_novelty_median` (0.0008-0.0027, gate 0.006): the same log-spectrum cosine, between consecutive minutes. It moves with large timbral changes (it rose in renders where air and shimmer come and go) but a median over four minute pairs mostly samples within-scene minutes. Proposal: compute it on a linear or mel-power spectrum, or on 30 s windows.
+- `onsets_per_5min` (7-83, gate 150-600): the detector's threshold is 6x the median absolute flux deviation of the whole file, so a continuous grain cloud and air sweeps raise the threshold and hide the keys, drips and pluck notes. Seed 3 played 59 pointed notes (score log) and the detector found 7. Solo renders of single layers count hundreds. The pointed-note rate itself (60-130 per 5 minutes plus 80-320 grains) is a deliberate ambient density; reaching 150 detected onsets would need roughly twice as many plucked/struck notes.
+- Seed-dependent: chord rate 1.4 per minute on seed 2 (engine changed chords 13 times in 5 minutes; the analyzer's stable-template count merges voice-led neighbours), RMS mean -27.2 on seed 2 (gate -27), energy above 2 kHz 0.6 % on seed 3 (gate 1.5 %; seeds 1 and 2: 4.0 % and 5.3 %).
+
+## D77. `EffectsChain.swift` removed
+- Why: unused since PASS 1 (replaced by `MixBus`), as planned in D36/D54.
+
+## D78. Node benches can run on optimized DSP
+- What: `MusicProbes.swift` compiles under `DEBUG || LIMINAL_BENCH`; building Release with `SWIFT_ACTIVE_COMPILATION_CONDITIONS=LIMINAL_BENCH` and `mode=bench` gives Release node costs. New bench rows: pitch shifter, Costello, tanh, 6 FM, 8 idle envelopes, pink + band-pass, 3 plucks, first-trigger latency of `PluckedString`. Probe E added (Mixer.pan and ramp envelopes).
+- Why: Debug numbers (D53) overstate C++ DSP by 2-3x and hid that per-node overhead, not DSP, dominates.
+
+## D79. Rare-event choice favours kinds not heard recently; lower thresholds for lead, grains, pluck
+- What: among allowed kinds, weight = min(3, time since last fired / 8 min). Entry-threshold ranges: lead 0.28-0.5, grains 0.42-0.65, pluck 0.32-0.55.
+- Why: a 30-minute render (seed 7) fired bell toll three times and never the cascade or shimmer bloom; lead, pluck and grains sounded 222-292 s of 1800 against 888-1073 s for keys and drips, because high thresholds made them enter late, leave early and be the first dropped by the layer cap.
+
+## D80. PASS 2 results
+- Renders: seeds 1-3 at 5 minutes (Release), each also with the limiter bypassed; one 30-minute render (seed 7, before D79 and the lead trim in D72); the 3-minute `pass2` render (Debug harness, seed 1); the realtime smoke test.
+- Safety, seeds 1-3: true peak -3.7 to -4.8 dBFS, limiter-bypassed peak identical (the limiter stays idle), 0 clipped samples, 0 NaN, no silence; same seed gives an identical score log.
+- Loudness: RMS mean -23.1 to -27.1 dBFS (seed 2 at -27.1 is 0.1 dB under the gate), 30 s RMS spans 8-13 dB. Seed 3's RMS std is 9.6 dB because the first analysis frame is digital zero (-180 dB) during the drone's fade-in; its 30 s values run -29 to -20.5 dB.
+- Timbre: centroid mean 1120-1180 Hz (PASS 1: 520-590, baseline 285); 30 minutes: mean 1213 Hz, std 723 Hz, p95 2542 Hz, energy above 2 kHz 2.2 %, every band above 3 % in some minute.
+- Harmony: stable chord changes 2.4-4.2 per minute, pitch-class entropy 2.66-2.82 bits (PASS 1 seeds failed at 2.4-2.5); 30 minutes: 9 pitch classes above 3 %, 4 key changes, 25 pedal moves, chroma novelty 0.20, minute-pair chroma distance 0.43, RMS-envelope autocorrelation 0.47 (gate 0.5).
+- Form: 30 minutes: 18 scenes, all 8 layers active for 30 s or more, 2-6 at once (mean 3.8), 7 rare events. Seeds 1-3: 6-8 layers active, 2-6 at once.
+- Stereo: side/mid -7.7 to -8.3 dB, L/R correlation 0.71-0.74, below 120 Hz 0.91-1.0.
+- Performance (Release, dev Mac under load from other workstreams): 17-21x realtime, 300 s in 14.4-17.6 s (3.3-4.0x the old engine's 4.38 s), conductor tick mean 0.01-0.05 ms, max 0.6-1.6 ms on most runs, with occasional 2.4-4.4 ms outliers that move between runs (scheduler or OS jitter on a loaded machine, not reproducible at a fixed time). Graph build is logged at launch.
+- Unmet, see D76: self-similarity mean and min, spectral novelty, onset count. The 30-minute distinct-chords gate (5 per 5 minutes) is a normalisation artifact: the analyzer divides the distinct template count over the whole render by the number of 5-minute blocks.
+- Not done here: listening on visionOS hardware, and the 10-minute live macOS dropout check (needs a person at the speakers; the realtime smoke test covers the threading path: state time 19.92 s of 20, peak 0.31, no isolation traps).
