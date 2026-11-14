@@ -104,36 +104,48 @@ struct ContentView: View {
 
                 Divider()
 
-                // Simple audio controls - bound to settings (single source of truth)
+                // Music style
+                Picker("Style", selection: $settings.style) {
+                    ForEach(MusicStyle.ID.allCases, id: \.self) { style in
+                        Text(style.title).tag(style)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .padding(.horizontal)
+
+                // Music controls - bound to settings (single source of truth)
                 VStack(spacing: 12) {
                     AudioSlider(
-                        label: "Delay",
-                        value: $settings.delay,
-                        leftIcon: "waveform.slash",
-                        rightIcon: "waveform.badge.plus"
+                        label: "Density",
+                        value: $settings.notes,
+                        leftIcon: "circle.dotted",
+                        rightIcon: "circle.hexagongrid.fill"
                     )
                     AudioSlider(
-                        label: "Reverb",
+                        label: "Space",
                         value: $settings.reverb,
                         leftIcon: "cube.transparent",
                         rightIcon: "cube.fill"
                     )
                     AudioSlider(
-                        label: "Notes",
-                        value: $settings.notes,
-                        leftIcon: "music.note",
-                        rightIcon: "music.quarternote.3"
+                        label: "Echo",
+                        value: $settings.delay,
+                        leftIcon: "waveform.slash",
+                        rightIcon: "waveform.badge.plus"
                     )
                 }
                 .padding(.horizontal)
 
-                // Scale selector - bound to settings
+                // Scale selector: Auto (evolving) or a pinned scale
                 HStack {
                     Text("Scale:")
                         .foregroundStyle(.secondary)
-                    Picker("", selection: $settings.currentScale) {
+                    Picker("", selection: settings.scaleSelection) {
+                        Text("Auto (evolving)").tag(ScaleType?.none)
+                        Divider()
                         ForEach(ScaleType.allCases, id: \.self) { scale in
-                            Text(scale.rawValue).tag(scale)
+                            Text(scale.rawValue).tag(ScaleType?.some(scale))
                         }
                     }
                     .pickerStyle(.menu)
@@ -170,16 +182,14 @@ struct ContentView: View {
         .background(WindowAccessor())
         .onAppear {
             // Apply saved settings to audio engine on launch
-            audioEngine.delay = settings.delay
-            audioEngine.reverb = settings.reverb
-            audioEngine.notes = settings.notes
-            audioEngine.currentScale = settings.currentScale
+            audioEngine.apply(settings)
         }
         // Settings -> AudioEngine: propagate changes immediately
         .onChange(of: settings.delay) { _, newValue in audioEngine.delay = newValue }
-        .onChange(of: settings.reverb) { _, newValue in audioEngine.reverb = newValue }
-        .onChange(of: settings.notes) { _, newValue in audioEngine.notes = newValue }
-        .onChange(of: settings.currentScale) { _, newValue in audioEngine.currentScale = newValue }
+        .onChange(of: settings.reverb) { _, newValue in audioEngine.space = newValue }
+        .onChange(of: settings.notes) { _, newValue in audioEngine.density = newValue }
+        .onChange(of: settings.style) { _, newValue in audioEngine.style = newValue }
+        .onChange(of: settings.pinnedScale) { _, newValue in audioEngine.pinnedScale = newValue }
         .sheet(isPresented: $showingSettings) {
             SettingsSheetView(audioEngine: audioEngine)
         }
@@ -285,14 +295,11 @@ struct SettingsSheetView: View {
                 Button("Reset All to Defaults") {
                     settings.resetToDefaults()
                     // Apply reset values to engine
-                    audioEngine.delay = settings.delay
-                    audioEngine.reverb = settings.reverb
-                    audioEngine.notes = settings.notes
-                    audioEngine.currentScale = settings.currentScale
+                    audioEngine.apply(settings)
                 }
                 .foregroundStyle(.red)
 
-                Text("Resets delay, reverb, notes, scale, and visual settings to their default values.")
+                Text("Resets style, density, space, echo, scale, and visual settings to their default values.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

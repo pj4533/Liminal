@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import Combine
 import OSLog
 
@@ -16,6 +17,8 @@ final class SettingsService: ObservableObject {
         static let reverb = "audio.reverb"
         static let notes = "audio.notes"
         static let scale = "audio.scale"
+        static let style = "audio.style"
+        static let scaleAuto = "audio.scaleAuto"
         static let imageInterval = "visual.imageInterval"
         static let cacheOnly = "visual.cacheOnly"
     }
@@ -30,6 +33,8 @@ final class SettingsService: ObservableObject {
     static let defaultReverb: Float = 0.5
     static let defaultNotes: Float = 0.5
     static let defaultScale: ScaleType = .pentatonicMajor
+    static let defaultStyle: MusicStyle.ID = .drift
+    static let defaultScaleAuto: Bool = true
     static let defaultImageInterval: Double = 30.0
     static let defaultCacheOnly: Bool = false
 
@@ -49,6 +54,27 @@ final class SettingsService: ObservableObject {
 
     @Published var currentScale: ScaleType {
         didSet { defaults.set(currentScale.rawValue, forKey: Keys.scale) }
+    }
+
+    /// Music style (Drift, Glass, Deep, Garden).
+    @Published var style: MusicStyle.ID {
+        didSet { defaults.set(style.rawValue, forKey: Keys.style) }
+    }
+
+    /// true = "Auto (evolving)" harmony; false = `currentScale` is pinned.
+    @Published var scaleAuto: Bool {
+        didSet { defaults.set(scaleAuto, forKey: Keys.scaleAuto) }
+    }
+
+    /// The scale the engine should pin, or nil for Auto.
+    var pinnedScale: ScaleType? { scaleAuto ? nil : currentScale }
+
+    /// Picker binding: nil = "Auto (evolving)", otherwise the pinned scale.
+    var scaleSelection: Binding<ScaleType?> {
+        Binding(get: { self.pinnedScale },
+                set: { newValue in
+                    if let s = newValue { self.currentScale = s; self.scaleAuto = false } else { self.scaleAuto = true }
+                })
     }
 
     @Published var imageInterval: Double {
@@ -74,6 +100,9 @@ final class SettingsService: ObservableObject {
         let savedScaleName = defaults.string(forKey: Keys.scale) ?? Self.defaultScale.rawValue
         self.currentScale = ScaleType.allCases.first { $0.rawValue == savedScaleName } ?? Self.defaultScale
 
+        self.style = MusicStyle.ID(rawValue: defaults.string(forKey: Keys.style) ?? "") ?? Self.defaultStyle
+        self.scaleAuto = defaults.object(forKey: Keys.scaleAuto) as? Bool ?? Self.defaultScaleAuto
+
         self.imageInterval = defaults.object(forKey: Keys.imageInterval) as? Double ?? Self.defaultImageInterval
         self.cacheOnly = defaults.object(forKey: Keys.cacheOnly) as? Bool ?? Self.defaultCacheOnly
 
@@ -87,6 +116,8 @@ final class SettingsService: ObservableObject {
         reverb = Self.defaultReverb
         notes = Self.defaultNotes
         currentScale = Self.defaultScale
+        style = Self.defaultStyle
+        scaleAuto = Self.defaultScaleAuto
         imageInterval = Self.defaultImageInterval
         cacheOnly = Self.defaultCacheOnly
         LMLog.state.info("Settings reset to defaults")
