@@ -156,3 +156,87 @@ Made autonomously at design time, before any of the new engine is built. Items m
 
 ## D36. Remove `AudioEngine.swift` (unused prototype) and `EffectsChain.swift` (replaced by `MixBus`) in PASS 2 cleanup
 - Why: dead code after the change. `VoiceLayer`, `MarkovChain`, `Scale`, `ParameterDrift` are kept and extended.
+
+---
+
+# PASS 1 implementation decisions
+
+Made while building PASS 1 (conductor, harmony, scenes, mix bus, drone/pad/lead/drips). Numbers quoted are from Release-config renders, seeds 1-3, 5 minutes (`CONFIG=Release scripts/render-music.sh s<seed> 300 <seed>`), unless noted.
+
+## D37. Probes passed; no fallbacks needed
+- What: `MusicProbes.swift` (DEBUG only, `scripts/render-music.sh probe`, checked by `scripts/analyze-probes.py`) rendered four small graphs offline.
+- Results: fan-out of one `Panner` into three `Fader`s/`Mixer`s sums exactly (peak ratio 1.750 for gains 1+0.5+0.25); a 10 s `Fader` gain ramp is linear within 0.4 % in offline manual rendering; a 4 s `Oscillator` frequency ramp is exact; `ZitaReverb` + `PeakLimiter` run offline with no NaN, peak held at 1.0; `MorphingOscillator` with the custom tables shows no clicks under 0.25 s frequency/index changes (max second difference 1.3x the 99.9th percentile).
+- Also learned: `Panner` at centre is equal-power (-3 dB), so every strip trim includes a 1.414 make-up factor.
+- Alternatives: none needed; the D7/D10/D14/D18 fallbacks in plan section 13 stay documented but unused.
+
+## D38. All music types are explicitly `nonisolated`
+- What: every type on the music path (RNG, state, scheduler, harmony, scenes, conductor, mix bus, layers, `VoiceLayer`, `MarkovChain`, `Scale`, `ParameterDrift`) is declared `nonisolated`; only `GenerativeEngine` is `@MainActor`.
+- Why: the project builds with `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`. Without the annotation every new class would silently be MainActor-isolated and the conductor queue would trip runtime isolation checks (or force hops onto the starved main thread). The drips-to-`shimmerNotePlayed` closure is built in a `nonisolated static` function for the same reason.
+- Alternatives: change the project default (affects other workstreams); `@preconcurrency`/`nonisolated(unsafe)` sprinkling (fragile).
+
+## D39. The plan's `Scene` type is named `MusicScene`
+- Why: `Scene` collides with SwiftUI's `Scene` protocol in the app target (`LiminalApp: App` stopped compiling).
+
+## D40. `LayerContext` is a class; layers derive from a `BaseLayer` that owns activation fades, scheduled-block cancellation and generator power-down
+- What: the plan sketched `LayerContext` as a struct. It is a final class held by the conductor, because layers capture it in scheduled blocks and it carries `emit`. `BaseLayer` provides `after(_:ctx:_:)` (blocks are dropped after silence/power-down via a generation counter), `ensureLoop` (one self-rescheduling loop per generation), and stops its generators (AudioKit `stop()` = bypass = zero DSP) after 5 s of silence.
+- Why: removes duplicated bookkeeping from every layer and makes silent layers free. `HarmonyEngine` is reachable through the context so the pad can voice-lead.
+- Alternatives: per-layer copies of the same logic; struct context passed `inout` (cannot be captured by scheduled blocks).
+
+## D41. Layer level fades are software envelopes (`SoftEnv`, smoothstep) written as 0.12 s ramps at 10 Hz
+- Why: a 30 s `ramp` on the level fader would be overridden by any later write (breathing, swells). Advancing the fade in software and writing short ramps keeps one writer per parameter and gives `MusicState.layerLevels` the exact current value. Same mechanism for pad voice swells/dips and drone glides.
+- Alternatives: one long `ramp` per fade (conflicts with modulation); a second fader per strip (more nodes).
+
+## D42. Gain staging retuned by measurement, not by the plan's peak table alone
+- What: strip trims (peak-equivalent): drone -24 dB, pad -4 dB, lead -15 dB, drips -17 dB (each times the 1.414 pan make-up). Drone partials rebalanced (sub 0.22, roots 0.22, fifth 0.10, octave 0.08, roam 0.10).
+- Why: the first render was 61 % energy below 120 Hz, 0.06 % above 2 kHz, and the drone's F/C were 79 % of the chroma (pad chords inaudible). Solo renders (`SOLO=<layer>`) showed the drone 12 dB above the pad. After retuning: drone about 7 dB below the pad in RMS, 6-7 pitch classes above 5 %.
+- Alternatives: keep the plan's per-layer peak targets (they assumed equal crest factors; the pad's 8 detuned oscillators have a much lower RMS per peak than the drone).
+
+## D43. Harmonic rhythm faster than the plan: chord length lerp(42, 16, intensity) +-25 %, clamped 14-50 s
+- Why: the plan's lerp(55, 20) gives about 1.4 changes per minute at typical intensity, below its own 2-8 per minute gate and slower than wanted for "more movement". Now 2.2-3.0 measured changes per minute.
+- Also: chord-root Markov weights flattened (tonic 1.6 instead of 3.0) and `openFifth` down-weighted (0.5/0.15), because the tonic chord plus a tonic pedal made the harmony read as one long chord.
+- Alternatives: keep slow harmony and only change voicings (still static in chroma).
+
+## D44. Brightness macro widened: `B = 0.5 + 0.3 scene + 0.3 (I - 0.4) + 0.2 (mood - 0.5) + 0.12 drift`
+- Why: with the plan's 0.25/0.2/0.1 coefficients the centroid standard deviation was 210-248 Hz (gate 250). Cutoff ranges also moved up: pad 450-6000 Hz (was 350-4900), drone 220-1100 Hz (was 180-900).
+
+## D45. Drone pedal range 36-47 (C2-B2), not 33-45
+- Why: with a 33 pedal the sub partial (pedal - 12) sits at 27 Hz, below the 28 Hz master high-pass. 36-47 keeps the sub at 33-62 Hz.
+
+## D46. Lead uses two alternating `VoiceLayer`s in PASS 1
+- Why: with one gated voice, retuning for the next note bends the previous note's 3-5 s release tail. Alternating voices lets tails overlap cleanly; PASS 2's answer voice gets its own pair.
+- Alternatives: one voice with a long glide (sounds like a slide whistle in the tail).
+
+## D47. Drips get per-voice `Panner`s and a brightness-dependent FM colour
+- What: 4 extra panner nodes; ratio 1:2 by default, 1:3 or 1:3.5 in bright scenes, index (0.4 + 1.6 B) x velocity decaying over 0.7 s.
+- Why: per-note pan +-0.8 (plan) needs per-voice panning because notes overlap; the pure-sine blip had almost no energy above 2 kHz.
+
+## D48. Scene layer sets are drawn from the layers that exist
+- Why: in PASS 1 the "feature" layer of a drift scene was often keys/grains/pluck (not built yet), leaving drone + pad only and no melody for minutes. Constellation scenes always include drips. PASS 2 widens the pools automatically as layers are added.
+
+## D49. The opening drone fades in over 4-6 s (other entries 8-30 s)
+- Why: the first render's first 30 s averaged -34 dBFS; the app should not start in near-silence after pressing Play.
+
+## D50. Analyzer chroma uses its own 16384-point FFT; chord-change rate counts changes that persist 6 s
+- What: `analyze-audio.py` computed chroma from 4096-point frames starting at 55 Hz. With 11.7 Hz bins (wider than a semitone below about 200 Hz) the drone on F2 showed up as E and F#, which are not in the key. Chroma now comes from a 16384-point STFT (2.9 Hz bins, 60-2000 Hz) on the same frame grid. `chord_changes_per_min_stable` ignores template flicker shorter than three 2 s windows (raw value is still reported).
+- Baseline re-analysed with the new analyzer (`baseline-v2.json`): self-similarity mean 0.666 (was 0.75), chroma novelty 0.465, stable chord changes 4.0/min.
+- Alternatives: keep the old chroma (it measured the drone's spectral leakage, not harmony).
+
+## D51. New harness pieces
+- `scripts/check-music.py <label> --pass N [--bypass <label>]`: PASS/FAIL table against `scripts/music-criteria.json` (gates tagged with the pass that enforces them), using the analysis JSON and the score log.
+- `scripts/render-music.sh <label> [seconds] [seed] [bypass]`, `CONFIG=Release` for optimized DSP, `SOLO=<layer>` to mute all other layers, `probe` label for the node probes.
+- Test modes (config file `mode=`): `render` (default), `probe`, `bench` (node cost table), `realtime` (realtime conductor smoke test, below).
+- The score log (`<label>.score.json`) lists scenes, layer enter/exit, chords, keys, pedal moves, note counts and 1 Hz levels; everything except `perf` is deterministic per seed.
+
+## D52. Realtime smoke test instead of a speaker run
+- What: `mode=realtime` runs the real conductor start path (own queue, 20 ms `DispatchSourceTimer`, debug `dispatchPrecondition(.notOnQueue(.main))`) against the engine in manual-rendering mode pumped at wall-clock pace, so nothing plays out loud during automated runs. 20 s result: state time 19.98 s, audio peak 0.10, no isolation traps.
+- Not done in PASS 1: the 10-minute live macOS listening/dropout session from section 11 (needs a person listening); visionOS hardware check is out of scope per the plan.
+
+## D53. PASS 1 results and the one unmet gate
+- Gates met on seeds 1-3 (5 min, Release): true peak -7.5 to -9.1 dBFS, 0 clipped samples, 0 NaN; limiter-bypassed peak -9.1 dBFS (limiter idle); no silence; RMS mean -25.1 to -25.6 dBFS, RMS std 4.5-5.0 dB; centroid mean 520-590 Hz, std 259-332 Hz; stable chord changes 2.2-3.0 per minute; side/mid -6.6 to -7.0 dB, L/R correlation 0.64-0.67, below-120 Hz correlation 0.97-1.0; 4 layers active, at most 3 at once (4 possible), 4 scene changes per 10 min; conductor tick mean 0.004-0.009 ms, max 0.24-1.5 ms across runs; identical score log for the same seed.
+- Speed: Release offline render 22-25x realtime; 300 s takes 12-13 s against 4.38 s for the baseline engine (2.8-3.0x, gate 4x). Debug builds are about 9x realtime because the AudioKit/Soundpipe C++ is unoptimized (bench: a Fader costs about 21 ns/frame, a Panner 42 ns/frame in Debug); `CONFIG=Release` is the meaningful number.
+- Unmet: `self_similarity_10s_mean_offdiag` 0.78-0.83 (gate 0.65; re-analysed baseline 0.67). Why: the metric averages a log-spectrum cosine and a chroma cosine. The log-spectrum half is 0.99 for every render including the baseline, so the gate effectively requires a chroma cosine of 0.31 or less between any two 10 s windows. A held tonic pedal plus voice-led chords that share common tones keep chroma similarity at 0.57-0.75; the baseline's unrelated random notes score 0.34. Pushing it lower in PASS 1 would mean removing the pedal or forcing unrelated harmony, which works against the ambient brief. Proposal for review: replace this gate with chroma novelty between minutes (0.10-0.45, already a PASS 2 gate) plus the 30-minute key-change and minute-pair chroma-distance gates, or re-target it to 0.80 for PASS 1 and reassess after PASS 2 adds four layers and key drift over longer renders. The gate is left at 0.65 in `music-criteria.json` so the gap stays visible.
+- PASS 2 gates still failing, as expected with four layers: onsets (4-19 per 5 min, gate 150-600), energy above 2 kHz (0.3-1.2 %, gate 1.5 %), centroid p95, spectral novelty, minimum simultaneous layers.
+- 3-minute `pass1` render (Debug harness, seed 1): true peak -9.6 dBFS, RMS -26.0 dBFS, centroid 500 Hz (std 311), side/mid -6.7 dB. The 10-minute gates (scene changes, layers active) cannot be met in 3 minutes and fail there by construction.
+
+## D54. `AudioEngine.swift` removed in PASS 1, `EffectsChain.swift` kept until PASS 2
+- Why: the unused `LiminalAudioEngine` prototype called `VoiceLayer.start/stop`, which the ramped `VoiceLayer` no longer has; deleting it was cheaper than keeping dead code compiling (D36 planned its removal anyway). `EffectsChain` still compiles and is now unused; it goes in the PASS 2 cleanup as planned.

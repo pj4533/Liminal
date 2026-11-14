@@ -5,7 +5,8 @@ Reports: peak/true-peak/clipping, RMS over time, silence gaps, spectral centroid
 trajectory + variance, onset density per 30s, pitch-class histogram, chord-change rate,
 novelty / self-similarity between minutes, stereo width.
 """
-import sys, json, argparse
+import sys, json, argparse, warnings
+warnings.filterwarnings("ignore")
 import numpy as np
 from scipy.io import wavfile
 from scipy.signal import stft, resample_poly, find_peaks
@@ -79,12 +80,24 @@ res["onsets_total"] = int(len(pk))
 res["onsets_per_30s"] = [int(((pt >= s) & (pt < s+30)).sum()) for s in range(0, int(dur), 30)]
 
 # ---- chroma, pitch-class histogram, chord changes
-fb = (f >= 55) & (f <= 2000)
-midi = 69 + 12*np.log2(np.maximum(f[fb], 1)/440)
-pc = np.round(midi).astype(int) % 12
-chroma = np.zeros((12, mag.shape[1]))
-for k in range(12):
-    chroma[k] = (mag[fb][pc == k]**2).sum(0)
+# Chroma uses its own long FFT (16384 points, 2.9 Hz bins, same 2048 hop and frame times as the main
+# STFT): with 4096-point frames, bins below ~400 Hz are wider than a semitone and smear pitch classes.
+def long_chroma(sig, sr, nfft=16384, hop=2048, lo=60, hi=2000, batch=256):
+    pad = np.concatenate([np.zeros(nfft//2), sig, np.zeros(nfft//2)])
+    nfr = len(t)
+    fr = np.fft.rfftfreq(nfft, 1/sr); sel = (fr >= lo) & (fr <= hi)
+    pcs = (np.round(69 + 12*np.log2(fr[sel]/440)).astype(int)) % 12
+    win = np.hanning(nfft)
+    out = np.zeros((12, nfr))
+    for b0 in range(0, nfr, batch):
+        idx = np.arange(b0, min(nfr, b0+batch))
+        frames = np.stack([pad[i*hop:i*hop+nfft] if i*hop+nfft <= len(pad) else
+                           np.pad(pad[i*hop:], (0, nfft-len(pad[i*hop:]))) for i in idx])
+        P = np.abs(np.fft.rfft(frames*win, axis=1)[:, sel])**2
+        for k in range(12):
+            out[k, idx] = P[:, pcs == k].sum(1)
+    return out
+chroma = long_chroma(mono, sr)
 chroma /= chroma.sum(0, keepdims=True) + 1e-12
 hist = chroma.mean(1)
 names = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"]
@@ -136,6 +149,69 @@ if len(segs) > 2:
 mid, side = (L+R)/2, (L-R)/2
 res["stereo_side_over_mid_dB"] = round(float(10*np.log10((side**2).mean()/((mid**2).mean()+1e-12)+1e-12)), 1)
 res["stereo_LR_correlation"] = round(float(np.corrcoef(L, R)[0, 1]), 3)
+
+# ---- additions for the PASS gates (docs/plans/music.md section 11)
+# silence: longest run of 1 s windows below -60 dBFS, quietest 1 s window (first 5 s excluded: fade-in)
+q = rms_db[5:] if len(rms_db) > 10 else rms_db
+run = best = 0
+for v in q:
+    run = run + 1 if v < -60 else 0; best = max(best, run)
+res["max_silence_s"] = int(best)
+res["min_rms_1s_dBFS_after5s"] = round(float(q.min()), 1)
+res["rms_per30_span_dB"] = round(float(max(per30) - min(per30)), 1) if per30 else 0
+cp = [c for c in res["centroid_per_30s"] if c == c and c > 0]
+res["centroid_per30_max_over_min"] = round(max(cp)/min(cp), 2) if cp else 0
+# band energy shares (power), overall and max share per minute
+pw = mag**2
+bands = {"lt120": (0, 120), "120_500": (120, 500), "500_2k": (500, 2000), "2k_8k": (2000, 8000)}
+tot = pw.sum()
+res["band_share"] = {k: round(float(pw[(f >= lo) & (f < hi)].sum()/tot), 4) for k, (lo, hi) in bands.items()}
+res["band_share"]["gt2k"] = round(float(pw[f >= 2000].sum()/tot), 4)
+bm = {}
+for k, (lo, hi) in bands.items():
+    shares = []
+    for s0 in range(0, int(dur)-59, 60):
+        m = (t >= s0) & (t < s0+60)
+        shares.append(float(pw[(f >= lo) & (f < hi)][:, m].sum()/pw[:, m].sum()))
+    bm[k] = round(max(shares), 4) if shares else 0
+res["band_share_max_minute"] = bm
+# stereo correlation below 120 Hz
+from scipy.signal import butter, sosfiltfilt
+sos = butter(4, 120, "low", fs=sr, output="sos")
+lL, lR = sosfiltfilt(sos, L[: sr*120]), sosfiltfilt(sos, R[: sr*120])
+res["stereo_corr_below120"] = round(float(np.corrcoef(lL, lR)[0, 1]), 3)
+# onsets per 30 s max/min (min floored at 1)
+o30 = res["onsets_per_30s"]
+res["onsets_per30_max_over_min"] = round(max(o30)/max(1, min(o30)), 2) if o30 else 0
+res["onsets_per_5min"] = round(res["onsets_total"] / (dur/300), 1)
+# chord changes that persist >= 3 windows (6 s): ignores single-window template flicker
+stable, cur, runlen, changes_st = [], None, 0, 0
+for c in chords:
+    if c == cur: runlen += 1
+    else: cur, runlen = c, 1
+    if runlen == 3 and (not stable or stable[-1] != c):
+        stable.append(c)
+res["chord_changes_per_min_stable"] = round(max(0, len(stable)-1)/(dur/60), 2)
+res["distinct_chords_stable"] = len(set(stable))
+res["distinct_chords_per_5min"] = round(len(set(chords)) / max(1, dur/300), 1)
+# chroma-only 10 s self-similarity, and median chroma distance over all minute pairs
+if len(segs) > 2:
+    C = np.array([s[1] for s in segs]); Sc = C @ C.T; iu = np.triu_indices(len(Sc), 1)
+    res["chroma_self_similarity_10s_mean"] = round(float(Sc[iu].mean()), 4)
+if len(mins) > 1:
+    Cm = np.array([m[1] for m in mins]); D = 1 - Cm @ Cm.T; iu = np.triu_indices(len(D), 1)
+    res["chroma_dist_minute_pairs_median"] = round(float(np.median(D[iu])), 3)
+nv = res["novelty_between_minutes_spec_cosdist"]
+res["spec_novelty_median"] = round(float(np.median(nv)), 4) if nv else 0
+nc = res["novelty_between_minutes_chroma_cosdist"]
+res["chroma_novelty_median"] = round(float(np.median(nc)), 3) if nc else 0
+# RMS envelope autocorrelation: max for lags 20-600 s
+e = rms_db - rms_db.mean()
+if len(e) > 60:
+    ac = np.correlate(e, e, "full")[len(e)-1:]; ac /= ac[0] + 1e-12
+    hi = min(600, len(e)//2)
+    res["rms_autocorr_max_20_600s"] = round(float(ac[20:hi].max()), 3) if hi > 20 else None
+res["pitch_classes_gt3pct"] = int((hist > 0.03).sum())
 
 print(json.dumps(res, indent=1))
 if a.json:

@@ -1,6 +1,6 @@
 # Liminal music system: design and build plan
 
-Status: design, nothing below is built yet. Baseline and current engine: `docs/plans/music-current.md`. Techniques: `docs/research/generative-ambient-music.md`. Every choice here has an entry in `docs/decisions/music.md` (D3 onward).
+Status: PASS 1 built (conductor, harmony, scenes, mix bus, drone/pad/lead/drips layers, harness); PASS 2 not started. Implementation deviations are D37-D53 in the decisions log. Baseline and current engine: `docs/plans/music-current.md`. Techniques: `docs/research/generative-ambient-music.md`. Every choice here has an entry in `docs/decisions/music.md` (D3 onward).
 
 ## 1. Goals and shape
 
