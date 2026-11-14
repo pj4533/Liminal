@@ -184,3 +184,27 @@ Verdict: kept (>=3% GPU improvement, no new errors).
 - Caveat: the GPU metric changed meaning (one whole-frame span now, previously a sum of three pass spans), so GPU ms is not directly comparable; fps is bimodal and noisy in the simulator (run 2 was 45 fps).
 - Visual parity: frozen screenshot mean abs diff vs baseline was 38, too large to call parity (could not be confirmed equivalent).
 - Verdict: not kept. GPU ms (primary metric) did not improve by >=3% and parity was unconfirmed. Branch reset to 8981aaf.
+
+---
+
+## 2026-11-14: Round 2 plan
+
+Re-read the per-frame path at 5d40d08 and extended `docs/plans/performance.md` with a round 2
+section. Nothing was measured in this step; the conclusions below come from the round 1 numbers.
+
+- **Why five of six round 1 items were reverted**: the simulator `gpu ms` reads 0.05-0.09 ms for
+  the 1,813-vertex dome compute and 0.04-0.08 ms for a 4.2 M pixel eye pass, so it mostly measures
+  a fixed cost per command buffer or pass and barely responds to per-pixel work. Both extra-pass
+  designs (displacement pre-pass 0.10 ms, hue bake 0.11-0.21 ms) lost for that reason. The
+  0.159 ms reference came from one session whose runs spanned 0.112-0.229; two later
+  work-removing changes read 0.28, which looks like a session shift (inferred, HEAD was not
+  re-measured alongside them).
+- **Decision**: first build a benchmark that responds to shader cost and gives pixel parity
+  (fixed image, fixed time, Mac GPU, real `.metal` source), then prefer changes that remove
+  shared work without adding passes: both eyes in one MRT pass, breathing on the CPU, texture
+  hygiene, exact ALU clean-ups. Two look-affecting items (noise by angle addition, mip sampling
+  for bloom and ghost taps) come after and need the PNG diff.
+- **Alternatives rejected**: retrying the low-res pre-passes (each new pass costs more than it
+  saves in this metric, and they carry look risk); effects below display rate (needs user
+  sign-off); anything below 2048².
+- **Rule change**: candidate and reference are measured interleaved in one session.
