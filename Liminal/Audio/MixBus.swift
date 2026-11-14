@@ -99,8 +99,11 @@ nonisolated final class MixBus {
     /// Scale for every layer's delay send (space x delay amount), 0.3 ... 1.4.
     var delaySendScale: Float { (0.3 + 0.7 * space) * (0.6 + 0.8 * delayAmount) }
 
+    /// Offline diagnosis only (stem renders): returns named here ("reverb", "delay", "shimmer") stay at zero.
+    var mutedReturns: Set<String> = []
+
     func setReverb(returnGain: Float, midRT60: Float, lowRT60: Float, damping: Float, over: Double) {
-        ParamRamp.setGain(reverbReturn, returnGain, over: over)
+        ParamRamp.setGain(reverbReturn, mutedReturns.contains("reverb") ? 0 : returnGain, over: over)
         ParamRamp.set(reverb.$midReleaseTime, midRT60, over: over)
         ParamRamp.set(reverb.$lowReleaseTime, lowRT60, over: over)
         ParamRamp.set(reverb.$dampingFrequency, damping, over: over)
@@ -108,7 +111,7 @@ nonisolated final class MixBus {
 
     func setDelay(feedback: Float, returnGain: Float, cutoff: Float, over: Double) {
         ParamRamp.set(delay.$feedback, feedback, over: over)
-        ParamRamp.setGain(delayReturn, returnGain, over: over)
+        ParamRamp.setGain(delayReturn, mutedReturns.contains("delay") ? 0 : returnGain, over: over)
         ParamRamp.set(delayFilter.$cutoffFrequency, cutoff, over: over)
     }
 
@@ -134,7 +137,7 @@ nonisolated final class MixBus {
     func modulate(t: Double, dt: Double) {
         if bloomEnd > 0 && t >= bloomEnd { shimmerBloom.go(to: 0, over: bloomRelease, now: t); bloomEnd = -1 }
         let b = shimmerBloom.tick(t)
-        let g = shimmerLevel + (dbToGain(-8) - shimmerLevel) * b
+        let g = mutedReturns.contains("shimmer") ? 0 : shimmerLevel + (dbToGain(-8) - shimmerLevel) * b
         if abs(g - shimmerOut) > 1e-5 { ParamRamp.setGain(shimmerReturn, g, over: 0.12); shimmerOut = g }
         wowPhase += dt * 2 * .pi * 0.41
         flutterPhase += dt * 2 * .pi * 0.13
