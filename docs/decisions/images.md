@@ -1,5 +1,18 @@
 # Image pipeline decisions
 
+## Summary (read this first)
+
+- Model: gemini-3.1-flash-image at 3:2, 2K, with the existing key. About half of prompts tagged needsStrongSurreal (about 10% of images) go to gemini-nano-banana-2.1. Fallback chain: gemini-3.1-flash-lite-image, then gemini-2.5-flash-image, then recycle cached images. Chosen because it was the most photographic and colorful of the five models the key exposes (D1-D3).
+- Prompt system: style (16, 13 photographic) x subject (about 110 concrete objects/places) x transformation (25) x palette (17) x composition (8), with recency-weighted anti-repetition and 20% chance of a 3-4 image series (D5, D10, D11). No people, no text-bearing subjects (D8, D9). The old scenes survive as one style (D6).
+- Clear cache on device: open the controls panel, find "Clear All Images" (ClearImagesSection, same in the visionOS controls and the macOS window), confirm. It wipes all caches, cancels in-flight work and restarts generation (D15). Also, this release bumps cacheEpoch to 2, so the first launch deletes the old cached images automatically (D14).
+- Scores, eval1 (16 new vs 6 old, 1-5): recognizability 5, photorealism 4, style variety 5, palette variety 4, surreal 5, effect suitability 4. Old set was samey blue-grey abstract CGI-looking scenes (D32).
+- Open questions for the user:
+  1. Spend: pacing generates only to keep 2 images pending, but 2K Gemini images are costlier than before. Want an hourly cap setting?
+  2. Another provider or key: not worth it now (D31). Flux, gpt-image or Midjourney were not tested and each needs a new key. Revisit only if you want more control over style than Gemini gives.
+  3. Teal skew and studioProduct frequency (D32 follow-ups): tune now?
+  4. Renderer workstream: macOS window is now 3:2 (D28) and GPU textures persist after Clear until the next image (D15).
+  5. Unit-test runs on macOS purge the local cache once (D29).
+
 Format: decision, why, alternatives.
 
 ## D0 Baseline mapping

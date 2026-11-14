@@ -16,7 +16,7 @@ Liminal creates endless, evolving ambient soundscapes synchronized with AI-gener
 ## Features
 
 - **Generative Audio** — Three-voice ambient synthesis with Markov-chain note selection across 47 musical scales
-- **AI Visuals** — Gemini-powered image generation with native CoreML upscaling (RealESRGAN 4x)
+- **AI Visuals** — Gemini image generation (gemini-3.1-flash-image, 3:2 at 2K) driven by a style/subject/palette prompt system for varied, photoreal-but-surreal imagery; a "Clear All Images" control wipes the cache (see docs/decisions/images.md)
 - **GPU Effects** — Metal shaders: Ken Burns motion, fBM distortion, saliency-based hue shifting, feedback trails
 - **Indirect Control** — Shape the experience through abstract sliders rather than direct manipulation
 
