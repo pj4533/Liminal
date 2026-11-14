@@ -365,3 +365,11 @@ Measured (visionOS sim, medians of 3 x 30s runs) vs previous best (MRT stereo, 2
 - Visual: frozen screenshots use different source images, so the numeric diff (30.7) is not meaningful. Effects looked equivalent. No errors in logs.
 - Verdict: not kept, branch reset to b2c5e6c. The simulator barely models texture-cache behaviour, so this idea may still
   pay off on Vision Pro hardware; verify with an Xcode GPU capture (texture L1 miss rate) before discarding it for good.
+
+## RealityKit-paced loop + ping-pong source textures (aeb5212) - NOT KEPT
+
+- What: drive dome frames from RealityKit's per-frame update instead of Task.sleep, and reuse the uploaded source texture on transitions.
+- Measured (3 runs, simulator, medians): GPU mean 0.181 ms (0.181/0.182/0.166) vs 0.153 ms before (+18%, worse); GPU p95 0.315 ms vs 0.304; fps 87.2 (87.2/88.7/80.7) vs 58.6; frame interval p95 20.1 ms vs 47.3; dropped/5s 131 vs 107. Frozen run GPU 0.175 ms. No errors in logs.
+- Visual parity: effects look equivalent (frozen numeric diff 44 vs baseline is not meaningful, the source image differs).
+- Verdict: reverted. GPU time, the primary metric, did not improve (it regressed); the fps gain is simulator-host jitter-sensitive (prior runs ranged 48-72 fps) and the change does not reduce GPU work. Branch reset to d81b92d.
+- Alternatives: could be revisited for CPU/pacing reasons on real hardware, but not as a GPU win.
