@@ -18,7 +18,7 @@ import AppKit
 /// the Gemini 3.1 switch (docs/decisions/images.md D4).
 final class SquareVisualWindowDelegate: NSObject, NSWindowDelegate {
     static let controlPanelWidth: CGFloat = 281  // 280 panel + 1 divider
-    static let visualAspect: CGFloat = 1.5       // 3:2, matches generated images
+    static let visualAspect: CGFloat = ImageFraming.displayAspect  // 3:2, matches generated images
 
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
         // Calculate title bar height for this window
@@ -329,10 +329,20 @@ struct VisualDisplayView: View {
     // Single uniforms struct - matches visionOS pattern for platform parity
     private var effectUniforms: EffectsUniforms {
         let effectTime = DebugLaunchOptions.effectTime(Float(effectController.time))
+        // Per-image vibrance factors (measured once per image, cached), blended across a crossfade
+        var vibrance = VibranceFactors.neutral
+        if let frame = transitionManager.currentFrame {
+            vibrance = ImageColorStats.cachedFactors(key: frame) { frame.cgImageRepresentation.map { ImageFraming.coverCrop($0) } }
+            if let prev = transitionManager.previousFrame {
+                let from = ImageColorStats.cachedFactors(key: prev) { prev.cgImageRepresentation.map { ImageFraming.coverCrop($0) } }
+                vibrance = VibranceFactors.lerp(from, vibrance, Float(transitionManager.transitionProgress))
+            }
+        }
         var uniforms = EffectsUniformsComputer.compute(
             time: effectTime,
             transitionProgress: Float(transitionManager.transitionProgress),
-            hasSaliencyMap: transitionManager.currentSaliencyMap != nil
+            hasSaliencyMap: transitionManager.currentSaliencyMap != nil,
+            vibrance: vibrance
         )
         // Add time-based hue shift (macOS-specific for now)
         uniforms.hueBaseShift = effectTime * 0.03
@@ -358,6 +368,9 @@ struct VisualDisplayView: View {
                         uniforms: effectUniforms,
                         delay: settings.delay
                     )
+                    // Keep the image at its 3:2 display aspect even if the window is not exactly
+                    // 3:2 (min sizes, full screen): letterbox on black instead of stretching.
+                    .aspectRatio(ImageFraming.displayAspect, contentMode: .fit)
                     .frame(width: geometry.size.width, height: geometry.size.height)
 
                     // Status overlay (top corners)

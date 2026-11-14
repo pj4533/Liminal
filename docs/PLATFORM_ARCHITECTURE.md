@@ -7,7 +7,7 @@ This document explains the architectural differences between Liminal's macOS and
 | Aspect | macOS | visionOS | Why Different |
 |--------|-------|----------|---------------|
 | **Rendering API** | MTKView (direct Metal) | Offscreen Metal → DrawableQueue → RealityKit | MTKView unavailable on visionOS; RealityKit is native |
-| **Display Surface** | Window framebuffer | Curved dome mesh (110°×75°) | visionOS is spatial/immersive |
+| **Display Surface** | Window framebuffer (3:2, letterboxed) | Curved dome mesh (112.5°×75°, 3:2 in view angle) | visionOS is spatial/immersive |
 | **Frame Rate** | 60fps display link | 90fps RealityKit timeline | Platform requirements differ |
 | **Image Blending** | GPU shader (fragment blend) | GPU shader (fragment blend) | Same approach, platform-optimal delivery |
 | **State Management** | @Published properties | AtomicImageBuffer (lock-free) | 90fps starves MainActor |
@@ -213,12 +213,21 @@ visionOS 2.0 introduced `LowLevelTexture` as an alternative, but it's better sui
 
 ## Color Space Handling
 
-Both platforms use `.bgra8Unorm` textures, but color management differs:
+The shader works on **gamma-encoded sRGB values** on both platforms (sources are `bgra8Unorm`
+holding sRGB bytes; nothing is linearised), and both platforms store those values unchanged:
 
-- **macOS**: Device RGB (implicit sRGB for display)
-- **visionOS**: `.raw` semantic on TextureResource prevents sRGB conversion
+- **macOS**: `MTKView` is `bgra8Unorm`; the drawable bytes are the shader's values.
+- **visionOS**: the DrawableQueue is `bgra8Unorm_srgb` (so RealityKit decodes on sample), but every
+  pass renders into a cached **`bgra8Unorm` view** of the drawable (`OffscreenEffectsRenderer.outputView`).
+  Rendering into the `_srgb` format directly encoded the values a second time (mid-grey 128 showed as
+  ~188, saturation -33%). Verified in the simulator with the test card's grey patches
+  (docs/decisions/vibrance.md, V1).
 
-This ensures identical color output despite different display pipelines.
+Feedback trails: macOS copies its drawable into a feedback texture; visionOS binds each eye's
+previous output view (texture 4, right eye texture 6 in the MRT pass), no copy (V2).
+
+The final shader stage is VIBRANCE (luminance-preserving chroma gain, gamut-safe); its amount comes
+from `EffectsUniformsComputer.computeVibrance` times a per-image factor (`ImageColorStats`).
 
 ---
 
@@ -252,3 +261,12 @@ The architecture maximizes code sharing (audio, shaders, uniforms, services) whi
 - Drawable queues no longer request `.shaderWrite`; uploaded source textures use `optimizeContentsForGPUAccess`.
 - GPU timing: `Utils/GPUTimingStats.swift`; DEBUG launch flags: `Utils/DebugLaunchOptions.swift`;
   capture script: `scripts/perf-run.sh`. See `docs/decisions/performance.md`.
+
+## Image orientation and aspect
+
+One convention on both platforms: texture row 0 / texCoord.y = 0 is the image top. The visionOS upload
+draws into the CGBitmapContext unflipped. The effects pass maps rows 1:1 into the drawable. Dome UVs
+use v = 1 at the top, and the mono UnlitMaterial and stereo ShaderGraph material both sample row
+`(1 - v) * H`. Every source is centre-cropped to 3:2 (`ImageFraming`). The square 2048² target stores
+the 3:2 frame and the 112.5°×75° dome shows it undistorted. macOS letterboxes its view to 3:2. Details,
+measurements and the DEBUG test-card flags: `docs/decisions/orientation.md`.

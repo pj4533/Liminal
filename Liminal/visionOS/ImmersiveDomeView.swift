@@ -106,8 +106,10 @@ struct ImmersiveDomeView: View {
 
     // Curved panel parameters
     private static let panelRadius: Float = 2.0
-    private static let horizontalArc: Float = 110.0
+    // 112.5° x 75° = 3:2 in view angle, matching ImageFraming.displayAspect so the 3:2 image is
+    // shown undistorted (docs/decisions/orientation.md). Was 110° (1.467, a 2% horizontal squeeze).
     private static let verticalArc: Float = 75.0
+    private static let horizontalArc: Float = verticalArc * Float(ImageFraming.displayAspect)
     private static let horizontalSegments: Int = 48
     private static let verticalSegments: Int = 36
 
@@ -211,6 +213,9 @@ struct ImmersiveDomeView: View {
         // Build stereo material for per-eye rendering
         let stereoBuilder = StereoMaterialBuilder(outputSize: 2048)
         do {
+            if DebugLaunchOptions.forceMonoMaterial {
+                throw CocoaError(.featureUnsupported)  // DEBUG: inspect the mono fallback path
+            }
             try await stereoBuilder.build()
             self.stereoMaterialBuilder = stereoBuilder
             if let stereoMat = stereoBuilder.material {
@@ -258,7 +263,8 @@ struct ImmersiveDomeView: View {
         }
 
         // Set initial image directly from CGImage - NO UIImage conversion!
-        if let cgImage = visualEngine.imageBuffer.loadCurrent() {
+        if let rawImage = visualEngine.imageBuffer.loadCurrent() {
+            let cgImage = ImageFraming.coverCrop(rawImage)
             transitionState.setInitialImage(cgImage)
             transitionState.lastGeneration = visualEngine.imageBuffer.generation()
             LMLog.visual.info("🎬 Initial image set directly from CGImage (gen \(transitionState.lastGeneration))")
@@ -349,16 +355,18 @@ struct ImmersiveDomeView: View {
                 // Check for new images from AtomicImageBuffer (thread-safe)
                 let (rawImage, generation) = visualEngine.imageBuffer.loadWithGeneration()
                 if let rawImage = rawImage, generation != transitionState.lastGeneration {
+                    // Centre-crop to the dome's 3:2 once; colour AND depth use the framed image.
+                    let framedImage = ImageFraming.coverCrop(rawImage)
                     transitionState.lastGeneration = generation
-                    transitionState.transitionTo(rawImage)
+                    transitionState.transitionTo(framedImage)
                     LMLog.visual.info("🎬 New image detected (gen \(generation)), triggering transition")
 
                     // Trigger depth map generation in background (~31ms, images change every ~30s)
-                    if let depthGen = depthGenerator {
+                    if let depthGen = depthGenerator, !DebugLaunchOptions.forceStereoFlatDepth {
                         let imageBuffer = visualEngine.imageBuffer
                         Task.detached {
                             do {
-                                let depth = try await depthGen.generateDepth(from: rawImage)
+                                let depth = try await depthGen.generateDepth(from: framedImage)
                                 await MainActor.run {
                                     imageBuffer.storeDepth(depth)
                                     self.effectsRenderer?.updateDepthTexture(from: depth)
@@ -398,10 +406,17 @@ struct ImmersiveDomeView: View {
                 // Use raw transitionProgress - shader applies easing (matches macOS)
                 // IMPORTANT: Pass 0 when not transitioning, otherwise ghost taps stay disabled forever
                 // (transitionProgress stays at 1.0 after transition completes)
+                // Per-image vibrance factors (measured once per image, cached), blended across a crossfade
+                var vibrance = ImageColorStats.cachedFactors(key: cgImage) { cgImage }
+                if transitionState.isTransitioning, let prev = transitionState.previousImage {
+                    let from = ImageColorStats.cachedFactors(key: prev) { prev }
+                    vibrance = VibranceFactors.lerp(from, vibrance, transitionState.transitionProgress)
+                }
                 let uniforms = EffectsUniformsComputer.compute(
                     time: effectTime,
                     transitionProgress: transitionState.isTransitioning ? transitionState.transitionProgress : 0,
-                    hasSaliencyMap: false
+                    hasSaliencyMap: false,
+                    vibrance: vibrance
                 )
 
                 // Render frame - use stereo path if available, otherwise mono
@@ -495,6 +510,15 @@ struct ImmersiveDomeView: View {
 
     @MainActor
     private func generateAndApplyDepth(for image: CGImage, logLabel: String) async {
+        if DebugLaunchOptions.forceStereoFlatDepth {
+            // DEBUG: constant mid-grey depth (zero parallax variation) instead of the ML map.
+            let flat = Self.makeFlatDepthMap()
+            visualEngine.imageBuffer.storeDepth(flat)
+            effectsRenderer?.updateDepthTexture(from: flat)
+            lastDepthGeneration = visualEngine.imageBuffer.loadDepthWithGeneration().generation
+            LMLog.visual.info("🗺️ \(logLabel): FLAT debug depth uploaded (\(flat.width)x\(flat.height))")
+            return
+        }
         guard let generator = await ensureDepthGeneratorReady() else {
             LMLog.visual.error("🗺️ \(logLabel): No depth generator available")
             return
@@ -511,6 +535,15 @@ struct ImmersiveDomeView: View {
         }
     }
 
+    /// Constant 0.5 depth map (DEBUG -LiminalForceStereoFlatDepth), same size as DepthAnything output.
+    private static func makeFlatDepthMap() -> CGImage {
+        let w = 518, h = 392
+        let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w,
+                            space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue)!
+        ctx.setFillColor(gray: 0.5, alpha: 1)
+        ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+        return ctx.makeImage()!
+    }
 }
 
 #endif

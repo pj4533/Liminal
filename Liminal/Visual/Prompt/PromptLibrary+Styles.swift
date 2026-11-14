@@ -2,7 +2,7 @@
 //  PromptLibrary+Styles.swift
 //  Liminal
 //
-//  16 styles. 13 photographic (78% by weight), 3 abstract/continuity (22%).
+//  17 styles. 14 photographic, 3 abstract/continuity (22%).
 //  Wording rules (docs/decisions/images.md D7): positive phrasing only, no
 //  "film scan" or "medium format film", and never the words checked by
 //  PromptBuilderTests.bannedWords.
@@ -103,10 +103,10 @@ nonisolated extension PromptLibrary {
             moods: [.eerie, .lush, .serene], energy: 0.55
         ),
         Style(
-            id: "studioProduct", weight: 8,
+            id: "studioProduct", weight: 3.5,
             lead: "High-end studio product photograph",
             camera: "100mm lens, f/11, focus-stacked",
-            lighting: "Softbox key light with a hard rim light, seamless backdrop in a deep palette color",
+            lighting: "Softbox key light with a hard rim light, seamless backdrop in a bold palette color that contrasts with the subject",
             texture: "Glossy highlights, beads of moisture, immaculate surfaces",
             categories: [.object, .food, .instrument, .plant, .creature, .vehicle],
             scales: [.tiny, .handheld, .humanSized],
@@ -115,6 +115,20 @@ nonisolated extension PromptLibrary {
             paletteRule: .any,
             compositions: ["centeredHero", "lowAngle", "closeUp"],
             moods: [.playful, .intimate, .electric], energy: 0.6
+        ),
+        Style(
+            id: "sunlitStill", weight: 3,
+            lead: "Sunlit still-life photograph",
+            camera: "70mm lens, f/9",
+            lighting: "Hard window sun casting a long graphic shadow across a plaster wall and a glossy tabletop",
+            texture: "Crisp shadow edges, glossy highlights, fine surface grain",
+            categories: [.object, .food, .instrument, .plant, .creature, .vehicle],
+            scales: [.tiny, .handheld, .humanSized],
+            scaleOverrides: ["miniatureOnLeaf"],
+            excludedTransformations: ["mountainSize", "flock", "upsideDown", "rising", "spiralHorizon", "standingAlone", "seabed", "float"],
+            paletteRule: .any,
+            compositions: ["centeredHero", "lowAngle", "closeUp"],
+            moods: [.serene, .intimate, .playful], energy: 0.5
         ),
         Style(
             id: "aerial", weight: 6,
@@ -215,7 +229,7 @@ nonisolated extension PromptLibrary {
     ]
 
     /// Fixed closing sentences. This exact wording tested clean (no borders, no text).
-    static let tail = "One clear focal subject in the central third with a strong readable silhouette, crisp edges and rich tactile surface texture, uncluttered surroundings. Full-bleed photograph: the scene fills the entire image edge to edge. Physically plausible materials and light, as if really photographed. The image contains only the scene itself: no lettering, no logos, no people."
+    static let tail = "One large focal subject filling at least a third of the picture with a strong readable silhouette, crisp edges and rich tactile surface texture, uncluttered surroundings. Full-bleed photograph: the scene fills the entire image edge to edge. Physically plausible materials and light, as if really photographed. The image contains only the scene itself: no lettering, no logos, no people."
 
     static let fullBleedSentence = "Full-bleed photograph: the scene fills the entire image edge to edge."
 

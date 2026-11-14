@@ -11,11 +11,13 @@
 //                     [--size 512] [--times 0,37,113,260,611] [--no-solo]
 //
 //  Modes:
-//    visionos — mirrors OffscreenEffectsRenderer: bgra8Unorm source, render target
-//               bgra8Unorm_srgb (Metal encodes linear->sRGB on write), and NO feedback
-//               texture bound at index 4 (emulated with a 1x1 black texture).
-//    macos    — mirrors EffectsMetalView: bgra8Unorm target, real feedback ping-pong
-//               (warm-up frames at 60fps leading into each time t).
+//    visionos — mirrors OffscreenEffectsRenderer: bgra8Unorm source, render target is a
+//               bgra8Unorm VIEW of a bgra8Unorm_srgb texture (the DrawableQueue format), so the
+//               stored bytes are the shader's values (no second sRGB encode). Feedback reads the
+//               previous frame's output view (as the renderer does with its last drawable).
+//    macos    — mirrors EffectsMetalView: bgra8Unorm target, real feedback ping-pong.
+//  Both modes run warm-up frames at 60fps leading into each time t, and apply the app's
+//  per-image vibrance factors (ImageColorStats, measured on the cropped source).
 //
 //  Output per image <name>:
 //    <out>/<mode>/<name>/input.png                 square-resampled input (baseline)
@@ -70,7 +72,17 @@ do {
 let device = MTLCreateSystemDefaultDevice()!
 let queue = device.makeCommandQueue()!
 let library = try! device.makeLibrary(URL: URL(fileURLWithPath: metallibPath))
-let targetFormat: MTLPixelFormat = (mode == "visionos") ? .bgra8Unorm_srgb : .bgra8Unorm
+// Pipelines always render bgra8Unorm (visionOS: into a view of an _srgb texture).
+let targetFormat: MTLPixelFormat = .bgra8Unorm
+/// Render target as the mode's renderer allocates it, plus the bgra8Unorm texture passes write/read.
+func makeTarget() -> (storage: MTLTexture, view: MTLTexture) {
+    if mode == "visionos" {
+        let t = makeTexture(.bgra8Unorm_srgb, size, size, usage: [.renderTarget, .shaderRead])
+        return (t, t.makeTextureView(pixelFormat: .bgra8Unorm)!)
+    }
+    let t = makeTexture(.bgra8Unorm, size, size, usage: [.renderTarget, .shaderRead])
+    return (t, t)
+}
 
 func makePipeline(_ fragment: String) -> MTLRenderPipelineState {
     let d = MTLRenderPipelineDescriptor()
@@ -106,21 +118,23 @@ let blackTex = fill1x1(.bgra8Unorm, bytes: [0, 0, 0, 255])
 let srgb = CGColorSpace(name: CGColorSpace.sRGB)!
 let bgraInfo = CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.premultipliedFirst.rawValue
 
-/// Upload exactly like OffscreenEffectsRenderer.updateSourceTexture (sRGB CGContext, BGRA, flipped).
-func loadSource(_ url: URL) -> MTLTexture {
+/// Upload exactly like OffscreenEffectsRenderer.updateSourceTexture: 3:2 cover-crop (as the dome
+/// view does before upload), sRGB CGContext, BGRA, NOT flipped (bitmap memory is top row first =
+/// Metal row 0 = image top). Also returns the app's vibrance factors for the image. Output PNGs are therefore upright (square, i.e. the 3:2 frame
+/// squeezed horizontally exactly as stored in the 2048² texture).
+func loadSource(_ url: URL) -> (MTLTexture, VibranceFactors) {
     let src = CGImageSourceCreateWithURL(url as CFURL, nil)!
-    let img = CGImageSourceCreateImageAtIndex(src, 0, nil)!
+    let img = ImageFraming.coverCrop(CGImageSourceCreateImageAtIndex(src, 0, nil)!)
+    let factors = ImageColorStats.factors(for: img)
     let bpr = size * 4
     var buf = [UInt8](repeating: 0, count: bpr * size)
     let ctx = CGContext(data: &buf, width: size, height: size, bitsPerComponent: 8, bytesPerRow: bpr,
                         space: srgb, bitmapInfo: bgraInfo)!
     ctx.interpolationQuality = .high
-    ctx.translateBy(x: 0, y: CGFloat(size))
-    ctx.scaleBy(x: 1, y: -1)
     ctx.draw(img, in: CGRect(x: 0, y: 0, width: size, height: size))
     let t = makeTexture(.bgra8Unorm, size, size, usage: .shaderRead)
     t.replace(region: MTLRegionMake2D(0, 0, size, size), mipmapLevel: 0, withBytes: buf, bytesPerRow: bpr)
-    return t
+    return (t, factors)
 }
 
 func writePNG(_ tex: MTLTexture, _ path: String) {
@@ -189,6 +203,7 @@ let stages: [(String, Mutator)] = [
     ("ghosttaps", { u, g in u.ghostTapCount = 0; g = [] }),
     ("bloom", { u, _ in u.bloomAmount = 0 }),
     ("feedback", { u, _ in u.feedbackMix = 0 }),
+    ("vibrance", { u, _ in u.vibranceAmount = 0; u.blackPoint = 0 }),
 ]
 
 func allOff(_ u: inout EffectsUniforms, _ g: inout [GhostTapData]) {
@@ -196,12 +211,12 @@ func allOff(_ u: inout EffectsUniforms, _ g: inout [GhostTapData]) {
 }
 
 /// Render one variant at time t. In macOS mode, runs `warmupFrames` frames of feedback leading into t.
-func render(source: MTLTexture, t: Float, mutate: Mutator, path: String) {
-    let target = makeTexture(targetFormat, size, size, usage: [.renderTarget, .shaderRead])
+func render(source: MTLTexture, vibrance: VibranceFactors, t: Float, mutate: Mutator, path: String) {
+    let target = makeTarget()
     let baseTaps = ghostTaps(at: t)
     func uniformsAt(_ time: Float) -> (EffectsUniforms, [GhostTapData]) {
         var u = EffectsUniformsComputer.compute(time: time, transitionProgress: 0, hasSaliencyMap: false,
-                                                ghostTapCount: baseTaps.count)
+                                                ghostTapCount: baseTaps.count, vibrance: vibrance)
         var g = baseTaps
         mutate(&u, &g)
         u.ghostTapCount = Float(g.count)
@@ -209,10 +224,11 @@ func render(source: MTLTexture, t: Float, mutate: Mutator, path: String) {
     }
     let cb = queue.makeCommandBuffer()!
     let (u, g) = uniformsAt(t)
-    if mode == "macos" && u.feedbackMix > 0.001 {
-        let fbA = makeTexture(.bgra8Unorm, size, size, usage: [.renderTarget, .shaderRead])
-        let fbB = makeTexture(.bgra8Unorm, size, size, usage: [.renderTarget, .shaderRead])
-        // EffectsMetalView zero-inits its feedback texture; we start from black too.
+    if u.feedbackMix > 0.001 {
+        let fbA = makeTarget().view
+        let fbB = makeTarget().view
+        // Feedback starts from black (macOS zero-inits; visionOS skips feedback on its first frame,
+        // which converges to the same state within the warm-up).
         var read = blackTex
         var write = fbA
         let dt: Float = 1.0 / 60.0
@@ -222,28 +238,27 @@ func render(source: MTLTexture, t: Float, mutate: Mutator, path: String) {
             read = write
             write = (write === fbA) ? fbB : fbA
         }
-        encodeDraw(cb, pipeline: effectsPipeline, target: target, source: source, feedback: read, uniforms: u, taps: g)
+        encodeDraw(cb, pipeline: effectsPipeline, target: target.view, source: source, feedback: read, uniforms: u, taps: g)
     } else {
-        encodeDraw(cb, pipeline: effectsPipeline, target: target, source: source, feedback: blackTex, uniforms: u, taps: g)
+        encodeDraw(cb, pipeline: effectsPipeline, target: target.view, source: source, feedback: blackTex, uniforms: u, taps: g)
     }
     cb.commit()
     cb.waitUntilCompleted()
-    writePNG(target, path)
+    writePNG(target.storage, path)
 }
 
-func renderPassthrough(source: MTLTexture, path: String, format: MTLPixelFormat) {
-    let d = MTLRenderPipelineDescriptor()
-    d.vertexFunction = library.makeFunction(name: "effectsVertex")!
-    d.fragmentFunction = library.makeFunction(name: "passthroughFragment")!
-    d.colorAttachments[0].pixelFormat = format
-    let p = try! device.makeRenderPipelineState(descriptor: d)
-    let target = makeTexture(format, size, size, usage: [.renderTarget, .shaderRead])
+/// passthroughFragment into a plain bgra8Unorm texture (asTarget false: the input reference) or
+/// into the mode's real render target (asTarget true).
+func renderPassthrough(source: MTLTexture, path: String, asTarget: Bool) {
+    let target = asTarget ? makeTarget() : {
+        let t = makeTexture(.bgra8Unorm, size, size, usage: [.renderTarget, .shaderRead]); return (t, t)
+    }()
     let cb = queue.makeCommandBuffer()!
     let u = EffectsUniformsComputer.compute(time: 0)
-    encodeDraw(cb, pipeline: p, target: target, source: source, feedback: blackTex, uniforms: u, taps: [])
+    encodeDraw(cb, pipeline: passthroughPipeline, target: target.view, source: source, feedback: blackTex, uniforms: u, taps: [])
     cb.commit()
     cb.waitUntilCompleted()
-    writePNG(target, path)
+    writePNG(target.storage, path)
 }
 
 // MARK: - Main
@@ -259,18 +274,18 @@ for file in inputs {
     let name = (file as NSString).deletingPathExtension
     let dir = "\(outDir)/\(mode)/\(name)"
     try! fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
-    let source = loadSource(URL(fileURLWithPath: "\(inDir)/\(file)"))
-    renderPassthrough(source: source, path: "\(dir)/input.png", format: .bgra8Unorm)
-    renderPassthrough(source: source, path: "\(dir)/passthrough.png", format: targetFormat)
+    let (source, vibrance) = loadSource(URL(fileURLWithPath: "\(inDir)/\(file)"))
+    renderPassthrough(source: source, path: "\(dir)/input.png", asTarget: false)
+    renderPassthrough(source: source, path: "\(dir)/passthrough.png", asTarget: true)
     for t in times {
         let tag = "t\(Int(t))"
-        render(source: source, t: t, mutate: { _, _ in }, path: "\(dir)/\(tag)_full.png")
-        render(source: source, t: t, mutate: { u, g in allOff(&u, &g) }, path: "\(dir)/\(tag)_none.png")
+        render(source: source, vibrance: vibrance, t: t, mutate: { _, _ in }, path: "\(dir)/\(tag)_full.png")
+        render(source: source, vibrance: vibrance, t: t, mutate: { u, g in allOff(&u, &g) }, path: "\(dir)/\(tag)_none.png")
         for (stage, neutralize) in stages {
-            render(source: source, t: t, mutate: neutralize, path: "\(dir)/\(tag)_ko_\(stage).png")
+            render(source: source, vibrance: vibrance, t: t, mutate: neutralize, path: "\(dir)/\(tag)_ko_\(stage).png")
             if doSolo && stage != "colorblock" {
                 // Solo: everything off, then restore this stage's real values.
-                render(source: source, t: t, mutate: { u, g in
+                render(source: source, vibrance: vibrance, t: t, mutate: { u, g in
                     let real = u
                     let realTaps = g
                     allOff(&u, &g)
@@ -288,6 +303,7 @@ for file in inputs {
                     case "ghosttaps": g = realTaps
                     case "bloom": u.bloomAmount = real.bloomAmount
                     case "feedback": u.feedbackMix = real.feedbackMix; u.feedbackWarpAmount = real.feedbackWarpAmount
+                    case "vibrance": u.vibranceAmount = real.vibranceAmount; u.blackPoint = real.blackPoint
                     default: break
                     }
                 }, path: "\(dir)/\(tag)_solo_\(stage).png")

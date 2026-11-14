@@ -2,7 +2,7 @@
 //  PromptLibrary+Palettes.swift
 //  Liminal
 //
-//  17 named palettes. Each prompt names three colors and an accent explicitly;
+//  25 named palettes. Each prompt names three colors and an accent explicitly;
 //  the old "Natural, realistic colors" line is gone (it was the main cause of
 //  the samey look). Swatches are the intended colors, stored in metadata.
 //
@@ -20,16 +20,16 @@ nonisolated extension PromptLibrary {
                 isDark: false, warmth: 0.5, energy: 0.95, moods: [.electric, .playful]),
         Palette(id: "deepSea", words: ["cobalt blue", "turquoise", "oxidized copper green"], accent: "sunflower yellow",
                 swatches: [RGB(hex: 0x0047AB), RGB(hex: 0x30D5C8), RGB(hex: 0x4F8A73), RGB(hex: 0xFFC512)],
-                isDark: true, warmth: -0.7, energy: 0.5, moods: [.serene, .eerie]),
+                isDark: true, warmth: -0.7, energy: 0.5, moods: [.serene, .eerie], weight: 0.5),
         Palette(id: "neonNoir", words: ["electric cyan", "neon magenta", "violet"], accent: "wet black",
                 swatches: [RGB(hex: 0x00F0FF), RGB(hex: 0xFF00C8), RGB(hex: 0x7A1FFF), RGB(hex: 0x0A0A12)],
-                isDark: true, warmth: -0.3, energy: 0.9, moods: [.electric, .ominous]),
+                isDark: true, warmth: -0.3, energy: 0.9, moods: [.electric, .ominous], weight: 0.7),
         Palette(id: "desertSunset", words: ["burnt sienna", "coral", "apricot"], accent: "dusty violet",
                 swatches: [RGB(hex: 0xA0522D), RGB(hex: 0xFF7F6A), RGB(hex: 0xFBCEB1), RGB(hex: 0x8E7CA6)],
                 isDark: false, warmth: 0.9, energy: 0.5, moods: [.serene, .melancholy]),
         Palette(id: "borealis", words: ["emerald", "aurora green", "ice blue"], accent: "indigo",
                 swatches: [RGB(hex: 0x009B77), RGB(hex: 0x5CFF9D), RGB(hex: 0xA5E6FF), RGB(hex: 0x3B2C8F)],
-                isDark: true, warmth: -0.6, energy: 0.6, moods: [.majestic, .serene]),
+                isDark: true, warmth: -0.6, energy: 0.6, moods: [.majestic, .serene], weight: 0.6),
         Palette(id: "candyPastel", words: ["bubblegum pink", "mint", "butter yellow"], accent: "baby blue",
                 swatches: [RGB(hex: 0xFF8FC7), RGB(hex: 0x98F5C8), RGB(hex: 0xFFF1A0), RGB(hex: 0x9FD3FF)],
                 isDark: false, warmth: 0.2, energy: 0.4, moods: [.playful, .intimate]),
@@ -42,13 +42,13 @@ nonisolated extension PromptLibrary {
         Palette(id: "monoCobalt", words: ["navy", "cobalt", "ice blue"], accent: "vermilion",
                 swatches: [RGB(hex: 0x0B1F4D), RGB(hex: 0x0047AB), RGB(hex: 0xBFE3FF), RGB(hex: 0xE34234)],
                 isDark: true, warmth: -0.9, energy: 0.45, moods: [.melancholy, .serene],
-                customClause: "Color palette: every shade of blue from navy to ice blue with one vermilion accent, vivid and clearly separated."),
+                weight: 0.5, customClause: "Color palette: every shade of blue from navy to ice blue with one vermilion accent, vivid and clearly separated."),
         Palette(id: "toxicBloom", words: ["chartreuse", "deep violet", "acid yellow"], accent: "black",
                 swatches: [RGB(hex: 0x9EFF00), RGB(hex: 0x4B0F7A), RGB(hex: 0xEFFF2E), RGB(hex: 0x050505)],
                 isDark: true, warmth: 0.1, energy: 0.85, moods: [.ominous, .electric]),
         Palette(id: "rustAndTeal", words: ["oxidized teal", "rust orange", "charcoal"], accent: "bone",
                 swatches: [RGB(hex: 0x2F7F7A), RGB(hex: 0xB7410E), RGB(hex: 0x36393D), RGB(hex: 0xE3DAC9)],
-                isDark: false, warmth: 0.2, energy: 0.5, moods: [.melancholy, .eerie]),
+                isDark: false, warmth: 0.2, energy: 0.5, moods: [.melancholy, .eerie], weight: 0.5),
         Palette(id: "pearl", words: ["pearl white", "opal shimmer", "lilac"], accent: "pale gold",
                 swatches: [RGB(hex: 0xF4F1EA), RGB(hex: 0xD9E8F0), RGB(hex: 0xC8A2C8), RGB(hex: 0xE6CF8B)],
                 isDark: false, warmth: 0.1, energy: 0.25, moods: [.serene, .intimate]),
@@ -64,5 +64,31 @@ nonisolated extension PromptLibrary {
         Palette(id: "earth", words: ["moss green", "ochre", "slate"], accent: "cream",
                 swatches: [RGB(hex: 0x6B7F3A), RGB(hex: 0xCC7722), RGB(hex: 0x6D7B8D), RGB(hex: 0xF3E9D2)],
                 isDark: false, warmth: 0.4, energy: 0.3, moods: [.serene, .melancholy], weight: 0.4),
+        // Round 2 (D33): warm and wide-hue palettes to offset the teal/blue skew.
+        Palette(id: "scarletRose", words: ["scarlet", "poppy red", "rose pink"], accent: "cream",
+                swatches: [RGB(hex: 0xD7263D), RGB(hex: 0xE8372B), RGB(hex: 0xF4829F), RGB(hex: 0xF7ECD8)],
+                isDark: false, warmth: 0.95, energy: 0.8, moods: [.euphoric, .intimate, .majestic], weight: 1.3),
+        Palette(id: "saffronGold", words: ["saffron yellow", "marigold orange", "amber"], accent: "deep plum",
+                swatches: [RGB(hex: 0xF4B400), RGB(hex: 0xFF9F1C), RGB(hex: 0xD98E04), RGB(hex: 0x4A1942)],
+                isDark: false, warmth: 1.0, energy: 0.7, moods: [.majestic, .playful, .serene], weight: 1.3),
+        Palette(id: "magentaBloom", words: ["fuchsia", "magenta", "orchid purple"], accent: "lime green",
+                swatches: [RGB(hex: 0xE6007E), RGB(hex: 0xFF2BD6), RGB(hex: 0xB65FCF), RGB(hex: 0xA6E22E)],
+                isDark: false, warmth: 0.5, energy: 0.85, moods: [.electric, .playful, .euphoric], weight: 1.3),
+        Palette(id: "verdantGreen", words: ["kelly green", "fern green", "lime"], accent: "coral red",
+                swatches: [RGB(hex: 0x1DB954), RGB(hex: 0x4F9D2D), RGB(hex: 0xB5E61D), RGB(hex: 0xFF5A4F)],
+                isDark: false, warmth: 0.1, energy: 0.6, moods: [.lush, .playful, .serene], weight: 1.2),
+        Palette(id: "sorbetPastel", words: ["peach", "lavender", "pistachio"], accent: "lemon cream",
+                swatches: [RGB(hex: 0xFFC9A8), RGB(hex: 0xC9B6F2), RGB(hex: 0xBFE8A8), RGB(hex: 0xFFF3B0)],
+                isDark: false, warmth: 0.4, energy: 0.35, moods: [.serene, .intimate, .playful], weight: 1.2,
+                customClause: "Color palette: high-key pastels of peach, lavender and pistachio with lemon cream accents, bright, airy and clearly separated."),
+        Palette(id: "garnetAmethyst", words: ["garnet red", "deep amethyst", "topaz gold"], accent: "midnight",
+                swatches: [RGB(hex: 0x7B1E2B), RGB(hex: 0x5B2A86), RGB(hex: 0xE0A526), RGB(hex: 0x0B0720)],
+                isDark: true, warmth: 0.4, energy: 0.65, moods: [.majestic, .ominous, .lush], weight: 1.2),
+        Palette(id: "coralMango", words: ["coral", "mango", "hot pink"], accent: "cobalt blue",
+                swatches: [RGB(hex: 0xFF6F61), RGB(hex: 0xFFB000), RGB(hex: 0xFF3E8E), RGB(hex: 0x1F44C8)],
+                isDark: false, warmth: 0.9, energy: 0.8, moods: [.playful, .euphoric, .electric], weight: 1.2),
+        Palette(id: "violetEmber", words: ["royal purple", "ember orange", "rose gold"], accent: "black",
+                swatches: [RGB(hex: 0x5A1FA8), RGB(hex: 0xF0581E), RGB(hex: 0xE8A798), RGB(hex: 0x070509)],
+                isDark: true, warmth: 0.5, energy: 0.75, moods: [.ominous, .majestic, .electric], weight: 1.1),
     ]
 }

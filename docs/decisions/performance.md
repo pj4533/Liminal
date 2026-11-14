@@ -6,6 +6,37 @@ Hard constraints: the visionOS render target stays 2048x2048, and the effects mu
 is the bottleneck on a real Vision Pro. Simulator numbers are only for before/after comparison.
 
 
+## CUMULATIVE SUMMARY after GPU round 2 (integration, 2026-11-14)
+
+Deterministic Mac-GPU bench (scripts/shader-bench.sh, 2048^2 eye pass, 5 scenarios, interleaved A/B,
+5 trials x 300 frames; the Simulator host and the Mac Liminal app shared the GPU, noise floor ~1-3%).
+"orig" = shader of 741465d (pre-perf main; per-eye `effectsFragment`, no vibrance stage), run in the bench
+via --mono (two per-eye passes, new bench option: the stereo pipeline is now only built when not --mono).
+"r2base" = shader at cdc8f90 (after perf+images+vibrance, before round 2).
+
+| Comparison (ms per frame, both eyes) | A | B | B/A |
+|---|---|---|---|
+| MRT: r2base -> final (run 1 / run 2) | 6.59 / 6.65 | 5.01 / 4.85 | 0.76 / 0.73 (-24..-27%) |
+| per-eye shader, mono: r2base -> final | 10.05 | 6.75 | 0.67 (-33%) |
+| per-eye shader, mono: orig -> final | 8.46 | 6.62 | 0.78 (-22%) |
+| per-eye shader, mono: orig -> r2base | 9.87 | 10.57 | 1.07 (+7%, cost of vibrance/orientation/sRGB-fix stages) |
+| whole pipeline: orig mono 2-pass (8.46) -> final MRT (~4.9) | 8.46 | ~4.9 | ~0.58 (-42%) |
+
+The last row compares absolute numbers from different runs within minutes of each other (no direct
+interleave possible across modes), so treat it as +-5%. Final shader is therefore ~22% cheaper per pixel than the
+original even though it now includes the vibrance stage, and MRT adds a further ~25% on top.
+Round 2 kept: noise-double-angle (-9.5%), logsphere-double-angle (-8.7%), fhue-double-angle (-5.5%),
+per-eye-alu-half (-4.6%). Not kept: mrt-share-eye-independent, bloom-ghost-mip, specialise-and-skip-retest,
+half-HSV. Note: the noise-double-angle commit (911eb7e) is below the literal 35 dB parity rule on 2 scenarios
+(32.6/34.5 dB; waived, see its entry: the old shader is only 32.2 dB from an all-float reference).
+
+Simulator, 3 x 30 s (integ-final-1/2/3, 15 s warm-up) + frozen t=100: fps 76.8/77.3/77.4, interval p95 13.3 ms,
+GPU mean 0.172/0.169/0.169 ms (p95 0.32-0.34), dropped/5 s 2.0/1.8/1.2; frozen GPU 0.155 ms. Versus the earlier
+perf-only final (0.157/0.161/0.207) the Simulator GPU number is slightly higher because the vibrance stage etc.
+were added since; the Simulator host GPU is too coarse to show the ALU savings (bench shows them). The frozen
+screenshot (integ-final-frozen) renders upright (floor at the bottom, sky above), vibrant, with turbulence, chromatic
+fringing, grain and ghosting visible. 2048x2048 unchanged.
+
 ## SUMMARY (final wrap-up, 2026-11-14)
 
 Simulator (host Mac GPU), median of 3 unfrozen 30 s runs, 15 s warm-up. GPU numbers are for relative
@@ -259,6 +290,8 @@ section. Nothing was measured in this step; the conclusions below come from the 
 - Measured (visionOS sim, median of 3): gpu_ms_mean 0.258 (0.261/0.254/0.258), fps 74.15 (74.2/61.5/75.1), interval p95 17.7 ms. Frozen run: gpu 0.264 ms. No errors in logs.
 - Comparison to the "current best" (0.159 ms) is not apples to apples: sim host load and loaded dome image content differ between sessions (frozen screenshots differ because different generated images were loaded: 551 vs 64 in the image counter; mean abs diff 47). Not a shader regression since no shader changed.
 - Verdict: no gain (>=3% threshold not met), so the branch was reset to 173a05a per workflow rules. The harness is a tooling-only change; it can be re-applied from 51ae60c if wanted (git cherry-pick 51ae60c).
+- **Superseded (2026-11-14, feature/integration)**: dropping it was a mistake. A tooling commit cannot be
+  judged by app GPU time. It was cherry-picked back and rebuilt; see "Round 2: deterministic bench" at the end.
 
 ## Both eyes in one MRT pass (mrt-stereo-single-pass) - implemented, awaiting measurement
 
@@ -416,3 +449,422 @@ Measured (visionOS sim, medians of 3 x 30s runs) vs previous best (MRT stereo, 2
 - Visual parity: effects look equivalent (frozen numeric diff 44 vs baseline is not meaningful, the source image differs).
 - Verdict: reverted. GPU time, the primary metric, did not improve (it regressed); the fps gain is simulator-host jitter-sensitive (prior runs ranged 48-72 fps) and the change does not reduce GPU work. Branch reset to d81b92d.
 - Alternatives: could be revisited for CPU/pacing reasons on real hardware, but not as a GPU win.
+---
+
+## 2026-11-14: Round 2 item 1 — offline Mac-GPU shader benchmark (shader-bench-harness)
+
+- **What**: added `scripts/shader-bench.swift` and the `scripts/shader-bench.sh` wrapper (tooling
+  only; no app code changed). The wrapper builds with `swiftc -O` into `$SCRATCH` (rebuilt when the
+  source is newer) and runs it. The tool compiles the working-tree
+  `Liminal/Shaders/EffectsRenderer.metal` with `makeLibrary(source:)` and renders the visionOS eye
+  pass the same way `OffscreenEffectsRenderer.renderEyeToDrawable` does: 2048² `bgra8Unorm_srgb`,
+  `.dontCare` load, uniforms at buffer 0, ghost taps at buffer 1, source at tex 0, 1x1 r8
+  saliency (0.5) at tex 2, previous at tex 3 (source when not transitioning), **tex 4 left
+  unbound**, r8 depth at tex 5, linear/clamp sampler, 4-vertex strip. Uniforms are a port of
+  `EffectsUniformsComputer.compute` at t=100 (hasSaliencyMap false, as ImmersiveDomeView passes).
+  Inputs are procedural (gradients, stripes, checker, grain, 24 bright spots; a second seed for the
+  previous image; a depth map with a near blob). No Gemini cache.
+- **Scenarios**: steady, ghost4 (4 active taps), transition (0.5, second image), each at
+  stereoOffset -0.008 (L) and +0.008 (R). `--fragment` picks the entry point for later items;
+  `--only` limits scenarios.
+- **Timing**: 40 eye passes per command buffer (one encoder per pass, alternating two targets like
+  the two eye drawables), 3 warm-up buffers, then 7 timed buffers per scenario. Scenarios are
+  interleaved round-robin so host drift hits all of them equally. ms per eye =
+  (gpuEndTime - gpuStartTime) / passes. Reports median, min, max, spread (max-min)/median and IQR
+  per scenario, plus `mean_of_medians_ms_per_eye`. `other_gpu_clients` records a running Liminal
+  (simulator or Mac) or SimMetalHost.
+- **Parity**: `--out DIR` writes `<scenario>.png` (one extra pass per scenario, read back by a blit).
+  `--compare A B` prints max and mean abs diff per channel and the % of pixels that differ. Two HEAD
+  runs compared as identical (worst max abs 0), so any non-zero diff later comes from the shader.
+- **Round 2 reference (HEAD 173a05a, Apple M4 10-core GPU, t=100, 40 passes/buffer x 7)**:
+
+  | scenario | run A median (min) ms | run B median (min) ms |
+  |---|---|---|
+  | steady-L | 10.50 (9.63) | 9.75 (8.68) |
+  | steady-R | 10.10 (9.00) | 10.56 (8.84) |
+  | ghost4-L | 10.88 (9.07) | 10.25 (9.47) |
+  | ghost4-R | 11.20 (10.53) | 10.62 (10.08) |
+  | transition-L | 10.90 (10.21) | 10.87 (9.12) |
+  | transition-R | 10.56 (10.21) | 10.38 (8.08) |
+  | **mean of medians** | **10.69** | **10.40** |
+
+  Earlier runs the same hour: 10.23 (50 passes/buffer) and 12.38 (15 reps, while two more Mac
+  Liminal builds were also running).
+- **Spread target NOT met (contention, not the harness)**: per-scenario spread was 8-34% (IQR
+  6-16%) in every run. All runs overlapped other agents' work on the same GPU: Liminal in the
+  visionOS simulator rendering the dome (SimMetalHost) the whole time, and in one run two Mac
+  Release Liminal builds as well. gpuStart/End spans include the time-slices the GPU gives those
+  processes, so the absolute ~10 ms/eye is inflated and noisy. Raising passes from 40 to 50 did not
+  help (spread 13-35%), which fits outside load rather than fixed overhead. I did not stop the
+  other agents' processes. The mean of medians across the 6 scenarios moved about 3% between the two
+  runs that had the same load (10.69 vs 10.40).
+- **How to use it for A/B**: quit the simulator and any running Liminal first (check
+  `other_gpu_clients` is empty), then run reference and candidate back to back, ideally twice
+  interleaved (A B A B), and compare medians. Keep `--out` dirs and run `--compare` for parity.
+  Even under load, the per-pixel work clearly shows up here: about 10 ms/eye measured (an upper
+  bound, since the time includes other processes' GPU slices), while the simulator reported
+  0.04-0.08 ms for the same pass. So the simulator `gpu_ms` does not reflect the shader cost.
+- **Alternatives considered**: GPU counter stage-boundary timestamps per encoder (rejected: the
+  same preemption is inside those spans, and they add API surface); a shared texture target for
+  direct readback (rejected: timed targets stay `.private` like a drawable; the PNG pass blits to
+  a buffer); using the real Gemini cache image (rejected: not deterministic, and secrets/cache are
+  outside tooling scope).
+- **App runtime**: unchanged by design; visionOS and macOS builds both succeed.
+
+---
+
+## 2026-11-14: Round 2: deterministic bench (shader-bench rebuilt for the current pipeline)
+
+- **Why**: in the visionOS simulator the eye pass reads ~0.15 ms/frame of GPU time. That number is
+  mostly noise plus a different random source image each run, so ALU-level shader changes (exact
+  ALU clean-ups, angle-addition noise, mip sampling, skip-previous-samples, dead-stage constant) could
+  not be judged, and they were dropped on simulator numbers. The 51ae60c harness was also dropped,
+  for a tooling commit, on the same simulator metric. Cherry-picked it back (conflict in this file
+  only, both sides kept) and rebuilt it for the current pipeline.
+- **What it renders now** (mirrors `OffscreenEffectsRenderer.renderStereoAndPresent` -> `renderBothEyes`):
+  - One command buffer and one render pass per frame. `effectsFragmentStereo` writes both eyes (MRT)
+    into `bgra8Unorm` views of 2048² `bgra8Unorm_srgb` textures (vibrance V1 encode fix), with
+    `.dontCare` load. There are 3 "drawables" per eye in rotation. Each eye reads its own previous
+    output as feedback (tex 4 / tex 6), and the first frame runs with `feedbackMix` 0, as in the app.
+    `--mono` renders the per-eye fallback (2 `effectsFragment` passes).
+  - Fixed input committed as fixtures: `tools/ShaderBench/fixtures/07.jpg` (images-eval round1 #07,
+    1264x848, 868 KB) and `07-depth.png`, the app's own DepthAnythingV2 map of the framed image
+    (518x392, generated once with `--gen-depth`, which compiles the real `DepthMapGenerator.swift`).
+    Upload follows the app's orientation convention: `ImageFraming.coverCrop` to 3:2, drawn unflipped,
+    stretched to 2048², depth as r8 at native size, `optimizeContentsForGPUAccess` on both.
+  - Uniforms come from the app's own code, compiled into the bench (`EffectsUniformsComputer`,
+    `SmoothOscillator`, `GhostTapManager`, `ImageColorStats` vibrance factors (amount 0.856, dark 1.0),
+    `ImageFraming`). No port, so the bench cannot drift from the app. The stereo offset is
+    `0.003 + 0.007 * SmoothOscillator(t)`.
+  - Scenarios: frozen t = 37, 113, 260, 611, plus `trans113` (transitionProgress 0.5, previous = the
+    mirrored source). Frames cycle through the scenarios.
+  - Shader: `xcrun metal -ffast-math` (same as `MTL_FAST_MATH = YES` in the project) from the working
+    tree or `--shader FILE`, cached by content hash.
+- **Timing**: 60 warm-up frames, then 5 trials x 300 frames. Each frame is its own command buffer,
+  committed one at a time (inflight 1), and timed with `gpuEndTime - gpuStartTime`. Reports median,
+  p10 and p90 per trial, overall and per scenario.
+  - Inflight 1 is required. At inflight 2 and 3 the per-buffer span includes time queued behind the
+    other buffer, and medians read 14.0 ms and 22.4 ms, while wall time per frame stayed at about
+    7.2 ms. So per-buffer timestamps only mean something when nothing overlaps them.
+- **Determinism / parity**: the first two runs' PNGs differed (PSNR 41-49 dB, max diff 30) in every
+  steady scenario but not the transition one. The cause was `GhostTapManager.computeDirection`, which
+  adds `Float.random(±0.15 rad)`. The bench now rebuilds each tap's direction from its spawn time with
+  zero variance; tap count and progress still come from the manager. Since then, every pair of runs is
+  **bit-identical** (`--compare`: PSNR inf, max diff 0) across 4 separate runs, including the A/A pair.
+  PNG state is fresh per scenario: first frame without feedback, then 30 frames at the frozen time.
+  App code is unchanged.
+- **Current numbers** (HEAD 4d4bc38 + this change; Apple M4 10-core GPU; MRT both eyes, 2048²):
+
+  | run | median ms/frame | p10 | p90 | trial spread |
+  |---|---|---|---|---|
+  | A (random taps) | 6.91 | 5.67 | 8.56 | 5.6% |
+  | B (random taps) | 7.21 | 5.86 | 8.82 | 1.7% |
+  | C (random taps) | 7.37 | 5.96 | 9.16 | 4.0% |
+  | N1 | 6.71 | 5.48 | 8.46 | 2.5% |
+  | N2 | 6.94 | 5.59 | 8.80 | 1.8% |
+  | R1 (deterministic) | 7.07 | 5.77 | 8.60 | 7.0% |
+  | R2 (deterministic) | 7.27 | 5.65 | 9.27 | 5.9% |
+  | AA-1 (A side) | 6.70 | 5.65 | 8.33 | 2.5% |
+  | AA-2 (A side) | 7.09 | 5.68 | 8.88 | 11.2% |
+
+  **Median: ~7.0 ms per frame for both eyes** (range 6.70-7.37). Per scenario at R1, all within
+  ±2.5%: t37 7.16, t113 7.16, t260 7.19, t611 6.92, trans113 6.97. Every scenario has 2 ghost taps.
+  Mono fallback (2 passes): **10.84 ms** (trial spread 2.3%). MRT saves about 36%, so the bench
+  clearly responds to per-pixel work. Compare the simulator's 0.16 ms for the same pass.
+  The p10-p90 band within a run is wide (about 5.6-8.6 ms) at every setting. Likely GPU clock states and
+  contention (inferred). The median is stable against it.
+- **Noise floor**:
+  - Separate runs of the same code (9 runs above): medians 6.70-7.37 ms, so max-min is **9.5%** of
+    the mean and the standard deviation about 3.4%. Two back-to-back runs differed by 2.9% (R1/R2) and
+    4.3% (A/B). Every run shared the GPU with idle SimMetalHost processes, and most also with the
+    music workstream's Mac Liminal test renders (recorded in `other_gpu_clients`).
+  - **Interleaved A/A** (`--shader-b` with a byte-different copy of the same shader; frames alternate
+    A,B,A,B and the order flips every trial): overall B/A ratio **1.0055** and **0.9879**, so the
+    floor is **about ±1.2%**. Per-trial ratios range 0.960-1.052.
+- **Decision rule for shader A/B from now on**: use the interleaved mode
+  (`scripts/shader-bench.sh --shader REF.metal --shader-b CANDIDATE.metal --out DIR`). Count a change
+  only when `ratio_b_over_a_overall` moves by **more than 2%** in the same direction in two runs
+  (about 1.7x the A/A floor). Check parity with `--compare DIR DIR/b`. An exact-math change must come
+  out identical or PSNR > 50 dB, and look changes need a visual check of the PNGs. Separate
+  (non-interleaved) runs are only good for ±10% effects.
+- **Commands**:
+  ```
+  export SCRATCH=<scratch>/shader-bench          # binary + metallib cache
+  scripts/shader-bench.sh --out OUT --json OUT.json                       # current shader, 5x300 frames
+  scripts/shader-bench.sh --shader-b cand.metal --out AB --json AB.json   # interleaved A/B
+  scripts/shader-bench.sh --compare AB AB/b                               # PSNR / max-abs-diff
+  scripts/shader-bench.sh --compare RUN1 RUN2                             # any two output sets
+  scripts/shader-bench.sh --gen-depth img.jpg depth.png                   # new depth fixture
+  ```
+  Before measuring, quit Liminal in the simulator (`xcrun simctl terminate <udid> com.saygoodnight.Liminal`);
+  the bench prints a warning when Liminal is running.
+- **Alternatives considered**: timing several frames per command buffer, as in 51ae60c (rejected:
+  one buffer per frame is what the app does, and inflight 1 gives clean per-frame spans);
+  MTLCounterSampleBuffer stage timestamps (not needed at this noise level); procedural inputs, as in
+  51ae60c (replaced by the real image and real ML depth, so texture-cache behaviour is realistic);
+  a flat depth map, as in VibranceHarness (rejected: depth drives the parallax sample offsets);
+  seeding `GhostTapManager` in app code (rejected: no app change for a tool; the bench rebuilds the
+  directions instead); reading the fixture image from the scratchpad (rejected: it can be cleared,
+  so the fixtures are committed, about 0.9 MB).
+- **Caveat**: these are Mac (M4) GPU numbers. They rank shader changes by ALU and texture cost on an
+  Apple tile GPU, but they are not Vision Pro frame times.
+- **App runtime**: unchanged (tooling, docs and fixtures only); visionOS and macOS builds both succeed.
+
+---
+
+## 2026-11-14: Round 2b plan: stage cost attribution on the bench, double-angle prototype
+
+Planning step only. No app code or shader changed; variants were scratch files run through
+`scripts/shader-bench.sh --shader ref.metal --shader-b variant.metal --trials 4 --frames 300`.
+Full tables and the ranked plan are in `docs/plans/performance.md` ("Round 2b").
+
+- **What was measured**: 15 knock-out variants (one stage removed each) to bound what each stage can
+  give back, then 4 prototypes of one idea.
+- **Stage shares of the MRT frame** (1 - B/A): sinusoidal noise 19.3%, fractal hue 14.2% (noise part
+  8.5%), feedback 12.7% (turbulence part 7.5%), log-spherical 12.4%, bloom 8.3% (random offset part
+  1.3%), ghost taps 8.0%, hue waves 7.5%, turbulence 4.9%, vibrance 4.2%, previous-texture samples
+  0.3% and 1.9% (two runs, inside noise), single-tap chromatic 0%. All distortion stages: 38%.
+- **Decision 1: lead with trig in the octave loops, not with texture samples.** The three Nishitsuji
+  loops are 46% of the frame; removing 3 or 4 texture samples is not measurable on this GPU.
+- **Decision 2: the round 1 drops of skip-previous-samples, mip sampling and function-constant
+  specialisation are confirmed as low value on a Mac GPU** (bounds 0-2%, 1.3%, and nothing to strip
+  since every amount stays above its threshold). They stay in the plan as the last two items, for a
+  confirming A/B and a device note, not as expected wins.
+- **Decision 3: angle-addition noise, dropped in round 1 as "no gain", is the largest win** once
+  extended to a double-angle recurrence across octaves. Prototype B/A: noise 0.874 and 0.899,
+  log-spherical 0.929, fractal hue 0.953, all three 0.784 and 0.749 (about 6.5 -> 4.8-5.1 ms).
+- **Parity of the prototype**: worst PSNR 32.4 dB against the current shader (mean abs 1.76 / 255).
+  The current shader is 32.2 dB from an all-float version of itself, because its half arguments
+  reach 250-590 at the top octaves (half step 0.125-0.5 rad). The prototype is 38.2 dB from that
+  float version. So this is a look change by the 50 dB rule; it removes quantisation noise rather
+  than adding error. 100% crops at t=113 and mid-transition look the same by eye (my judgement; the
+  implementing step must repeat the PNG check).
+- **Alternatives considered**: float recurrence (not needed so far, kept as fallback if banding
+  shows); CPU/uniform hoist of time-only trig (2 trig per loop after the recurrence, not worth a
+  uniform layout change); LUT-texture noise (changes the pattern, no cheaper than the recurrence);
+  evaluating the fractal-hue noise once for both eyes (would pin the hue pattern at zero disparity
+  while the image has parallax; rejected as a stereo look change); reusing the parallax depth sample
+  for fractal hue (different texel, rejected).
+- **Limits**: single runs for most knock-outs (floor ±1.2%); two runs for the all-three prototype,
+  the noise prototype and the previous-sample knock-out. Mac M4 numbers; the texture-vs-ALU balance
+  on Vision Pro is unmeasured.
+
+---
+
+## 2026-11-14: Round 2b item 1 (noise-double-angle): implemented
+
+- **What**: stage 2.7 of `distortedUV()` in `Liminal/Shaders/EffectsRenderer.metal` no longer calls
+  `nishitsujiNoiseFlowing` twice. It takes one `sin`/`cos` of `noisePos`, builds the 5 octaves with
+  the double-angle recurrence (`DBL` macro + `flowOctaves` helper, half precision), and derives the
+  second field (`noisePos + (17, 31, 7)`) by angle addition with compile-time `sin`/`cos(17, 31, 7)`
+  constants (checked against Python `math`). Trig per pixel pair drops from 70 to 16.
+- **Why**: this stage is 19.3% of the MRT frame; the Round 2b prototype measured B/A 0.874 and 0.899.
+- **Kept**: `nishitsujiNoiseFlowing` stays; the fractal-hue stage still uses it (item 3 covers that).
+  The noise is shared by both eyes, so macOS and the mono path get the change too.
+- **Precision**: half, as in the prototype. Float `DBL` stays the fallback if the PNG check shows
+  banding.
+- **Parity**: visual-equivalent, not exact. It cannot reach 50 dB, because the current shader's top
+  octaves are half-quantised (arguments 250-590). The prototype was 38.2 dB from the all-float
+  version, against 32.2 dB for the current shader.
+- **Verification in this step**: visionOS Simulator and macOS builds succeed. The interleaved A/B
+  bench, `--compare` and the 100% PNG review (including trans113) are run separately by the
+  benchmarking step and logged there.
+
+### Round 2b item 1 (noise-double-angle): benchmark result — KEPT (parity waiver noted)
+
+- **Bench**: interleaved A/B on the Mac GPU bench, A = shader at 1f9ef52, B = 911eb7e, 5 trials x 300 frames, two runs.
+  Median GPU ms/frame (A -> B): run 1 6.70 -> 6.04, run 2 6.59 -> 5.98. `ratio_b_over_a_overall` 0.902 and 0.908
+  (about -9.5%), per-trial ratios 0.886-0.916. A/A noise floor is about +-1.2%, so the gain is well above it
+  and above the 4% bar.
+- **Parity (`--compare`)**: PSNR per file: t37 41.4, t260 41.4, t611 39.5, t113 34.5, trans113 32.6 dB (worst max abs diff 188,
+  mean abs 1.74). Side-by-side PNGs (t37, trans113) look identical, with the same shapes, colours and banding.
+- **Deviation from the stated rule**: the rule asked for PSNR >= 35 dB, and t113 and trans113 are 34.5 and 32.6 dB.
+  Kept anyway: the Round 2b prototype showed the old shader is itself only 32.2 dB from an all-float reference (its top
+  octaves are half-quantised) while the new one is 38.2 dB from it, so the difference is the old shader's quantisation
+  error, not a new artefact. Float `DBL` would move closer to truth but further from the old output, so it cannot fix
+  the PSNR figure. If a stricter reviewer wants the 35 dB rule applied literally, revert 911eb7e.
+
+---
+
+## 2026-11-14: Round 2b item (logsphere-double-angle): implemented
+
+- **What**: `logSphericalTransform()` in `Liminal/Shaders/EffectsRenderer.metal` keeps `p` exactly as
+  before, but the 6-octave loop is now `e += flowOctaves(sin(p), cos(p), 6);` (the double-angle helper
+  added by noise-double-angle). The radial offset uses `(R > 1.0e-6 ? centered / R : float2(1, 0)) *
+  displacement` in place of `float2(cos(angle), sin(angle)) * displacement`. `atan2` stays, because it
+  feeds `p.z`.
+- **Why**: this stage is 12.4% of the frame. The prototype measured B/A 0.929 (about -7% of the frame),
+  with trig per pixel going from 47 to 15.
+- **Equivalence**: the old loop computed `sin(p.zxy*s) - 0.5` and `1 - cos(p.yxz*s)` with weight `1/s`,
+  s = 2^j. `flowOctaves` computes the same terms from `sin(p)`/`cos(p)` by `sin 2a = 2 sin a cos a`,
+  `cos 2a = 1 - 2 sin^2 a`, with weight 0.5^j. `centered / R` equals `(cos atan2, sin atan2)` for R > 0.
+  At R == 0, `atan2(0,0)` is 0, so `(1, 0)` keeps the old centre behaviour. `p.x` is already wrapped
+  mod 2pi, so the half-precision recurrence starts from a bounded angle.
+- **Alternatives**: float `DBL` (slower, and the noise-double-angle round showed float moves further from
+  the old half-quantised output, not closer). Dropping `atan2` with `p.z` derived from
+  `centered / R` was not done: `p.z` needs the angle itself.
+- **Parity**: visual-equivalent, not exact. The top octaves of the old loop were half-quantised
+  (arguments up to 32 x |p|), as in noise-double-angle.
+- **Verification in this step**: visionOS Simulator and macOS builds succeed. The interleaved A/B bench
+  (two runs), `--compare` and the PNG check near the image centre and in trans113 (amount boosted 3x)
+  are done by the benchmarking step and logged there.
+
+### Measured result: log-spherical double-angle recurrence + centered/R (d497e20) - KEPT
+
+- Interleaved A/B (`shader-bench.sh --shader <c2e554c> --shader-b <d497e20>`), 5 runs of 5 trials x 300
+  frames (A/B order flips per trial). `ratio_b_over_a_overall`: 0.927, 0.929, 0.876, 0.913, 0.888.
+  **Median 0.913 = -8.7% GPU ms** (range -7.1% to -12.4%). Absolute: A ~5.3-6.2 ms, B ~4.9-5.4 ms per
+  frame (both eyes, 2048², Mac GPU, shared with idle SimMetalHost). Noise floor is about +-1.2%
+  (interleaved A/A), so the gain is well above it and above the 4% bar.
+- Parity (`--compare`, run 1; PNGs 2048², all 10 scenario/eye images): worst PSNR 44.86 dB
+  (trans113-R), best 57.0 dB (t260), worst max abs diff 112 at isolated pixels, mean abs 0.1-0.45 of 255.
+  Not bit-exact (double-angle recurrence and centered/R reorder float rounding, amplified by the
+  distortion feedback). Expected class "visual-equivalent" (>= 35 dB): met with ~10 dB margin.
+  Side-by-side views of t113-L and trans113-L show an identical look.
+- Verdict: KEPT, no reset.
+
+---
+
+## 2026-11-14: Round 2b item 3 (fhue-double-angle-half-hsv), commit 1: fractal-hue noise recurrence
+
+- **What**: stage 6.5 of `shadeEye()` replaces `nishitsujiNoiseFlowing(noisePos, 4)` with
+  `float(flowOctaves(sin(noisePos), cos(noisePos), 4))`. Same helper and half precision as item 1.
+  Trig per pixel per eye drops from 4 x (3 sin + 3 cos + 1 sin) = 28 to 3 + 3 + 4 = 10.
+- **Why**: the fractal-hue noise part is 8.5% of the MRT frame; the Round 2b prototype for this
+  stage measured B/A 0.953.
+- **Kept per eye**: the noise is still evaluated in each eye at that eye's uv. Evaluating it once
+  for both eyes was rejected (pins the hue pattern at zero disparity while the image has parallax).
+- **`nishitsujiNoiseFlowing`**: now has no callers. Kept in the file as the reference definition
+  that `flowOctaves` reproduces (the comment above `flowOctaves` points at it); it costs nothing
+  when unused.
+- **Parity**: visual-equivalent (same reasoning as item 1: 4 octaves, half arguments up to ~8x the
+  base, so the old version's top octave is also half-quantised).
+- **Verification in this step**: visionOS Simulator and macOS builds succeed. The A/B (two runs,
+  >2% to count) and PSNR/PNG review are run separately by the benchmarking step.
+
+---
+
+## 2026-11-14: Fractal hue recurrence + half HSV: benchmark result
+
+- **Bench**: interleaved A/B on the Mac GPU bench (5 trials x 300 frames each). A/A noise floor about +-1% (1.0099 and 1.0005).
+- **Commit 1 (4af454f, `flowOctaves` recurrence for the fractal-hue noise) vs a146f0a: KEPT.** Median GPU ms (A -> B):
+  5.28 -> 4.97 and 5.06 -> 4.79; overall ratios 0.942 and 0.947 (about -5.5%, above the 4% bar and the noise floor).
+  Parity via `--compare`: worst PSNR 66.3 dB, worst max abs diff 1 (near-exact, bar 45 dB).
+- **Commit 2 (b1c448a, half-precision branch-free HSV) vs 4af454f: NOT KEPT, reverted.** Ratios 1.0034 and 0.9993
+  (no measurable change, inside noise). Parity was fine (59.7 dB, max abs 4) but there is no gain, so the extra
+  precision risk (1e-4h epsilon, grey/near-black hue now computed instead of forced to 0) is not worth it. Combined
+  a146f0a -> b1c448a was 0.955, i.e. all of the gain comes from commit 1. The branch now ends at 4af454f plus this entry.
+- Why no gain: the HSV round trip is a handful of ALU ops per pixel next to ~10 trig calls and many texture samples,
+  and the old branches were uniform-cheap; the compiler already ran the float math at near-half cost under fast-math.
+
+## 2026-11-14: Round 2, MRT shared eye-independent work (1cf4584 + 79386fd) - NOT KEPT
+
+- **What was tried**: (a)-(d) compute bloom hash, vertWaves, crossfade ease and ghost offsets/alphas once per
+  pixel in `effectsFragmentStereo` (`EyeShared`), commit 1cf4584 (parity 96 dB vs 6737525); (e) share the
+  feedback-warp turbulence at the pre-parallax uv, commit 79386fd (43-50 dB, below the 50 dB bar).
+- **Measured** (shader-bench, interleaved A/B, 5 trials x 300 frames, M4, MRT path; other GPU clients
+  were running, trial spread 9-12%, but the interleaved ratio is stable):
+
+  | A vs B | A median ms | B median ms | B/A (median of trials) | B/A (overall) |
+  |---|---|---|---|---|
+  | pre (6737525) vs post (79386fd) | 5.252 | 5.268 | 0.999 | 1.003 |
+  | pre vs c1 (1cf4584) | 5.657 | 5.988 | 1.070 | 1.059 |
+  | c1 vs post | 6.207 | 5.870 | 0.946 | 0.946 |
+
+- **Result**: net change pre -> post is +0.0% (0.999 / 1.003), far below the 4% bar. Commit 1 alone is about
+  6-7% SLOWER (the shared struct raises register pressure or live range across the two `shadeEye` calls, and
+  the hash is now computed even with bloom off); commit 2 recovers about 5.4% of that by removing a
+  turbulence evaluation, ending at parity with the original.
+- **Decision**: not kept. Branch reset to 6737525. Parity was not re-checked since the gain bar failed.
+- **Alternatives / follow-ups**: (e) alone on top of the original (without the `EyeShared` struct) might win
+  but would be a parity-below-50 dB change; it would need its own evaluation with the 35 dB visual-equivalent
+  bar. Not pursued here. The derived lesson: moving cheap eye-independent math into a shared struct costs more
+  in register pressure than it saves; only the turbulence (heavy trig) sharing is worth testing.
+
+## 2026-11-14: Round 3 item (per-eye-alu-half): benchmark result - NOT KEPT
+
+- **Item**: half x-dependent hue waves, sqrt depth boost, turbulence octave table, shared max/min (commit 5a63757,
+  reverted; branch reset to bf5a2bf, so the implementation entry for it is gone with the commit).
+- **Bench**: interleaved A/B (pre bf5a2bf vs post 5a63757 shader), 5 trials x 300 frames, two runs.
+  Overall B/A 0.976 and 0.945, median-of-trials 0.956 and 0.950 (about -2.4% to -5.5%; noise floor about +-1.2%).
+  Median GPU ms (B) 4.82 and 5.47. Per-trial spread was wide in run 1 (0.945-1.027).
+- **Parity**: FAILED. `--compare`: worst PSNR 25.5 dB, worst max abs diff 215; t37 30.9 dB, t113 35.0 dB, t260 36.9 dB.
+  Bar for "near-exact" is 45 dB. Differences touch 90-97% of pixels (mean abs 2-3.8/255), so at least one
+  sub-change is not near-exact (suspects: the half hue-wave phases, or the turbulence table's `.zw` / phase
+  convention changing the displacement, since turbulence feeds the whole frame).
+- **Decision**: not kept (parity bar missed, gain in the 2-5% range, borderline against the 4% bar). Reset to bf5a2bf.
+- **Follow-up**: bisect the four sub-changes individually; the shared max/min and sqrt depth boost are the
+  likely exact ones, and could be re-applied alone, but expected gain is below the 4% bar.
+
+## 2026-11-14: Round 3 item (per-eye-alu-half): bisected, turbulence table dropped, other three KEPT
+
+- **Bisect** (each sub-change alone on bf5a2bf, `shader-bench.sh --shader base --shader-b variant --out`, `--compare`):
+
+  | sub-change | worst PSNR | worst max abs diff |
+  |---|---|---|
+  | turbulence octave table | 25.46 dB | 215 |
+  | half x-dependent hue waves | 57.2 dB | 9 |
+  | shared max/min (`scaleChromaFit`, HSV `d` reuse) | 62.96 dB | 1 |
+  | sqrt depth boost | 96.75 dB | 2 |
+
+  The whole parity failure was the turbulence table.
+- **Cause: not an algebra bug, a precision one.** The table values are correct (checked against R^(i+1) and
+  2 * 1.4^i in double). The old loop is ill-conditioned in half: `result` is `uv * 3` (half ulp 0.002 in
+  [2,4)), the last octave multiplies it by ~21, and `rot`/`freq` are themselves accumulated in half (up to
+  ~0.3% off the true rotation by octave 8). A float16 simulation of old vs table over [0,3]^2 gives a
+  displacement difference of rms 0.0051 / max 0.059 (displacement rms 0.35). Rebuilding the table from the
+  step-by-step half products (so it carries the old loop's systematic error) still leaves rms 0.0026 / max
+  0.037 from the changed rounding order alone. So no reordering of this loop can match the old output to
+  45 dB; the feedback loop then compounds it over the 30 parity frames. The table is closer to the ideal
+  math than the old loop, but it is a look change at the pixel level, not an exact one.
+- **And it saves nothing**: turbulence-table-only A/B, two runs: B/A overall 0.9945 and 0.9976 (inside the
+  +-1.2% floor). `rot` and `freq` depend on no input, so the compiler already folds them when it unrolls the
+  8 iterations. Dropped.
+- **Kept**: half hue waves + sqrt depth boost + shared max/min, as one change. Interleaved A/B vs bf5a2bf,
+  5 runs of 5 trials x 300 frames (M4, MRT, 2048^2; the music workstream's Mac Liminal shared the GPU in some):
+
+  | run | A median ms | B median ms | B/A overall | B/A median of trials |
+  |---|---|---|---|---|
+  | 1 | 4.645 | 4.470 | 0.9623 | 0.9603 |
+  | 2 | 4.958 | 4.719 | 0.9519 | 0.9365 |
+  | 3 | 4.925 | 4.717 | 0.9579 | 0.9517 |
+  | 4 | 5.059 | 4.774 | 0.9435 | 0.9468 |
+  | 5 | 5.009 | 4.769 | 0.9520 | 0.9395 |
+
+  Mean B/A overall 0.9535 (**-4.6%**, range -3.8% to -5.7%); mean median-of-trials 0.9470 (-5.3%).
+  Same direction in all five runs, against a 4% bar.
+- **Parity**: worst PSNR 56.78 dB, worst max abs diff 8 (per file 56.8-65.6 dB). Above the 50 dB exact-math
+  bar; the residue is the half hue-wave phases (57.2 dB alone).
+- **Alternatives considered**: (a) half-emulated table, to inherit the old loop's rotation error: still
+  rounding-limited (simulation above) and no gain to justify it. (b) Table in float: more accurate than both,
+  matches neither, and adds float ALU. (c) Accept the table as a look change under the 35 dB
+  visual-equivalent bar: 25.5 dB misses that too, for 0.5% or less.
+- **Builds**: visionOS Simulator and macOS both succeed. Resolution, effects and audio code untouched.
+
+---
+
+## 2026-11-14: Round 3 item (bloom-ghost-mip): benchmarked, NOT KEPT (reverted ecf3047)
+
+- **What was tried**: trilinear `mipSampler`; stochastic bloom tap at `level(3)`, ghost taps at `level(1)`;
+  mipmapped source and previous textures (+10.7 MB on visionOS), `generateMipmaps` blit once per upload.
+- **Bench** (M4, interleaved A/B, 5 trials x 300 frames, 2 runs; both shaders sample the same mipmapped
+  textures so only the mip level differs). Median GPU ms (A pre -> B post): run 1 4.556 -> 4.518 (-0.8%),
+  run 2 4.746 -> 4.572 (-3.7%). Trial spread 3-12%; an A/A run (same shader both sides) read 4.978 vs 4.975.
+  The noise floor is about 3%, and the gain is below the 4% bar in both runs.
+- **Parity (`--compare`)**: worst PSNR 40.0 dB, worst max abs diff 69, mean abs 0.95. That meets the
+  visual-equivalent bar (35 dB) but a coarser bloom is a visible change, so there is no gain to pay for it.
+- **Decision**: reverted (git reset --hard 6a46ae2). Possible device-only candidate: check with an Xcode GPU
+  capture on Vision Pro, where texture bandwidth matters more than on the M4.
+
+### Measured result: skip previousTexture samples + saliency function constant (a802f03) - NOT KEPT
+
+- Shader-bench, interleaved A/B (A = fe0203a shader, B = a802f03 shader), 2 runs x 5 trials x 300
+  frames, M4: B/A median of trials 0.9899 and 0.9942 (overall 0.9931 and 0.9988). Per-trial ratios
+  ranged 0.967-1.012; trial spread 3.5-9%. Only trans113 (the path that still samples) was
+  unchanged-or-slower. Steady scenarios gained about 1%, inside the noise.
+- Rule was B/A < 0.98 in both runs (task: >= 4% and above the noise floor). Not met in either run.
+- Parity: see the --compare run at the time of measurement (expected exact by construction).
+- Verdict: reverted (git reset --hard fe0203a). The eye pass on the M4 is ALU-bound, so removing
+  three texture fetches that are cache-hot (previous = source) and a never-taken saliency branch
+  buys almost nothing. The macOS crossfade first-frame fix went with the revert since it only
+  existed to support the skip.

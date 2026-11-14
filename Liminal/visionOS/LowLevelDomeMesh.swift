@@ -129,9 +129,13 @@ final class LowLevelDomeMesh {
                 vertexData.append(normal.x)
                 vertexData.append(normal.y)
                 vertexData.append(normal.z)
-                // uv (float2)
+                // uv (float2), standard USD/RealityKit convention: u left→right, v = 0 at the
+                // BOTTOM edge, v = 1 at the TOP edge (v grows with height). RealityKit materials
+                // sample texture row (1 - v) * H, so v = 1 hits row 0 = image top
+                // (docs/decisions/orientation.md). Was 1 - vFrac, which only looked right because
+                // the upload also stored the image upside down.
                 vertexData.append(hFrac)
-                vertexData.append(1.0 - vFrac)
+                vertexData.append(vFrac)
             }
         }
 
