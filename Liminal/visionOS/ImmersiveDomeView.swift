@@ -177,10 +177,8 @@ struct ImmersiveDomeView: View {
         }
         effectsRenderer = renderer
 
-        // Create LowLevelDomeMesh using renderer's Metal device and command queue
+        // Create LowLevelDomeMesh (breathing is computed on the CPU)
         guard let mesh = LowLevelDomeMesh(
-            device: renderer.device,
-            commandQueue: renderer.commandQueue,
             horizontalSegments: Self.horizontalSegments,
             verticalSegments: Self.verticalSegments,
             panelRadius: Self.panelRadius,
@@ -191,7 +189,6 @@ struct ImmersiveDomeView: View {
             LMLog.visual.error("❌ Failed to create LowLevelDomeMesh!")
             return
         }
-        mesh.gpuStats = renderer.gpuStats
         domeMesh = mesh
 
         loadingState = "Setting up DrawableQueue..."
@@ -339,10 +336,10 @@ struct ImmersiveDomeView: View {
                 // Update effect time (DEBUG: -LiminalFreezeTime pins it for deterministic captures)
                 effectTime = DebugLaunchOptions.effectTime(Float(Date().timeIntervalSince(startTime)))
 
-                // Tag this frame's command buffers (dome compute + eyes) for GPU timing
+                // Tag this frame's command buffers (eyes) for GPU timing
                 effectsRenderer?.gpuStats.beginFrame()
 
-                // Update panel mesh with GPU-driven breathing
+                // Update panel mesh with CPU-computed breathing
                 domeMesh?.updateBreathing(
                     time: effectTime,
                     amplitude: Self.breathingAmplitude,

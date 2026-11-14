@@ -266,3 +266,30 @@ section. Nothing was measured in this step; the conclusions below come from the 
   runs (the baseline shot had a different image loaded), so the mean abs diff of 42 is content, not
   shader, difference. Visually the effect stack (distortion, chromatic fringing, grain, hue shift) looks
   equivalent. The maths was moved verbatim. No errors in the logs.
+
+### Dome breathing on the CPU (dome-breathing-cpu)
+- What: `LowLevelDomeMesh.updateBreathing` now computes the breathing displacement on the CPU and
+  writes full 32-byte vertices (position, normal, uv: every field, every vertex) through
+  `lowLevelMesh.withUnsafeMutableBytes(bufferIndex: 0)`. The per-frame command buffer, compute
+  encoder, `replace(bufferIndex:using:)` and `gpuStats.track(..., pass: "dome")` are gone.
+  `Liminal/Shaders/DomeCompute.metal` (the `breathingDisplacement` kernel) is deleted along with its
+  pipeline. The init no longer takes `device`/`commandQueue`, and `gpuStats` on the mesh is removed.
+- How: the base vertex array ([Float], 8 floats per vertex) plus per-vertex hFrac, vFrac and
+  centerDist arrays are built once at init. The per-frame loop uses Float `sin` with the kernel's
+  constants (6.0/1.0/0.4, 5.0/0.7/0.3, 4.0/0.5/0.2, 8.0/-0.8/0.1, times amplitude) and allocates
+  nothing. centerDist uses `sqrt(dh*dh + dv*dv)` in place of `sqrt(pow(dh,2)+pow(dv,2))`, which is
+  the same value to within float rounding. Every field is written because
+  `withUnsafeMutableBytes` may return a different (multi-buffered) backing buffer than last frame.
+- Why: 1,813 vertices x 4 sines did not justify a whole command buffer and compute dispatch every
+  frame. In the simulator that pass read 0.08-0.09 ms, about 40% of the gpu_ms metric.
+- CPU cost: a standalone `-O` microbenchmark of the same loop (Mac host, 1,813 vertices) gives a
+  best case of 16 us per frame, well under the 0.1 ms budget for the @MainActor render loop. vForce
+  was not needed.
+- Alternatives: merging dome compute into the eyes command buffer was the reverted
+  single-command-buffer item. Moving the displacement into a RealityKit vertex shader (ShaderGraph
+  geometry modifier) would also drop the compute pass, but it would rewrite the material path.
+- Reading the metric: gpu_ms (and the 📊 line) no longer has a "dome" term. It is now the eyes
+  pass alone, so a lower total is expected by construction. Compare the "eyes" per-pass number
+  against earlier runs, not only the total.
+- Builds: visionOS Simulator and macOS both succeed.
+- Measured numbers: to be appended by the measurement step.
