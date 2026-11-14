@@ -304,3 +304,31 @@ Measured (visionOS sim, medians of 3 x 30s runs) vs previous best (MRT stereo, 2
 - No errors/faults in logs.
 - Visual parity: frozen screenshots show a different source image than the baseline (image selection is not pinned by freeze), so a numeric diff (mean abs 40.7) is not meaningful; the effect look (distortion, chroma fringing, grain, hue) is equivalent. Verdict: acceptable.
 - Alternative considered: keep compute pass with cheaper kernel; rejected since CPU cost is ~0.2 ms and removes a command buffer entirely.
+
+## Texture GPU hygiene: drop .shaderWrite on drawables, optimizeContentsForGPUAccess on uploads
+
+- What: (1) Both DrawableQueue descriptors (StereoMaterialBuilder.build, OffscreenEffectsRenderer.setupDrawableQueue)
+  now declare usage [.renderTarget, .shaderRead] instead of [.renderTarget, .shaderRead, .shaderWrite].
+  (2) After every CPU `texture.replace` in updateSourceTexture, updatePreviousTexture and updateDepthTexture,
+  a one-off command buffer with a blit `optimizeContentsForGPUAccess(texture:)` is committed on `commandQueue`.
+- Why: Apple GPUs cannot losslessly compress textures that declare shaderWrite (or pixelFormatView) usage, and
+  shared-storage textures written from the CPU stay in a CPU-friendly layout until optimized. Nothing writes the
+  drawables from a shader any more (only the render pass, plus debug-only blit copies, which need no shaderWrite).
+  The source/previous/depth textures are sampled 7-16 times per pixel per frame. Docs checked on sosumi.ai:
+  optimizeContentsForGPUAccess "can reduce the time it takes the GPU to access a texture", is meant for
+  .shared/.managed textures the GPU reads for a long time, and only applies lossless changes.
+- Ordering: the helper is called synchronously inside the update functions, which run before the frame's render
+  command buffer is created on the same queue, so in-order queue execution guarantees the render sees the
+  optimized texture. Cost is one tiny command buffer per uploaded image (about every 30 s), not per frame.
+- Output: lossless by definition (no pixel format, size or shader change; 2048x2048 kept), so bit-identical.
+- Verification limits: the simulator may treat optimizeContentsForGPUAccess as a no-op and does not model Apple
+  GPU lossless compression, so simulator gpu_ms is not expected to move. There is no standalone shader benchmark
+  harness in the repo, so no --optimize-textures switch was added. The drawable-usage part (compression of the two
+  16 MB drawables and RealityKit's sampling of them) can only be confirmed on a Vision Pro (Xcode GPU capture:
+  check the drawable textures report lossless compression and compare memory bandwidth counters).
+- Fallback: if DrawableQueue creation throws or the first render logs an error with the reduced usage on device,
+  restore .shaderWrite and note here that it is required.
+- Alternatives: making the uploaded textures .private with a staging-buffer blit upload (bigger change, also gets
+  compression); left for later if device capture shows the shared textures still uncompressed.
+- Builds: visionOS Simulator and macOS both succeed.
+- Measured numbers: to be appended by the measurement step.

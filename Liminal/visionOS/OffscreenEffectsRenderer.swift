@@ -236,7 +236,7 @@ final class OffscreenEffectsRenderer {
             pixelFormat: .bgra8Unorm_srgb,
             width: size,
             height: size,
-            usage: [.renderTarget, .shaderRead, .shaderWrite],
+            usage: [.renderTarget, .shaderRead],  // no .shaderWrite: allows lossless compression
             mipmapsMode: .none
         )
 
@@ -1026,6 +1026,7 @@ final class OffscreenEffectsRenderer {
             withBytes: stagingBuffer,
             bytesPerRow: bytesPerRow
         )
+        optimizeForGPUAccess(texture, label: "Optimize source texture")
     }
 
     /// Update the previous texture for GPU crossfade blending.
@@ -1086,6 +1087,7 @@ final class OffscreenEffectsRenderer {
             withBytes: stagingBuffer,
             bytesPerRow: bytesPerRow
         )
+        optimizeForGPUAccess(texture, label: "Optimize previous texture")
 
         lastPreviousImageIdentifier = currentPreviousID
         return true
@@ -1195,6 +1197,20 @@ final class OffscreenEffectsRenderer {
             withBytes: pixelData,
             bytesPerRow: bytesPerRow
         )
+        optimizeForGPUAccess(texture, label: "Optimize depth texture")
+    }
+
+    /// Re-layout a CPU-written shared texture for faster GPU sampling (lossless; may enable
+    /// framebuffer-style compression on Apple GPUs). Runs once per image upload, not per frame.
+    /// Committed on `commandQueue` before the frame's render command buffer is created, so
+    /// Metal's in-order queue execution guarantees the render pass sees the optimized texture.
+    private func optimizeForGPUAccess(_ texture: MTLTexture, label: String) {
+        guard let commandBuffer = commandQueue.makeCommandBuffer(),
+              let blit = commandBuffer.makeBlitCommandEncoder() else { return }
+        commandBuffer.label = label
+        blit.optimizeContentsForGPUAccess(texture: texture)
+        blit.endEncoding()
+        commandBuffer.commit()
     }
 }
 
