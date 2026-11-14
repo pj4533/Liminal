@@ -824,3 +824,16 @@ Full tables and the ranked plan are in `docs/plans/performance.md` ("Round 2b").
   visual-equivalent bar (35 dB) but a coarser bloom is a visible change, so there is no gain to pay for it.
 - **Decision**: reverted (git reset --hard 6a46ae2). Possible device-only candidate: check with an Xcode GPU
   capture on Vision Pro, where texture bandwidth matters more than on the M4.
+
+### Measured result: skip previousTexture samples + saliency function constant (a802f03) - NOT KEPT
+
+- Shader-bench, interleaved A/B (A = fe0203a shader, B = a802f03 shader), 2 runs x 5 trials x 300
+  frames, M4: B/A median of trials 0.9899 and 0.9942 (overall 0.9931 and 0.9988). Per-trial ratios
+  ranged 0.967-1.012; trial spread 3.5-9%. Only trans113 (the path that still samples) was
+  unchanged-or-slower. Steady scenarios gained about 1%, inside the noise.
+- Rule was B/A < 0.98 in both runs (task: >= 4% and above the noise floor). Not met in either run.
+- Parity: see the --compare run at the time of measurement (expected exact by construction).
+- Verdict: reverted (git reset --hard fe0203a). The eye pass on the M4 is ALU-bound, so removing
+  three texture fetches that are cache-hot (previous = source) and a never-taken saliency branch
+  buys almost nothing. The macOS crossfade first-frame fix went with the revert since it only
+  existed to support the skip.
