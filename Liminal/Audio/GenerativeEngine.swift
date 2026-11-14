@@ -31,7 +31,7 @@ final class GenerativeEngine: ObservableObject {
 
     // MARK: - Audio Components
 
-    private let engine = AudioEngine()
+    let engine = AudioEngine()
     private var voices: [VoiceLayer] = []
     private var chains: [MarkovChain] = []
     private var effects: EffectsChain?
@@ -41,6 +41,8 @@ final class GenerativeEngine: ObservableObject {
 
     private var scale: Scale
     private var noteTimers: [Timer] = []
+    /// Non-nil only during offline (faster-than-realtime) rendering; replaces Timers with a simulated clock.
+    var offlineClock: OfflineClock?
     private var drift: ParameterDrift?
     private var driftTimer: Timer?
 
@@ -220,12 +222,9 @@ final class GenerativeEngine: ObservableObject {
                     scheduleNoteChanges(voiceIndex: index, config: config)
                 } else {
                     let initialDelay = Double.random(in: 0.5...2.0)
-                    let timer = Timer.scheduledTimer(withTimeInterval: initialDelay, repeats: false) { [weak self] _ in
-                        Task { @MainActor in
-                            self?.changeNote(voiceIndex: index, config: config)
-                        }
+                    schedule(after: initialDelay) { [weak self] in
+                        self?.changeNote(voiceIndex: index, config: config)
                     }
-                    noteTimers.append(timer)
                 }
             }
 
@@ -251,17 +250,27 @@ final class GenerativeEngine: ObservableObject {
         engine.stop()
     }
 
+    // MARK: - Scheduling (real Timer or simulated clock)
+
+    private func schedule(after delay: Double, _ block: @escaping @MainActor () -> Void) {
+        if let clock = offlineClock {
+            clock.schedule(after: delay, block)
+        } else {
+            let timer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { _ in
+                Task { @MainActor in block() }
+            }
+            noteTimers.append(timer)
+        }
+    }
+
     // MARK: - Generative Logic
 
     private func scheduleNoteChanges(voiceIndex: Int, config: VoiceConfig) {
         let interval = Double.random(in: config.noteChangeInterval)
 
-        let timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { [weak self] _ in
-            Task { @MainActor in
-                self?.changeNote(voiceIndex: voiceIndex, config: config)
-            }
+        schedule(after: interval) { [weak self] in
+            self?.changeNote(voiceIndex: voiceIndex, config: config)
         }
-        noteTimers.append(timer)
     }
 
     /// Consonant intervals in semitones for harmonic splitting
@@ -305,23 +314,17 @@ final class GenerativeEngine: ObservableObject {
                 shimmerNotePlayed.send(newNote)
             }
 
-            let noteOffTimer = Timer.scheduledTimer(withTimeInterval: noteDuration, repeats: false) { [weak self] _ in
-                Task { @MainActor in
-                    self?.voices[voiceIndex].stop()
-                }
+            schedule(after: noteDuration) { [weak self] in
+                self?.voices[voiceIndex].stop()
             }
-            noteTimers.append(noteOffTimer)
 
             // Use current shimmerGapRange (controlled by notes slider)
             let silenceGap = Double.random(in: shimmerGapRange)
             let nextNoteDelay = noteDuration + silenceGap
 
-            let nextTimer = Timer.scheduledTimer(withTimeInterval: nextNoteDelay, repeats: false) { [weak self] _ in
-                Task { @MainActor in
-                    self?.changeNote(voiceIndex: voiceIndex, config: config)
-                }
+            schedule(after: nextNoteDelay) { [weak self] in
+                self?.changeNote(voiceIndex: voiceIndex, config: config)
             }
-            noteTimers.append(nextTimer)
         } else {
             // Sustained voice
             voice.setFrequency(frequency)
@@ -348,6 +351,7 @@ final class GenerativeEngine: ObservableObject {
     private func startDrift() {
         drift = ParameterDrift()
         driftStartTime = Date()
+        if offlineClock != nil { return }  // offline: OfflineRender calls applyDrift() on its own 0.1s grid
 
         // Fire at 10Hz — smooth enough for parameter changes, light on CPU
         driftTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
@@ -364,10 +368,10 @@ final class GenerativeEngine: ObservableObject {
         drift = nil
     }
 
-    private func applyDrift() {
+    func applyDrift() {
         guard let drift else { return }
 
-        let t = Float(Date().timeIntervalSince(driftStartTime))
+        let t = Float(offlineClock?.now ?? Date().timeIntervalSince(driftStartTime))
 
         // Effects parameter drift — modulate ±15% around slider center
         let reverbCenter = 0.3 + reverb * 0.6
