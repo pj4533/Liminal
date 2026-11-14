@@ -153,3 +153,10 @@ Verdict: kept (>=3% GPU improvement, no new errors).
 - Verdict: not kept. GPU time did not improve (it was higher), so the rule of >=3% GPU gain was not met. The fps jump looks like simulator or host load differences between sessions, not a real gain, since GPU ms moved the wrong way.
 - Visual parity: frozen screenshots could not be compared. Mean abs diff was 46.8, but the two captures showed different source images (the image pool changes per run), so the diff says nothing about the shader.
 - Alternative to revisit: A/B the same build with the constant on and off in one session, using a fixed image, to separate shader cost from host noise.
+
+## Result: skip previousTexture samples (skip-previous-samples) - NOT KEPT
+
+- Measured (simulator, 3 runs x 30 s, medians): GPU mean 0.280 ms (runs 0.291 / 0.280 / 0.258) vs 0.159 ms before; p95 0.49 ms vs 0.26; fps 76.7 vs 46.4. Per-pass (run 2): dome 0.084, eyeL 0.127, eyeR 0.068. Frozen run: GPU mean 0.137 ms vs 0.113 before. No errors in logs.
+- Verdict: reverted (branch reset to 16ea43d). GPU ms did not improve by >=3%; it was higher. As with the feedback-warp run, fps and GPU ms moved in opposite directions, which points to host/session noise in the simulator rather than a shader effect.
+- Visual parity: frozen screenshots show the same effect style but different source images (image pool varies per run), so the numeric diff (mean abs 38.5) is not meaningful. Output is bit-identical by construction outside transitions.
+- Note: the change is logically sound (removes 3 fetches per pixel outside crossfades) but cannot be shown to help with this simulator harness. Worth retrying with an A/B on the same build and a fixed image, or on real hardware.
