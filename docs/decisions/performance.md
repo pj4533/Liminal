@@ -347,3 +347,10 @@ Measured (visionOS sim, medians of 3 x 30s runs) vs previous best (MRT stereo, 2
 - Previous best: GPU 0.153 ms median, frozen 0.150 ms. Frozen GPU is identical, so no measurable gain; unfrozen medians are within simulator noise (and nominally worse).
 - Visual: effects look equivalent (distortion, chromatic fringing, grain); frozen screenshots use different source images so numeric diff is not meaningful. No log errors.
 - Verdict: below the 3% improvement threshold, so reverted to 11af781. Alternative of keeping it as a harmless cleanup was rejected to honour the keep-only-if-measurable rule.
+
+## Derive second sinusoidal-noise field by angle addition (ce3b6f6) - NOT KEPT
+
+- What: compute the second noise field from the first via angle-addition identities to save sin/cos calls.
+- Measured (3 runs, visionOS sim): GPU ms 0.161 / 0.151 / 0.154, median 0.154 vs 0.153 before (no gain, within noise). fps median 76.0, p95 frame interval 13.4 ms. Frozen run GPU 0.141 ms. No errors in logs.
+- Visual: frozen screenshot differs from baseline only because the source image differs (mean abs diff 35.5, not meaningful); effects look equivalent.
+- Verdict: below the 3% threshold, so reverted to 6f89af6. Not worth the added complexity.
