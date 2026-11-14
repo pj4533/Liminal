@@ -677,3 +677,17 @@ Full tables and the ranked plan are in `docs/plans/performance.md` ("Round 2b").
 - **Verification in this step**: visionOS Simulator and macOS builds succeed. The interleaved A/B bench
   (two runs), `--compare` and the PNG check near the image centre and in trans113 (amount boosted 3x)
   are done by the benchmarking step and logged there.
+
+### Measured result: log-spherical double-angle recurrence + centered/R (d497e20) - KEPT
+
+- Interleaved A/B (`shader-bench.sh --shader <c2e554c> --shader-b <d497e20>`), 5 runs of 5 trials x 300
+  frames (A/B order flips per trial). `ratio_b_over_a_overall`: 0.927, 0.929, 0.876, 0.913, 0.888.
+  **Median 0.913 = -8.7% GPU ms** (range -7.1% to -12.4%). Absolute: A ~5.3-6.2 ms, B ~4.9-5.4 ms per
+  frame (both eyes, 2048², Mac GPU, shared with idle SimMetalHost). Noise floor is about +-1.2%
+  (interleaved A/A), so the gain is well above it and above the 4% bar.
+- Parity (`--compare`, run 1; PNGs 2048², all 10 scenario/eye images): worst PSNR 44.86 dB
+  (trans113-R), best 57.0 dB (t260), worst max abs diff 112 at isolated pixels, mean abs 0.1-0.45 of 255.
+  Not bit-exact (double-angle recurrence and centered/R reorder float rounding, amplified by the
+  distortion feedback). Expected class "visual-equivalent" (>= 35 dB): met with ~10 dB margin.
+  Side-by-side views of t113-L and trans113-L show an identical look.
+- Verdict: KEPT, no reset.
