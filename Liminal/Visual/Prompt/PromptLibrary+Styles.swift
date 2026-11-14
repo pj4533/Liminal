@@ -69,11 +69,11 @@ nonisolated extension PromptLibrary {
             moods: [.serene, .eerie, .lush], energy: 0.4
         ),
         Style(
-            id: "doubleExposure", weight: 5,
+            id: "doubleExposure", weight: 4,
             lead: "In-camera double exposure photograph",
             camera: "85mm lens",
-            lighting: "Bright clean backdrop behind a dark silhouette",
-            texture: "The silhouette of the subject filled with a second scene, soft blended edges",
+            lighting: "A dark silhouette against a deep saturated dusk sky",
+            texture: "The silhouette of the subject filled with a second photograph of a vast landscape, soft blended edges",
             categories: [.creature, .plant, .architecture, .instrument, .vehicle, .object],
             kinds: [.plain, .luminous, .hybrid, .multiplicity],
             paletteRule: .any,
@@ -106,7 +106,7 @@ nonisolated extension PromptLibrary {
             id: "studioProduct", weight: 8,
             lead: "High-end studio product photograph",
             camera: "100mm lens, f/11, focus-stacked",
-            lighting: "Softbox key light with a hard rim light, seamless backdrop",
+            lighting: "Softbox key light with a hard rim light, seamless backdrop in a deep palette color",
             texture: "Glossy highlights, beads of moisture, immaculate surfaces",
             categories: [.object, .food, .instrument, .plant, .creature, .vehicle],
             scales: [.tiny, .handheld, .humanSized],
@@ -155,7 +155,7 @@ nonisolated extension PromptLibrary {
             moods: [.playful, .electric, .eerie], energy: 0.75
         ),
         Style(
-            id: "prism", weight: 4,
+            id: "prism", weight: 5,
             lead: "Photograph shot through a glass prism held against the lens",
             camera: "50mm lens, f/2",
             lighting: "Backlit, strong sun flare",
