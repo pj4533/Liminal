@@ -162,3 +162,10 @@ Format: decision, why, alternatives.
 ## D31 Provider recommendation unchanged
 - Decision: stay on Gemini with the existing key. No other provider or key is needed for the requested look.
 - Why: two evaluation rounds on gemini-3.1-flash-image produced photoreal, recognizable, colorful surreal images; the open question is spend (about 120 images an hour at 2K when playing), not quality.
+
+## D32 Evaluation round (eval1): fresh seed 7301, 16 new vs 6 old
+- Setup: both platform builds succeeded. 16 prompts from `scripts/print-prompts.sh -n 16 -s 7301`, generated on gemini-3.1-flash-image 3:2 1K. Old-style: the first 6 baseline prompts from docs/plans/images-current.md on gemini-2.5-flash-image 1:1 (the old config). Images: scratchpad `images-eval/round1/` and `round1/old/` (the earlier implementation-time round was moved to `round1-prev-impl/`).
+- Viewed via the two contact sheets (new 4x4, old 2x3), not each full-size file.
+- Scores (1-5): recognizability 5, photorealism 4, style_variety 5, palette_variety 4, surreal_trippy 5, effect_suitability 4. PASS; clearly better than old on recognizability (beetle, sailboat, guitar, pomegranate, antlers vs. abstract mood scenes), photorealism and variety. Old set was samey (blue-grey, centered abstract metaphors, CGI look).
+- Problems: (1) teal/blue skew: 00, 04, 07, 08, 09 lean teal; (2) studioProduct drew 4 of 16 and its backdrops read similar; (3) 02 underwater has a small subject (diver) in a busy frame; (4) 15 cave and 11 prism are cluttered with weak focal point; (5) 04 and 11 prism lean CGI-ish; (6) no text artifacts seen.
+- Possible follow-up, not done: slightly lower studioProduct weight, nudge palette picker away from teal-adjacent palettes after a teal one.
