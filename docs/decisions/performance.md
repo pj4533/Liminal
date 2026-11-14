@@ -809,3 +809,18 @@ Full tables and the ranked plan are in `docs/plans/performance.md` ("Round 2b").
   matches neither, and adds float ALU. (c) Accept the table as a look change under the 35 dB
   visual-equivalent bar: 25.5 dB misses that too, for 0.5% or less.
 - **Builds**: visionOS Simulator and macOS both succeed. Resolution, effects and audio code untouched.
+
+---
+
+## 2026-11-14: Round 3 item (bloom-ghost-mip): benchmarked, NOT KEPT (reverted ecf3047)
+
+- **What was tried**: trilinear `mipSampler`; stochastic bloom tap at `level(3)`, ghost taps at `level(1)`;
+  mipmapped source and previous textures (+10.7 MB on visionOS), `generateMipmaps` blit once per upload.
+- **Bench** (M4, interleaved A/B, 5 trials x 300 frames, 2 runs; both shaders sample the same mipmapped
+  textures so only the mip level differs). Median GPU ms (A pre -> B post): run 1 4.556 -> 4.518 (-0.8%),
+  run 2 4.746 -> 4.572 (-3.7%). Trial spread 3-12%; an A/A run (same shader both sides) read 4.978 vs 4.975.
+  The noise floor is about 3%, and the gain is below the 4% bar in both runs.
+- **Parity (`--compare`)**: worst PSNR 40.0 dB, worst max abs diff 69, mean abs 0.95. That meets the
+  visual-equivalent bar (35 dB) but a coarser bloom is a visible change, so there is no gain to pay for it.
+- **Decision**: reverted (git reset --hard 6a46ae2). Possible device-only candidate: check with an Xcode GPU
+  capture on Vision Pro, where texture bandwidth matters more than on the M4.
