@@ -710,3 +710,18 @@ Full tables and the ranked plan are in `docs/plans/performance.md` ("Round 2b").
   base, so the old version's top octave is also half-quantised).
 - **Verification in this step**: visionOS Simulator and macOS builds succeed. The A/B (two runs,
   >2% to count) and PSNR/PNG review are run separately by the benchmarking step.
+
+---
+
+## 2026-11-14: Fractal hue recurrence + half HSV: benchmark result
+
+- **Bench**: interleaved A/B on the Mac GPU bench (5 trials x 300 frames each). A/A noise floor about +-1% (1.0099 and 1.0005).
+- **Commit 1 (4af454f, `flowOctaves` recurrence for the fractal-hue noise) vs a146f0a: KEPT.** Median GPU ms (A -> B):
+  5.28 -> 4.97 and 5.06 -> 4.79; overall ratios 0.942 and 0.947 (about -5.5%, above the 4% bar and the noise floor).
+  Parity via `--compare`: worst PSNR 66.3 dB, worst max abs diff 1 (near-exact, bar 45 dB).
+- **Commit 2 (b1c448a, half-precision branch-free HSV) vs 4af454f: NOT KEPT, reverted.** Ratios 1.0034 and 0.9993
+  (no measurable change, inside noise). Parity was fine (59.7 dB, max abs 4) but there is no gain, so the extra
+  precision risk (1e-4h epsilon, grey/near-black hue now computed instead of forced to 0) is not worth it. Combined
+  a146f0a -> b1c448a was 0.955, i.e. all of the gain comes from commit 1. The branch now ends at 4af454f plus this entry.
+- Why no gain: the HSV round trip is a handful of ALU ops per pixel next to ~10 trig calls and many texture samples,
+  and the old branches were uniform-cheap; the compiler already ran the float math at near-half cost under fast-math.
