@@ -13,27 +13,42 @@ struct ClearImagesSection: View {
     @State private var usage: ImageStore.Usage?
     @State private var confirming = false
 
+    /// visionOS draws a destructive role as red text that is hard to read on glass; there the red
+    /// lives in the icon (DestructiveLabel) and the confirmation dialog keeps the destructive role.
+    #if os(visionOS)
+    private static let buttonRole: ButtonRole? = nil
+    #else
+    private static let buttonRole: ButtonRole? = .destructive
+    #endif
+
     private var sizeText: String {
         ByteCountFormatter.string(fromByteCount: usage?.bytes ?? 0, countStyle: .file)
     }
 
     private var usageLine: String {
-        guard let usage else { return "Counting cached images..." }
+        guard let usage else { return "Counting cached images" }
         let noun = usage.imageCount == 1 ? "image" : "images"
         return "\(usage.imageCount) cached \(noun), \(sizeText)"
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Button(role: .destructive) {
+            Button(role: Self.buttonRole) {
                 confirming = true
             } label: {
-                if visualEngine.isClearing {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Text("Clear All Images")
+                Group {
+                    if visualEngine.isClearing {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        DestructiveLabel(title: "Clear All Images", systemImage: "trash")
+                    }
                 }
+                .frame(minHeight: ControlMetrics.buttonHeight)
             }
+            .buttonStyle(.bordered)
+            #if os(visionOS)
+            .buttonBorderShape(.roundedRectangle(radius: 20))
+            #endif
             .disabled(visualEngine.isClearing)
             .confirmationDialog(
                 "Delete all \(usage?.imageCount ?? 0) images (\(sizeText))?",
@@ -52,13 +67,20 @@ struct ClearImagesSection: View {
             }
 
             Text(usageLine)
-                .font(.caption.monospacedDigit())
+                .font(.callout.monospacedDigit())
                 .foregroundStyle(.secondary)
+                .wrapping()
+
+            Text("Deletes every cached image and its metadata. Settings are kept.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .wrapping()
 
             if let status = visualEngine.statusMessage {
                 Text(status)
                     .font(.caption)
                     .foregroundStyle(.yellow)
+                    .wrapping()
             }
         }
         .task { await refresh() }

@@ -111,9 +111,9 @@ while (( $(perf_count) == 0 )); do
   sleep 1; (( waited++ ))
   if (( waited == 25 && tapped == 0 )) && ! grep -q "auto-opened liminalDome" "$LOG"; then
     log "dome not open after 25s; falling back to sim-tap (Play, Enter Dome)"
-    grep -q "auto-play started" "$LOG" || "$SCRIPT_DIR/sim-tap.sh" 1795 937
+    grep -q "auto-play started" "$LOG" || "$SCRIPT_DIR/sim-tap.sh" 1371 935
     sleep 2
-    "$SCRIPT_DIR/sim-tap.sh" 1918 937
+    "$SCRIPT_DIR/sim-tap.sh" 1371 1041
     tapped=1
   fi
   if (( waited >= 150 )); then

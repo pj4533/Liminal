@@ -17,7 +17,7 @@ import AppKit
 /// (width = height * visualAspect + controlPanelWidth). Images are 3:2 since
 /// the Gemini 3.1 switch (docs/decisions/images.md D4).
 final class SquareVisualWindowDelegate: NSObject, NSWindowDelegate {
-    static let controlPanelWidth: CGFloat = 281  // 280 panel + 1 divider
+    static let controlPanelWidth: CGFloat = ContentView.panelWidth + 1  // panel + 1 divider
     static let visualAspect: CGFloat = ImageFraming.displayAspect  // 3:2, matches generated images
 
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
@@ -71,6 +71,9 @@ struct WindowAccessor: NSViewRepresentable {
 // MARK: - Content View
 
 struct ContentView: View {
+    /// Width of the control panel. Wide enough for the style segments and "Natural Minor (Aeolian)".
+    static let panelWidth: CGFloat = 320
+
     @State private var showingSettings = false
     @StateObject private var audioEngine = GenerativeEngine()
     @StateObject private var visualEngine = VisualEngine()
@@ -86,103 +89,10 @@ struct ContentView: View {
             Divider()
 
             // Control panel
-            VStack(spacing: 16) {
-                // Header
-                HStack {
-                    Image(systemName: "waveform")
-                        .imageScale(.large)
-                        .foregroundStyle(.tint)
-                    Text("Liminal")
-                        .font(.largeTitle)
-
-                    Spacer()
-
-                    Button {
-                        showingSettings = true
-                    } label: {
-                        Image(systemName: "gear")
-                            .imageScale(.large)
-                    }
-                    .buttonStyle(.plain)
-                }
-
-                Divider()
-
-                // Music style
-                Picker("Style", selection: $settings.style) {
-                    ForEach(MusicStyle.ID.allCases, id: \.self) { style in
-                        Text(style.title).tag(style)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .padding(.horizontal)
-
-                // Music controls - bound to settings (single source of truth)
-                VStack(spacing: 12) {
-                    AudioSlider(
-                        label: "Density",
-                        value: $settings.notes,
-                        leftIcon: "circle.dotted",
-                        rightIcon: "circle.hexagongrid.fill"
-                    )
-                    AudioSlider(
-                        label: "Space",
-                        value: $settings.reverb,
-                        leftIcon: "cube.transparent",
-                        rightIcon: "cube.fill"
-                    )
-                    AudioSlider(
-                        label: "Echo",
-                        value: $settings.delay,
-                        leftIcon: "waveform.slash",
-                        rightIcon: "waveform.badge.plus"
-                    )
-                }
-                .padding(.horizontal)
-
-                // Scale selector: Auto (evolving) or a pinned scale
-                HStack {
-                    Text("Scale:")
-                        .foregroundStyle(.secondary)
-                    Picker("", selection: settings.scaleSelection) {
-                        Text("Auto (evolving)").tag(ScaleType?.none)
-                        Divider()
-                        ForEach(ScaleType.allCases, id: \.self) { scale in
-                            Text(scale.rawValue).tag(ScaleType?.some(scale))
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    .frame(maxWidth: .infinity)
-                }
-                .padding(.horizontal)
-
-                Spacer()
-
-                // Debug effect toggle
-                Toggle("Debug Effect", isOn: $settings.debugEffectEnabled)
-                    .toggleStyle(.switch)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal)
-
-                // Play/Stop
-                Button(audioEngine.isRunning ? "Stop" : "Play") {
-                    if audioEngine.isRunning {
-                        audioEngine.stop()
-                        visualEngine.stop()
-                    } else {
-                        audioEngine.start()
-                        visualEngine.start()
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .font(.title2)
-                .controlSize(.large)
-            }
-            .padding()
-            .frame(width: 280)
+            controlPanel
+                .frame(width: Self.panelWidth)
         }
-        .frame(minWidth: 700, minHeight: 450)
+        .frame(minWidth: 400 + Self.panelWidth, minHeight: 560)
         .background(WindowAccessor())
         .onAppear {
             // Apply saved settings to audio engine on launch
@@ -208,6 +118,81 @@ struct ContentView: View {
     }
 }
 
+
+// MARK: - Control panel
+
+extension ContentView {
+    var controlPanel: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 8) {
+                    Image(systemName: "waveform")
+                        .font(.title2)
+                        .foregroundStyle(.tint)
+                    Text("Liminal")
+                        .font(.title.weight(.semibold))
+                }
+                .padding(.bottom, 4)
+
+                ControlSection(title: "Playback", systemImage: "play.circle") {
+                    Button(action: togglePlayback) {
+                        Label(audioEngine.isRunning ? "Stop" : "Play",
+                              systemImage: audioEngine.isRunning ? "stop.fill" : "play.fill")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+
+                    PlaybackStatus(isPlaying: audioEngine.isRunning,
+                                   cachedCount: visualEngine.totalCachedCount,
+                                   queuedCount: visualEngine.queuedCount)
+                }
+
+                ControlSection(title: "Music", systemImage: "music.note") {
+                    StylePicker(style: $settings.style)
+                    ValueSlider(title: "Density", value: $settings.notes)
+                    ValueSlider(title: "Space", value: $settings.reverb)
+                    ValueSlider(title: "Echo", value: $settings.delay)
+                    ScalePicker(selection: settings.scaleSelection)
+                }
+
+                ControlSection(title: "Visuals", systemImage: "sparkles") {
+                    ExplainedToggle(title: "Sync visuals to music",
+                                    explanation: "Color, motion and bloom follow the music as it plays.",
+                                    isOn: $settings.syncVisualsToMusic)
+                    ExplainedToggle(title: "Debug effect",
+                                    explanation: "Turns the effect under test (bloom) on or off.",
+                                    isOn: $settings.debugEffectEnabled)
+                }
+
+                ControlSection(title: "Images & Storage", systemImage: "photo.stack") {
+                    APIStatusRow()
+                    Button {
+                        showingSettings = true
+                    } label: {
+                        Label("Storage & Settings", systemImage: "gearshape")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .controlSize(.large)
+                    .keyboardShortcut(",", modifiers: .command)
+                }
+            }
+            .padding(16)
+        }
+        .scrollIndicators(.automatic)
+    }
+
+    private func togglePlayback() {
+        if audioEngine.isRunning {
+            audioEngine.stop()
+            visualEngine.stop()
+        } else {
+            audioEngine.start()
+            visualEngine.start()
+        }
+    }
+}
+
 // MARK: - Settings Sheet
 
 struct SettingsSheetView: View {
@@ -215,115 +200,53 @@ struct SettingsSheetView: View {
     @ObservedObject var audioEngine: GenerativeEngine
     @ObservedObject var visualEngine: VisualEngine
     @Environment(\.dismiss) private var dismiss
-    @State private var cacheCount: Int = 0
-
-    private var apiKeyStatus: String {
-        EnvironmentService.shared.hasValidCredentials ? "✓ Gemini API ready" : "✗ Missing API key"
-    }
-
-    private func refreshCacheCount() {
-        cacheCount = ImageStore.shared.imageCount()
-    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(spacing: 0) {
             HStack {
-                Text("Settings")
-                    .font(.title2)
-                    .fontWeight(.semibold)
+                Text("Storage & Settings")
+                    .font(.title2.weight(.semibold))
                 Spacer()
-                Button("Done") {
-                    dismiss()
-                }
-                .keyboardShortcut(.defaultAction)
+                Button("Done") { dismiss() }
+                    .keyboardShortcut(.defaultAction)
             }
+            .padding(20)
 
             Divider()
 
-            // API Status
-            VStack(alignment: .leading, spacing: 12) {
-                Text("API")
-                    .font(.headline)
-                    .foregroundStyle(.secondary)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    ControlSection(title: "Images", systemImage: "photo.stack") {
+                        ExplainedToggle(title: "Cache only",
+                                        explanation: "Show only images already saved on this Mac. No new images are generated, which is useful for testing effects without API costs.",
+                                        isOn: $settings.cacheOnly)
+                        if settings.cacheOnly && visualEngine.totalCachedCount == 0 {
+                            Label("No cached images, so nothing will display.",
+                                  systemImage: "exclamationmark.triangle.fill")
+                                .font(.callout)
+                                .foregroundStyle(.yellow)
+                                .wrapping()
+                        }
+                        Divider()
+                        ClearImagesSection(visualEngine: visualEngine)
+                    }
 
-                Text(apiKeyStatus)
-                    .font(.body)
-            }
-
-            Divider()
-
-            // Visual Settings
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Visuals")
-                    .font(.headline)
-                    .foregroundStyle(.secondary)
-
-                Toggle("Cache Only Mode", isOn: $settings.cacheOnly)
-                    .toggleStyle(.checkbox)
-
-                Toggle("Sync visuals to music", isOn: $settings.syncVisualsToMusic)
-                    .toggleStyle(.checkbox)
-
-                if settings.cacheOnly && cacheCount == 0 {
-                    HStack(spacing: 6) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.yellow)
-                        Text("No cached images! Nothing will display.")
+                    ControlSection(title: "Reset", systemImage: "arrow.counterclockwise") {
+                        Button("Reset All Settings", role: .destructive) {
+                            settings.resetToDefaults()
+                            audioEngine.apply(settings)
+                        }
+                        Text("Restores style, density, space, echo, scale and visual settings to their defaults.")
                             .font(.caption)
-                            .foregroundStyle(.yellow)
+                            .foregroundStyle(.secondary)
+                            .wrapping()
                     }
                 }
-
-                Text("When enabled, only cached images are used - no new images will be generated. Useful for testing effects without API costs.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                .padding(20)
             }
-
-            Divider()
-
-            // Cache Management
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Cache")
-                    .font(.headline)
-                    .foregroundStyle(.secondary)
-
-                ClearImagesSection(visualEngine: visualEngine)
-
-                Text("Deletes every cached image and its metadata. Settings are kept.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Divider()
-
-            // Reset Button
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Reset")
-                    .font(.headline)
-                    .foregroundStyle(.secondary)
-
-                Button("Reset All to Defaults") {
-                    settings.resetToDefaults()
-                    // Apply reset values to engine
-                    audioEngine.apply(settings)
-                }
-                .foregroundStyle(.red)
-
-                Text("Resets style, density, space, echo, scale, and visual settings to their default values.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer()
         }
-        .padding(20)
-        .frame(width: 400, height: 550)
-        .onAppear {
-            refreshCacheCount()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .imageCacheCleared)) { _ in
-            refreshCacheCount()
-        }
+        .frame(width: 440)
+        .frame(minHeight: 420, idealHeight: 560)
     }
 }
 
@@ -537,32 +460,6 @@ struct VisualDisplayView: View {
         let line = MusicSyncLog.line(reactor: sync.reactor, state: music.musicState.read(), uniforms: params.uniforms,
                                      neutral: neutral, mood: sync.lastMood, activity: sync.activity.lastSent)
         LMLog.visual.info("\(line, privacy: .public)")
-    }
-}
-
-// MARK: - Audio Slider Component
-
-struct AudioSlider: View {
-    let label: String
-    @Binding var value: Float
-    let leftIcon: String
-    let rightIcon: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(label)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            HStack {
-                Image(systemName: leftIcon)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 20)
-                Slider(value: $value, in: 0...1)
-                Image(systemName: rightIcon)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 20)
-            }
-        }
     }
 }
 

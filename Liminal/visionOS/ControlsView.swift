@@ -20,178 +20,39 @@ struct ControlsView: View {
 
     @State private var isImmersed = false
     @State private var isDioramaActive = false
-    @State private var showingSettings = false
+
+    /// Minimum column width that keeps every label on one line at visionOS type sizes.
+    private static let columnWidth: CGFloat = 360
+
+    private func column<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        VStack(spacing: 24) { content() }
+            .frame(minWidth: Self.columnWidth, idealWidth: Self.columnWidth, maxWidth: .infinity)
+    }
 
     var body: some View {
-        VStack(spacing: 20) {
-            // Header with title and settings
-            HStack {
-                Text("Liminal")
-                    .font(.title)
-                    .fontWeight(.medium)
-
-                Spacer()
-
-                Button {
-                    showingSettings = true
-                } label: {
-                    Image(systemName: "gear")
-                        .imageScale(.large)
-                }
-                .buttonStyle(.plain)
-            }
-
-            // Play/Stop controls
-            HStack(spacing: 16) {
-                Button(action: {
-                    if audioEngine.isRunning {
-                        audioEngine.stop()
-                        visualEngine.stop()
-                    } else {
-                        audioEngine.start()
-                        visualEngine.start()
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                header
+                // Three columns at the default size, two or one when the window is narrowed.
+                // idealWidth: wrapping captions would otherwise report their one-line width and
+                // ViewThatFits would always fall back to the narrowest layout.
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .top, spacing: 24) {
+                        column { playbackSection }
+                        column { musicSection }
+                        column { visualsSection; imagesSection }
                     }
-                }) {
-                    Label(
-                        audioEngine.isRunning ? "Stop" : "Play",
-                        systemImage: audioEngine.isRunning ? "stop.fill" : "play.fill"
-                    )
-                    .font(.title3)
-                }
-                .buttonStyle(.borderedProminent)
-
-                Button(action: {
-                    Task {
-                        if isImmersed {
-                            await dismissImmersiveSpace()
-                            isImmersed = false
-                        } else {
-                            // Dismiss diorama if active
-                            if isDioramaActive {
-                                await dismissImmersiveSpace()
-                                isDioramaActive = false
-                            }
-                            let result = await openImmersiveSpace(id: "liminalDome")
-                            if case .opened = result {
-                                isImmersed = true
-                            }
-                        }
+                    HStack(alignment: .top, spacing: 24) {
+                        column { playbackSection; visualsSection }
+                        column { musicSection; imagesSection }
                     }
-                }) {
-                    Label(
-                        isImmersed ? "Exit Dome" : "Enter Dome",
-                        systemImage: isImmersed ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right"
-                    )
-                    .font(.title3)
-                }
-                .buttonStyle(.bordered)
-
-                Button(action: {
-                    Task {
-                        if isDioramaActive {
-                            await dismissImmersiveSpace()
-                            isDioramaActive = false
-                        } else {
-                            // Dismiss dome if active
-                            if isImmersed {
-                                await dismissImmersiveSpace()
-                                isImmersed = false
-                            }
-                            let result = await openImmersiveSpace(id: "liminalDiorama")
-                            if case .opened = result {
-                                isDioramaActive = true
-                            }
-                        }
-                    }
-                }) {
-                    Label(
-                        isDioramaActive ? "Exit Diorama" : "Spatial Diorama",
-                        systemImage: isDioramaActive ? "cube.transparent" : "cube.transparent.fill"
-                    )
-                    .font(.title3)
-                }
-                .buttonStyle(.bordered)
-            }
-
-            Divider()
-
-            // Audio Parameters
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Audio")
-                    .font(.headline)
-
-                Picker("Style", selection: $settings.style) {
-                    ForEach(MusicStyle.ID.allCases, id: \.self) { style in
-                        Text(style.title).tag(style)
+                    VStack(spacing: 24) {
+                        playbackSection; musicSection; visualsSection; imagesSection
                     }
                 }
-                .pickerStyle(.segmented)
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Density: \(Int(settings.notes * 100))%")
-                        .font(.caption)
-                    Slider(value: $settings.notes, in: 0...1)
-                }
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Space: \(Int(settings.reverb * 100))%")
-                        .font(.caption)
-                    Slider(value: $settings.reverb, in: 0...1)
-                }
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Echo: \(Int(settings.delay * 100))%")
-                        .font(.caption)
-                    Slider(value: $settings.delay, in: 0...1)
-                }
             }
-
-            Divider()
-
-            // Scale Picker
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Scale")
-                    .font(.headline)
-
-                Picker("Scale", selection: settings.scaleSelection) {
-                    Text("Auto (evolving)").tag(ScaleType?.none)
-                    ForEach(ScaleType.allCases, id: \.self) { scale in
-                        Text(scale.rawValue).tag(ScaleType?.some(scale))
-                    }
-                }
-                .pickerStyle(.menu)
-            }
-
-            Spacer()
-
-            // Status
-            HStack {
-                Circle()
-                    .fill(audioEngine.isRunning ? .green : .gray)
-                    .frame(width: 8, height: 8)
-                Text(audioEngine.isRunning ? "Playing" : "Stopped")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                Spacer()
-
-                HStack(spacing: 4) {
-                    Image(systemName: "photo.stack")
-                        .font(.caption2)
-                    Text("\(visualEngine.totalCachedCount)")
-                        .font(.caption.monospacedDigit())
-                }
-                .foregroundStyle(.secondary)
-
-                Divider()
-                    .frame(height: 12)
-
-                Text("Queue: \(visualEngine.queuedCount)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+            .padding(32)
         }
-        .padding(24)
         .onAppear {
             audioEngine.apply(settings)
             applyDebugLaunchOptions()
@@ -201,8 +62,168 @@ struct ControlsView: View {
         .onChange(of: settings.notes) { _, newValue in audioEngine.density = newValue }
         .onChange(of: settings.style) { _, newValue in audioEngine.style = newValue }
         .onChange(of: settings.pinnedScale) { _, newValue in audioEngine.pinnedScale = newValue }
-        .sheet(isPresented: $showingSettings) {
-            VisionSettingsSheetView(audioEngine: audioEngine, visualEngine: visualEngine)
+    }
+
+    // MARK: Header
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Liminal")
+                .font(.extraLargeTitle2)
+            Text("Generative ambient music with evolving visuals")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+                .wrapping()
+        }
+    }
+
+    // MARK: Playback
+
+    private var playbackSection: some View {
+        ControlSection(title: "Playback", systemImage: "play.circle") {
+            Button(action: togglePlayback) {
+                Label(audioEngine.isRunning ? "Stop" : "Play",
+                      systemImage: audioEngine.isRunning ? "stop.fill" : "play.fill")
+                    .font(.title3.weight(.semibold))
+                    .frame(maxWidth: .infinity, minHeight: ControlMetrics.buttonHeight)
+            }
+            .buttonStyle(.borderedProminent)
+            .buttonBorderShape(.roundedRectangle(radius: 20))
+            .tint(audioEngine.isRunning ? .red : .blue)
+            .accessibilityIdentifier("play")
+
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) { domeButton; dioramaButton }
+                VStack(spacing: 12) { domeButton; dioramaButton }
+            }
+
+            PlaybackStatus(isPlaying: audioEngine.isRunning,
+                           cachedCount: visualEngine.totalCachedCount,
+                           queuedCount: visualEngine.queuedCount)
+        }
+    }
+
+    private var domeButton: some View {
+        Button(action: toggleDome) {
+            Label(isImmersed ? "Exit Dome" : "Enter Dome",
+                  systemImage: isImmersed ? "arrow.down.right.and.arrow.up.left"
+                                          : "arrow.up.left.and.arrow.down.right")
+                .fixedSize()
+                .frame(maxWidth: .infinity, minHeight: ControlMetrics.buttonHeight)
+        }
+        .buttonStyle(.bordered)
+        .buttonBorderShape(.roundedRectangle(radius: 20))
+        .accessibilityIdentifier("enterDome")
+    }
+
+    private var dioramaButton: some View {
+        Button(action: toggleDiorama) {
+            Label(isDioramaActive ? "Exit Diorama" : "Spatial Diorama",
+                  systemImage: isDioramaActive ? "cube.transparent" : "cube.transparent.fill")
+                .fixedSize()
+                .frame(maxWidth: .infinity, minHeight: ControlMetrics.buttonHeight)
+        }
+        .buttonStyle(.bordered)
+        .buttonBorderShape(.roundedRectangle(radius: 20))
+        .accessibilityIdentifier("spatial")
+    }
+
+    // MARK: Music
+
+    private var musicSection: some View {
+        ControlSection(title: "Music", systemImage: "music.note") {
+            StylePicker(style: $settings.style)
+            ValueSlider(title: "Density", value: $settings.notes)
+            ValueSlider(title: "Space", value: $settings.reverb)
+            ValueSlider(title: "Echo", value: $settings.delay)
+            ScalePicker(selection: settings.scaleSelection)
+        }
+    }
+
+    // MARK: Visuals
+
+    private var visualsSection: some View {
+        ControlSection(title: "Visuals", systemImage: "sparkles") {
+            ExplainedToggle(title: "Sync visuals to music",
+                            explanation: "Color, motion and bloom follow the music as it plays.",
+                            isOn: $settings.syncVisualsToMusic)
+            ExplainedToggle(title: "Cache only",
+                            explanation: "Show only images already saved on this device. No new images are generated.",
+                            isOn: $settings.cacheOnly)
+            if settings.cacheOnly && visualEngine.totalCachedCount == 0 {
+                Label("No cached images, so nothing will display.", systemImage: "exclamationmark.triangle.fill")
+                    .font(.callout)
+                    .foregroundStyle(.yellow)
+                    .wrapping()
+            }
+        }
+    }
+
+    // MARK: Images & storage
+
+    private var imagesSection: some View {
+        ControlSection(title: "Images & Storage", systemImage: "photo.stack") {
+            APIStatusRow()
+            ClearImagesSection(visualEngine: visualEngine)
+            Divider()
+            // No destructive role: its red title is unreadable on glass; the icon is red instead.
+            Button {
+                settings.resetToDefaults()
+                audioEngine.apply(settings)
+            } label: {
+                DestructiveLabel(title: "Reset All Settings", systemImage: "arrow.counterclockwise")
+                    .frame(minHeight: ControlMetrics.buttonHeight)
+            }
+            .buttonStyle(.bordered)
+            .buttonBorderShape(.roundedRectangle(radius: 20))
+            Text("Restores style, density, space, echo, scale and visual settings to their defaults.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .wrapping()
+        }
+    }
+
+    // MARK: Actions
+
+    private func togglePlayback() {
+        if audioEngine.isRunning {
+            audioEngine.stop()
+            visualEngine.stop()
+        } else {
+            audioEngine.start()
+            visualEngine.start()
+        }
+    }
+
+    private func toggleDome() {
+        Task {
+            if isImmersed {
+                await dismissImmersiveSpace()
+                isImmersed = false
+            } else {
+                if isDioramaActive {
+                    await dismissImmersiveSpace()
+                    isDioramaActive = false
+                }
+                let result = await openImmersiveSpace(id: "liminalDome")
+                if case .opened = result { isImmersed = true }
+            }
+        }
+    }
+
+    private func toggleDiorama() {
+        Task {
+            if isDioramaActive {
+                await dismissImmersiveSpace()
+                isDioramaActive = false
+            } else {
+                if isImmersed {
+                    await dismissImmersiveSpace()
+                    isImmersed = false
+                }
+                let result = await openImmersiveSpace(id: "liminalDiorama")
+                if case .opened = result { isDioramaActive = true }
+            }
         }
     }
 }
@@ -230,119 +251,6 @@ extension ControlsView {
                     LMLog.general.error("🧪 DEBUG: auto-open of liminalDome failed: \(String(describing: result), privacy: .public)")
                 }
             }
-        }
-    }
-}
-
-// MARK: - Settings Sheet
-
-struct VisionSettingsSheetView: View {
-    @ObservedObject private var settings = SettingsService.shared
-    @ObservedObject var audioEngine: GenerativeEngine
-    @ObservedObject var visualEngine: VisualEngine
-    @Environment(\.dismiss) private var dismiss
-    @State private var cacheCount: Int = 0
-
-    private var apiKeyStatus: String {
-        EnvironmentService.shared.hasValidCredentials ? "Gemini API ready" : "Missing API key"
-    }
-
-    private func refreshCacheCount() {
-        cacheCount = ImageStore.shared.imageCount()
-    }
-
-    var body: some View {
-        NavigationStack {
-            VStack(alignment: .leading, spacing: 24) {
-                VStack(alignment: .leading, spacing: 12) {
-                    Label("API", systemImage: "antenna.radiowaves.left.and.right")
-                        .font(.headline)
-                        .foregroundStyle(.secondary)
-
-                    HStack {
-                        Circle()
-                            .fill(EnvironmentService.shared.hasValidCredentials ? .green : .red)
-                            .frame(width: 8, height: 8)
-                        Text(apiKeyStatus)
-                            .font(.body)
-                    }
-                }
-
-                Divider()
-
-                VStack(alignment: .leading, spacing: 12) {
-                    Label("Visuals", systemImage: "sparkles")
-                        .font(.headline)
-                        .foregroundStyle(.secondary)
-
-                    Toggle("Cache Only Mode", isOn: $settings.cacheOnly)
-
-                    Toggle("Sync visuals to music", isOn: $settings.syncVisualsToMusic)
-
-                    if settings.cacheOnly && cacheCount == 0 {
-                        HStack(spacing: 6) {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundStyle(.yellow)
-                            Text("No cached images! Nothing will display.")
-                                .font(.caption)
-                                .foregroundStyle(.yellow)
-                        }
-                    }
-
-                    Text("When enabled, only cached images are used. No new images will be generated.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Divider()
-
-                VStack(alignment: .leading, spacing: 12) {
-                    Label("Cache", systemImage: "photo.stack")
-                        .font(.headline)
-                        .foregroundStyle(.secondary)
-
-                    ClearImagesSection(visualEngine: visualEngine)
-
-                    Text("Deletes every cached image and its metadata. Settings are kept.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Divider()
-
-                VStack(alignment: .leading, spacing: 12) {
-                    Label("Reset", systemImage: "arrow.counterclockwise")
-                        .font(.headline)
-                        .foregroundStyle(.secondary)
-
-                    Button("Reset All to Defaults", role: .destructive) {
-                        settings.resetToDefaults()
-                        audioEngine.apply(settings)
-                    }
-
-                    Text("Resets all audio and visual settings to defaults.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer()
-            }
-            .padding(24)
-            .navigationTitle("Settings")
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") {
-                        dismiss()
-                    }
-                }
-            }
-        }
-        .frame(width: 380, height: 560)
-        .onAppear {
-            refreshCacheCount()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .imageCacheCleared)) { _ in
-            refreshCacheCount()
         }
     }
 }

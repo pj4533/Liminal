@@ -175,8 +175,10 @@ xcrun xctrace export --input /tmp/l.trace --toc
 **Peekaboo 3.0.0-beta3 clicks work on the visionOS 26.2 simulator.** Clicking the macOS Simulator window registers as a gaze+pinch tap in visionOS.
 
 Verified end-to-end with no code changes to the app:
-1. `scripts/sim-tap.sh 1795 937` → Play button toggled to Stop, status "Playing".
-2. `scripts/sim-tap.sh 1918 937` → "Enter dome" opened the ImmersiveSpace.
+1. `scripts/sim-tap.sh 1371 935` → Play button toggled to Stop, status "Playing".
+2. `scripts/sim-tap.sh 1371 1041` → "Enter Dome" opened the ImmersiveSpace.
+
+(Coordinates updated for the redesigned 1240x800 control window, docs/decisions/ui.md. The original run used 1795 937 / 1918 937 on the old 320x560 window.)
 3. `xcrun simctl io <udid> screenshot` captured the rendered dome shader output (3840x2160).
 4. `log stream` produced `📊 visionOS PERF: fps=72.5 | render avg=0.2ms max=0.9ms | dropped=20`.
 

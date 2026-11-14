@@ -2,6 +2,11 @@
 # Tap the visionOS Simulator at a point given in SIMULATOR SCREENSHOT pixels (3840x2160).
 # Uses Peekaboo to click the macOS Simulator window (AXe/simctl taps don't work on visionOS).
 # Usage: scripts/sim-tap.sh <x_px> <y_px>
+# Default control-window targets (1240x800 window, fresh launch, docs/decisions/ui.md):
+#   Play/Stop   1371 935
+#   Enter/Exit Dome   1371 1041
+#   Spatial Diorama   1371 1139
+#   Clear All Images  2378 1316 (opens a confirmation popover; tap 1350 1500 to dismiss)
 set -e
 X=$1; Y=$2
 B=$(peekaboo list windows --app Simulator --json | python3 -I -c '
