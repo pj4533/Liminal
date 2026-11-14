@@ -339,3 +339,11 @@ Measured (visionOS sim, medians of 3 x 30s runs) vs previous best (MRT stereo, 2
 - fps (58.6 / 72.2 / 48.7, median 58.6) and dropped frames were noisy and lower than the previous best (77.3). Frame interval is dominated by simulator/host-load jitter while the GPU time itself fell, so GPU ms is the deciding metric (the target is real hardware, which is GPU-bound).
 - Visual parity: acceptable. The frozen screenshot shows a different source image than baseline (the image is not pinned by freeze), so the numeric diff (47.2) is not meaningful; the effects look equivalent. No errors in logs.
 - Alternative considered: revert. Rejected because GPU time improved over the 3% threshold.
+
+## Exact ALU clean-ups in eye shader (1f34e18) - NOT KEPT
+
+- What: removed cos/sin(atan2) round-trips and hoisted uniform-only maths in the eye shader.
+- Measured (visionOS sim, 3 runs, 20s each): GPU ms mean 0.180 / 0.453 / 0.133 (median 0.180); fps 59.3 / 30.0 / 64.5 (median 59.3). Frozen run GPU 0.150 ms.
+- Previous best: GPU 0.153 ms median, frozen 0.150 ms. Frozen GPU is identical, so no measurable gain; unfrozen medians are within simulator noise (and nominally worse).
+- Visual: effects look equivalent (distortion, chromatic fringing, grain); frozen screenshots use different source images so numeric diff is not meaningful. No log errors.
+- Verdict: below the 3% improvement threshold, so reverted to 11af781. Alternative of keeping it as a harmless cleanup was rejected to honour the keep-only-if-measurable rule.
