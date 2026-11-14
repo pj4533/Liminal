@@ -1,6 +1,6 @@
 # Audio-visual coupling: plan
 
-Status: design only, nothing implemented. Decisions and their reasons are in `docs/decisions/av-coupling.md` (C1 to C14).
+Status: implemented 2026-11-14 (see the implementation decisions I1 to I12). Decisions and their reasons are in `docs/decisions/av-coupling.md` (C1 to C14).
 
 Goal: the music should follow the imagery (each new image changes how the music feels) and the visuals should feel alive with the music (motion and colour breathe with scenes, chords and notes), without strobing, without new shader work and without new uniforms.
 

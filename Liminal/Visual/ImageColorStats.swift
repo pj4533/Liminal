@@ -30,8 +30,16 @@ nonisolated struct VibranceFactors: Equatable {
 
 nonisolated enum ImageColorStats {
 
-    /// Mean HSV saturation and mean (gamma) Rec.601 luma of the image, both 0...1.
-    static func measure(_ image: CGImage) -> (saturation: Float, luma: Float)? {
+    /// One 32x32 pass: mean HSV saturation, mean (gamma) Rec.601 luma, luma standard deviation
+    /// (contrast) and mean (r - b) (warm/cool tilt, -1...1). All in gamma sRGB.
+    struct Measurement: Equatable {
+        var saturation: Float
+        var luma: Float
+        var lumaStdDev: Float
+        var redMinusBlue: Float
+    }
+
+    static func measureFull(_ image: CGImage) -> Measurement? {
         let n = 32
         var buf = [UInt8](repeating: 0, count: n * n * 4)
         guard let cs = CGColorSpace(name: CGColorSpace.sRGB),
@@ -39,15 +47,26 @@ nonisolated enum ImageColorStats {
                                   space: cs, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return nil }
         ctx.interpolationQuality = .medium
         ctx.draw(image, in: CGRect(x: 0, y: 0, width: n, height: n))
-        var satSum: Float = 0, lumaSum: Float = 0
+        var satSum: Float = 0, lumaSum: Float = 0, lumaSq: Float = 0, rbSum: Float = 0
         for i in stride(from: 0, to: buf.count, by: 4) {
             let r = Float(buf[i]) / 255, g = Float(buf[i + 1]) / 255, b = Float(buf[i + 2]) / 255
             let mx = max(r, g, b), mn = min(r, g, b)
             satSum += mx > 0.001 ? (mx - mn) / mx : 0
-            lumaSum += 0.299 * r + 0.587 * g + 0.114 * b
+            let y = 0.299 * r + 0.587 * g + 0.114 * b
+            lumaSum += y
+            lumaSq += y * y
+            rbSum += r - b
         }
         let count = Float(n * n)
-        return (satSum / count, lumaSum / count)
+        let mean = lumaSum / count
+        return Measurement(saturation: satSum / count, luma: mean,
+                           lumaStdDev: max(lumaSq / count - mean * mean, 0).squareRoot(),
+                           redMinusBlue: rbSum / count)
+    }
+
+    /// Mean HSV saturation and mean (gamma) Rec.601 luma of the image, both 0...1.
+    static func measure(_ image: CGImage) -> (saturation: Float, luma: Float)? {
+        measureFull(image).map { ($0.saturation, $0.luma) }
     }
 
     /// Factors for one image (pure; see `VibranceFactors` for the formulas).

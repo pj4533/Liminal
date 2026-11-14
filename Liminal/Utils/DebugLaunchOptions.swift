@@ -60,6 +60,17 @@ nonisolated enum DebugLaunchOptions {
     /// -LiminalNoEffects YES: bypass every effect (passthroughFragment) on both platforms, for clean
     /// orientation/colour checks of the bare image path.
     static let noEffects: Bool = defaults.bool(forKey: "LiminalNoEffects")
+
+    /// -LiminalSyncLog YES: one "🎼 SYNC ..." line per second from each render loop (music -> visuals
+    /// reactor state, resulting uniforms, last mood/activity sent to the music).
+    static let syncLog: Bool = defaults.bool(forKey: "LiminalSyncLog")
+
+    /// -LiminalSyncStrength <x>: multiply the music -> visuals amount (default 1; e.g. 3 to make the
+    /// coupling obvious while tuning). Caps in EffectsUniformsComputer still apply.
+    static let syncStrength: Float = {
+        guard defaults.object(forKey: "LiminalSyncStrength") != nil else { return 1 }
+        return max(0, defaults.float(forKey: "LiminalSyncStrength"))
+    }()
 #else
     static let autoPlay = false
     static let openDome = false
@@ -71,6 +82,8 @@ nonisolated enum DebugLaunchOptions {
     static let forceStereoFlatDepth = false
     static let forceMonoMaterial = false
     static let noEffects = false
+    static let syncLog = false
+    static let syncStrength: Float = 1
 #endif
 
     private static let logOnce: Void = {
@@ -87,6 +100,8 @@ nonisolated enum DebugLaunchOptions {
         if forceStereoFlatDepth { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalForceStereoFlatDepth=YES (stereo material + flat depth)") }
         if forceMonoMaterial { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalForceMonoMaterial=YES (mono UnlitMaterial)") }
         if noEffects { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalNoEffects=YES (passthrough, no effects)") }
+        if syncLog { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalSyncLog=YES (🎼 SYNC lines)") }
+        if syncStrength != 1 { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalSyncStrength=\(syncStrength, format: .fixed(precision: 2))") }
 #endif
     }()
 

@@ -89,14 +89,15 @@ nonisolated struct VisualCoupling {
     }
 
     /// Keyword table (lowercased substrings). Values are summed and capped, so several words reinforce.
+    /// Every `Mood` value (PromptTypes.swift) matches a row (decision C9).
     static let table: [(words: [String], valence: Float, energy: Float, scenes: [SceneKind: Float], shimmer: Float)] = [
-        (["calm", "serene", "still", "quiet", "peace", "tranquil", "gentle", "soft", "mist", "fog"],
+        (["calm", "serene", "still", "quiet", "peace", "tranquil", "gentle", "soft", "mist", "fog", "intimate"],
          0.1, -0.5, [.stillness: 1.6, .tide: 1.5, .bloom: 0.7], 1),
-        (["vast", "cosmic", "space", "infinite", "galaxy", "nebula", "star", "sky", "ethereal", "heaven"],
+        (["vast", "cosmic", "space", "infinite", "galaxy", "nebula", "star", "sky", "ethereal", "heaven", "majestic", "celestial"],
          0.2, 0.2, [.bloom: 1.6, .constellation: 1.3], 1.4),
-        (["dark", "ominous", "shadow", "night", "gloom", "storm", "abyss", "haunt", "melanchol", "somber"],
+        (["dark", "ominous", "shadow", "night", "gloom", "storm", "abyss", "haunt", "melanchol", "somber", "eerie"],
          -0.7, 0.1, [.tide: 1.4, .stillness: 1.2, .constellation: 0.8], 0.9),
-        (["playful", "bright", "joy", "sun", "golden", "warm", "vivid", "bloom", "flower", "garden", "spring"],
+        (["playful", "bright", "joy", "sun", "golden", "warm", "vivid", "bloom", "flower", "garden", "spring", "euphoric", "lush"],
          0.6, 0.4, [.constellation: 1.6, .bloom: 1.2, .stillness: 0.8], 1.1),
         (["ocean", "sea", "water", "wave", "river", "rain", "tide", "flow"],
          0, 0, [.tide: 1.7, .drift: 1.2], 1),

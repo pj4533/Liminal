@@ -21,6 +21,7 @@ final class SettingsService: ObservableObject {
         static let scaleAuto = "audio.scaleAuto"
         static let imageInterval = "visual.imageInterval"
         static let cacheOnly = "visual.cacheOnly"
+        static let syncVisualsToMusic = "visual.syncToMusic"
     }
 
     // MARK: - Defaults
@@ -37,6 +38,7 @@ final class SettingsService: ObservableObject {
     static let defaultScaleAuto: Bool = true
     static let defaultImageInterval: Double = 30.0
     static let defaultCacheOnly: Bool = false
+    static let defaultSyncVisualsToMusic: Bool = true
 
     // MARK: - Published Settings
 
@@ -85,6 +87,12 @@ final class SettingsService: ObservableObject {
         didSet { defaults.set(cacheOnly, forKey: Keys.cacheOnly) }
     }
 
+    /// "Sync visuals to music": music -> visuals coupling (docs/plans/av-coupling.md section 4).
+    /// Gates only that direction, with a 1.5 s fade; image -> music always runs.
+    @Published var syncVisualsToMusic: Bool {
+        didSet { defaults.set(syncVisualsToMusic, forKey: Keys.syncVisualsToMusic) }
+    }
+
     /// Generic debug toggle for testing new effects (not persisted)
     @Published var debugEffectEnabled: Bool = true
 
@@ -105,6 +113,7 @@ final class SettingsService: ObservableObject {
 
         self.imageInterval = defaults.object(forKey: Keys.imageInterval) as? Double ?? Self.defaultImageInterval
         self.cacheOnly = defaults.object(forKey: Keys.cacheOnly) as? Bool ?? Self.defaultCacheOnly
+        self.syncVisualsToMusic = defaults.object(forKey: Keys.syncVisualsToMusic) as? Bool ?? Self.defaultSyncVisualsToMusic
 
         LMLog.state.info("Settings loaded: scale=\(self.currentScale.rawValue), delay=\(self.delay), reverb=\(self.reverb), notes=\(self.notes)")
     }
@@ -120,6 +129,7 @@ final class SettingsService: ObservableObject {
         scaleAuto = Self.defaultScaleAuto
         imageInterval = Self.defaultImageInterval
         cacheOnly = Self.defaultCacheOnly
+        syncVisualsToMusic = Self.defaultSyncVisualsToMusic
         LMLog.state.info("Settings reset to defaults")
     }
 }

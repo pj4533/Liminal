@@ -25,7 +25,7 @@ struct LiminalVisionApp: App {
         .defaultSize(width: 320, height: 560)
 
         ImmersiveSpace(id: "liminalDome") {
-            ImmersiveDomeView(visualEngine: visualEngine, settings: settings)
+            ImmersiveDomeView(visualEngine: visualEngine, settings: settings, music: audioEngine)
         }
         .immersionStyle(selection: $immersionStyle, in: .progressive, .full)
 

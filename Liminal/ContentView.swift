@@ -79,7 +79,8 @@ struct ContentView: View {
     var body: some View {
         HStack(spacing: 0) {
             // Visual display area
-            VisualDisplayView(visualEngine: visualEngine, settings: settings, isPlaying: audioEngine.isRunning)
+            VisualDisplayView(visualEngine: visualEngine, settings: settings, isPlaying: audioEngine.isRunning,
+                              music: audioEngine)
                 .frame(minWidth: 400, minHeight: 400)
 
             Divider()
@@ -260,6 +261,9 @@ struct SettingsSheetView: View {
                 Toggle("Cache Only Mode", isOn: $settings.cacheOnly)
                     .toggleStyle(.checkbox)
 
+                Toggle("Sync visuals to music", isOn: $settings.syncVisualsToMusic)
+                    .toggleStyle(.checkbox)
+
                 if settings.cacheOnly && cacheCount == 0 {
                     HStack(spacing: 6) {
                         Image(systemName: "exclamationmark.triangle.fill")
@@ -313,7 +317,7 @@ struct SettingsSheetView: View {
             Spacer()
         }
         .padding(20)
-        .frame(width: 400, height: 520)
+        .frame(width: 400, height: 550)
         .onAppear {
             refreshCacheCount()
         }
@@ -325,18 +329,60 @@ struct SettingsSheetView: View {
 
 // MARK: - Visual Display
 
+/// Music <-> visuals coupling state for the macOS render path. A plain class held in `@State`
+/// (not observable), so mutating it while SwiftUI evaluates `body` never invalidates the view.
+final class MusicSyncBox {
+    var reactor = MusicReactor(strength: DebugLaunchOptions.syncStrength)
+    var lastMood: VisualMood?
+    var activity = VisualActivityThrottle()
+    var lastLogSecond = -1
+}
+
 struct VisualDisplayView: View {
     @ObservedObject var visualEngine: VisualEngine
     @ObservedObject var settings: SettingsService
     let isPlaying: Bool
+    /// Plain reference, not observed: only its nonisolated bus and visual-input methods are used (C13).
+    let music: GenerativeEngine
     @StateObject private var transitionManager = TimerDrivenCrossfade()
     @StateObject private var effectController = EffectController()
     @State private var lastLoggedSecond: Int = -1
+    @State private var sync = MusicSyncBox()
 
     // Single uniforms struct - matches visionOS pattern for platform parity
-    private var effectUniforms: EffectsUniforms {
+    private var effectUniforms: EffectsUniforms { frameParams().uniforms }
+
+    /// Uniforms plus the music modulation they were built from (the renderer also needs its burst serial).
+    /// Called at least twice per tick (body and the log `onChange`); the reactor caches repeated times.
+    private func frameParams() -> (uniforms: EffectsUniforms, modulation: MusicModulation) {
         let effectTime = DebugLaunchOptions.effectTime(Float(effectController.time))
-        // Per-image vibrance factors (measured once per image, cached), blended across a crossfade
+        let vibrance = currentVibrance()
+        // Music -> visuals. macOS keeps its 0.03 turns/s hue drift when un-synced. Frozen time bypasses
+        // the reactor so deterministic captures are unchanged.
+        let modulation: MusicModulation
+        if DebugLaunchOptions.freezeTime != nil {
+            modulation = .unsynced(hueBaseShift: effectTime * Self.baseHueRate)
+        } else {
+            let bus = music.musicState
+            modulation = sync.reactor.update(state: bus.read(), now: bus.now(), effectTime: effectTime,
+                                             enabled: settings.syncVisualsToMusic, baseHueRate: Self.baseHueRate)
+        }
+        var uniforms = EffectsUniformsComputer.compute(
+            time: effectTime,
+            transitionProgress: Float(transitionManager.transitionProgress),
+            hasSaliencyMap: transitionManager.currentSaliencyMap != nil,
+            vibrance: vibrance,
+            music: modulation
+        )
+        // Debug toggle controls the effect currently being tested
+        if !settings.debugEffectEnabled {
+            uniforms.bloomAmount = 0
+        }
+        return (uniforms, modulation)
+    }
+
+    /// Per-image vibrance factors (measured once per image, cached), blended across a crossfade
+    private func currentVibrance() -> VibranceFactors {
         var vibrance = VibranceFactors.neutral
         if let frame = transitionManager.currentFrame {
             vibrance = ImageColorStats.cachedFactors(key: frame) { frame.cgImageRepresentation.map { ImageFraming.coverCrop($0) } }
@@ -345,19 +391,22 @@ struct VisualDisplayView: View {
                 vibrance = VibranceFactors.lerp(from, vibrance, Float(transitionManager.transitionProgress))
             }
         }
-        var uniforms = EffectsUniformsComputer.compute(
-            time: effectTime,
-            transitionProgress: Float(transitionManager.transitionProgress),
-            hasSaliencyMap: transitionManager.currentSaliencyMap != nil,
-            vibrance: vibrance
-        )
-        // Add time-based hue shift (macOS-specific for now)
-        uniforms.hueBaseShift = effectTime * 0.03
-        // Debug toggle controls the effect currently being tested
-        if !settings.debugEffectEnabled {
-            uniforms.bloomAmount = 0
-        }
-        return uniforms
+        return vibrance
+    }
+
+    /// Hue drift of the un-synced macOS look (turns per second).
+    private static let baseHueRate: Float = 0.03
+
+    /// Visuals -> music: describe the image whose crossfade just started (or the first image).
+    private func postMood(for image: PlatformImage, imageChanged: Bool) {
+        // Atomic read: the two @Published mirrors (image, metadata) have no ordering guarantee (C10).
+        let metadata = visualEngine.imageBuffer.loadCurrentWithMetadata().metadata
+        let mood = VisualMoodBuilder.mood(metadata: metadata,
+                                          image: image.cgImageRepresentation.map { ImageFraming.coverCrop($0) })
+        music.setVisualMood(mood)
+        if imageChanged { music.imageDidChange(transitionDuration: VisualMoodBuilder.crossfadeDuration) }
+        sync.lastMood = mood
+        LMLog.visual.info("🎼 setVisualMood b=\(String(format: "%.2f", mood.brightness)) w=\(String(format: "%.2f", mood.warmth)) s=\(String(format: "%.2f", mood.saturation)) e=\(String(format: "%.2f", mood.energy)) words=\(mood.moodWords.joined(separator: ","), privacy: .public) imageDidChange=\(imageChanged)")
     }
 
     var body: some View {
@@ -368,12 +417,14 @@ struct VisualDisplayView: View {
 
                 // Metal view with all effects + ghost tap trails
                 if transitionManager.currentFrame != nil {
+                    let params = frameParams()
                     EffectsMetalViewRepresentable(
                         sourceImage: transitionManager.currentFrame,
                         previousImage: transitionManager.previousFrame,  // GPU crossfade blending
                         saliencyMap: transitionManager.currentSaliencyMap,
-                        uniforms: effectUniforms,
-                        delay: settings.delay
+                        uniforms: params.uniforms,
+                        delay: settings.delay,
+                        ghostBurstSerial: params.modulation.ghostBurstSerial
                     )
                     // Keep the image at its 3:2 display aspect even if the window is not exactly
                     // 3:2 (min sizes, full screen): letterbox on black instead of stretching.
@@ -425,7 +476,9 @@ struct VisualDisplayView: View {
         }
         .onChange(of: visualEngine.currentImage) { _, newImage in
             if let image = newImage {
-                transitionManager.transitionTo(image)
+                let hadFrame = transitionManager.currentFrame != nil
+                let started = transitionManager.transitionTo(image)
+                if started || !hadFrame { postMood(for: image, imageChanged: started) }
             } else {
                 // Image was cleared (e.g., cache cleared) - reset transition manager
                 transitionManager.reset()
@@ -438,6 +491,7 @@ struct VisualDisplayView: View {
             // Effects start when Play is pressed, not on appear
             if let image = visualEngine.currentImage {
                 transitionManager.setInitialImage(image)
+                postMood(for: image, imageChanged: false)
             }
         }
         .onChange(of: isPlaying) { _, playing in
@@ -450,6 +504,14 @@ struct VisualDisplayView: View {
         }
         // Log Ken Burns values periodically for debugging
         .onChange(of: effectController.time) { _, newTime in
+            // Visuals -> music activity (un-modulated oscillators, at most 2 Hz)
+            let tp = Float(transitionManager.transitionProgress)
+            let activity = EffectsUniformsComputer.visualActivity(time: Float(newTime), transitionProgress: tp)
+            if let a = sync.activity.next(activity, at: newTime) { music.setVisualActivity(a) }
+            if DebugLaunchOptions.syncLog, Int(newTime) != sync.lastLogSecond {
+                sync.lastLogSecond = Int(newTime)
+                logSync(time: Float(newTime))
+            }
             let currentSecond = Int(newTime)
             if currentSecond > lastLoggedSecond {
                 lastLoggedSecond = currentSecond
@@ -462,6 +524,19 @@ struct VisualDisplayView: View {
             transitionManager.stop()
             effectController.stop()
         }
+    }
+
+    /// DEBUG -LiminalSyncLog: one line per second.
+    private func logSync(time: Float) {
+        let params = frameParams()
+        let neutral = EffectsUniformsComputer.compute(
+            time: DebugLaunchOptions.effectTime(time),
+            transitionProgress: Float(transitionManager.transitionProgress),
+            hasSaliencyMap: transitionManager.currentSaliencyMap != nil,
+            vibrance: currentVibrance())
+        let line = MusicSyncLog.line(reactor: sync.reactor, state: music.musicState.read(), uniforms: params.uniforms,
+                                     neutral: neutral, mood: sync.lastMood, activity: sync.activity.lastSent)
+        LMLog.visual.info("\(line, privacy: .public)")
     }
 }
 

@@ -1,6 +1,47 @@
 # Audio-visual coupling: decisions
 
-Design decisions for `docs/plans/av-coupling.md`. Nothing is implemented yet; these are for review before the implementation pass.
+Design decisions for `docs/plans/av-coupling.md` (C1 to C14), then implementation decisions (I1 to I9).
+
+## Implementation (I1 to I9)
+
+All amounts are the plan's starting values (section 1.3), unchanged. No shader or uniform-struct edits.
+
+- I1. The reactor's smoothers and accumulators run on the effect-clock delta, not the bus clock. Why: the macOS hue drift must keep running when the music is not alive, and a clock that goes backwards (macOS `EffectController.start()` resets to 0) resets the reactor automatically. The bus clock is used for aliveness and the onset envelope.
+- I2. `amount` snaps to its target within 0.005. Why: sync off then gives exactly the un-coupled output (step at most 0.0006 in bloom).
+- I3. With sync off, `hueBaseShift` and the Ken Burns lead keep the phase offset they built up (they stop changing; no jump back). They are the only two values that differ from the un-coupled output.
+- I4. `shimmerLevel` is normalised by 0.4 (dbToGain(-8), its ceiling in MixBus) before clamping to 0...1.
+- I5. The ghost-reach swell holds its target at 1 for 2 s after a scene change (attack 0.8 s, release 6 s). Why: holding it for a single update with a 1.5 s attack would barely move it.
+- I6. A burst that cannot fire within 3 s (4 taps already active) is dropped. A burst tap counts as a spawn, so the regular schedule restarts after it.
+- I7. visionOS builds the mood in a detached task (one 32x32 pass over a 3K image), off the render loop. `imageDidChange` is still posted at crossfade start. macOS builds it inline in `onChange`.
+- I8. macOS `hueBaseShift` is now wrapped to 0...1. Before, it was `time * 0.03` unbounded and added in half precision in the shader, so it lost precision over time. With `-LiminalFreezeTime` set, the old `time * 0.03` is kept exactly.
+- I9. Open questions C6 and C11 use the plan's defaults: visionOS drifts the hue while sync is on, and the toggle gates music -> visuals only.
+- I10. The fast onset follower (`pulseColor`) attack is 90 ms, not the planned 60 ms. Why: at 60 ms the offline check measured 5.02 % of the bloom variance in the 3 to 30 Hz band, just over the 5 % no-strobe limit. At 90 ms it is 4.4 %, and a note still reads as an immediate glow. Every other amount is the plan's value.
+- I11. The settings toggle sits under "Cache Only Mode" in both settings sheets (macOS checkbox, visionOS switch). It is minimal placement; the control layout will be redone later.
+- I12. The offline check (`scripts/av-coupling-check.sh`) advances the conductor without rendering audio, so 600 s runs in about a second. A synthetic 1.5 s crossfade is not simulated in the uniforms (the transition boost code is unchanged); caps and slews are checked on the un-boosted values.
+
+### Amounts in use
+
+| Music signal | Visual target | Amount | Cap |
+|---|---|---|---|
+| intensity (2 s) | distortion base | x(1 + 0.35E - 0.15) | 0.10 |
+| intensity | log-sphere, fractal noise base | x(1 + 0.30E - 0.15) | 1.2x old high |
+| intensity | chromatic base | x(1 + 0.30E - 0.10) | 0.02 |
+| intensity | feedback mix | 0.3 + 0.08E - 0.04 | 0.26...0.34 |
+| intensity | Ken Burns rate | 0.85x...1.35x via motionLead | |
+| onset fast (90/450 ms) | bloom, vibrance | +0.12, +0.06 x imageFactor | 0.72, 0.50 x imageFactor |
+| onset slow (180/900 ms) | distortion, chromatic | +0.004, +0.002 | as above |
+| shimmer / 0.4 | bloom | +0.10 | 0.72 |
+| air level | feedback warp | +0.01 | 0.04 |
+| music brightness | hue drift | 0.018...0.042 turns/s | wraps |
+| chord vs tonic, tonic | hue offset (4 s, 12 s) | +-0.06, +-0.10 turns | |
+| scene change | ghost burst of 2 taps (< 4 active, Echo > 0), reach swell | 0.06 -> 0.08 | 0.08 |
+
+### Verification results (2026-11-14)
+
+- Both platforms build.
+- Offline check, 600 s, seed 3: max per-frame step bloom 0.0133 (limit 0.03), vibrance 0.0067 (0.015), distortion 0.00022 (0.0006), hue 0.0005 turns (0.002). 3 to 30 Hz band: bloom 4.4 %, vibrance 0.2 % (limit 5 %). Correlation of the distortion ratio with intensity 0.993. 6 scene changes gave 6 bursts. Harmony hue moved 0 to 0.103 turns. With sync off, 4680 of 4680 frames matched the un-coupled output (hue and Ken Burns phase excepted, I3). Music side: every synthetic mood moved `brightnessNudge` and `warmthDb` the right way within 20 s. A chord change landed within 1 s of the crossfade midpoint for 10 of 17 images; the conductor skips it when the current chord is under 8 s old.
+- visionOS simulator, launched with `-LiminalAutoPlay YES -LiminalOpenDome YES -LiminalSyncLog YES`: the `🎼 SYNC` lines show amount 1, alive, intensity 0.20 -> 0.50, pulses, shimmer and air moving, and distortion, chromatic, bloom, feedback and warp following them. One scene change raised `burst` to 1. `setVisualMood` was sent for the first image (mood words such as eerie, majestic, euphoric, architecture, `imageDidChange=false`) and at the next crossfade (`imageDidChange=true`).
+- `perf-run.sh`, 30 s: sync on gave 81.1 fps and 0.182 ms mean GPU; sync off gave 82.1 fps and 0.172 ms. Both are in line with the ~77 fps / ~0.17 ms baseline, and other processes were loading the host CPU. The shader was not changed, so no shader-bench A/B was needed.
 
 ## C1. No new uniforms and no shader edits
 - What: every music-driven change goes through uniforms that already exist. The Metal struct and the fragment shader are untouched.

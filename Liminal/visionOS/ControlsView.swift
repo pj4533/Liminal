@@ -277,6 +277,8 @@ struct VisionSettingsSheetView: View {
 
                     Toggle("Cache Only Mode", isOn: $settings.cacheOnly)
 
+                    Toggle("Sync visuals to music", isOn: $settings.syncVisualsToMusic)
+
                     if settings.cacheOnly && cacheCount == 0 {
                         HStack(spacing: 6) {
                             Image(systemName: "exclamationmark.triangle.fill")
