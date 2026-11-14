@@ -332,3 +332,10 @@ Measured (visionOS sim, medians of 3 x 30s runs) vs previous best (MRT stereo, 2
   compression); left for later if device capture shows the shared textures still uncompressed.
 - Builds: visionOS Simulator and macOS both succeed.
 - Measured numbers: to be appended by the measurement step.
+
+## Result: drop shaderWrite on drawables, optimise uploaded textures (48832eb) - KEPT
+
+- Measured (3 runs, medians): GPU ms mean 0.146 / 0.153 / 0.244 -> median 0.153 (was 0.177, -13.6%); p95 median 0.304. Frozen run: 0.150 ms.
+- fps (58.6 / 72.2 / 48.7, median 58.6) and dropped frames were noisy and lower than the previous best (77.3). Frame interval is dominated by simulator/host-load jitter while the GPU time itself fell, so GPU ms is the deciding metric (the target is real hardware, which is GPU-bound).
+- Visual parity: acceptable. The frozen screenshot shows a different source image than baseline (the image is not pinned by freeze), so the numeric diff (47.2) is not meaningful; the effects look equivalent. No errors in logs.
+- Alternative considered: revert. Rejected because GPU time improved over the 3% threshold.
