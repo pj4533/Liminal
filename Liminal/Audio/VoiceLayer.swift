@@ -2,137 +2,79 @@ import AudioKit
 import AudioKitEX
 import SoundpipeAudioKit
 import AVFoundation
-import OSLog
 
-/// A single voice layer with multiple detuned oscillators for rich, ambient pads.
-/// Each voice has its own envelope for smooth attack/release.
-final class VoiceLayer {
-
-    // MARK: - Configuration
+/// One gated voice: a few detuned oscillators (optionally of different waveforms) through an
+/// `AmplitudeEnvelope`. Used by `LeadLayer`. All frequency and amplitude changes are ramped (D7).
+nonisolated final class VoiceLayer {
 
     struct Config {
-        var oscillatorCount: Int = 4
-        var detuneAmount: Float = 0.02      // 2% detune spread
-        var attackTime: Float = 2.0          // seconds
-        var releaseTime: Float = 8.0         // seconds
+        var oscillatorCount: Int = 2
+        var detuneAmount: Float = 0.002      // fraction, spread -d...+d
+        var attackTime: Float = 1.0
+        var releaseTime: Float = 4.0
         var amplitude: Float = 0.15
-        var waveform: Table = Table(.sine)
+        /// Waveform per oscillator (cycled). Default all sine.
+        var waveforms: [Table] = [Table(.sine)]
+        /// Relative level per oscillator (cycled).
+        var mix: [Float] = [1]
     }
-
-    // MARK: - Audio Nodes
 
     // Note: Using Oscillator (not DynamicOscillator) - DynamicOscillator has
     // wavetable discontinuity clicks when multiple oscillators' phases align
-    private var oscillators: [Oscillator] = []
-    private var envelope: AmplitudeEnvelope?
+    private(set) var oscillators: [Oscillator] = []
+    let envelope: AmplitudeEnvelope
     private let mixer = Mixer()
-
-    // MARK: - State
-
-    private var baseFrequency: Float = 220
     private let config: Config
+    private(set) var frequency: Float = 220
+    private(set) var amplitude: Float
 
-    /// The output node to connect to the audio graph
-    var output: Node { envelope ?? mixer }
-
-    // MARK: - Init
+    var output: Node { envelope }
 
     init(config: Config = Config()) {
         self.config = config
-        setupOscillators()
-        setupEnvelope()
-    }
-
-    // MARK: - Setup
-
-    private func setupOscillators() {
-        // Create multiple oscillators with slight detuning
+        self.amplitude = config.amplitude
         for i in 0..<config.oscillatorCount {
-            let osc = Oscillator(waveform: config.waveform)
-
-            // Spread detune: -detune to +detune
-            let detuneRange = config.detuneAmount
-            let normalizedPosition = Float(i) / Float(max(1, config.oscillatorCount - 1))
-            let detuneFactor = 1.0 + (normalizedPosition * 2 - 1) * detuneRange
-
-            osc.frequency = baseFrequency * detuneFactor
-            osc.amplitude = config.amplitude / Float(config.oscillatorCount)
-
+            let osc = Oscillator(waveform: config.waveforms[i % config.waveforms.count])
             oscillators.append(osc)
             mixer.addInput(osc)
         }
-
-        LMLog.audio.debug("🎹 Created \(self.config.oscillatorCount) Oscillators (non-dynamic)")
-    }
-
-    private func setupEnvelope() {
-        envelope = AmplitudeEnvelope(
-            mixer,
-            attackDuration: config.attackTime,
-            decayDuration: 0.1,
-            sustainLevel: 1.0,
-            releaseDuration: config.releaseTime
-        )
-        LMLog.audio.debug("📈 Envelope: attack=\(self.config.attackTime)s, release=\(self.config.releaseTime)s")
-    }
-
-    // MARK: - Control
-
-    func start() {
-        // Log oscillator frequencies before starting
+        envelope = AmplitudeEnvelope(mixer, attackDuration: config.attackTime, decayDuration: 0.1,
+                                     sustainLevel: 1.0, releaseDuration: config.releaseTime)
         for (i, osc) in oscillators.enumerated() {
-            LMLog.audio.debug("🔊 Osc[\(i)] freq=\(osc.frequency), amp=\(osc.amplitude)")
-        }
-
-        oscillators.forEach { $0.start() }
-        envelope?.openGate()
-        LMLog.audio.info("🎵 Voice started at \(self.baseFrequency)Hz")
-    }
-
-    func stop() {
-        envelope?.closeGate()
-        // Oscillators keep running but envelope fades out
-        LMLog.audio.info("🛑 Voice stopping (release phase)")
-    }
-
-    // Note: Use AUParameter.value directly to avoid AudioKit's legacy
-    // AudioUnitSetParameter C API path which triggers kAudioUnitErr_InvalidParameter
-    // on AUv3 nodes. The AUv3 path works correctly.
-
-    func setFrequency(_ freq: Float) {
-        baseFrequency = freq
-
-        // Update all oscillators with detune spread
-        for (i, osc) in oscillators.enumerated() {
-            let normalizedPosition = Float(i) / Float(max(1, oscillators.count - 1))
-            let detuneFactor = 1.0 + (normalizedPosition * 2 - 1) * config.detuneAmount
-            osc.$frequency.parameter?.value = AUValue(freq * detuneFactor)
+            osc.frequency = frequency * detuneFactor(i)
+            osc.amplitude = config.amplitude * oscMix(i)
         }
     }
 
-    func setAmplitude(_ amp: Float) {
-        let perOscAmp = amp / Float(oscillators.count)
-        oscillators.forEach { $0.$amplitude.parameter?.value = AUValue(perOscAmp) }
+    private func detuneFactor(_ i: Int) -> Float {
+        let pos = Float(i) / Float(max(1, config.oscillatorCount - 1))
+        return 1.0 + (pos * 2 - 1) * config.detuneAmount
     }
 
-    /// Split oscillators: half play root, half play an interval frequency.
-    /// Pass nil to return all oscillators to unison at the current base frequency.
-    func setIntervalFrequency(_ intervalFreq: Float?) {
-        guard oscillators.count >= 2 else { return }
+    private func oscMix(_ i: Int) -> Float {
+        let total = (0..<config.oscillatorCount).reduce(Float(0)) { $0 + config.mix[$1 % config.mix.count] }
+        return config.mix[i % config.mix.count] / max(total, 0.0001)
+    }
 
-        let halfCount = oscillators.count / 2
+    func openGate() { envelope.openGate() }
+    func closeGate() { envelope.closeGate() }
 
+    func setFrequency(_ freq: Float, glide: Double = ParamRamp.minimum) {
+        frequency = freq
         for (i, osc) in oscillators.enumerated() {
-            let normalizedPosition = Float(i) / Float(max(1, oscillators.count - 1))
-            let detuneFactor = 1.0 + (normalizedPosition * 2 - 1) * config.detuneAmount
-
-            if let intervalFreq, i >= halfCount {
-                // Second half plays interval
-                osc.$frequency.parameter?.value = AUValue(intervalFreq * detuneFactor)
-            } else {
-                // First half (or all when nil) plays root
-                osc.$frequency.parameter?.value = AUValue(baseFrequency * detuneFactor)
-            }
+            ParamRamp.set(osc.$frequency, freq * detuneFactor(i), over: glide)
         }
+    }
+
+    func setAmplitude(_ amp: Float, over: Double = ParamRamp.minimum) {
+        amplitude = amp
+        for (i, osc) in oscillators.enumerated() {
+            ParamRamp.set(osc.$amplitude, amp * oscMix(i), over: over)
+        }
+    }
+
+    func setEnvelope(attack: Float, release: Float) {
+        ParamRamp.set(envelope.$attackDuration, attack, over: ParamRamp.minimum)
+        ParamRamp.set(envelope.$releaseDuration, release, over: ParamRamp.minimum)
     }
 }
