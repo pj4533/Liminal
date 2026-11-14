@@ -617,3 +617,24 @@ Full tables and the ranked plan are in `docs/plans/performance.md` ("Round 2b").
 - **Limits**: single runs for most knock-outs (floor ±1.2%); two runs for the all-three prototype,
   the noise prototype and the previous-sample knock-out. Mac M4 numbers; the texture-vs-ALU balance
   on Vision Pro is unmeasured.
+
+---
+
+## 2026-11-14: Round 2b item 1 (noise-double-angle): implemented
+
+- **What**: stage 2.7 of `distortedUV()` in `Liminal/Shaders/EffectsRenderer.metal` no longer calls
+  `nishitsujiNoiseFlowing` twice. It takes one `sin`/`cos` of `noisePos`, builds the 5 octaves with
+  the double-angle recurrence (`DBL` macro + `flowOctaves` helper, half precision), and derives the
+  second field (`noisePos + (17, 31, 7)`) by angle addition with compile-time `sin`/`cos(17, 31, 7)`
+  constants (checked against Python `math`). Trig per pixel pair drops from 70 to 16.
+- **Why**: this stage is 19.3% of the MRT frame; the Round 2b prototype measured B/A 0.874 and 0.899.
+- **Kept**: `nishitsujiNoiseFlowing` stays; the fractal-hue stage still uses it (item 3 covers that).
+  The noise is shared by both eyes, so macOS and the mono path get the change too.
+- **Precision**: half, as in the prototype. Float `DBL` stays the fallback if the PNG check shows
+  banding.
+- **Parity**: visual-equivalent, not exact. It cannot reach 50 dB, because the current shader's top
+  octaves are half-quantised (arguments 250-590). The prototype was 38.2 dB from the all-float
+  version, against 32.2 dB for the current shader.
+- **Verification in this step**: visionOS Simulator and macOS builds succeed. The interleaved A/B
+  bench, `--compare` and the 100% PNG review (including trans113) are run separately by the
+  benchmarking step and logged there.

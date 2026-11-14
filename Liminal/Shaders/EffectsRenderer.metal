@@ -119,6 +119,22 @@ float nishitsujiNoiseFlowing(half3 pos, int octaves) {
     return float(e);
 }
 
+// Double-angle octave recurrence for the flowing variant (Round 2b, noise-double-angle).
+// Octave j of nishitsujiNoiseFlowing needs sin(pos*2^j) and cos(pos*2^j); the component swizzles
+// only permute them, so one sin/cos of pos gives every octave via sin 2a = 2 sin a cos a,
+// cos 2a = 1 - 2 sin^2 a. s1 = sin(pos), c1 = cos(pos).
+#define DBL(S,C) { half3 _t = 2.0h * S * C; C = 1.0h - 2.0h * S * S; S = _t; }
+static inline half flowOctaves(half3 s1, half3 c1, int octaves) {
+    half e = 0.0h;
+    half w = 1.0h;
+    for (int j = 0; j < octaves; j++) {
+        e += sin(dot(s1.zxy - 0.5h, 1.0h - c1.yxz)) * w;
+        DBL(s1, c1)
+        w *= 0.5h;
+    }
+    return e;
+}
+
 // MARK: - Log-Spherical Transform (Nishitsuji's signature viral technique)
 // UV distortion through logarithmic-spherical coordinates — infinite-depth kaleidoscopic warping.
 // 6-octave sinusoidal noise in log-polar space (higher octaves are sub-pixel at 2048²).
@@ -304,8 +320,13 @@ static inline float2 distortedUV(float2 texCoord, constant EffectsUniforms &unif
     // Refracting, prismatic texture — complements XorDev's smoky turbulence
     if (uniforms.fractalNoiseAmount > 0.001) {
         half3 noisePos = half3(half2(uv * 6.0), half(fmod(uniforms.time * 0.15, 6.2831853)));
-        float noiseX = nishitsujiNoiseFlowing(noisePos, 5);
-        float noiseY = nishitsujiNoiseFlowing(noisePos + half3(17.0h, 31.0h, 7.0h), 5);
+        // One sin/cos of noisePos; octaves by double-angle recurrence (flowOctaves), and the second
+        // field (noisePos + (17, 31, 7)) by angle addition with ks/kc = sin/cos(17, 31, 7).
+        half3 ns = sin(noisePos), nc = cos(noisePos);
+        const half3 ks = half3(-0.961397h, -0.404038h, 0.656987h);
+        const half3 kc = half3(-0.275163h,  0.914742h, 0.753902h);
+        float noiseX = float(flowOctaves(ns, nc, 5));
+        float noiseY = float(flowOctaves(ns * kc + nc * ks, nc * kc - ns * ks, 5));
         float amount = uniforms.fractalNoiseAmount;
         uv += float2(noiseX, noiseY) * amount;
     }
