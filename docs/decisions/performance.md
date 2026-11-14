@@ -354,3 +354,14 @@ Measured (visionOS sim, medians of 3 x 30s runs) vs previous best (MRT stereo, 2
 - Measured (3 runs, visionOS sim): GPU ms 0.161 / 0.151 / 0.154, median 0.154 vs 0.153 before (no gain, within noise). fps median 76.0, p95 frame interval 13.4 ms. Frozen run GPU 0.141 ms. No errors in logs.
 - Visual: frozen screenshot differs from baseline only because the source image differs (mean abs diff 35.5, not meaningful); effects look equivalent.
 - Verdict: below the 3% threshold, so reverted to 6f89af6. Not worth the added complexity.
+
+## Mipmapped source sampling for bloom and ghost taps: measured, not kept
+
+- Change tested (8ef459f): sample coarser source mip levels for bloom and ghost taps; mipmaps generated once per image.
+- Measured (visionOS simulator, 3 runs, 30 s each): GPU ms mean 0.166 / 0.144 / 0.165, median 0.165 (frozen run 0.144).
+  Prior best was 0.153 ms (runs 0.146 / 0.153 / 0.244). Median GPU time did not improve by 3% (it was about 8% higher).
+  fps 76.9 / 77.8 / 77.6 and p95 frame interval 13.4 ms (prior 58.6 fps, 47 ms) looked better, but earlier runs
+  of the previous build also reached 72 fps; the simulator-host jitter makes fps unreliable, and GPU time is the primary metric.
+- Visual: frozen screenshots use different source images, so the numeric diff (30.7) is not meaningful. Effects looked equivalent. No errors in logs.
+- Verdict: not kept, branch reset to b2c5e6c. The simulator barely models texture-cache behaviour, so this idea may still
+  pay off on Vision Pro hardware; verify with an Xcode GPU capture (texture L1 miss rate) before discarding it for good.
