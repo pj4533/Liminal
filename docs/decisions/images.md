@@ -98,3 +98,67 @@ Format: decision, why, alternatives.
 - Decision: crop uniform white or black borders detected on all four sides before caching.
 - Why: one of four test images came back with a film-scan border. The prompt fix worked, but a border on a dome is very visible and the check is cheap.
 - Alternatives: prompt wording only; regenerate on detection (costs a second image).
+
+# Implementation decisions
+
+## D19 RGB lives in Prompt/, not ImageMetadata.swift
+- Decision: `RGB` is defined in `Liminal/Visual/Prompt/PromptTypes.swift`.
+- Why: `PromptSpec` carries palette swatches and Prompt/ must compile standalone with swiftc (D17).
+- Alternatives: duplicate the type (two sources of truth).
+
+## D20 Small API deviations from the plan
+- Decision: `PromptSpec` gains `materialID` (materialThread series hold it). `ModelRouter.model(for:now:using:)` takes `now` and returns nil when every model is cooling down. `GeminiError.network` carries a String (keeps the enum Sendable). `ImageStore.save` takes an optional `trimmed` image; it adds `imageFiles()`, `entry(id:url:)` and `imageCount()` for the recycler so it never reads 400 sidecars to pick one image.
+- Why: each was needed to implement a planned rule without a clock or globals in the pure types.
+- Alternatives: keep the exact signatures and hide state (harder to test).
+
+## D21 Library adjustments while implementing
+- Decision: 25 transformations (plan said 26) with extra slots `{Sn}` (bare noun), `{S2p}` (plural second subject), `{MS}` (carvable materials) and `{B}` (burst items). Materials use plain names ("jade", added "white marble", "rose quartz") so "carved from a single block of jade" reads correctly. Styles gained `excludedTransformations` (macro never gets "flock", studioProduct never gets "standing alone in {E}") and `scaleOverrides` (macro accepts any subject as "a miniature X resting on a single leaf"; aerial/tiltShift/grandLandscape/longExposure accept small subjects only as "the size of a mountain").
+- Why: generated sentences that read wrong ("carved from a single block of carved jade") or fought the style.
+- Alternatives: free combination (produced nonsense in dumps).
+
+## D22 Series feasibility rules
+- Decision: subjectStudy never starts on a landscape subject; paletteRun never starts on the aerochrome palette; styleSet only starts in a category with at least 2x the series length of subjects and never on a palette-locked style; abstract styles in a styleSet hold only the style. A style is only drawn if it still has a fresh subject (with a fresh transformation kind) and a fresh palette. If a series cannot continue, it ends early instead of relaxing into repeats.
+- Why: the first test runs showed series repeating a subject four times (flashNight + architecture = only the phone booth) and subjectStudy repeating a transformation kind.
+- Alternatives: relax penalties inside series (produced the repeats).
+
+## D23 Word budget trims
+- Decision: shortened the tilt-shift lead, the monoCobalt clause, the lowAngle and patternHorizon fragments and the aerochrome texture; prompts now run 103-140 words over 15,000 samples.
+- Why: worst cases hit 143 words against the 70-140 target.
+
+## D24 Evaluation rounds (gemini-3.1-flash-image, 3:2, 1K)
+- Round 1 (24 images, seed 101, strong-surreal prompts on nano-banana-2.1): all 24 photoreal and recognizable, clearly different looks. Defect: doubleExposure (4 in a styleSet run) and studioProduct came back on white/pale backdrops, which would flood the dome with white.
+- Fix: doubleExposure lighting is now "a dark silhouette against a deep saturated dusk sky" and the second scene is named ("a vast landscape"); studioProduct asks for a "seamless backdrop in a deep palette color". doubleExposure weight 5 -> 4, prism 4 -> 5 (prism tested very well).
+- Round 2 (16 images, seed 202, biased to those styles): no white backdrops; double exposures now readable.
+- Also verified the fallbacks: gemini-3.1-flash-lite-image returns 1264x848 JPEG at 3:2/1K in 3.8s; gemini-2.5-flash-image accepts imageSize 1K and returns a 1248x832 PNG (the store keeps PNG bytes as .png).
+- Images: scratchpad `images-eval/round1/`, `images-eval/round2/`, `images-eval/fallback/` (not in the repo).
+
+## D25 BorderTrimmer trims only near-white borders
+- Decision: uniform near-black edges are never cropped.
+- Why: flashNight, biolumNight and macro produce black surroundings on purpose; cropping them cuts into the subject. The observed defect was a white film-scan border.
+- Alternatives: trim both and require a sharp edge (more code, still risky on dark studio shots).
+
+## D26 One cache recycler for both platforms; macOS live mode starts with an empty queue
+- Decision: Cache Only mode and the all-models-cooling-down case both use `recycleOneFromCache()` (decode one image, avoid the last 50 shown). macOS no longer loads the whole cache into its display queue at start.
+- Why: with pacing (D16) a preloaded macOS queue would block generation forever; it also kept every decoded image in memory.
+- Alternatives: keep the macOS refill logic (it depended on unpaced generation).
+
+## D27 Concurrency annotations
+- Decision: the new pipeline types are `nonisolated` (the app target uses default MainActor isolation); `GeminiClient.generate` is `@concurrent`; `ImageQueue`, `AtomicImageBuffer`, `LMLog` and `EnvironmentService` are marked `nonisolated`. On visionOS the pipeline creates no UIImage at all.
+- Why: keeps decoding and network work off the MainActor, which the 90fps visionOS render loop starves.
+- Alternatives: leave the implicit MainActor isolation (work would hop to the starved main actor).
+
+## D28 macOS 3:2 visual area needs no renderer change
+- Decision: `SquareVisualWindowDelegate.visualAspect = 1.5`; no center-crop fallback.
+- Why: `EffectsMetalView` draws a full-screen quad sampling the source texture, so any drawable aspect works. Renderer workstream may still want to know the window changed shape.
+
+## D29 Clear and cache side effects to know about
+- Running the macOS unit tests launches the app as test host, which runs `migrateIfNeeded()` and purges the local macOS cache once (epoch 2). That is the designed first-launch behavior.
+- Renderer GPU textures still hold the last image until a new one arrives (D15 known limit; renderer workstream).
+
+## D30 Commit attribution
+- Decision: commits from the implementation step end with the session's current attribution lines (Co-Authored-By Claude Opus 5.5 plus the Claude-Session link).
+- Why: that is the attribution the session supplied; it also matches the shared rules.
+
+## D31 Provider recommendation unchanged
+- Decision: stay on Gemini with the existing key. No other provider or key is needed for the requested look.
+- Why: two evaluation rounds on gemini-3.1-flash-image produced photoreal, recognizable, colorful surreal images; the open question is spend (about 120 images an hour at 2K when playing), not quality.

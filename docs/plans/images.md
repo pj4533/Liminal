@@ -1,6 +1,6 @@
 # Image generation plan (feature/images)
 
-Status: design, not yet implemented. Baseline is in `docs/plans/images-current.md`, model evaluation in `docs/research/image-models.md`, decisions in `docs/decisions/images.md`.
+Status: implemented on feature/images (see D19-D31 in the decisions doc for deviations found during implementation). Baseline is in `docs/plans/images-current.md`, model evaluation in `docs/research/image-models.md`, decisions in `docs/decisions/images.md`.
 
 Goal: varied, colorful, photoreal-but-surreal images of things you can recognize, in several distinct styles, on a better model, with one button that removes every old image.
 
