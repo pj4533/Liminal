@@ -259,6 +259,8 @@ section. Nothing was measured in this step; the conclusions below come from the 
 - Measured (visionOS sim, median of 3): gpu_ms_mean 0.258 (0.261/0.254/0.258), fps 74.15 (74.2/61.5/75.1), interval p95 17.7 ms. Frozen run: gpu 0.264 ms. No errors in logs.
 - Comparison to the "current best" (0.159 ms) is not apples to apples: sim host load and loaded dome image content differ between sessions (frozen screenshots differ because different generated images were loaded: 551 vs 64 in the image counter; mean abs diff 47). Not a shader regression since no shader changed.
 - Verdict: no gain (>=3% threshold not met), so the branch was reset to 173a05a per workflow rules. The harness is a tooling-only change; it can be re-applied from 51ae60c if wanted (git cherry-pick 51ae60c).
+- **Superseded (2026-11-14, feature/integration)**: dropping it was a mistake. A tooling commit cannot be
+  judged by app GPU time. It was cherry-picked back and rebuilt; see "Round 2: deterministic bench" at the end.
 
 ## Both eyes in one MRT pass (mrt-stereo-single-pass) - implemented, awaiting measurement
 
@@ -477,3 +479,102 @@ Measured (visionOS sim, medians of 3 x 30s runs) vs previous best (MRT stereo, 2
   a buffer); using the real Gemini cache image (rejected: not deterministic, and secrets/cache are
   outside tooling scope).
 - **App runtime**: unchanged by design; visionOS and macOS builds both succeed.
+
+---
+
+## 2026-11-14: Round 2: deterministic bench (shader-bench rebuilt for the current pipeline)
+
+- **Why**: in the visionOS simulator the eye pass reads ~0.15 ms/frame of GPU time. That number is
+  mostly noise plus a different random source image each run, so ALU-level shader changes (exact
+  ALU clean-ups, angle-addition noise, mip sampling, skip-previous-samples, dead-stage constant) could
+  not be judged, and they were dropped on simulator numbers. The 51ae60c harness was also dropped,
+  for a tooling commit, on the same simulator metric. Cherry-picked it back (conflict in this file
+  only, both sides kept) and rebuilt it for the current pipeline.
+- **What it renders now** (mirrors `OffscreenEffectsRenderer.renderStereoAndPresent` -> `renderBothEyes`):
+  - One command buffer and one render pass per frame. `effectsFragmentStereo` writes both eyes (MRT)
+    into `bgra8Unorm` views of 2048² `bgra8Unorm_srgb` textures (vibrance V1 encode fix), with
+    `.dontCare` load. There are 3 "drawables" per eye in rotation. Each eye reads its own previous
+    output as feedback (tex 4 / tex 6), and the first frame runs with `feedbackMix` 0, as in the app.
+    `--mono` renders the per-eye fallback (2 `effectsFragment` passes).
+  - Fixed input committed as fixtures: `tools/ShaderBench/fixtures/07.jpg` (images-eval round1 #07,
+    1264x848, 868 KB) and `07-depth.png`, the app's own DepthAnythingV2 map of the framed image
+    (518x392, generated once with `--gen-depth`, which compiles the real `DepthMapGenerator.swift`).
+    Upload follows the app's orientation convention: `ImageFraming.coverCrop` to 3:2, drawn unflipped,
+    stretched to 2048², depth as r8 at native size, `optimizeContentsForGPUAccess` on both.
+  - Uniforms come from the app's own code, compiled into the bench (`EffectsUniformsComputer`,
+    `SmoothOscillator`, `GhostTapManager`, `ImageColorStats` vibrance factors (amount 0.856, dark 1.0),
+    `ImageFraming`). No port, so the bench cannot drift from the app. The stereo offset is
+    `0.003 + 0.007 * SmoothOscillator(t)`.
+  - Scenarios: frozen t = 37, 113, 260, 611, plus `trans113` (transitionProgress 0.5, previous = the
+    mirrored source). Frames cycle through the scenarios.
+  - Shader: `xcrun metal -ffast-math` (same as `MTL_FAST_MATH = YES` in the project) from the working
+    tree or `--shader FILE`, cached by content hash.
+- **Timing**: 60 warm-up frames, then 5 trials x 300 frames. Each frame is its own command buffer,
+  committed one at a time (inflight 1), and timed with `gpuEndTime - gpuStartTime`. Reports median,
+  p10 and p90 per trial, overall and per scenario.
+  - Inflight 1 is required. At inflight 2 and 3 the per-buffer span includes time queued behind the
+    other buffer, and medians read 14.0 ms and 22.4 ms, while wall time per frame stayed at about
+    7.2 ms. So per-buffer timestamps only mean something when nothing overlaps them.
+- **Determinism / parity**: the first two runs' PNGs differed (PSNR 41-49 dB, max diff 30) in every
+  steady scenario but not the transition one. The cause was `GhostTapManager.computeDirection`, which
+  adds `Float.random(±0.15 rad)`. The bench now rebuilds each tap's direction from its spawn time with
+  zero variance; tap count and progress still come from the manager. Since then, every pair of runs is
+  **bit-identical** (`--compare`: PSNR inf, max diff 0) across 4 separate runs, including the A/A pair.
+  PNG state is fresh per scenario: first frame without feedback, then 30 frames at the frozen time.
+  App code is unchanged.
+- **Current numbers** (HEAD 4d4bc38 + this change; Apple M4 10-core GPU; MRT both eyes, 2048²):
+
+  | run | median ms/frame | p10 | p90 | trial spread |
+  |---|---|---|---|---|
+  | A (random taps) | 6.91 | 5.67 | 8.56 | 5.6% |
+  | B (random taps) | 7.21 | 5.86 | 8.82 | 1.7% |
+  | C (random taps) | 7.37 | 5.96 | 9.16 | 4.0% |
+  | N1 | 6.71 | 5.48 | 8.46 | 2.5% |
+  | N2 | 6.94 | 5.59 | 8.80 | 1.8% |
+  | R1 (deterministic) | 7.07 | 5.77 | 8.60 | 7.0% |
+  | R2 (deterministic) | 7.27 | 5.65 | 9.27 | 5.9% |
+  | AA-1 (A side) | 6.70 | 5.65 | 8.33 | 2.5% |
+  | AA-2 (A side) | 7.09 | 5.68 | 8.88 | 11.2% |
+
+  **Median: ~7.0 ms per frame for both eyes** (range 6.70-7.37). Per scenario at R1, all within
+  ±2.5%: t37 7.16, t113 7.16, t260 7.19, t611 6.92, trans113 6.97. Every scenario has 2 ghost taps.
+  Mono fallback (2 passes): **10.84 ms** (trial spread 2.3%). MRT saves about 36%, so the bench
+  clearly responds to per-pixel work. Compare the simulator's 0.16 ms for the same pass.
+  The p10-p90 band within a run is wide (about 5.6-8.6 ms) at every setting. Likely GPU clock states and
+  contention (inferred). The median is stable against it.
+- **Noise floor**:
+  - Separate runs of the same code (9 runs above): medians 6.70-7.37 ms, so max-min is **9.5%** of
+    the mean and the standard deviation about 3.4%. Two back-to-back runs differed by 2.9% (R1/R2) and
+    4.3% (A/B). Every run shared the GPU with idle SimMetalHost processes, and most also with the
+    music workstream's Mac Liminal test renders (recorded in `other_gpu_clients`).
+  - **Interleaved A/A** (`--shader-b` with a byte-different copy of the same shader; frames alternate
+    A,B,A,B and the order flips every trial): overall B/A ratio **1.0055** and **0.9879**, so the
+    floor is **about ±1.2%**. Per-trial ratios range 0.960-1.052.
+- **Decision rule for shader A/B from now on**: use the interleaved mode
+  (`scripts/shader-bench.sh --shader REF.metal --shader-b CANDIDATE.metal --out DIR`). Count a change
+  only when `ratio_b_over_a_overall` moves by **more than 2%** in the same direction in two runs
+  (about 1.7x the A/A floor). Check parity with `--compare DIR DIR/b`. An exact-math change must come
+  out identical or PSNR > 50 dB, and look changes need a visual check of the PNGs. Separate
+  (non-interleaved) runs are only good for ±10% effects.
+- **Commands**:
+  ```
+  export SCRATCH=<scratch>/shader-bench          # binary + metallib cache
+  scripts/shader-bench.sh --out OUT --json OUT.json                       # current shader, 5x300 frames
+  scripts/shader-bench.sh --shader-b cand.metal --out AB --json AB.json   # interleaved A/B
+  scripts/shader-bench.sh --compare AB AB/b                               # PSNR / max-abs-diff
+  scripts/shader-bench.sh --compare RUN1 RUN2                             # any two output sets
+  scripts/shader-bench.sh --gen-depth img.jpg depth.png                   # new depth fixture
+  ```
+  Before measuring, quit Liminal in the simulator (`xcrun simctl terminate <udid> com.saygoodnight.Liminal`);
+  the bench prints a warning when Liminal is running.
+- **Alternatives considered**: timing several frames per command buffer, as in 51ae60c (rejected:
+  one buffer per frame is what the app does, and inflight 1 gives clean per-frame spans);
+  MTLCounterSampleBuffer stage timestamps (not needed at this noise level); procedural inputs, as in
+  51ae60c (replaced by the real image and real ML depth, so texture-cache behaviour is realistic);
+  a flat depth map, as in VibranceHarness (rejected: depth drives the parallax sample offsets);
+  seeding `GhostTapManager` in app code (rejected: no app change for a tool; the bench rebuilds the
+  directions instead); reading the fixture image from the scratchpad (rejected: it can be cleared,
+  so the fixtures are committed, about 0.9 MB).
+- **Caveat**: these are Mac (M4) GPU numbers. They rank shader changes by ALU and texture cost on an
+  Apple tile GPU, but they are not Vision Pro frame times.
+- **App runtime**: unchanged (tooling, docs and fixtures only); visionOS and macOS builds both succeed.
