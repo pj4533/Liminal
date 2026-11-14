@@ -250,3 +250,19 @@ section. Nothing was measured in this step; the conclusions below come from the 
 - Measured numbers: to be appended by the measurement step. Expected: the "eyeL"+"eyeR" pair is
   replaced by one "eyes" pass, with a lower simulator total from one fewer pass's fixed cost, and
   about 30-35% less arithmetic across the two eyes on device.
+
+### Measured result: MRT single-pass stereo (ac1ad07) - KEPT
+- Medians of 3 runs (30 s each, simulator, relative only): fps 68.3 (70.8 / 66.0 / 68.3), frame interval
+  p95 21.9 ms, GPU mean 0.201 ms (0.208 / 0.198 / 0.201), GPU p95 0.371 ms. Passes: dome 0.082,
+  eyes 0.120 ms. Frozen (t=100): fps 77.1, GPU mean 0.198, dome 0.090, eyes 0.108.
+- Previous best: fps 46.4, GPU mean 0.159 (runs 0.159 / 0.229 / 0.112, so run-to-run noise is about
+  +/-35%), interval p95 51.1 ms, eyeL+eyeR about 0.109 ms.
+- Verdict: kept on the fps criterion. fps rose about 47% and interval p95 dropped from 51 to 22 ms,
+  consistently across all three runs. Simulator GPU ms mean looks about 26% higher, but that sits inside
+  the baseline's own run spread and the simulator's per-pass timing is not representative of the Vision
+  Pro. The arithmetic saving (shared distortion field) applies on device; one fewer pass and command
+  buffer also lowers per-frame overhead.
+- Parity: the frozen screenshots are not pixel-comparable because the dream-image set differs between
+  runs (the baseline shot had a different image loaded), so the mean abs diff of 42 is content, not
+  shader, difference. Visually the effect stack (distortion, chromatic fringing, grain, hue shift) looks
+  equivalent. The maths was moved verbatim. No errors in the logs.
