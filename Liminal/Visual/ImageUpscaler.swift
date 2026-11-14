@@ -56,6 +56,15 @@ final class ImageUpscaler {
     private var model: VNCoreMLModel?
     private var isModelLoaded = false
 
+    // MARK: - Skip rule
+
+    /// Images whose long side is at least this many pixels are returned unchanged.
+    nonisolated static let skipThreshold = 2048
+
+    nonisolated static func shouldSkipUpscale(_ image: CGImage) -> Bool {
+        max(image.width, image.height) >= skipThreshold
+    }
+
     // MARK: - Public API
 
     /// Upscale a CGImage using RealESRGAN
@@ -67,6 +76,13 @@ final class ImageUpscaler {
     /// and will never block on MainActor, which is critical for visionOS.
     func upscale(_ cgImage: CGImage) async throws -> CGImage {
         LMLog.visual.info("🔬 [Upscaler] Starting upscale: input \(cgImage.width)x\(cgImage.height)")
+
+        // 2K model output (2528x1696) already exceeds the 2048 renderer texture. MetalFX 4x
+        // would make it 10112 px wide and RealESRGAN squashes to 512 first, so skip both.
+        if Self.shouldSkipUpscale(cgImage) {
+            LMLog.visual.info("🔬 [Upscaler] ⏭️ Skipping: long side \(max(cgImage.width, cgImage.height)) >= \(Self.skipThreshold)")
+            return cgImage
+        }
 
         // Skip upscaling entirely in simulator - CPU-only CoreML is too slow, MetalFX not available
         #if targetEnvironment(simulator)

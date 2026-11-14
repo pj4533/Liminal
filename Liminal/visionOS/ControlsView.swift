@@ -196,7 +196,7 @@ struct ControlsView: View {
         .onChange(of: settings.notes) { _, newValue in audioEngine.notes = newValue }
         .onChange(of: settings.currentScale) { _, newValue in audioEngine.currentScale = newValue }
         .sheet(isPresented: $showingSettings) {
-            VisionSettingsSheetView(audioEngine: audioEngine)
+            VisionSettingsSheetView(audioEngine: audioEngine, visualEngine: visualEngine)
         }
     }
 }
@@ -233,6 +233,7 @@ extension ControlsView {
 struct VisionSettingsSheetView: View {
     @ObservedObject private var settings = SettingsService.shared
     @ObservedObject var audioEngine: GenerativeEngine
+    @ObservedObject var visualEngine: VisualEngine
     @Environment(\.dismiss) private var dismiss
     @State private var cacheCount: Int = 0
 
@@ -241,8 +242,7 @@ struct VisionSettingsSheetView: View {
     }
 
     private func refreshCacheCount() {
-        let cache = ImageCache()
-        cacheCount = cache.count + cache.rawCount
+        cacheCount = ImageStore.shared.imageCount()
     }
 
     var body: some View {
@@ -293,13 +293,9 @@ struct VisionSettingsSheetView: View {
                         .font(.headline)
                         .foregroundStyle(.secondary)
 
-                    Button("Clear Image Cache", role: .destructive) {
-                        let cache = ImageCache()
-                        cache.clearAll()
-                        cache.clearAllRaw()
-                    }
+                    ClearImagesSection(visualEngine: visualEngine)
 
-                    Text("Deletes all cached images. New images will be generated on next play.")
+                    Text("Deletes every cached image and its metadata. Settings are kept.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -336,7 +332,7 @@ struct VisionSettingsSheetView: View {
                 }
             }
         }
-        .frame(width: 380, height: 500)
+        .frame(width: 380, height: 560)
         .onAppear {
             refreshCacheCount()
         }

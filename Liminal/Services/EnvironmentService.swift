@@ -3,7 +3,7 @@ import OSLog
 
 /// Centralized access to API keys and configuration.
 /// Loads from environment variables first (Xcode scheme), falls back to Secrets struct.
-final class EnvironmentService {
+nonisolated final class EnvironmentService: @unchecked Sendable {
 
     // MARK: - Singleton
 
