@@ -1,3 +1,52 @@
+# Music workstream: summary for review
+
+Read this section first; the numbered decisions (D1-D90) below it are the full record (what / why / alternatives).
+
+## What changed
+The three-voice engine (bass drone, mid pad, shimmer pings; one reverb and delay chain; unseeded main-thread Timers) was replaced by a generative engine with form, shared harmony and eight layers. Everything is synthesized with AudioKit / SoundpipeAudioKit nodes: no samples, no generation services. `GenerativeEngine` stays as the public facade (same class, same settings keys), so both UIs compile unchanged apart from the new controls.
+
+- Layers (8, 9 strips): drone (6 oscillators on a moving pedal), pad (voice-led detuned wavetable voices through a Moog ladder), lead (melodic motif voice plus an answer voice), keys (struck arpeggio patterns), drips (FM bell/drip), air (filtered-noise sweeps and gusts), grains (Poisson granular glints), pluck (plucked-string ostinato). Shared sends: Zita reverb, filtered delay, feed-forward +12 shimmer; PeakLimiter on the master.
+- Form: a SceneDirector plays scenes (stillness, drift, bloom, constellation, tide) of 45-240 s with an intensity arc; layers enter and leave by scene thresholds and lean +-4 dB on slow channels; a 7-19 min session curve. Key and mode drift every 3-8 minutes (voice-led chords, Markov roots, drone pedal moves); rare events every 2-6 min (arpeggio cascade, shimmer bloom, air swell, sub pulse, bell toll, hush).
+- Four styles as data (Drift default, Glass, Deep, Garden); controls: Style, Density, Space, Echo, Scale with "Auto (evolving)".
+- Architecture: a conductor on its own serial queue with a 20 ms tick; nothing on MainActor, no allocation on the audio thread, seeded and deterministic for offline renders (`OfflineRender.swift`, `scripts/check-music.py`).
+
+## Key decisions to review
+D3/D4 conductor off MainActor; D9 static graph (inactive layers at gain 0); D11 Zita reverb; D12 feed-forward shimmer; D30/D31 Auto scale default (key drifts unless a scale is pinned); D64 four styles; D70/D72 session curve and layer lean; D85 envelope bug (decays cancelled attacks); D86 section contrast; D89 brightness soft knee and cross-layer attack headroom; D76 unmet gates and why. Open watch items (D89/D90): L/R correlation 0.795 (gate 0.8), CPU 3.6-3.85x baseline wall time (gate 4x), seed-dependent narrow misses (self-similarity on seeds 77/303, sub-band correlation on seed 505).
+
+## Final metrics vs baseline (10 min Release offline renders, new seeds 707 / 808, D90)
+| | Baseline | New |
+|---|---|---|
+| Gates passed | n/a | 37 of 37 on both seeds |
+| Spectral centroid mean (std) | 285 Hz (132) | 1111 / 1219 Hz (664 / 783) |
+| Onsets per 5 min | 90 | above the 150 gate on every passing seed (lowest seen 151-154) |
+| Distinct chords per 5 min | 16 (whole-render, undercounted) | 14-16 per 5-min block (round 1 measurement), with key journeys |
+| Self-similarity mean | 0.566 (analyzer-fixed) | ~0.61 across seeds (gate 0.65) |
+| True peak | n/a | -4.5 / -5.0 dBFS, limiter idle, 0 clipped samples |
+| RMS mean | n/a | -25.9 / -26.9 dBFS |
+| Render speed | 4.38 s per 300 s | 19.1x / 17.8x realtime (3.6x / 3.85x baseline wall) |
+
+## Renders
+Directory: /private/tmp/claude-501/-Users-pj4533-Developer-Liminal/7dc59965-0f73-427a-9142-59d4c00317b0/scratchpad/music-eval
+- Listen: final-demo.m4a (AAC 192k of `verify3-a.wav`, 10 min, seed 707, final code)
+- verify3-a.wav / verify3-b.wav (seeds 707 / 808) with `-bypass` twins (limiter bypassed), `verify3-spectrograms.png`, baseline.wav (old engine). Renders are not in git.
+
+## MusicState coupling interface (for the integration phase)
+Lives in `Liminal/Audio/MusicState.swift`; the engine exposes it on `GenerativeEngine` (all `nonisolated`, callable from any thread, never block):
+
+Music -> visuals (read every frame):
+- `engine.musicState.read() -> MusicState`: seqlock snapshot, lock-free, copy of a plain struct. Fields: `time`, `sceneIndex`, `sceneKind` (stillness, drift, bloom, constellation, tide), `scenePhase` (emerge, bloom, dissolve), `sceneProgress` 0-1, `intensity`, `brightness`, `density`, `tonic`, `modeIndex`, `scaleMask`, `chordMask`, `chordRoot` (pitch classes), `chordChangeCount`, `keyChangeCount`, per-layer levels (`level(.pad)` etc., LayerID: drone, pad, lead, keys, drips, air, grains, pluck), `shimmerLevel`, `lastOnsetTime` / `lastOnsetVelocity`, and a ring of the last 8 `MusicEvent`s (`kind`: noteOn, chordChange, keyChange, sceneChange, layerEnter, layerExit, rareEvent; plus layer, midi, velocity, time).
+- `state.pulse(at: engine.musicState.now(), decay: 0.4) -> Float`: 0-1 onset envelope for flashes / ghost-tap kicks.
+- `state.events(after: lastSeenSequence) -> [MusicEvent]`: new events since the last frame (track the highest `sequence` seen).
+- `engine.musicState.now()`: conductor seconds on the same clock as `time`/`MusicEvent.time`.
+
+Visuals -> music (post from anywhere; handled on the music queue, capped nudges):
+- `engine.setVisualMood(VisualMood(brightness, warmth, saturation, energy, palette, moodWords))` when a new image is analysed (smoothed over 8 s: register, density, FM brightness, shimmer, warm/cool tilt, chord tension, key-move bias, scene weights from mood words).
+- `engine.imageDidChange(transitionDuration:)` at the start of each crossfade (air swell, chord change at the midpoint, pad re-bloom, occasional keys/drips accent).
+- `engine.setVisualActivity(_ 0...1)` for continuous visual motion (small pad detune and delay-send nudge).
+None of these hooks are called from the image pipeline or renderers yet; that is the integration step. Suggested: read `musicState` once per frame on the render thread (shader uniforms from `intensity`, `pulse`, `brightness`, layer levels; scene change to retrigger Ken Burns).
+
+---
+
 # Music decisions log
 
 Format: decision / why / alternatives.

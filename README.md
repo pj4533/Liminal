@@ -15,7 +15,7 @@ Liminal creates endless, evolving ambient soundscapes synchronized with AI-gener
 
 ## Features
 
-- **Generative Audio** — Three-voice ambient synthesis with Markov-chain note selection across 47 musical scales
+- **Generative Audio** — Eight-layer synthesized ambient engine (drone, pad, lead, keys, drips, air, grains, pluck) with evolving scenes, key drift, rare events and four styles; no samples. See `docs/plans/music-current.md`
 - **AI Visuals** — Gemini-powered image generation with native CoreML upscaling (RealESRGAN 4x)
 - **GPU Effects** — Metal shaders: Ken Burns motion, fBM distortion, saliency-based hue shifting, feedback trails
 - **Indirect Control** — Shape the experience through abstract sliders rather than direct manipulation
@@ -51,23 +51,24 @@ Liminal creates endless, evolving ambient soundscapes synchronized with AI-gener
 ```
 Audio                          Visual
 ─────                          ──────
-Bass Voice (drone)             Gemini API → Image Generation
-Mid Voice (pad)         →      CoreML → RealESRGAN Upscale
-Shimmer Voice (pings)          Metal → GPU Effects Pipeline
-        ↓                              ↓
-  Effects Chain                  Morph Player
-  (Reverb + Delay)            (GPU Crossfade)
+8 layers + Scene Director       Gemini API → Image Generation
+(MusicConductor, off-main) →   CoreML → RealESRGAN Upscale
+        ↓                      Metal → GPU Effects Pipeline
+  Mix bus: Zita reverb,               ↓
+  delay, shimmer, limiter        Morph Player
+                              (GPU Crossfade)
 ```
 
 ## Controls
 
 | Slider | Effect |
 |--------|--------|
-| **Delay** | Audio delay feedback + visual trail intensity |
-| **Reverb** | Reverb mix depth |
-| **Notes** | Shimmer voice note frequency |
+| **Style** | Drift, Glass, Deep or Garden music palette |
+| **Density** | How many notes the pointed layers play |
+| **Space** | Reverb size and shimmer |
+| **Echo** | Audio delay + visual trail intensity |
 
-Scale picker changes the musical mode (Pentatonic, Dorian, Lydian, etc.)
+Scale picker: "Auto (evolving)" lets key and mode drift; choosing a scale pins it.
 
 ## Dependencies
 
