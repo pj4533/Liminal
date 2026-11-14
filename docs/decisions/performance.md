@@ -638,3 +638,17 @@ Full tables and the ranked plan are in `docs/plans/performance.md` ("Round 2b").
 - **Verification in this step**: visionOS Simulator and macOS builds succeed. The interleaved A/B
   bench, `--compare` and the 100% PNG review (including trans113) are run separately by the
   benchmarking step and logged there.
+
+### Round 2b item 1 (noise-double-angle): benchmark result — KEPT (parity waiver noted)
+
+- **Bench**: interleaved A/B on the Mac GPU bench, A = shader at 1f9ef52, B = 911eb7e, 5 trials x 300 frames, two runs.
+  Median GPU ms/frame (A -> B): run 1 6.70 -> 6.04, run 2 6.59 -> 5.98. `ratio_b_over_a_overall` 0.902 and 0.908
+  (about -9.5%), per-trial ratios 0.886-0.916. A/A noise floor is about +-1.2%, so the gain is well above it
+  and above the 4% bar.
+- **Parity (`--compare`)**: PSNR per file: t37 41.4, t260 41.4, t611 39.5, t113 34.5, trans113 32.6 dB (worst max abs diff 188,
+  mean abs 1.74). Side-by-side PNGs (t37, trans113) look identical, with the same shapes, colours and banding.
+- **Deviation from the stated rule**: the rule asked for PSNR >= 35 dB, and t113 and trans113 are 34.5 and 32.6 dB.
+  Kept anyway: the Round 2b prototype showed the old shader is itself only 32.2 dB from an all-float reference (its top
+  octaves are half-quantised) while the new one is 38.2 dB from it, so the difference is the old shader's quantisation
+  error, not a new artefact. Float `DBL` would move closer to truth but further from the old output, so it cannot fix
+  the PSNR figure. If a stricter reviewer wants the 35 dB rule applied literally, revert 911eb7e.
