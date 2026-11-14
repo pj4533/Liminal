@@ -416,3 +416,64 @@ Measured (visionOS sim, medians of 3 x 30s runs) vs previous best (MRT stereo, 2
 - Visual parity: effects look equivalent (frozen numeric diff 44 vs baseline is not meaningful, the source image differs).
 - Verdict: reverted. GPU time, the primary metric, did not improve (it regressed); the fps gain is simulator-host jitter-sensitive (prior runs ranged 48-72 fps) and the change does not reduce GPU work. Branch reset to d81b92d.
 - Alternatives: could be revisited for CPU/pacing reasons on real hardware, but not as a GPU win.
+---
+
+## 2026-11-14: Round 2 item 1 — offline Mac-GPU shader benchmark (shader-bench-harness)
+
+- **What**: added `scripts/shader-bench.swift` and the `scripts/shader-bench.sh` wrapper (tooling
+  only; no app code changed). The wrapper builds with `swiftc -O` into `$SCRATCH` (rebuilt when the
+  source is newer) and runs it. The tool compiles the working-tree
+  `Liminal/Shaders/EffectsRenderer.metal` with `makeLibrary(source:)` and renders the visionOS eye
+  pass the same way `OffscreenEffectsRenderer.renderEyeToDrawable` does: 2048² `bgra8Unorm_srgb`,
+  `.dontCare` load, uniforms at buffer 0, ghost taps at buffer 1, source at tex 0, 1x1 r8
+  saliency (0.5) at tex 2, previous at tex 3 (source when not transitioning), **tex 4 left
+  unbound**, r8 depth at tex 5, linear/clamp sampler, 4-vertex strip. Uniforms are a port of
+  `EffectsUniformsComputer.compute` at t=100 (hasSaliencyMap false, as ImmersiveDomeView passes).
+  Inputs are procedural (gradients, stripes, checker, grain, 24 bright spots; a second seed for the
+  previous image; a depth map with a near blob). No Gemini cache.
+- **Scenarios**: steady, ghost4 (4 active taps), transition (0.5, second image), each at
+  stereoOffset -0.008 (L) and +0.008 (R). `--fragment` picks the entry point for later items;
+  `--only` limits scenarios.
+- **Timing**: 40 eye passes per command buffer (one encoder per pass, alternating two targets like
+  the two eye drawables), 3 warm-up buffers, then 7 timed buffers per scenario. Scenarios are
+  interleaved round-robin so host drift hits all of them equally. ms per eye =
+  (gpuEndTime - gpuStartTime) / passes. Reports median, min, max, spread (max-min)/median and IQR
+  per scenario, plus `mean_of_medians_ms_per_eye`. `other_gpu_clients` records a running Liminal
+  (simulator or Mac) or SimMetalHost.
+- **Parity**: `--out DIR` writes `<scenario>.png` (one extra pass per scenario, read back by a blit).
+  `--compare A B` prints max and mean abs diff per channel and the % of pixels that differ. Two HEAD
+  runs compared as identical (worst max abs 0), so any non-zero diff later comes from the shader.
+- **Round 2 reference (HEAD 173a05a, Apple M4 10-core GPU, t=100, 40 passes/buffer x 7)**:
+
+  | scenario | run A median (min) ms | run B median (min) ms |
+  |---|---|---|
+  | steady-L | 10.50 (9.63) | 9.75 (8.68) |
+  | steady-R | 10.10 (9.00) | 10.56 (8.84) |
+  | ghost4-L | 10.88 (9.07) | 10.25 (9.47) |
+  | ghost4-R | 11.20 (10.53) | 10.62 (10.08) |
+  | transition-L | 10.90 (10.21) | 10.87 (9.12) |
+  | transition-R | 10.56 (10.21) | 10.38 (8.08) |
+  | **mean of medians** | **10.69** | **10.40** |
+
+  Earlier runs the same hour: 10.23 (50 passes/buffer) and 12.38 (15 reps, while two more Mac
+  Liminal builds were also running).
+- **Spread target NOT met (contention, not the harness)**: per-scenario spread was 8-34% (IQR
+  6-16%) in every run. All runs overlapped other agents' work on the same GPU: Liminal in the
+  visionOS simulator rendering the dome (SimMetalHost) the whole time, and in one run two Mac
+  Release Liminal builds as well. gpuStart/End spans include the time-slices the GPU gives those
+  processes, so the absolute ~10 ms/eye is inflated and noisy. Raising passes from 40 to 50 did not
+  help (spread 13-35%), which fits outside load rather than fixed overhead. I did not stop the
+  other agents' processes. The mean of medians across the 6 scenarios moved about 3% between the two
+  runs that had the same load (10.69 vs 10.40).
+- **How to use it for A/B**: quit the simulator and any running Liminal first (check
+  `other_gpu_clients` is empty), then run reference and candidate back to back, ideally twice
+  interleaved (A B A B), and compare medians. Keep `--out` dirs and run `--compare` for parity.
+  Even under load, the per-pixel work clearly shows up here: about 10 ms/eye measured (an upper
+  bound, since the time includes other processes' GPU slices), while the simulator reported
+  0.04-0.08 ms for the same pass. So the simulator `gpu_ms` does not reflect the shader cost.
+- **Alternatives considered**: GPU counter stage-boundary timestamps per encoder (rejected: the
+  same preemption is inside those spans, and they add API surface); a shared texture target for
+  direct readback (rejected: timed targets stay `.private` like a drawable; the PNG pass blits to
+  a buffer); using the real Gemini cache image (rejected: not deterministic, and secrets/cache are
+  outside tooling scope).
+- **App runtime**: unchanged by design; visionOS and macOS builds both succeed.
