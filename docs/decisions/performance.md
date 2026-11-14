@@ -725,3 +725,27 @@ Full tables and the ranked plan are in `docs/plans/performance.md` ("Round 2b").
   a146f0a -> b1c448a was 0.955, i.e. all of the gain comes from commit 1. The branch now ends at 4af454f plus this entry.
 - Why no gain: the HSV round trip is a handful of ALU ops per pixel next to ~10 trig calls and many texture samples,
   and the old branches were uniform-cheap; the compiler already ran the float math at near-half cost under fast-math.
+
+## 2026-11-14: Round 2, MRT shared eye-independent work (1cf4584 + 79386fd) - NOT KEPT
+
+- **What was tried**: (a)-(d) compute bloom hash, vertWaves, crossfade ease and ghost offsets/alphas once per
+  pixel in `effectsFragmentStereo` (`EyeShared`), commit 1cf4584 (parity 96 dB vs 6737525); (e) share the
+  feedback-warp turbulence at the pre-parallax uv, commit 79386fd (43-50 dB, below the 50 dB bar).
+- **Measured** (shader-bench, interleaved A/B, 5 trials x 300 frames, M4, MRT path; other GPU clients
+  were running, trial spread 9-12%, but the interleaved ratio is stable):
+
+  | A vs B | A median ms | B median ms | B/A (median of trials) | B/A (overall) |
+  |---|---|---|---|---|
+  | pre (6737525) vs post (79386fd) | 5.252 | 5.268 | 0.999 | 1.003 |
+  | pre vs c1 (1cf4584) | 5.657 | 5.988 | 1.070 | 1.059 |
+  | c1 vs post | 6.207 | 5.870 | 0.946 | 0.946 |
+
+- **Result**: net change pre -> post is +0.0% (0.999 / 1.003), far below the 4% bar. Commit 1 alone is about
+  6-7% SLOWER (the shared struct raises register pressure or live range across the two `shadeEye` calls, and
+  the hash is now computed even with bloom off); commit 2 recovers about 5.4% of that by removing a
+  turbulence evaluation, ending at parity with the original.
+- **Decision**: not kept. Branch reset to 6737525. Parity was not re-checked since the gain bar failed.
+- **Alternatives / follow-ups**: (e) alone on top of the original (without the `EyeShared` struct) might win
+  but would be a parity-below-50 dB change; it would need its own evaluation with the 35 dB visual-equivalent
+  bar. Not pursued here. The derived lesson: moving cheap eye-independent math into a shared struct costs more
+  in register pressure than it saves; only the turbulence (heavy trig) sharing is worth testing.
