@@ -4,18 +4,27 @@ Complete documentation of the visual effects system. All effects are rendered in
 
 ---
 
+> **Status (2026-11-14): partly historical.** The per-effect sections below (1-6) describe the original design and still explain the intent of each effect, but several details are stale: `MorphPlayer.swift` and `CIDissolveTransition` no longer exist (the crossfade is a shader blend driven by `transitionProgress`), Ken Burns and all uniforms are computed in `Visual/EffectsUniformsComputer.swift` (not `ContentView.swift`), the uniform struct has more fields (read `Liminal/EffectsUniforms.swift`), and macOS no longer renders a separate copy pass. The shader is the source of truth: `Liminal/Shaders/EffectsRenderer.metal`. Later additions are documented in `docs/decisions/vibrance.md` (vibrance stage, chroma-preserving blends, feedback on visionOS), `docs/decisions/performance.md` (MRT stereo pass, shader optimizations) and `docs/decisions/av-coupling.md` (music-driven modulation).
+
 ## Effect Stack
 
-All effects are combined in `EffectsRenderer.metal` and rendered through `EffectsMetalView.swift`:
+Current order in `EffectsRenderer.metal` (both platforms):
 
 ```
 Source Image
-  → Ken Burns Transform (scale + offset)
-  → Dreamy Distortion (fBM displacement)
-  → Spatial Hue Shift (rainbow waves)
-  → Saliency-Based Hue Variation (subjects vs background)
-  → Feedback Trails (expanding ghost frames)
-  → Output
+  -> Ken Burns Transform (scale + offset)
+  -> Distortion (turbulence, log-spherical, sinusoidal interference)
+  -> Stereo depth parallax (visionOS) + chromatic aberration
+  -> Crossfade (previous -> current, eased)
+  -> Spatial Hue Shift (rainbow waves)
+  -> Saliency-Based Hue Variation
+  -> Contrast / Saturation
+  -> Fractal hue cycling
+  -> Ghost Taps (discrete delay echoes)
+  -> Stochastic Bloom
+  -> Feedback Warping (trails)
+  -> Vibrance (black point, chroma gain, gamut-safe)
+  -> Output
 ```
 
 ---
@@ -244,7 +253,7 @@ half3 trailsBlended = mix(currentColor, feedback.rgb, effectiveAmount);
 
 ## 6. Image Transitions (Crossfade)
 
-**File:** `MorphPlayer.swift`
+**File:** (historical: `MorphPlayer.swift`, removed; now `TimerDrivenCrossfade.swift` on macOS and `CGImageTransitionState` in `ImmersiveDomeView.swift` on visionOS)
 
 **What it does:** GPU-accelerated alpha crossfade via `CIDissolveTransition`, masked by boosted fBM distortion.
 
@@ -348,7 +357,7 @@ override func draw(_ dirtyRect: NSRect) {
 | `EffectsRenderer.metal` | All effects in single fragment shader |
 | `DreamyEffects.metal` | Legacy SwiftUI shader wrappers (unused) |
 | `VisualEffects.swift` | EffectController (time driver), legacy SwiftUI extensions |
-| `MorphPlayer.swift` | Crossfade transitions, saliency map generation |
+| `TimerDrivenCrossfade.swift` | Crossfade progress (macOS); saliency maps come from `DepthAnalyzer` |
 | `DepthAnalyzer.swift` | Vision framework saliency analysis |
 
 ---
@@ -358,7 +367,7 @@ override func draw(_ dirtyRect: NSRect) {
 Must match between Swift and Metal:
 
 ```swift
-// EffectsMetalView.swift
+// Abridged and out of date: see Liminal/EffectsUniforms.swift for the real struct
 struct EffectsUniforms {
     var time: Float
     var kenBurnsScale: Float

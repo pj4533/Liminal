@@ -31,7 +31,7 @@ This document explains the architectural differences between Liminal's macOS and
 Metal (offscreen) → DrawableQueue → TextureResource → RealityKit Entity
 ```
 
-The `OffscreenEffectsRenderer` handles Metal rendering to a 2048×2048 texture, which is then presented to a `TextureResource.DrawableQueue` that RealityKit can display on the curved dome mesh.
+The `OffscreenEffectsRenderer` renders both eyes in one MRT pass straight into the 2048×2048 drawables of two `TextureResource.DrawableQueue`s (no intermediate texture or blit), which RealityKit displays on the curved dome mesh.
 
 ### Problem 2: MainActor Starvation
 
@@ -100,10 +100,12 @@ Metal renders to the drawable's texture, calls `drawable.present()`, and Reality
 | **Shader code** | `Shaders/EffectsRenderer.metal` | All visual effects (Ken Burns, distortion, hue shifts, feedback) |
 | **Uniform computation** | `Visual/EffectsUniformsComputer.swift` | Deterministic animation math |
 | **Uniform structure** | `EffectsUniforms.swift` | Shader parameter data |
-| **Audio system** | `Audio/*` | Generative ambient audio (AudioKit) |
+| **Audio system** | `Audio/*` | Eight-layer generative ambient engine (AudioKit), `MusicState` read by both renderers |
+| **Audio-visual coupling** | `Visual/MusicReactor.swift`, `Visual/MusicModulation.swift`, `Visual/VisualMoodBuilder.swift` | Music -> clamped uniform nudges; image -> mood sent to the music |
 | **Image generation** | `Visual/GeminiClient.swift` | Gemini API client |
-| **Image pipeline** | `Visual/ImageQueue.swift`, `Visual/ImageCache.swift` | Buffering and persistence |
-| **Settings** | `Services/SettingsService.swift` | UserDefaults persistence |
+| **Image pipeline** | `Visual/ImageQueue.swift`, `Visual/ImageStore.swift`, `Visual/ImageFraming.swift` | Buffering, disk persistence, 3:2 crop |
+| **Settings** | `Services/SettingsService.swift` | UserDefaults persistence (incl. `visual.syncToMusic`) |
+| **Control UI pieces** | `ControlComponents.swift`, `ClearImagesSection.swift` | Sections, value sliders, pickers, toggles used by both UIs |
 | **Platform abstraction** | `PlatformImage.swift` | NSImage/UIImage typealias |
 
 ### Key Insight: Same Shader, Different Delivery
@@ -119,7 +121,7 @@ The actual visual effects are 100% identical on both platforms. The same Metal s
 | File | Purpose |
 |------|---------|
 | `LiminalApp.swift` | App entry point with WindowGroup |
-| `ContentView.swift` | Main UI with sidebar controls |
+| `ContentView.swift` | Main UI: scrolling 320 pt control panel plus the 3:2 visual area; "Storage & Settings" sheet |
 | `Visual/EffectsMetalView.swift` | MTKView-based Metal rendering |
 | `Visual/TimerDrivenCrossfade.swift` | Timer-driven transition manager (tracks progress for GPU shader) |
 
@@ -128,7 +130,8 @@ The actual visual effects are 100% identical on both platforms. The same Metal s
 | File | Purpose |
 |------|---------|
 | `visionOS/LiminalVisionApp.swift` | App entry point with ImmersiveSpace |
-| `visionOS/ControlsView.swift` | Floating controls window |
+| `visionOS/ControlsView.swift` | Control window (1240x800, three columns, no settings sheet) |
+| `visionOS/SpatialDioramaView.swift`, `LowLevelDomeMesh.swift`, `StereoMaterialBuilder.swift` | Diorama, dome mesh and stereo material |
 | `visionOS/ImmersiveDomeView.swift` | RealityKit curved panel + render loop + `CGImageTransitionState` |
 | `visionOS/OffscreenEffectsRenderer.swift` | Metal → DrawableQueue bridge |
 | `Visual/AtomicImageBuffer.swift` | Lock-free image passing |
@@ -270,3 +273,11 @@ use v = 1 at the top, and the mono UnlitMaterial and stereo ShaderGraph material
 `(1 - v) * H`. Every source is centre-cropped to 3:2 (`ImageFraming`). The square 2048² target stores
 the 3:2 frame and the 112.5°×75° dome shows it undistorted. macOS letterboxes its view to 3:2. Details,
 measurements and the DEBUG test-card flags: `docs/decisions/orientation.md`.
+
+## Audio-visual coupling (both platforms)
+
+`MusicReactor` (one per render loop, smoothing on the effect clock) turns `engine.musicState` snapshots into a `MusicModulation`, which `EffectsUniformsComputer.compute(..., music:)` converts into existing uniforms with hard clamps; `.neutral` reproduces the un-coupled output and no shader or uniform-struct change was needed. Scene changes request a small ghost-tap burst (`OffscreenEffectsRenderer.requestGhostBurst` on visionOS, `EffectsMetalViewRepresentable.ghostBurstSerial` on macOS). In the other direction `VisualMoodBuilder` sends `setVisualMood` and `imageDidChange` at crossfade start and `setVisualActivity` at most twice a second. `-LiminalFreezeTime` bypasses the coupling. Decisions: `decisions/av-coupling.md`.
+
+## Control UI
+
+Both platforms share the same four sections (Playback, Music, Visuals, Images & Storage) built from `ControlComponents.swift`. visionOS opens a 1240x800 window with no settings sheet; macOS has a 320 pt scrolling panel and a "Storage & Settings" sheet. Decisions: `decisions/ui.md`.

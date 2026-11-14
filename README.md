@@ -1,8 +1,9 @@
 # Liminal
 
-> Generative ambient audio-visual experience for macOS
+> Generative ambient audio-visual experience for macOS and visionOS
 
-![macOS](https://img.shields.io/badge/macOS-14.0+-000000?style=flat&logo=apple&logoColor=white)
+![macOS](https://img.shields.io/badge/macOS-26.0+-000000?style=flat&logo=apple&logoColor=white)
+![visionOS](https://img.shields.io/badge/visionOS-immersive-000000?style=flat&logo=apple&logoColor=white)
 ![Swift](https://img.shields.io/badge/Swift-5.9-F05138?style=flat&logo=swift&logoColor=white)
 ![Metal](https://img.shields.io/badge/Metal-GPU-8A8A8A?style=flat&logo=apple&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-blue?style=flat)
@@ -15,15 +16,17 @@ Liminal creates endless, evolving ambient soundscapes synchronized with AI-gener
 
 ## Features
 
-- **Generative Audio** — Eight-layer synthesized ambient engine (drone, pad, lead, keys, drips, air, grains, pluck) with evolving scenes, key drift, rare events and four styles; no samples. See `docs/decisions/music.md`
-- **AI Visuals** — Gemini image generation (gemini-3.1-flash-image, 3:2 at 2K) driven by a style/subject/palette prompt system for varied, photoreal-but-surreal imagery; a "Clear All Images" control wipes the cache (see docs/decisions/images.md)
-- **GPU Effects** — Metal shaders: Ken Burns motion, fBM distortion, saliency-based hue shifting, feedback trails
-- **Indirect Control** — Shape the experience through abstract sliders rather than direct manipulation
+- **Generative Audio**: eight-layer synthesized ambient engine (drone, pad, lead, keys, drips, air, grains, pluck) with evolving scenes, key drift, rare events and four styles (Drift, Glass, Deep, Garden); no samples. See `docs/decisions/music.md`
+- **AI Visuals**: Gemini image generation (gemini-3.1-flash-image, 3:2 at 2K) driven by a style/subject/transformation/palette prompt system for varied, photoreal-but-surreal imagery. See `docs/decisions/images.md`
+- **GPU Effects**: one Metal fragment shader with Ken Burns motion, turbulence distortion, chromatic aberration, crossfade, hue shifts, ghost taps, stochastic bloom, feedback warping and a final vibrance stage that keeps colors vivid
+- **Audio-visual coupling**: the music drives the visuals (note glow, scene intensity, chord-tied hue, ghost-tap burst on scene change) and each new image sends a mood (brightness, warmth, saturation, energy, mood words) back to the music. A "Sync visuals to music" switch turns the music-to-visuals direction off. See `docs/decisions/av-coupling.md`
+- **macOS and visionOS**: a window with a control panel on macOS; on visionOS a control window plus an immersive curved dome (112.5 x 75 degrees, 2048x2048 per eye, stereo with ML depth) and a Spatial Diorama
+- **Indirect Control**: shape the experience through abstract sliders rather than direct manipulation
 
 ## Requirements
 
-- macOS 14.0+
-- Xcode 15.0+
+- macOS 26.0+ (deployment target) or visionOS (simulator or Apple Vision Pro)
+- Xcode with the macOS and visionOS SDKs
 - [Gemini API key](https://aistudio.google.com/apikey) (for image generation)
 
 ## Setup
@@ -39,40 +42,100 @@ Liminal creates endless, evolving ambient soundscapes synchronized with AI-gener
    open Liminal.xcodeproj
    ```
 
-3. Configure your API key
-   - Duplicate the `Liminal` scheme and name it `Liminal-Dev`
-   - Edit the scheme → Run → Arguments → Environment Variables
-   - Add `GEMINI_API_KEY` with your key
+3. Configure your API key (either way)
+   - Copy `Secrets.swift.template` to `Liminal/Secrets.swift` and fill in the key (gitignored; never commit it), or
+   - Duplicate the `Liminal` scheme as `Liminal-Dev` and add a `GEMINI_API_KEY` environment variable under Run > Arguments
 
-4. Build and run (⌘R)
+4. Build and run (Cmd-R). Pick the macOS or visionOS destination.
+
+## Build from the command line
+
+```bash
+# macOS
+xcodebuild -scheme Liminal -destination 'platform=macOS' build
+
+# visionOS Simulator (list devices with: xcrun simctl list devices)
+xcodebuild -scheme Liminal -destination 'platform=visionOS Simulator,name=Apple Vision Pro' build
+
+# unit tests (macOS)
+xcodebuild test -scheme Liminal -destination 'platform=macOS' -only-testing:LiminalTests
+```
+
+Never build for iOS destinations; the app targets macOS and visionOS only.
 
 ## Architecture
 
 ```
-Audio                          Visual
-─────                          ──────
-8 layers + Scene Director       Gemini API → Image Generation
-(MusicConductor, off-main) →   CoreML → RealESRGAN Upscale
-        ↓                      Metal → GPU Effects Pipeline
-  Mix bus: Zita reverb,               ↓
-  delay, shimmer, limiter        Morph Player
-                              (GPU Crossfade)
+Audio                               Visual
+-----                               ------
+GenerativeEngine (facade)           Gemini -> ImageQueue / ImageStore (disk)
+ MusicConductor (own queue, 20 ms)   -> ImageUpscaler (CoreML RealESRGAN on macOS,
+ SceneDirector + 8 layers               MetalFX on device visionOS) -> 3:2 centre crop
+ MixBus: Zita reverb, delay,         EffectsUniformsComputer (single source of truth)
+ shimmer, limiter                     -> EffectsMetalView (macOS, MTKView)
+        |                             -> OffscreenEffectsRenderer (visionOS, MRT stereo ->
+        |  MusicState (lock-free)         DrawableQueue -> RealityKit dome)
+        +-----> MusicReactor / MusicModulation -> uniforms
+        <----- VisualMoodBuilder: setVisualMood / imageDidChange / setVisualActivity
 ```
+
+Shader pipeline order (`Liminal/Shaders/EffectsRenderer.metal`): Ken Burns, distortion (turbulence, log-spherical, sinusoidal), stereo parallax and chromatic aberration, crossfade, hue shift (spatial, saliency, fractal), contrast/saturation, ghost taps, stochastic bloom, feedback warping, vibrance. `EffectsUniforms.swift` must match the Metal struct exactly. Images use one orientation convention: texture row 0 is the top. Platform details: `docs/PLATFORM_ARCHITECTURE.md`.
 
 ## Controls
 
-| Slider | Effect |
+| Control | Effect |
 |--------|--------|
 | **Style** | Drift, Glass, Deep or Garden music palette |
 | **Density** | How many notes the pointed layers play |
 | **Space** | Reverb size and shimmer |
-| **Echo** | Audio delay + visual trail intensity |
+| **Echo** | Audio delay and visual ghost-trail intensity |
+| **Scale** | "Auto (evolving)" lets key and mode drift; choosing a scale pins it |
+| **Sync visuals to music** | Music drives hue, motion, bloom and ghost bursts (on by default) |
+| **Debug effect** | Debug visualization of the effect (macOS panel) |
+| **Cache only** | Skip generation and recycle cached images |
+| **Clear All Images** | Wipes every cached image after confirmation and restarts generation |
+| **Reset All Settings** | Restores defaults |
 
-Scale picker: "Auto (evolving)" lets key and mode drift; choosing a scale pins it.
+On macOS the panel scrolls, and Cache only, Clear All Images and Reset live in a "Storage & Settings" sheet (Cmd-,). On visionOS all controls are in the control window (Playback, Music, Visuals, Images & Storage), plus Enter/Exit Dome and Spatial Diorama.
+
+## Debug launch flags (DEBUG builds only, compiled out of Release)
+
+Pass as launch arguments, for example `-LiminalAutoPlay YES`. Defined in `Liminal/Utils/DebugLaunchOptions.swift`.
+
+| Flag | Effect |
+|------|--------|
+| `-LiminalAutoPlay YES` | Start playback at launch |
+| `-LiminalOpenDome YES` | Open the immersive dome automatically (visionOS) |
+| `-LiminalFreezeTime <s>` | Pin the effect clock for deterministic screenshots (bypasses coupling) |
+| `-LiminalPerfLogInterval <s>` | Interval of the PERF log lines (default 1) |
+| `-LiminalPerfSplitPasses YES` | Legacy split-pass option (no-op since the direct-drawable render) |
+| `-LiminalTestPattern YES` / `-LiminalTestImage <path>` | Show a generated orientation test card / a given image |
+| `-LiminalForceStereoFlatDepth YES`, `-LiminalForceMonoMaterial YES` | Force flat depth / the mono dome material |
+| `-LiminalNoEffects YES` | Bypass all effects |
+| `-LiminalSyncLog YES` | One SYNC log line per second (coupling state) |
+| `-LiminalSyncStrength <x>` | Exaggerate the music-to-visuals coupling for tuning |
+
+## Scripts (`scripts/`)
+
+| Script | Purpose |
+|--------|---------|
+| `perf-run.sh` | Repeatable visionOS Simulator capture: launches with the debug flags, collects fps and GPU timing, writes a JSON summary and screenshot |
+| `shader-bench.sh` | Deterministic Mac-GPU benchmark of the visionOS eye pass, with interleaved A/B of two shader files and parity PNG comparison |
+| `sim-tap.sh X Y` | Click the visionOS Simulator at 3840x2160 screenshot pixel coordinates via Peekaboo |
+| `sim-drag.sh` | Drag in the Simulator (needed for sliders) |
+| `vibrance-eval.sh IN OUT` | Offline vibrance evaluation of the effect pipeline over a folder of images (`vibrance-check.py` checks the result) |
+| `render-music.sh`, `check-music.py` | Offline render and analysis of the music engine |
+| `av-coupling-check.sh` | Offline check of the audio-visual coupling |
+
+Simulator automation notes: `docs/research/visionos-sim-automation/README.md`.
+
+## Documentation
+
+Decision records, with a review index: `docs/decisions/README.md`. Plans: `docs/plans/`.
 
 ## Dependencies
 
-- [AudioKit](https://github.com/AudioKit/AudioKit) — Audio synthesis and effects
+- [AudioKit](https://github.com/AudioKit/AudioKit), AudioKitEX and SoundpipeAudioKit: audio synthesis and effects
 
 ## License
 
