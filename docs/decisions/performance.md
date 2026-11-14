@@ -168,3 +168,11 @@ Verdict: kept (>=3% GPU improvement, no new errors).
 - Visual: frozen screenshot mean abs diff 55 vs baseline, but the dome showed a different source image (queue count 263 vs 64), so parity could not be established.
 - No errors in logs.
 - Verdict: not kept; branch reset to c3c3592. Alternative (not tried): fold displacement into a single eye pass with fewer octaves.
+
+## Bake hue waves and fractal-hue noise into a 512² field texture (reverted)
+
+- What: commit 8c61f39 added a separate pass baking hue waves and fractal-hue noise into a low-res field texture, sampled at the final uv.
+- Measured (visionOS simulator, 3 runs): GPU mean 0.362 / 0.693 / 0.796 ms (median 0.693) vs prior best 0.159 ms. fps 74.1 / 30.7 / 26.7 (median 30.7) vs 46.4. Interval p95 median 70.95 ms. The new hue bake pass itself cost 0.11-0.21 ms/frame, which exceeds the whole prior frame.
+- Frozen run: GPU mean 0.362 ms. The frozen screenshot content differs from the baseline because a different generated image was on screen, so a numeric diff is not meaningful. No errors in the logs.
+- Verdict: NOT kept. The extra pass and texture sampling cost more than the per-pixel noise it removed. Reset to fbf870e.
+- Alternative: none pursued; per-pixel evaluation is already cheap after the half-precision and octave reductions.
