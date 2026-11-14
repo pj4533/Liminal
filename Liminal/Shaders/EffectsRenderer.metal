@@ -178,12 +178,14 @@ static inline half chromaOf(half3 c) {
     return max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b));
 }
 
-// Scale chroma about luma l so every channel lands in [0,1]. Hue and luma are unchanged.
-static inline half3 gamutFit(half3 c, half l) {
-    half hi = max(c.r, max(c.g, c.b));
-    half lo = min(c.r, min(c.g, c.b));
-    half k = min(1.0h, min((1.0h - l) / max(hi - l, 1.0e-4h), l / max(l - lo, 1.0e-4h)));
-    return l + (c - l) * k;
+// Scale chroma about luma l by g, then fit into [0,1]: gamutFit(l + (c - l) * g, l).
+// hi/lo are c's max/min channel, already known to the caller. For g >= 0 the scaled colour's
+// extremes are l + (hi - l) * g and l + (lo - l) * g, so they are not re-derived from the
+// scaled colour (one max/min analysis per colour instead of two). Hue and luma are unchanged.
+static inline half3 scaleChromaFit(half3 c, half l, half hi, half lo, half g) {
+    half k = min(1.0h, min((1.0h - l) / max((hi - l) * g, 1.0e-4h),
+                           l / max((l - lo) * g, 1.0e-4h)));
+    return l + (c - l) * (g * k);
 }
 
 // Raise chroma toward `target` (never lower it), luma-preserving and gamut-safe.
@@ -192,8 +194,10 @@ static inline half3 gamutFit(half3 c, half l) {
 // (and the feedback loop cannot run away). The 0.02 floor keeps grey noise grey.
 static inline half3 restoreChroma(half3 c, half target, half maxGain) {
     half l = dot(c, LUMA_W);
-    half g = clamp(target / max(chromaOf(c), 0.02h), 1.0h, maxGain);
-    return gamutFit(l + (c - l) * g, l);
+    half hi = max(c.r, max(c.g, c.b));
+    half lo = min(c.r, min(c.g, c.b));
+    half g = clamp(target / max(hi - lo, 0.02h), 1.0h, maxGain);
+    return scaleChromaFit(c, l, hi, lo, g);
 }
 
 // MARK: - Uniforms
@@ -351,7 +355,10 @@ static inline half4 shadeEye(
     if (abs(stereoOffset) > 0.000001) {
         constexpr sampler depthSampler(address::clamp_to_edge, filter::linear);
         float depthVal = float(depthTexture.sample(depthSampler, uv).r);  // 0=far, 1=near
-        float boostedDepth = pow(clamp(depthVal, 0.0, 1.0), 0.75);
+        // d^0.75 == sqrt(d) * sqrt(sqrt(d)): two sqrts instead of pow's log2/exp2.
+        float dClamped = clamp(depthVal, 0.0, 1.0);
+        float dRoot = sqrt(dClamped);
+        float boostedDepth = dRoot * sqrt(dRoot);
         float parallax = stereoOffset * boostedDepth;
         uv.x = clamp(uv.x + parallax, 0.001, 0.999);
     }
@@ -404,23 +411,28 @@ static inline half4 shadeEye(
     // Spatial waves for rainbow effect
     float t = uniforms.time;
     float wi = uniforms.hueWaveIntensity;
-
-    float horizWaves = sin(uv.x * 2.0 + t * 0.2) * wi
-                     + sin(uv.x * 5.0 - t * 0.15) * wi * 0.6
-                     + sin(uv.x * 8.0 + t * 0.3) * wi * 0.3;
+    // The six x-dependent waves (uv.x differs per eye after parallax) run in half. Each time
+    // phase is wrapped to [0, 2pi) in float first, so half only ever sees arguments < ~15
+    // (seamless: phases only enter through sin). The y-only waves stay float: they are
+    // identical for both eyes, so the compiler shares them across the inlined shadeEye calls.
+    constexpr float TWO_PI = 6.2831853;
+    half2 hx = half2(uv);
+    half hwi = half(wi);
+    half horizWaves = (sin(hx.x * 2.0h + half(fmod(t * 0.2, TWO_PI)))
+                     + sin(hx.x * 5.0h - half(fmod(t * 0.15, TWO_PI))) * 0.6h
+                     + sin(hx.x * 8.0h + half(fmod(t * 0.3, TWO_PI))) * 0.3h) * hwi;
 
     float vertWaves = sin(uv.y * 3.0 + t * 0.18) * wi * 0.8
                     + sin(uv.y * 6.0 - t * 0.22) * wi * 0.5
                     + sin(uv.y * 10.0 + t * 0.25) * wi * 0.25;
 
-    float diagWaves = sin((uv.x + uv.y) * 4.0 + t * 0.12) * wi * 0.7
-                    + sin((uv.x - uv.y) * 3.0 - t * 0.16) * wi * 0.5;
+    half diagWaves = (sin((hx.x + hx.y) * 4.0h + half(fmod(t * 0.12, TWO_PI))) * 0.7h
+                    + sin((hx.x - hx.y) * 3.0h - half(fmod(t * 0.16, TWO_PI))) * 0.5h) * hwi;
 
-    float2 centerOffset = uv - 0.5;
-    float dist = length(centerOffset);
-    float radialWaves = sin(dist * 12.0 - t * 0.3) * wi * 0.5;
+    half dist = length(hx - 0.5h);
+    half radialWaves = sin(dist * 12.0h - half(fmod(t * 0.3, TWO_PI))) * hwi * 0.5h;
 
-    float spatialOffset = horizWaves + vertWaves + diagWaves + radialWaves;
+    float spatialOffset = float(horizWaves + diagWaves + radialWaves) + vertWaves;
 
     // === SALIENCY-BASED HUE VARIATION ===
     // Sample saliency map if available - subjects get different hue treatment
@@ -467,7 +479,8 @@ static inline half4 shadeEye(
     // The two colours often have opposite hues; compensate the chroma the RGB mix loses.
     half hb = half(uniforms.hueBlendAmount);
     half3 currentColor = mix(color.rgb, saturated, hb);
-    currentColor = restoreChroma(currentColor, mix(chromaOf(color.rgb), chromaOf(saturated), hb), 2.0h);
+    // d (from the RGB->HSV step above) is exactly max - min of color.rgb == chromaOf(color.rgb).
+    currentColor = restoreChroma(currentColor, mix(d, chromaOf(saturated), hb), 2.0h);
 
     // === 6.5 FRACTAL HUE CYCLING (Nishitsuji organic color shifts) ===
     // Spatially-varying hue shifts driven by sinusoidal interference noise.
@@ -579,16 +592,18 @@ static inline half4 shadeEye(
     // === 7. VIBRANCE ===
     // Black-point pull-down, then a chroma gain weighted toward under-saturated pixels
     // (tapers to 1 as saturation -> 1: the soft knee), gated off for near-greys, then
-    // gamutFit: luma- and hue-preserving, never leaves [0,1] (no clipping to white).
+    // scaleChromaFit: luma- and hue-preserving, never leaves [0,1] (no clipping to white).
     {
         half bp = half(uniforms.blackPoint);
         half3 c = max((currentColor - bp) / (1.0h - bp), 0.0h);
         half l = dot(c, LUMA_W);
         half mx = max(c.r, max(c.g, c.b));
-        half ch = mx - min(c.r, min(c.g, c.b));
+        half mn = min(c.r, min(c.g, c.b));
+        half ch = mx - mn;
         half sat = ch / max(mx, 1.0e-3h);
+        // g >= 1 (vibranceAmount >= 0), so c's own max/min feed the gamut fit directly.
         half g = 1.0h + half(uniforms.vibranceAmount) * (1.0h - sat) * smoothstep(0.02h, 0.10h, ch);
-        currentColor = gamutFit(l + (c - l) * g, l);
+        currentColor = scaleChromaFit(c, l, mx, mn, g);
     }
 
     return half4(currentColor, 1.0h);

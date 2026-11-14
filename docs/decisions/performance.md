@@ -764,3 +764,48 @@ Full tables and the ranked plan are in `docs/plans/performance.md` ("Round 2b").
 - **Decision**: not kept (parity bar missed, gain in the 2-5% range, borderline against the 4% bar). Reset to bf5a2bf.
 - **Follow-up**: bisect the four sub-changes individually; the shared max/min and sqrt depth boost are the
   likely exact ones, and could be re-applied alone, but expected gain is below the 4% bar.
+
+## 2026-11-14: Round 3 item (per-eye-alu-half): bisected, turbulence table dropped, other three KEPT
+
+- **Bisect** (each sub-change alone on bf5a2bf, `shader-bench.sh --shader base --shader-b variant --out`, `--compare`):
+
+  | sub-change | worst PSNR | worst max abs diff |
+  |---|---|---|
+  | turbulence octave table | 25.46 dB | 215 |
+  | half x-dependent hue waves | 57.2 dB | 9 |
+  | shared max/min (`scaleChromaFit`, HSV `d` reuse) | 62.96 dB | 1 |
+  | sqrt depth boost | 96.75 dB | 2 |
+
+  The whole parity failure was the turbulence table.
+- **Cause: not an algebra bug, a precision one.** The table values are correct (checked against R^(i+1) and
+  2 * 1.4^i in double). The old loop is ill-conditioned in half: `result` is `uv * 3` (half ulp 0.002 in
+  [2,4)), the last octave multiplies it by ~21, and `rot`/`freq` are themselves accumulated in half (up to
+  ~0.3% off the true rotation by octave 8). A float16 simulation of old vs table over [0,3]^2 gives a
+  displacement difference of rms 0.0051 / max 0.059 (displacement rms 0.35). Rebuilding the table from the
+  step-by-step half products (so it carries the old loop's systematic error) still leaves rms 0.0026 / max
+  0.037 from the changed rounding order alone. So no reordering of this loop can match the old output to
+  45 dB; the feedback loop then compounds it over the 30 parity frames. The table is closer to the ideal
+  math than the old loop, but it is a look change at the pixel level, not an exact one.
+- **And it saves nothing**: turbulence-table-only A/B, two runs: B/A overall 0.9945 and 0.9976 (inside the
+  +-1.2% floor). `rot` and `freq` depend on no input, so the compiler already folds them when it unrolls the
+  8 iterations. Dropped.
+- **Kept**: half hue waves + sqrt depth boost + shared max/min, as one change. Interleaved A/B vs bf5a2bf,
+  5 runs of 5 trials x 300 frames (M4, MRT, 2048^2; the music workstream's Mac Liminal shared the GPU in some):
+
+  | run | A median ms | B median ms | B/A overall | B/A median of trials |
+  |---|---|---|---|---|
+  | 1 | 4.645 | 4.470 | 0.9623 | 0.9603 |
+  | 2 | 4.958 | 4.719 | 0.9519 | 0.9365 |
+  | 3 | 4.925 | 4.717 | 0.9579 | 0.9517 |
+  | 4 | 5.059 | 4.774 | 0.9435 | 0.9468 |
+  | 5 | 5.009 | 4.769 | 0.9520 | 0.9395 |
+
+  Mean B/A overall 0.9535 (**-4.6%**, range -3.8% to -5.7%); mean median-of-trials 0.9470 (-5.3%).
+  Same direction in all five runs, against a 4% bar.
+- **Parity**: worst PSNR 56.78 dB, worst max abs diff 8 (per file 56.8-65.6 dB). Above the 50 dB exact-math
+  bar; the residue is the half hue-wave phases (57.2 dB alone).
+- **Alternatives considered**: (a) half-emulated table, to inherit the old loop's rotation error: still
+  rounding-limited (simulation above) and no gain to justify it. (b) Table in float: more accurate than both,
+  matches neither, and adds float ALU. (c) Accept the table as a look change under the 35 dB
+  visual-equivalent bar: 25.5 dB misses that too, for 0.5% or less.
+- **Builds**: visionOS Simulator and macOS both succeed. Resolution, effects and audio code untouched.
