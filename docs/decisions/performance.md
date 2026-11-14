@@ -160,3 +160,11 @@ Verdict: kept (>=3% GPU improvement, no new errors).
 - Verdict: reverted (branch reset to 16ea43d). GPU ms did not improve by >=3%; it was higher. As with the feedback-warp run, fps and GPU ms moved in opposite directions, which points to host/session noise in the simulator rather than a shader effect.
 - Visual parity: frozen screenshots show the same effect style but different source images (image pool varies per run), so the numeric diff (mean abs 38.5) is not meaningful. Output is bit-identical by construction outside transitions.
 - Note: the change is logically sound (removes 3 fetches per pixel outside crossfades) but cannot be shown to help with this simulator harness. Worth retrying with an A/B on the same build and a fixed image, or on real hardware.
+
+## Shared low-res displacement pre-pass (turbulence + log-spherical + sinusoidal noise) — REVERTED
+
+- What: commit 19d26be computed displacement once at low res in a pre-pass, sampled by both eyes.
+- Measured (visionOS sim, medians of 3): GPU mean 0.313 ms (runs 0.315/0.313/0.308) vs 0.159 ms before (about +97%, worse). Per-pass: disp=0.101, dome=0.088, eyeL=0.073, eyeR=0.048. The new disp pass costs more than the eye-pass work it saves. fps 73.9 vs 46.4 and p95 interval 16.5 ms vs 51 ms, but those are simulator/system-load noise, not GPU gain. GPU p95 0.53 ms vs 0.26 ms.
+- Visual: frozen screenshot mean abs diff 55 vs baseline, but the dome showed a different source image (queue count 263 vs 64), so parity could not be established.
+- No errors in logs.
+- Verdict: not kept; branch reset to c3c3592. Alternative (not tried): fold displacement into a single eye pass with fewer octaves.
