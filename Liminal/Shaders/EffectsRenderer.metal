@@ -154,23 +154,16 @@ float3 logSphericalTransform(float2 uv, float time, float intensity) {
         angle + half(cos(time * 0.5)) * 0.2h
     );
 
-    // 6-octave sinusoidal noise in half precision (Apple GPU runs FP16 at 2x rate)
+    // 6-octave sinusoidal noise in half precision (Apple GPU runs FP16 at 2x rate).
+    // One sin/cos of p; octaves 2..6 by double-angle recurrence (flowOctaves, logsphere-double-angle).
     half e = p.y - 1.0h;
-    half s = 1.0h;
-    for (int j = 0; j < 6; j++) {
-        half3 sinP = sin(p.zxy * s) - 0.5h;
-        half3 cosP = 1.0h - cos(p.yxz * s);
-        e += sin(dot(sinP, cosP)) / s;
-        s *= 2.0h;
-    }
+    e += flowOctaves(sin(p), cos(p), 6);
 
-    // UV displacement along radial direction (back to float for UV math)
+    // UV displacement along radial direction (back to float for UV math).
+    // centered / R == (cos(angle), sin(angle)); atan2(0,0) == 0, so (1,0) at the exact centre.
     float ef = float(e);
     float displacement = ef * intensity;
-    float2 offset = float2(
-        cos(angle) * displacement,
-        sin(angle) * displacement
-    );
+    float2 offset = (R > 1.0e-6 ? centered / R : float2(1.0, 0.0)) * displacement;
 
     return float3(offset, ef);
 }

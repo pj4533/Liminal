@@ -652,3 +652,28 @@ Full tables and the ranked plan are in `docs/plans/performance.md` ("Round 2b").
   octaves are half-quantised) while the new one is 38.2 dB from it, so the difference is the old shader's quantisation
   error, not a new artefact. Float `DBL` would move closer to truth but further from the old output, so it cannot fix
   the PSNR figure. If a stricter reviewer wants the 35 dB rule applied literally, revert 911eb7e.
+
+---
+
+## 2026-11-14: Round 2b item (logsphere-double-angle): implemented
+
+- **What**: `logSphericalTransform()` in `Liminal/Shaders/EffectsRenderer.metal` keeps `p` exactly as
+  before, but the 6-octave loop is now `e += flowOctaves(sin(p), cos(p), 6);` (the double-angle helper
+  added by noise-double-angle). The radial offset uses `(R > 1.0e-6 ? centered / R : float2(1, 0)) *
+  displacement` in place of `float2(cos(angle), sin(angle)) * displacement`. `atan2` stays, because it
+  feeds `p.z`.
+- **Why**: this stage is 12.4% of the frame. The prototype measured B/A 0.929 (about -7% of the frame),
+  with trig per pixel going from 47 to 15.
+- **Equivalence**: the old loop computed `sin(p.zxy*s) - 0.5` and `1 - cos(p.yxz*s)` with weight `1/s`,
+  s = 2^j. `flowOctaves` computes the same terms from `sin(p)`/`cos(p)` by `sin 2a = 2 sin a cos a`,
+  `cos 2a = 1 - 2 sin^2 a`, with weight 0.5^j. `centered / R` equals `(cos atan2, sin atan2)` for R > 0.
+  At R == 0, `atan2(0,0)` is 0, so `(1, 0)` keeps the old centre behaviour. `p.x` is already wrapped
+  mod 2pi, so the half-precision recurrence starts from a bounded angle.
+- **Alternatives**: float `DBL` (slower, and the noise-double-angle round showed float moves further from
+  the old half-quantised output, not closer). Dropping `atan2` with `p.z` derived from
+  `centered / R` was not done: `p.z` needs the angle itself.
+- **Parity**: visual-equivalent, not exact. The top octaves of the old loop were half-quantised
+  (arguments up to 32 x |p|), as in noise-double-angle.
+- **Verification in this step**: visionOS Simulator and macOS builds succeed. The interleaved A/B bench
+  (two runs), `--compare` and the PNG check near the image centre and in trans113 (amount boosted 3x)
+  are done by the benchmarking step and logged there.
