@@ -29,8 +29,8 @@ struct PromptBuilderTests {
 
     @Test func libraryHasPlannedSize() {
         let lib = PromptLibrary.standard
-        #expect(lib.styles.count == 16)
-        #expect(lib.palettes.count == 17)
+        #expect(lib.styles.count == 17)
+        #expect(lib.palettes.count == 25)
         #expect(lib.subjects.count >= 110)
         #expect(lib.compositions.count == 8)
         let photographic = lib.styles.filter { $0.family == .photographic }.map(\.weight).reduce(0, +)
@@ -171,7 +171,7 @@ struct PromptBuilderTests {
             switch spec.styleID {
             case "aerochrome": #expect(spec.paletteID == "aerochrome")
             case "biolumNight", "longExposure", "flashNight": #expect(palette.isDark, "\(spec.styleID) got \(spec.paletteID)")
-            case "doubleExposure", "studioProduct", "liquidAbstract": break
+            case "doubleExposure", "studioProduct", "sunlitStill", "liquidAbstract": break
             default: #expect(spec.paletteID != "aerochrome", "\(spec.styleID) got aerochrome")
             }
             if spec.styleID == "aerial" { #expect(spec.compositionID == "topDown") }
