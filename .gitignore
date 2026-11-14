@@ -81,3 +81,6 @@ Secrets.xcconfig
 
 # External binaries (RIFE, etc) - too large for git
 External/
+
+## Claude Code local state
+.claude/
