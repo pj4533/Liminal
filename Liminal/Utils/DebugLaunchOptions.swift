@@ -44,6 +44,10 @@ nonisolated enum DebugLaunchOptions {
     /// test card (TestPatternGenerator) and skip image generation entirely.
     static let testPattern: Bool = defaults.bool(forKey: "LiminalTestPattern")
 
+    /// -LiminalTestImage <path>: like -LiminalTestPattern, but show this image file (any path the
+    /// app can read; the simulator can read host paths). For before/after colour comparisons.
+    static let testImagePath: String? = defaults.string(forKey: "LiminalTestImage")
+
     /// -LiminalForceStereoFlatDepth YES (visionOS): always use the stereo ShaderGraph material and
     /// feed it a flat (constant mid-grey) depth map instead of the ML depth map, so the stereo path
     /// can be inspected deterministically (zero parallax) in the simulator.
@@ -63,6 +67,7 @@ nonisolated enum DebugLaunchOptions {
     static let perfLogInterval: Double = 1.0
     static let splitPasses = false
     static let testPattern = false
+    static let testImagePath: String? = nil
     static let forceStereoFlatDepth = false
     static let forceMonoMaterial = false
     static let noEffects = false
@@ -77,6 +82,7 @@ nonisolated enum DebugLaunchOptions {
             LMLog.general.info("🧪 DEBUG FLAG applied: LiminalPerfLogInterval=\(perfLogInterval, format: .fixed(precision: 2))s")
         }
         if splitPasses { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalPerfSplitPasses=YES (no-op: eyes render direct to drawable, no blit to split)") }
+        if let p = testImagePath { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalTestImage=\(p, privacy: .public) (fixed source image)") }
         if testPattern { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalTestPattern=YES (orientation test card replaces source images)") }
         if forceStereoFlatDepth { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalForceStereoFlatDepth=YES (stereo material + flat depth)") }
         if forceMonoMaterial { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalForceMonoMaterial=YES (mono UnlitMaterial)") }

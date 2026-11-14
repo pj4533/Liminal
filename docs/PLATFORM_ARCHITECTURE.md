@@ -213,12 +213,21 @@ visionOS 2.0 introduced `LowLevelTexture` as an alternative, but it's better sui
 
 ## Color Space Handling
 
-Both platforms use `.bgra8Unorm` textures, but color management differs:
+The shader works on **gamma-encoded sRGB values** on both platforms (sources are `bgra8Unorm`
+holding sRGB bytes; nothing is linearised), and both platforms store those values unchanged:
 
-- **macOS**: Device RGB (implicit sRGB for display)
-- **visionOS**: `.raw` semantic on TextureResource prevents sRGB conversion
+- **macOS**: `MTKView` is `bgra8Unorm`; the drawable bytes are the shader's values.
+- **visionOS**: the DrawableQueue is `bgra8Unorm_srgb` (so RealityKit decodes on sample), but every
+  pass renders into a cached **`bgra8Unorm` view** of the drawable (`OffscreenEffectsRenderer.outputView`).
+  Rendering into the `_srgb` format directly encoded the values a second time (mid-grey 128 showed as
+  ~188, saturation -33%). Verified in the simulator with the test card's grey patches
+  (docs/decisions/vibrance.md, V1).
 
-This ensures identical color output despite different display pipelines.
+Feedback trails: macOS copies its drawable into a feedback texture; visionOS binds each eye's
+previous output view (texture 4, right eye texture 6 in the MRT pass), no copy (V2).
+
+The final shader stage is VIBRANCE (luminance-preserving chroma gain, gamut-safe); its amount comes
+from `EffectsUniformsComputer.computeVibrance` times a per-image factor (`ImageColorStats`).
 
 ---
 

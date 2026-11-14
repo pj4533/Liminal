@@ -406,10 +406,17 @@ struct ImmersiveDomeView: View {
                 // Use raw transitionProgress - shader applies easing (matches macOS)
                 // IMPORTANT: Pass 0 when not transitioning, otherwise ghost taps stay disabled forever
                 // (transitionProgress stays at 1.0 after transition completes)
+                // Per-image vibrance factors (measured once per image, cached), blended across a crossfade
+                var vibrance = ImageColorStats.cachedFactors(key: cgImage) { cgImage }
+                if transitionState.isTransitioning, let prev = transitionState.previousImage {
+                    let from = ImageColorStats.cachedFactors(key: prev) { prev }
+                    vibrance = VibranceFactors.lerp(from, vibrance, transitionState.transitionProgress)
+                }
                 let uniforms = EffectsUniformsComputer.compute(
                     time: effectTime,
                     transitionProgress: transitionState.isTransitioning ? transitionState.transitionProgress : 0,
-                    hasSaliencyMap: false
+                    hasSaliencyMap: false,
+                    vibrance: vibrance
                 )
 
                 // Render frame - use stereo path if available, otherwise mono

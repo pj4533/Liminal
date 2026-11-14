@@ -329,10 +329,20 @@ struct VisualDisplayView: View {
     // Single uniforms struct - matches visionOS pattern for platform parity
     private var effectUniforms: EffectsUniforms {
         let effectTime = DebugLaunchOptions.effectTime(Float(effectController.time))
+        // Per-image vibrance factors (measured once per image, cached), blended across a crossfade
+        var vibrance = VibranceFactors.neutral
+        if let frame = transitionManager.currentFrame {
+            vibrance = ImageColorStats.cachedFactors(key: frame) { frame.cgImageRepresentation.map { ImageFraming.coverCrop($0) } }
+            if let prev = transitionManager.previousFrame {
+                let from = ImageColorStats.cachedFactors(key: prev) { prev.cgImageRepresentation.map { ImageFraming.coverCrop($0) } }
+                vibrance = VibranceFactors.lerp(from, vibrance, Float(transitionManager.transitionProgress))
+            }
+        }
         var uniforms = EffectsUniformsComputer.compute(
             time: effectTime,
             transitionProgress: Float(transitionManager.transitionProgress),
-            hasSaliencyMap: transitionManager.currentSaliencyMap != nil
+            hasSaliencyMap: transitionManager.currentSaliencyMap != nil,
+            vibrance: vibrance
         )
         // Add time-based hue shift (macOS-specific for now)
         uniforms.hueBaseShift = effectTime * 0.03

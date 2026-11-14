@@ -159,6 +159,34 @@ float3 logSphericalTransform(float2 uv, float time, float intensity) {
     return float3(offset, ef);
 }
 
+// MARK: - Chroma helpers (vibrance; docs/decisions/vibrance.md)
+// All colour math runs on gamma-encoded sRGB values (the shader never linearises; see V1).
+// "Chroma" here is max-min of RGB: cheap, hue-agnostic, and what an RGB average destroys.
+
+constant half3 LUMA_W = half3(0.299h, 0.587h, 0.114h);
+
+static inline half chromaOf(half3 c) {
+    return max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b));
+}
+
+// Scale chroma about luma l so every channel lands in [0,1]. Hue and luma are unchanged.
+static inline half3 gamutFit(half3 c, half l) {
+    half hi = max(c.r, max(c.g, c.b));
+    half lo = min(c.r, min(c.g, c.b));
+    half k = min(1.0h, min((1.0h - l) / max(hi - l, 1.0e-4h), l / max(l - lo, 1.0e-4h)));
+    return l + (c - l) * k;
+}
+
+// Raise chroma toward `target` (never lower it), luma-preserving and gamut-safe.
+// Used after RGB mixes of differently-hued colours, which otherwise pass through grey.
+// target is a convex combination of the inputs' chroma, so it can never over-saturate
+// (and the feedback loop cannot run away). The 0.02 floor keeps grey noise grey.
+static inline half3 restoreChroma(half3 c, half target, half maxGain) {
+    half l = dot(c, LUMA_W);
+    half g = clamp(target / max(chromaOf(c), 0.02h), 1.0h, maxGain);
+    return gamutFit(l + (c - l) * g, l);
+}
+
 // MARK: - Uniforms
 
 struct EffectsUniforms {
@@ -187,6 +215,8 @@ struct EffectsUniforms {
     float logSphereAmount;      // log-spherical fractal distortion intensity
     float fractalNoiseAmount;   // sinusoidal interference noise distortion intensity
     float fractalHueAmount;     // fractal-driven hue cycling intensity
+    float vibranceAmount;       // final vibrance stage chroma gain (0 = off)
+    float blackPoint;           // final vibrance stage black-point pull-down (0 = off)
 };
 
 // Ghost tap data - passed in separate buffer as array of 8
@@ -404,8 +434,11 @@ static inline half4 shadeEye(
 
     // Color blend mode
     half shiftedLuma = dot(shiftedRgb, half3(0.299h, 0.587h, 0.114h));
-    half3 colorBlended = shiftedRgb * (originalLuma / max(shiftedLuma, 0.001h));
-    colorBlended = clamp(colorBlended, 0.0h, 1.0h);
+    // Restore the original luma, but cap the scale so the largest channel stops at 1.
+    // (Scale-then-clamp turned bright->dark hue rotations into pastels.)
+    half shiftedMax = max(shiftedRgb.r, max(shiftedRgb.g, shiftedRgb.b));
+    half3 colorBlended = shiftedRgb * min(originalLuma / max(shiftedLuma, 0.001h),
+                                          1.0h / max(shiftedMax, 0.001h));
 
     // Contrast boost
     half3 contrasted = (colorBlended - 0.5h) * half(uniforms.contrastBoost) + 0.5h;
@@ -417,7 +450,10 @@ static inline half4 shadeEye(
     saturated = clamp(saturated, 0.0h, 1.0h);
 
     // Mix with original based on blend amount
-    half3 currentColor = mix(color.rgb, saturated, half(uniforms.hueBlendAmount));
+    // The two colours often have opposite hues; compensate the chroma the RGB mix loses.
+    half hb = half(uniforms.hueBlendAmount);
+    half3 currentColor = mix(color.rgb, saturated, hb);
+    currentColor = restoreChroma(currentColor, mix(chromaOf(color.rgb), chromaOf(saturated), hb), 2.0h);
 
     // === 6.5 FRACTAL HUE CYCLING (Nishitsuji organic color shifts) ===
     // Spatially-varying hue shifts driven by sinusoidal interference noise.
@@ -463,6 +499,7 @@ static inline half4 shadeEye(
     // IMPORTANT: Skip ghost taps during transitions - they sample sourceTexture (new image)
     // which would bleed through before the crossfade completes.
     int tapCount = (uniforms.transitionProgress > 0.001) ? 0 : int(uniforms.ghostTapCount);
+    half preTapChroma = chromaOf(currentColor);
     for (int i = 0; i < tapCount; i++) {
         GhostTap tap = ghostTaps[i];
 
@@ -485,6 +522,11 @@ static inline half4 shadeEye(
         currentColor = mix(currentColor, ghostSample.rgb, ghostAlpha * 0.15h);
     }
 
+    // Ghosts keep their shape (luma) and take on the processed colour's chroma.
+    if (tapCount > 0) {
+        currentColor = restoreChroma(currentColor, preTapChroma, 1.5h);
+    }
+
     // === 5. STOCHASTIC BLOOM ===
     // Single random-offset sample weighted by brightness — dreamy glow around bright areas.
     // Noise varies per pixel and per frame so the bloom shimmers organically.
@@ -498,8 +540,12 @@ static inline half4 shadeEye(
         float2 bloomUV = clamp(uv + noise * uniforms.bloomRadius, float2(0.001), float2(0.999));
         half3 bloomSample = sourceTexture.sample(texSampler, bloomUV).rgb;
         half brightness = dot(bloomSample, half3(0.299h, 0.587h, 0.114h));
-        currentColor += bloomSample * brightness * half(uniforms.bloomAmount);
-        currentColor = clamp(currentColor, 0.0h, 1.0h);
+        // Saturate the glow about its own luma and SCREEN it: highlights roll off with their
+        // colour instead of the old clamped add flattening them to white.
+        half3 glow = bloomSample * brightness * half(uniforms.bloomAmount);
+        half glowL = dot(glow, LUMA_W);
+        glow = clamp(glowL + (glow - glowL) * 1.5h, 0.0h, 1.0h);
+        currentColor = 1.0h - (1.0h - currentColor) * (1.0h - glow);
     }
 
     // === 6. FEEDBACK WARPING ===
@@ -510,7 +556,24 @@ static inline half4 shadeEye(
                           * uniforms.feedbackWarpAmount;
         feedbackUV = clamp(feedbackUV, float2(0.001), float2(0.999));
         half3 feedbackColor = feedbackTexture.sample(texSampler, feedbackUV).rgb;
-        currentColor = mix(currentColor, feedbackColor, half(uniforms.feedbackMix));
+        half fm = half(uniforms.feedbackMix);
+        half fbTarget = mix(chromaOf(currentColor), chromaOf(feedbackColor), fm);
+        currentColor = restoreChroma(mix(currentColor, feedbackColor, fm), fbTarget, 1.5h);
+    }
+
+    // === 7. VIBRANCE ===
+    // Black-point pull-down, then a chroma gain weighted toward under-saturated pixels
+    // (tapers to 1 as saturation -> 1: the soft knee), gated off for near-greys, then
+    // gamutFit: luma- and hue-preserving, never leaves [0,1] (no clipping to white).
+    {
+        half bp = half(uniforms.blackPoint);
+        half3 c = max((currentColor - bp) / (1.0h - bp), 0.0h);
+        half l = dot(c, LUMA_W);
+        half mx = max(c.r, max(c.g, c.b));
+        half ch = mx - min(c.r, min(c.g, c.b));
+        half sat = ch / max(mx, 1.0e-3h);
+        half g = 1.0h + half(uniforms.vibranceAmount) * (1.0h - sat) * smoothstep(0.02h, 0.10h, ch);
+        currentColor = gamutFit(l + (c - l) * g, l);
     }
 
     return half4(currentColor, 1.0h);
@@ -561,8 +624,9 @@ fragment StereoEyesOut effectsFragmentStereo(
     texture2d<half> sourceTexture [[texture(0)]],
     texture2d<half> saliencyTexture [[texture(2)]],
     texture2d<half> previousTexture [[texture(3)]],
-    texture2d<half> feedbackTexture [[texture(4)]],
+    texture2d<half> feedbackTexture [[texture(4)]],       // left eye's previous output
     texture2d<half> depthTexture [[texture(5)]],
+    texture2d<half> feedbackTextureRight [[texture(6)]],  // right eye's previous output
     constant EffectsUniforms &uniforms [[buffer(0)]],
     constant GhostTap *ghostTaps [[buffer(1)]]
 ) {
@@ -573,7 +637,7 @@ fragment StereoEyesOut effectsFragmentStereo(
                         sourceTexture, saliencyTexture, previousTexture, feedbackTexture, depthTexture,
                         uniforms, ghostTaps);
     out.right = shadeEye(uv, in.texCoord, in.position.xy, mag,
-                         sourceTexture, saliencyTexture, previousTexture, feedbackTexture, depthTexture,
+                         sourceTexture, saliencyTexture, previousTexture, feedbackTextureRight, depthTexture,
                          uniforms, ghostTaps);
     return out;
 }

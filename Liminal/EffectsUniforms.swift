@@ -34,6 +34,10 @@ struct EffectsUniforms {
     var logSphereAmount: Float  // Log-spherical fractal distortion intensity
     var fractalNoiseAmount: Float  // Sinusoidal interference noise distortion intensity
     var fractalHueAmount: Float  // Fractal-driven hue cycling intensity
+    // Final VIBRANCE stage (appended last; order must match the Metal struct).
+    // Defaults of 0 = stage is a no-op, so debug/dummy initialisers need not list them.
+    var vibranceAmount: Float = 0  // Chroma gain for under-saturated pixels (0 = off)
+    var blackPoint: Float = 0  // Black-point pull-down before the gain (0 = off)
 }
 
 /// Ghost tap data for shader. Must match Metal struct layout.

@@ -41,6 +41,24 @@ final class OffscreenEffectsRenderer {
 
     private let outputSize: Int = 2048  // Output texture resolution
 
+    // MARK: - Output encoding + feedback (docs/decisions/vibrance.md V1, V2)
+
+    /// Every pass renders into a plain `bgra8Unorm` VIEW of the `_srgb` drawable. The shader works on
+    /// gamma-encoded sRGB values; writing them through an `_srgb` attachment encoded them a second
+    /// time (mid-grey 128 showed as ~188, saturation -33%). Through the view the stored bytes are the
+    /// shader's values unchanged, exactly like macOS; RealityKit still samples the `_srgb` format.
+    static let renderFormat: MTLPixelFormat = .bgra8Unorm
+    /// Views keyed by the drawable texture they alias (DrawableQueue recycles a small fixed set).
+    private var outputViews: [(texture: MTLTexture, view: MTLTexture)] = []
+    private var loggedViewFailure = false
+
+    /// Feedback trails: each eye reads its own previous output (the view of the drawable presented
+    /// last frame) at texture 4 (right eye: 6 in the MRT pass). Same semantics as macOS (which copies
+    /// its drawable), but with no copy and no extra memory. Index: 0 = left / mono, 1 = right.
+    private var lastOutput: [MTLTexture?] = [nil, nil]
+    /// 1x1 black, bound when no previous output exists (feedbackMix is also forced to 0 then).
+    private let blackTexture: MTLTexture?
+
     // MARK: - Ghost Taps
 
     private var ghostTapBuffer: MTLBuffer?
@@ -131,7 +149,7 @@ final class OffscreenEffectsRenderer {
         let pipelineDescriptor = MTLRenderPipelineDescriptor()
         pipelineDescriptor.vertexFunction = vertexFunc
         pipelineDescriptor.fragmentFunction = fragmentFunc
-        pipelineDescriptor.colorAttachments[0].pixelFormat = .bgra8Unorm_srgb
+        pipelineDescriptor.colorAttachments[0].pixelFormat = Self.renderFormat
 
         do {
             pipelineState = try device.makeRenderPipelineState(descriptor: pipelineDescriptor)
@@ -144,8 +162,8 @@ final class OffscreenEffectsRenderer {
         let stereoDescriptor = MTLRenderPipelineDescriptor()
         stereoDescriptor.vertexFunction = vertexFunc
         stereoDescriptor.fragmentFunction = stereoFragmentFunc
-        stereoDescriptor.colorAttachments[0].pixelFormat = .bgra8Unorm_srgb
-        stereoDescriptor.colorAttachments[1].pixelFormat = .bgra8Unorm_srgb
+        stereoDescriptor.colorAttachments[0].pixelFormat = Self.renderFormat
+        stereoDescriptor.colorAttachments[1].pixelFormat = Self.renderFormat
 
         do {
             stereoPipelineState = try device.makeRenderPipelineState(descriptor: stereoDescriptor)
@@ -158,7 +176,7 @@ final class OffscreenEffectsRenderer {
         let passthroughDescriptor = MTLRenderPipelineDescriptor()
         passthroughDescriptor.vertexFunction = vertexFunc
         passthroughDescriptor.fragmentFunction = passthroughFragFunc
-        passthroughDescriptor.colorAttachments[0].pixelFormat = .bgra8Unorm_srgb
+        passthroughDescriptor.colorAttachments[0].pixelFormat = Self.renderFormat
 
         do {
             passthroughPipelineState = try device.makeRenderPipelineState(descriptor: passthroughDescriptor)
@@ -183,6 +201,16 @@ final class OffscreenEffectsRenderer {
         // Create ghost tap buffer (8 taps * 16 bytes each)
         let ghostTapBufferSize = GhostTapManager.maxTaps * MemoryLayout<GhostTapData>.stride
         self.ghostTapBuffer = device.makeBuffer(length: ghostTapBufferSize, options: .storageModeShared)
+
+        // 1x1 black feedback placeholder (never sampled with weight: feedbackMix is 0 when it is bound)
+        let blackDescriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: Self.renderFormat, width: 1, height: 1, mipmapped: false)
+        blackDescriptor.usage = .shaderRead
+        blackDescriptor.storageMode = .shared
+        let black = device.makeTexture(descriptor: blackDescriptor)
+        var blackPixel: [UInt8] = [0, 0, 0, 255]
+        black?.replace(region: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0, withBytes: &blackPixel, bytesPerRow: 4)
+        self.blackTexture = black
 
         // Create default saliency texture (1x1 neutral gray)
         // IMPORTANT: Prevents undefined behavior when sampling nil texture
@@ -231,7 +259,9 @@ final class OffscreenEffectsRenderer {
     func setupDrawableQueue() async throws {
         let size = outputSize
 
-        // Use sRGB format - Metal auto-applies linear→sRGB on write to match macOS
+        // `_srgb` so RealityKit decodes on sample. We never render into this format directly: passes
+        // target a bgra8Unorm view (outputView(for:)), so the bytes are the shader's gamma values,
+        // which RealityKit decodes to linear and the display re-encodes: same result as macOS.
         let descriptor = TextureResource.DrawableQueue.Descriptor(
             pixelFormat: .bgra8Unorm_srgb,
             width: size,
@@ -247,7 +277,7 @@ final class OffscreenEffectsRenderer {
         let placeholderImage = createPlaceholderImage(width: size, height: size)
 
         // Create texture resource from placeholder, then link to drawable queue
-        // Use .raw semantic to prevent sRGB color space conversion (matches macOS behavior)
+        // .raw semantic: the placeholder's bytes are uploaded as-is (it is replaced by the queue anyway)
         let resource = try await TextureResource(image: placeholderImage, options: .init(semantic: .raw))
         resource.replace(withDrawables: queue)
 
@@ -547,7 +577,7 @@ final class OffscreenEffectsRenderer {
             }
 
             // Render using passthrough shader directly into the drawable (no effects, just samples texture)
-            let renderPassDescriptor = makeDrawablePassDescriptor(for: drawable.texture)
+            let renderPassDescriptor = makeDrawablePassDescriptor(for: outputView(for: drawable.texture))
 
             guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else { return false }
 
@@ -650,7 +680,8 @@ final class OffscreenEffectsRenderer {
         }
 
         // Render straight into the drawable (no intermediate texture, no copy)
-        let renderPassDescriptor = makeDrawablePassDescriptor(for: drawable.texture)
+        let target = outputView(for: drawable.texture)
+        let renderPassDescriptor = makeDrawablePassDescriptor(for: target)
 
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else {
             inFlightSemaphore.signal()
@@ -663,6 +694,10 @@ final class OffscreenEffectsRenderer {
         // Set uniforms with ghost tap count for optimized shader loop
         var mutableUniforms = uniforms
         mutableUniforms.ghostTapCount = Float(ghostTapResult.activeCount)
+        let feedback = feedbackSource(eye: 0, target: target)
+        if feedback == nil { mutableUniforms.feedbackMix = 0 }
+        encoder.setFragmentTexture(feedback ?? blackTexture, index: 4)
+        lastOutput[0] = target
         encoder.setFragmentBytes(&mutableUniforms, length: MemoryLayout<EffectsUniforms>.size, index: 0)
 
         // Set ghost tap buffer
@@ -851,7 +886,7 @@ final class OffscreenEffectsRenderer {
     private func renderPassthrough(to drawable: TextureResource.Drawable, sourceTexture: MTLTexture) -> Bool {
         guard let commandBuffer = commandQueue.makeCommandBuffer(),
               let encoder = commandBuffer.makeRenderCommandEncoder(
-                descriptor: makeDrawablePassDescriptor(for: drawable.texture)) else { return false }
+                descriptor: makeDrawablePassDescriptor(for: outputView(for: drawable.texture))) else { return false }
         encoder.setRenderPipelineState(passthroughPipelineState)
         let zeroUniforms = [UInt8](repeating: 0, count: MemoryLayout<EffectsUniforms>.size)
         encoder.setFragmentBytes(zeroUniforms, length: zeroUniforms.count, index: 0)
@@ -877,9 +912,11 @@ final class OffscreenEffectsRenderer {
     ) -> Bool {
         guard let commandBuffer = commandQueue.makeCommandBuffer() else { return false }
 
-        let descriptor = makeDrawablePassDescriptor(for: left.texture)
+        let leftTarget = outputView(for: left.texture)
+        let rightTarget = outputView(for: right.texture)
+        let descriptor = makeDrawablePassDescriptor(for: leftTarget)
         validateDrawableSize(right.texture)
-        descriptor.colorAttachments[1].texture = right.texture
+        descriptor.colorAttachments[1].texture = rightTarget
         descriptor.colorAttachments[1].loadAction = .dontCare
         descriptor.colorAttachments[1].storeAction = .store
 
@@ -893,6 +930,14 @@ final class OffscreenEffectsRenderer {
         var mutableUniforms = uniforms
         mutableUniforms.ghostTapCount = Float(ghostTapCount)
         mutableUniforms.stereoOffset = depthTexture != nil ? abs(stereoOffset) : 0
+        // Feedback: each eye reads its own previous output. feedbackMix is shared by the pass, so if
+        // either eye has none (first frame, or a recycled drawable), skip trails for this one frame.
+        let leftFeedback = feedbackSource(eye: 0, target: leftTarget)
+        let rightFeedback = feedbackSource(eye: 1, target: rightTarget)
+        if leftFeedback == nil || rightFeedback == nil { mutableUniforms.feedbackMix = 0 }
+        encoder.setFragmentTexture(leftFeedback ?? blackTexture, index: 4)
+        encoder.setFragmentTexture(rightFeedback ?? blackTexture, index: 6)
+        lastOutput = [leftTarget, rightTarget]
         encoder.setFragmentBytes(&mutableUniforms, length: MemoryLayout<EffectsUniforms>.size, index: 0)
 
         encoder.setFragmentBuffer(ghostTapBuffer, offset: 0, index: 1)
@@ -929,7 +974,8 @@ final class OffscreenEffectsRenderer {
         }
 
         // Render straight into this eye's drawable (no intermediate texture, no copy)
-        let renderPassDescriptor = makeDrawablePassDescriptor(for: drawable.texture)
+        let target = outputView(for: drawable.texture)
+        let renderPassDescriptor = makeDrawablePassDescriptor(for: target)
 
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else {
             return false
@@ -941,6 +987,11 @@ final class OffscreenEffectsRenderer {
         var mutableUniforms = uniforms
         mutableUniforms.ghostTapCount = Float(ghostTapCount)
         mutableUniforms.stereoOffset = depthTexture != nil ? eyeOffset : 0
+        let eye = eyeOffset < 0 ? 0 : 1
+        let feedback = feedbackSource(eye: eye, target: target)
+        if feedback == nil { mutableUniforms.feedbackMix = 0 }
+        encoder.setFragmentTexture(feedback ?? blackTexture, index: 4)
+        lastOutput[eye] = target
         encoder.setFragmentBytes(&mutableUniforms, length: MemoryLayout<EffectsUniforms>.size, index: 0)
 
         encoder.setFragmentBuffer(ghostTapBuffer, offset: 0, index: 1)
@@ -960,6 +1011,32 @@ final class OffscreenEffectsRenderer {
         commandBuffer.commit()
         drawable.present()
         return true
+    }
+
+    /// `bgra8Unorm` view of an `_srgb` drawable texture (cached; see `renderFormat`). Falls back to the
+    /// drawable itself if the view cannot be made, which only happens if the drawable's format changed.
+    private func outputView(for texture: MTLTexture) -> MTLTexture {
+        if texture.pixelFormat == Self.renderFormat { return texture }
+        if let hit = outputViews.first(where: { $0.texture === texture }) { return hit.view }
+        guard let view = texture.makeTextureView(pixelFormat: Self.renderFormat) else {
+            if !loggedViewFailure {
+                loggedViewFailure = true
+                LMLog.visual.error("❌ Could not make bgra8Unorm view of drawable (format \(texture.pixelFormat.rawValue)); output will be double sRGB-encoded")
+            }
+            return texture
+        }
+        outputViews.append((texture, view))
+        if outputViews.count > 12 { outputViews.removeFirst(outputViews.count - 12) }
+        LMLog.visual.info("🎨 Output view #\(self.outputViews.count): drawable format \(texture.pixelFormat.rawValue) → view \(view.pixelFormat.rawValue)")
+        return view
+    }
+
+    /// Previous output for this eye, or nil if there is none or it is the texture about to be written
+    /// (a render pass must not sample its own attachment).
+    private func feedbackSource(eye: Int, target: MTLTexture) -> MTLTexture? {
+        guard let prev = lastOutput[eye], prev !== target else { return nil }
+        if let a = prev.parent, let b = target.parent, a === b { return nil }
+        return prev
     }
 
     /// Render pass that writes the effects quad straight into a drawable texture.

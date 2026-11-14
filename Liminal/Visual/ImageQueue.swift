@@ -2,6 +2,7 @@ import Foundation
 import Combine
 import OSLog
 import CoreGraphics
+import ImageIO
 
 #if os(macOS)
 import AppKit
@@ -130,6 +131,15 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
     /// Lists the store (sidecars only), decodes ONE random image and shows it.
     private func loadInitialImage() async {
         #if DEBUG
+        if let path = DebugLaunchOptions.testImagePath,
+           let src = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil),
+           let img = CGImageSourceCreateImageAtIndex(src, 0, nil) {
+            // -LiminalTestImage: show only this image (deterministic before/after captures).
+            imageBuffer.storeCurrent(img, metadata: nil)
+            await MainActor.run { self.currentImage = Self.platformImage(img) }
+            LMLog.visual.info("🧪 [ImageQueue] Test image shown (\(img.width)x\(img.height)); generation disabled")
+            return
+        }
         if DebugLaunchOptions.testPattern {
             // -LiminalTestPattern: show only the orientation/colour test card.
             let card = TestPatternGenerator.image
@@ -161,7 +171,7 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
         let cacheOnly = SettingsService.shared.cacheOnly
         isRunning = true
         #if DEBUG
-        if DebugLaunchOptions.testPattern { return }  // test card only, no generation/recycling
+        if DebugLaunchOptions.testPattern || DebugLaunchOptions.testImagePath != nil { return }  // fixed image only
         #endif
         LMLog.visual.info("ImageQueue starting (cacheOnly=\(cacheOnly), cached=\(self.totalCachedCount))")
         statusMessage = nil

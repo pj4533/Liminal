@@ -10,6 +10,8 @@
 //    - a circle + square grid in the middle (aspect check: the circle must look round)
 //    - bottom strip: left-to-right black→white ramp, 18% and 50% grey patches,
 //      saturated R G B C M Y swatches
+//    - mid-height grey columns (left 0.18/0.46/0.50/0.735, right 0/0.25/0.75/1.0) for colour
+//      readback in simulator screenshots (the bottom strip is hidden by the floor overlay)
 //
 
 #if DEBUG
@@ -117,6 +119,18 @@ enum TestPatternGenerator {
         for p in patches {
             fill(rect(px, patchY, ps, ps), p)
             px += ps + 10
+        }
+
+        // Mid-height grey columns (vibrance/encoding check): the bottom strip sits under the
+        // simulator's floor overlay, so these are the patches to sample in screenshots.
+        // Left, top→bottom: 0.18, 0.46, 0.50, 0.735. Right, top→bottom: 0.0, 0.25, 0.75, 1.0.
+        let leftGreys: [CGFloat] = [0.18, 0.46, 0.5, 0.735]
+        let rightGreys: [CGFloat] = [0.0, 0.25, 0.75, 1.0]
+        for (i, v) in leftGreys.enumerated() {
+            fill(rect(250, 290 + CGFloat(i) * 115, 150, 100), (v, v, v))
+        }
+        for (i, v) in rightGreys.enumerated() {
+            fill(rect(w - 400, 290 + CGFloat(i) * 115, 150, 100), (v, v, v))
         }
 
         return ctx.makeImage()!

@@ -20,12 +20,14 @@ enum EffectsUniformsComputer {
     ///   - transitionProgress: Optional crossfade transition progress (0-1) for distortion boost
     ///   - hasSaliencyMap: Whether a saliency texture is available
     ///   - ghostTapCount: Number of active ghost taps (0-8) for optimized shader loop
+    ///   - vibrance: Per-image vibrance factors (ImageColorStats), blended across crossfades
     /// - Returns: Complete EffectsUniforms ready for the shader
     static func compute(
         time: Float,
         transitionProgress: Float = 0,
         hasSaliencyMap: Bool = false,
-        ghostTapCount: Int = 0
+        ghostTapCount: Int = 0,
+        vibrance: VibranceFactors = .neutral
     ) -> EffectsUniforms {
 
         // Ken Burns: smooth continuous motion
@@ -39,7 +41,7 @@ enum EffectsUniformsComputer {
         let hueBlend = colorCycle * 0.8  // Max blend at 80% to preserve some original color
         let hueWave = colorCycle * 0.6   // Spatial wave intensity also scales with color cycle
 
-        return EffectsUniforms(
+        var uniforms = EffectsUniforms(
             time: time,
             kenBurnsScale: kenBurns.scale,
             kenBurnsOffsetX: kenBurns.offsetX,
@@ -66,6 +68,24 @@ enum EffectsUniformsComputer {
             fractalNoiseAmount: computeFractalNoise(time: time, transitionProgress: transitionProgress),
             fractalHueAmount: computeFractalHue(time: time)
         )
+        uniforms.vibranceAmount = computeVibrance(time: time, imageFactor: vibrance.amount)
+        uniforms.blackPoint = baseBlackPoint * vibrance.dark
+        return uniforms
+    }
+
+    // MARK: - Vibrance (final shader stage)
+
+    /// Black-point pull-down at darkFactor 1. 0.03 crushed 4.3% of pixels in the prototype;
+    /// 0.015 stays within +0.5 points of the input's crushed blacks.
+    static let baseBlackPoint: Float = 0.015
+
+    /// Chroma gain of the final vibrance stage: a slow, non-repeating swell (golden-ratio
+    /// frequencies decorrelated from the other oscillators) so colour intensity breathes.
+    /// 0.18...0.42 at imageFactor 1. See docs/decisions/vibrance.md (V6).
+    static func computeVibrance(time: Float, imageFactor: Float = 1) -> Float {
+        let phi: Float = 1.618034
+        let wave = (sin(time * 0.023 * phi) + sin(time * 0.041 / phi) * 0.6) / 1.6  // -1..1
+        return (0.30 + 0.12 * wave) * imageFactor
     }
 
     // MARK: - Ken Burns

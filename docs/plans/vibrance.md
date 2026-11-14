@@ -1,6 +1,8 @@
 # Vibrance fix plan: keep every effect, restore the color
 
-Status: plan. No app shader or renderer code is changed by this document. The numbers come from
+Status: **implemented** (see `docs/decisions/vibrance.md`, V1-V9, for what shipped, how the renderer-level
+fixes were adapted to the direct-to-drawable MRT renderer, and the final numbers). Originally: no app shader
+or renderer code was changed by this document. The numbers come from
 `scripts/vibrance-eval.sh` (baseline, see `vibrance-measurements.md`) and from a prototype of the shader
 changes below, applied to a *copy* of the shader by `scripts/vibrance-proto.sh` and measured with the same
 harness (16 images × 5 times, 512², macOS mode with a 30-frame feedback loop).
