@@ -2,7 +2,7 @@ import Foundation
 
 /// Musical scale definitions for generative composition.
 /// Scales constrain note selection to musically coherent sets.
-enum ScaleType: String, CaseIterable {
+nonisolated enum ScaleType: String, CaseIterable {
     // MARK: - Western Modes
     case major = "Major (Ionian)"
     case dorian = "Dorian"
@@ -189,8 +189,20 @@ enum ScaleType: String, CaseIterable {
     }
 }
 
+nonisolated extension ScaleType {
+    /// 12-bit pitch-class set of this scale on `tonic` (bit k = pitch class k).
+    func pitchClassMask(tonic: Int) -> UInt16 {
+        var m: UInt16 = 0
+        for i in intervals { m |= 1 << UInt16((tonic + i) % 12) }
+        return m
+    }
+
+    /// Index into `allCases` (published in `MusicState.modeIndex`).
+    var index: Int { ScaleType.allCases.firstIndex(of: self) ?? 0 }
+}
+
 /// A musical scale rooted at a specific note.
-struct Scale {
+nonisolated struct Scale {
     let type: ScaleType
     let rootMIDI: Int  // MIDI note number (60 = middle C)
 
@@ -219,14 +231,27 @@ struct Scale {
         return 440.0 * pow(2.0, Float(midi - 69) / 12.0)
     }
 
+    /// MIDI note for a true scale degree (0 = root, negative and > count wrap by octaves).
+    /// Unlike indexing into `notesInRange`, degree 0 is always the root.
+    func midi(degree: Int, octave: Int) -> Int {
+        let intervals = type.intervals
+        let n = intervals.count
+        let o = Scale.floorDiv(degree, n)
+        return rootMIDI + octave * 12 + intervals[degree - o * n] + o * 12
+    }
+
     /// Get frequency for a scale degree (0-indexed) in a specific octave
     func frequencyForDegree(_ degree: Int, octave: Int) -> Float {
-        let intervals = type.intervals
-        let octaveOffset = degree / intervals.count
-        let degreeInOctave = degree % intervals.count
+        Scale.midiToFrequency(midi(degree: degree, octave: octave))
+    }
 
-        let midi = rootMIDI + (octave * 12) + intervals[degreeInOctave] + (octaveOffset * 12)
-        return Scale.midiToFrequency(midi)
+    /// Fractional MIDI to frequency (for detune).
+    static func midiToFrequency(_ midi: Double) -> Float {
+        Float(440.0 * pow(2.0, (midi - 69) / 12.0))
+    }
+
+    static func floorDiv(_ a: Int, _ b: Int) -> Int {
+        a >= 0 ? a / b : -((-a + b - 1) / b)
     }
 
     /// Get a random note from the scale within a MIDI range
@@ -238,7 +263,7 @@ struct Scale {
 
 // MARK: - Convenience
 
-extension Scale {
+nonisolated extension Scale {
     /// Common scales for ambient music
     static let cPentatonic = Scale(type: .pentatonicMajor, rootMIDI: 60)
     static let aPentatonicMinor = Scale(type: .pentatonicMinor, rootMIDI: 57)
