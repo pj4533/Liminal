@@ -6,6 +6,37 @@ Hard constraints: the visionOS render target stays 2048x2048, and the effects mu
 is the bottleneck on a real Vision Pro. Simulator numbers are only for before/after comparison.
 
 
+## CUMULATIVE SUMMARY after GPU round 2 (integration, 2026-11-14)
+
+Deterministic Mac-GPU bench (scripts/shader-bench.sh, 2048^2 eye pass, 5 scenarios, interleaved A/B,
+5 trials x 300 frames; the Simulator host and the Mac Liminal app shared the GPU, noise floor ~1-3%).
+"orig" = shader of 741465d (pre-perf main; per-eye `effectsFragment`, no vibrance stage), run in the bench
+via --mono (two per-eye passes, new bench option: the stereo pipeline is now only built when not --mono).
+"r2base" = shader at cdc8f90 (after perf+images+vibrance, before round 2).
+
+| Comparison (ms per frame, both eyes) | A | B | B/A |
+|---|---|---|---|
+| MRT: r2base -> final (run 1 / run 2) | 6.59 / 6.65 | 5.01 / 4.85 | 0.76 / 0.73 (-24..-27%) |
+| per-eye shader, mono: r2base -> final | 10.05 | 6.75 | 0.67 (-33%) |
+| per-eye shader, mono: orig -> final | 8.46 | 6.62 | 0.78 (-22%) |
+| per-eye shader, mono: orig -> r2base | 9.87 | 10.57 | 1.07 (+7%, cost of vibrance/orientation/sRGB-fix stages) |
+| whole pipeline: orig mono 2-pass (8.46) -> final MRT (~4.9) | 8.46 | ~4.9 | ~0.58 (-42%) |
+
+The last row compares absolute numbers from different runs within minutes of each other (no direct
+interleave possible across modes), so treat it as +-5%. Final shader is therefore ~22% cheaper per pixel than the
+original even though it now includes the vibrance stage, and MRT adds a further ~25% on top.
+Round 2 kept: noise-double-angle (-9.5%), logsphere-double-angle (-8.7%), fhue-double-angle (-5.5%),
+per-eye-alu-half (-4.6%). Not kept: mrt-share-eye-independent, bloom-ghost-mip, specialise-and-skip-retest,
+half-HSV. Note: the noise-double-angle commit (911eb7e) is below the literal 35 dB parity rule on 2 scenarios
+(32.6/34.5 dB; waived, see its entry: the old shader is only 32.2 dB from an all-float reference).
+
+Simulator, 3 x 30 s (integ-final-1/2/3, 15 s warm-up) + frozen t=100: fps 76.8/77.3/77.4, interval p95 13.3 ms,
+GPU mean 0.172/0.169/0.169 ms (p95 0.32-0.34), dropped/5 s 2.0/1.8/1.2; frozen GPU 0.155 ms. Versus the earlier
+perf-only final (0.157/0.161/0.207) the Simulator GPU number is slightly higher because the vibrance stage etc.
+were added since; the Simulator host GPU is too coarse to show the ALU savings (bench shows them). The frozen
+screenshot (integ-final-frozen) renders upright (floor at the bottom, sky above), vibrant, with turbulence, chromatic
+fringing, grain and ghosting visible. 2048x2048 unchanged.
+
 ## SUMMARY (final wrap-up, 2026-11-14)
 
 Simulator (host Mac GPU), median of 3 unfrozen 30 s runs, 15 s warm-up. GPU numbers are for relative

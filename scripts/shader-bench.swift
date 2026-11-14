@@ -291,14 +291,14 @@ func makePipeline(_ library: MTLLibrary, _ fragment: String, attachments: Int) -
 struct Variant {
     let name: String
     let path: String
-    let stereo: MTLRenderPipelineState
+    let stereo: MTLRenderPipelineState?
     let mono: MTLRenderPipelineState
 }
 let variantPaths: [(String, String)] = [("A", metallibPath)] + (metallibPathB.map { [("B", $0)] } ?? [])
 let variants: [Variant] = variantPaths.map { name, path in
         let lib = loadLibrary(path)
         return Variant(name: name, path: path,
-                       stereo: makePipeline(lib, "effectsFragmentStereo", attachments: 2),
+                       stereo: mono ? nil : makePipeline(lib, "effectsFragmentStereo", attachments: 2),
                        mono: makePipeline(lib, "effectsFragment", attachments: 1))
     }
 
@@ -475,7 +475,7 @@ func encodeFrame(_ cb: MTLCommandBuffer, _ sc: Scenario, _ st: FrameState, varia
             rpd.colorAttachments[a].storeAction = .store
         }
         let enc = cb.makeRenderCommandEncoder(descriptor: rpd)!
-        enc.setRenderPipelineState(variants[variant].stereo)
+        enc.setRenderPipelineState(variants[variant].stereo!)
         if st.last[0] == nil || st.last[1] == nil { u.feedbackMix = 0 }
         enc.setFragmentTexture(st.last[0] ?? blackTex, index: 4)
         enc.setFragmentTexture(st.last[1] ?? blackTex, index: 6)
