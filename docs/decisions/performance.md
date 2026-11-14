@@ -208,3 +208,11 @@ section. Nothing was measured in this step; the conclusions below come from the 
   saves in this metric, and they carry look risk); effects below display rate (needs user
   sign-off); anything below 2048².
 - **Rule change**: candidate and reference are measured interleaved in one session.
+
+## Offline Mac-GPU shader benchmark harness (commit 51ae60c) - NOT KEPT
+
+- What: scripts/shader-bench.swift + shader-bench.sh, an offline 2048^2 eye-pass benchmark with PNG parity output.
+- Why measured: workflow step requires every commit to be run through perf-run.sh. The commit touches only scripts/ and docs/ (no app code), so it cannot change app GPU time.
+- Measured (visionOS sim, median of 3): gpu_ms_mean 0.258 (0.261/0.254/0.258), fps 74.15 (74.2/61.5/75.1), interval p95 17.7 ms. Frozen run: gpu 0.264 ms. No errors in logs.
+- Comparison to the "current best" (0.159 ms) is not apples to apples: sim host load and loaded dome image content differ between sessions (frozen screenshots differ because different generated images were loaded: 551 vs 64 in the image counter; mean abs diff 47). Not a shader regression since no shader changed.
+- Verdict: no gain (>=3% threshold not met), so the branch was reset to 173a05a per workflow rules. The harness is a tooling-only change; it can be re-applied from 51ae60c if wanted (git cherry-pick 51ae60c).
