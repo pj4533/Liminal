@@ -31,7 +31,7 @@ struct CGImageTransitionState {
     var transitionStartTime: Date?
     var lastGeneration: UInt64 = 0
 
-    private let crossfadeDuration: Double = 1.5
+    private let crossfadeDuration: Double = VisualMoodBuilder.crossfadeDuration
 
     /// Raw linear transition progress (0-1)
     var transitionProgress: Float {
@@ -78,6 +78,8 @@ struct CGImageTransitionState {
 struct ImmersiveDomeView: View {
     @ObservedObject var visualEngine: VisualEngine
     @ObservedObject var settings: SettingsService
+    /// Plain reference, not observed: only its nonisolated bus and visual-input methods are used (C13).
+    let music: GenerativeEngine
 
     @State private var panelEntity: ModelEntity?
     @State private var effectsRenderer: OffscreenEffectsRenderer?
@@ -263,11 +265,14 @@ struct ImmersiveDomeView: View {
         }
 
         // Set initial image directly from CGImage - NO UIImage conversion!
-        if let rawImage = visualEngine.imageBuffer.loadCurrent() {
+        let initial = visualEngine.imageBuffer.loadCurrentWithMetadata()
+        if let rawImage = initial.image {
             let cgImage = ImageFraming.coverCrop(rawImage)
             transitionState.setInitialImage(cgImage)
-            transitionState.lastGeneration = visualEngine.imageBuffer.generation()
+            transitionState.lastGeneration = initial.generation
             LMLog.visual.info("🎬 Initial image set directly from CGImage (gen \(transitionState.lastGeneration))")
+            // Visuals -> music: first image sets the mood, no imageDidChange (no crossfade).
+            postVisualMood(metadata: initial.metadata, image: cgImage, imageChanged: false)
 
             loadingState = "Preparing 3D depth..."
             await generateAndApplyDepth(for: cgImage, logLabel: "initial")
@@ -312,6 +317,12 @@ struct ImmersiveDomeView: View {
             var consecutiveSlowFrames = 0
             var lastYieldTime: Date = Date()
 
+            // Music <-> visuals coupling (docs/plans/av-coupling.md); local to this loop, no locks.
+            var reactor = MusicReactor(strength: DebugLaunchOptions.syncStrength)
+            var activityThrottle = VisualActivityThrottle()
+            var lastSyncLogTime = Date.distantPast
+            let musicBus = music.musicState
+
             while !Task.isCancelled {
                 frameCount += 1
                 let frameStartTime = Date()
@@ -353,13 +364,17 @@ struct ImmersiveDomeView: View {
                 )
 
                 // Check for new images from AtomicImageBuffer (thread-safe)
-                let (rawImage, generation) = visualEngine.imageBuffer.loadWithGeneration()
+                // One atomic read of image, metadata and generation (C10).
+                let (rawImage, metadata, generation) = visualEngine.imageBuffer.loadCurrentWithMetadata()
                 if let rawImage = rawImage, generation != transitionState.lastGeneration {
                     // Centre-crop to the dome's 3:2 once; colour AND depth use the framed image.
                     let framedImage = ImageFraming.coverCrop(rawImage)
+                    let wasFirst = transitionState.currentImage == nil
                     transitionState.lastGeneration = generation
                     transitionState.transitionTo(framedImage)
                     LMLog.visual.info("🎬 New image detected (gen \(generation)), triggering transition")
+                    // Visuals -> music at the crossfade start.
+                    postVisualMood(metadata: metadata, image: framedImage, imageChanged: !wasFirst)
 
                     // Trigger depth map generation in background (~31ms, images change every ~30s)
                     if let depthGen = depthGenerator, !DebugLaunchOptions.forceStereoFlatDepth {
@@ -412,12 +427,36 @@ struct ImmersiveDomeView: View {
                     let from = ImageColorStats.cachedFactors(key: prev) { prev }
                     vibrance = VibranceFactors.lerp(from, vibrance, transitionState.transitionProgress)
                 }
+                let transitionProgress = transitionState.isTransitioning ? transitionState.transitionProgress : 0
+                // Music -> visuals: one seqlock read and ~10 one-pole updates. visionOS has no un-synced
+                // hue drift (baseHueRate 0). Frozen time bypasses the reactor (deterministic captures).
+                let modulation: MusicModulation
+                if DebugLaunchOptions.freezeTime != nil {
+                    modulation = .neutral
+                } else {
+                    modulation = reactor.update(state: musicBus.read(), now: musicBus.now(), effectTime: effectTime,
+                                                enabled: settings.syncVisualsToMusic, baseHueRate: 0)
+                }
+                renderer.requestGhostBurst(serial: modulation.ghostBurstSerial)
                 let uniforms = EffectsUniformsComputer.compute(
                     time: effectTime,
-                    transitionProgress: transitionState.isTransitioning ? transitionState.transitionProgress : 0,
+                    transitionProgress: transitionProgress,
                     hasSaliencyMap: false,
-                    vibrance: vibrance
+                    vibrance: vibrance,
+                    music: modulation
                 )
+
+                // Visuals -> music activity (un-modulated oscillators, at most 2 Hz)
+                let activity = EffectsUniformsComputer.visualActivity(time: effectTime, transitionProgress: transitionProgress)
+                if let a = activityThrottle.next(activity, at: Double(effectTime)) { music.setVisualActivity(a) }
+                if DebugLaunchOptions.syncLog, frameStartTime.timeIntervalSince(lastSyncLogTime) >= 1 {
+                    lastSyncLogTime = frameStartTime
+                    let neutral = EffectsUniformsComputer.compute(time: effectTime, transitionProgress: transitionProgress,
+                                                                  hasSaliencyMap: false, vibrance: vibrance)
+                    let line = MusicSyncLog.line(reactor: reactor, state: musicBus.read(), uniforms: uniforms, neutral: neutral,
+                                                 mood: sentMood.load(), activity: activityThrottle.lastSent)
+                    LMLog.visual.info("\(line, privacy: .public)")
+                }
 
                 // Render frame - use stereo path if available, otherwise mono
                 let renderStartTime = Date()
@@ -488,6 +527,24 @@ struct ImmersiveDomeView: View {
 
                 lastYieldTime = Date()  // Track when yield returns for next frame's timing
             }
+        }
+    }
+
+    /// Last mood sent (for the sync log); written from the background mood task.
+    private let sentMood = SentMoodRecord()
+
+    /// Visuals -> music. `imageDidChange` is posted immediately (the conductor lands its chord change on the
+    /// crossfade midpoint); the mood needs one 32x32 pass over the image, done off the render loop.
+    @MainActor
+    private func postVisualMood(metadata: ImageMetadata?, image: CGImage, imageChanged: Bool) {
+        if imageChanged { music.imageDidChange(transitionDuration: VisualMoodBuilder.crossfadeDuration) }
+        let music = self.music
+        let record = sentMood
+        Task.detached(priority: .utility) {
+            let mood = VisualMoodBuilder.mood(metadata: metadata, image: image)
+            music.setVisualMood(mood)
+            record.store(mood)
+            LMLog.visual.info("🎼 setVisualMood b=\(String(format: "%.2f", mood.brightness), privacy: .public) w=\(String(format: "%.2f", mood.warmth), privacy: .public) s=\(String(format: "%.2f", mood.saturation), privacy: .public) e=\(String(format: "%.2f", mood.energy), privacy: .public) words=\(mood.moodWords.joined(separator: ","), privacy: .public) imageDidChange=\(imageChanged)")
         }
     }
 

@@ -15,6 +15,8 @@ struct LiminalApp: App {
         WindowGroup {
             ContentView()
         }
+        // 3:2 visual area plus the control panel (the window delegate keeps the ratio on resize).
+        .defaultSize(width: 640 * 1.5 + ContentView.panelWidth + 1, height: 640)
     }
 }
 

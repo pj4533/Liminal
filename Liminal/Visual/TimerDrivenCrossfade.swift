@@ -17,7 +17,7 @@ final class TimerDrivenCrossfade: ObservableObject {
     // MARK: - Configuration
 
     private let targetFPS: Double = 30
-    private let crossfadeDuration: Double = 1.5  // seconds for crossfade
+    private let crossfadeDuration: Double = VisualMoodBuilder.crossfadeDuration  // seconds for crossfade
 
     // MARK: - Published State
 
@@ -66,7 +66,9 @@ final class TimerDrivenCrossfade: ObservableObject {
         }
     }
 
-    func transitionTo(_ newImage: PlatformImage) {
+    /// - Returns: true when a crossfade started (false for the first image and for the same image).
+    @discardableResult
+    func transitionTo(_ newImage: PlatformImage) -> Bool {
         guard let current = currentFrame else {
             currentFrame = newImage
             addToHistory(newImage)
@@ -76,12 +78,12 @@ final class TimerDrivenCrossfade: ObservableObject {
             Task {
                 await generateSaliencyMap(for: newImage)
             }
-            return
+            return false
         }
 
         if current.hash == newImage.hash {
             LMLog.visual.debug("Same image, skipping transition")
-            return
+            return false
         }
 
         if isMorphing {
@@ -101,6 +103,7 @@ final class TimerDrivenCrossfade: ObservableObject {
         Task {
             await generateSaliencyMap(for: newImage)
         }
+        return true
     }
 
     func addToPool(_ image: PlatformImage) {

@@ -53,6 +53,7 @@ xcrun -sdk macosx swiftc -O -o "$BUILD/vibrance-harness" \
   "$ROOT/tools/VibranceHarness/main.swift" \
   "$ROOT/Liminal/EffectsUniforms.swift" \
   "$ROOT/Liminal/Visual/EffectsUniformsComputer.swift" \
+  "$ROOT/Liminal/Visual/MusicModulation.swift" \
   "$ROOT/Liminal/Visual/SmoothOscillator.swift" \
   "$ROOT/Liminal/Visual/GhostTapManager.swift" \
   "$ROOT/Liminal/Visual/ImageFraming.swift" \

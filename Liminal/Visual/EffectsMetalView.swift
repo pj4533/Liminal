@@ -487,6 +487,11 @@ final class EffectsMetalView: MTKView {
         ghostTapManager.reset()
         LMLog.visual.info("🔄 Ghost taps reset")
     }
+
+    /// Music scene change: forward to the ghost tap manager (no-op unless the serial changed).
+    func requestGhostBurst(serial: UInt32) {
+        ghostTapManager.requestBurst(serial: serial)
+    }
 }
 
 // MARK: - SwiftUI Wrapper
@@ -497,6 +502,7 @@ struct EffectsMetalViewRepresentable: NSViewRepresentable {
     let saliencyMap: NSImage?
     let uniforms: EffectsUniforms  // Single struct - matches visionOS pattern
     let delay: Float  // Delay slider value (0-1), controls ghost tap spawn frequency
+    var ghostBurstSerial: UInt32 = 0  // MusicModulation.ghostBurstSerial (scene-change trail burst)
 
     func makeNSView(context: Context) -> EffectsMetalView {
         let view = EffectsMetalView()
@@ -517,6 +523,7 @@ struct EffectsMetalViewRepresentable: NSViewRepresentable {
         // Pass uniforms and delay
         nsView.uniforms = uniforms
         nsView.delay = delay
+        nsView.requestGhostBurst(serial: ghostBurstSerial)
     }
 }
 

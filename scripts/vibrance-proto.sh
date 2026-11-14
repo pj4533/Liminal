@@ -28,6 +28,7 @@ if [ ! -x "$OUT/.build/vibrance-harness" ]; then
   xcrun -sdk macosx swiftc -O -o "$OUT/.build/vibrance-harness" \
     "$ROOT/tools/VibranceHarness/main.swift" "$ROOT/Liminal/EffectsUniforms.swift" \
     "$ROOT/Liminal/Visual/EffectsUniformsComputer.swift" "$ROOT/Liminal/Visual/SmoothOscillator.swift" \
+    "$ROOT/Liminal/Visual/MusicModulation.swift" "$ROOT/Liminal/Visual/ImageColorStats.swift" \
     "$ROOT/Liminal/Visual/GhostTapManager.swift"
 fi
 "$OUT/.build/vibrance-harness" --metallib "$OUT/.build/default.metallib" --in "$IN" --out "$OUT" \

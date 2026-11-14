@@ -156,7 +156,7 @@ nonisolated final class GeminiClient: Sendable {
                     throw GeminiError.decodeFailed
                 }
                 let mime = inline.mimeType ?? (bytes.starts(with: [0x89, 0x50]) ? "image/png" : "image/jpeg")
-                LMLog.gemini.info("🌐 [Gemini] ✅ \(model) \(cgImage.width)x\(cgImage.height) \(bytes.count) bytes in \(String(format: "%.1f", latency))s")
+                LMLog.gemini.info("🌐 [Gemini] ✅ \(model) \(cgImage.width)x\(cgImage.height) \(bytes.count) bytes in \(String(format: "%.1f", latency), privacy: .public)s")
                 return GeneratedImageData(data: bytes, mimeType: mime, cgImage: cgImage, model: model, latency: latency)
             }
         }

@@ -175,12 +175,16 @@ xcrun xctrace export --input /tmp/l.trace --toc
 **Peekaboo 3.0.0-beta3 clicks work on the visionOS 26.2 simulator.** Clicking the macOS Simulator window registers as a gaze+pinch tap in visionOS.
 
 Verified end-to-end with no code changes to the app:
-1. `scripts/sim-tap.sh 1795 937` → Play button toggled to Stop, status "Playing".
-2. `scripts/sim-tap.sh 1918 937` → "Enter dome" opened the ImmersiveSpace.
+1. `scripts/sim-tap.sh 1371 935` → Play button toggled to Stop, status "Playing".
+2. `scripts/sim-tap.sh 1371 1041` → "Enter Dome" opened the ImmersiveSpace.
+
+(Coordinates updated for the redesigned 1240x800 control window, docs/decisions/ui.md. The original run used 1795 937 / 1918 937 on the old 320x560 window.)
 3. `xcrun simctl io <udid> screenshot` captured the rendered dome shader output (3840x2160).
 4. `log stream` produced `📊 visionOS PERF: fps=72.5 | render avg=0.2ms max=0.9ms | dropped=20`.
 
 `scripts/sim-tap.sh <x> <y>` takes coordinates in **simulator-screenshot pixels**. It reads the Simulator window bounds through Peekaboo and maps them to screen points. The display is 16:9 at window width, and the remaining space above it is window chrome. Workflow: screenshot → find the element's pixel position → `sim-tap.sh`.
+
+Sliders do not respond to a tap, and they ignore `peekaboo drag`. To move them, use `scripts/sim-drag.sh <x0> <y0> <x1> <y1>`, which takes the same pixel coordinates. It posts CGEvent drags through `scripts/sim-drag.swift`, and the Simulator only responds when those events carry `mouseEventDeltaX/Y`. The slider moves less than the pointer, so overshoot and check the screenshot: dragging +160 px moved the value by 11 to 22 points in testing. Picker menus such as Scale open with a tap, and a second tap picks an item.
 
 Caveats:
 - The Simulator window must stay visible and on-screen. The window is resizable, and the script re-reads its bounds on every tap.

@@ -22,10 +22,10 @@ struct LiminalVisionApp: App {
             ControlsView(audioEngine: audioEngine, visualEngine: visualEngine)
         }
         // Use automatic (default) window style - system handles glass and chrome
-        .defaultSize(width: 320, height: 560)
+        .defaultSize(width: 1240, height: 800)
 
         ImmersiveSpace(id: "liminalDome") {
-            ImmersiveDomeView(visualEngine: visualEngine, settings: settings)
+            ImmersiveDomeView(visualEngine: visualEngine, settings: settings, music: audioEngine)
         }
         .immersionStyle(selection: $immersionStyle, in: .progressive, .full)
 

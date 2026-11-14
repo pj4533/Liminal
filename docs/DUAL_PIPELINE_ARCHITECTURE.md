@@ -1,5 +1,7 @@
 # Dual Pipeline Architecture Review
 
+> **Historical (2026-01-15 review).** Its conclusion (keep two platform-specific pipelines, share shader and uniforms) still stands, but the render path has since changed: visionOS now renders both eyes in one MRT pass directly into the drawables, with no intermediate texture or blit. The current description is `PLATFORM_ARCHITECTURE.md`; any "optimization deferred" or blit-related text below is superseded by `decisions/performance.md`.
+
 **Date**: 2026-01-15
 **Status**: Reviewed and approved - optimization deferred
 **Reviewed by**: visionOS Expert, SwiftUI Architecture Expert, General Architecture Reviewer

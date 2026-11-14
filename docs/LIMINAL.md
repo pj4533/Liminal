@@ -2,6 +2,8 @@
 
 A macOS app that generates endless, evolving ambient music synchronized with AI-generated visuals that morph continuously. The system runs autonomously but provides abstract controls for users to "shape" the experience without directly controlling it.
 
+> **Status note (2026-11-14):** this overview was synced with the code after the music, images, vibrance, orientation, performance, coupling and UI work. Older diagrams were replaced. For the up-to-date entry point see `README.md`; platform details are in `PLATFORM_ARCHITECTURE.md`; decisions are indexed in `decisions/README.md`.
+
 ## Quick Start
 
 ```bash
@@ -19,141 +21,68 @@ cd ~/Developer/Liminal && xcodebuild -scheme Liminal -destination 'platform=macO
 ## Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        SwiftUI UI                                │
-│  ┌──────────────┐  ┌──────────────┐  ┌────────────────────┐     │
-│  │   Sliders    │  │ Scale Picker │  │  Visual Display    │     │
-│  │ delay        │  │              │  │  (EffectsMetalView)│     │
-│  │ reverb       │  │              │  │                    │     │
-│  │ notes        │  │              │  │                    │     │
-│  └──────────────┘  └──────────────┘  └────────────────────┘     │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      SettingsService                             │
-│  Persists all settings to UserDefaults                           │
-│  Single source of truth for UI and engines                       │
-└─────────────────────────────────────────────────────────────────┘
-              │                                    │
-              ▼                                    ▼
-┌──────────────────────────┐      ┌──────────────────────────────┐
-│     AUDIO ENGINE         │      │      VISUAL ENGINE           │
-│     (AudioKit)           │      │                              │
-│                          │      │  ┌────────────────────────┐  │
-│  ┌────────────────────┐  │      │  │ GeminiClient           │  │
-│  │ Bass Voice (drone) │  │      │  │ (Nano Banana model)    │  │
-│  │ 2 detuned oscs     │  │      │  └──────────┬─────────────┘  │
-│  └────────────────────┘  │      │             │                │
-│  ┌────────────────────┐  │      │             ▼                │
-│  │ Mid Voice (pad)    │  │      │  ┌────────────────────────┐  │
-│  │ 4 detuned oscs     │  │      │  │ ImageUpscaler          │  │
-│  └────────────────────┘  │      │  │ (CoreML RealESRGAN 4x) │  │
-│  ┌────────────────────┐  │      │  └──────────┬─────────────┘  │
-│  │ Shimmer Voice      │  │      │             │                │
-│  │ soft pings         │  │      │             ▼                │
-│  └────────────────────┘  │      │  ┌────────────────────────┐  │
-│           │              │      │  │ ImageCache             │  │
-│           ▼              │      │  │ (persistent storage)   │  │
-│  ┌────────────────────┐  │      │  └──────────┬─────────────┘  │
-│  │ Effects Chain      │  │      │             │                │
-│  │ - Reverb           │  │      │             ▼                │
-│  │ - Delay            │  │      │  ┌────────────────────────┐  │
-│  └────────────────────┘  │      │  │ MorphPlayer            │  │
-│                          │      │  │ (GPU crossfade)        │  │
-│                          │      │  └──────────┬─────────────┘  │
-│                          │      │             │                │
-│                          │      │             ▼                │
-│                          │      │  ┌────────────────────────┐  │
-│                          │      │  │ EffectsMetalView       │  │
-│                          │      │  │ (unified GPU effects)  │  │
-│                          │      │  │ - Ken Burns            │  │
-│                          │      │  │ - fBM Distortion       │  │
-│                          │      │  │ - Spatial Hue Shift    │  │
-│                          │      │  │ - Saliency Hue         │  │
-│                          │      │  │ - Feedback Trails      │  │
-│                          │      │  └────────────────────────┘  │
-└──────────────────────────┘      └──────────────────────────────┘
+SwiftUI UI (Playback, Music, Visuals, Images & Storage; shared pieces in ControlComponents.swift)
+        |
+SettingsService (UserDefaults; single source of truth for UI and engines)
+        |
+  +-----+------------------------------+
+  |                                    |
+AUDIO: GenerativeEngine (facade)    VISUAL: VisualEngine
+  MusicConductor (own queue)          PromptDirector / PromptBuilder -> GeminiClient (ModelRouter)
+  SceneDirector, Harmony, 8 layers    ImageQueue + ImageStore (disk) -> ImageUpscaler / MetalFXUpscaler
+  MixBus (reverb, delay, shimmer,     3:2 centre crop (ImageFraming), ImageColorStats, saliency, depth
+  limiter)                            EffectsUniformsComputer -> EffectsRenderer.metal
+  MusicState (lock-free) ----------> MusicReactor -> MusicModulation (clamped uniform nudges)
+  setVisualMood / imageDidChange <--- VisualMoodBuilder (metadata + pixels)
+  / setVisualActivity
+                                      macOS: EffectsMetalView (MTKView)
+                                      visionOS: OffscreenEffectsRenderer (one MRT pass, both eyes)
+                                                -> DrawableQueue -> RealityKit dome
 ```
 
 ## File Structure
 
 ```
 Liminal/
-├── Liminal.xcodeproj/
-│   └── xcshareddata/xcschemes/
-│       └── Liminal.xcscheme         # Shared scheme (no secrets)
-├── Liminal/
-│   ├── LiminalApp.swift             # App entry point
-│   ├── ContentView.swift            # Main UI + VisualDisplayView
-│   ├── SecretsTemplate.swift        # API key placeholder
-│   │
-│   ├── Audio/
-│   │   ├── GenerativeEngine.swift   # Facade (UI, settings, hooks)
-│   │   ├── MusicConductor.swift     # Off-main scheduler, scenes, layers
-│   │   ├── MusicState.swift         # Lock-free state bus for visuals
-│   │   ├── MixBus.swift             # Sends, reverb, delay, shimmer, limiter
-│   │   ├── Layers/                  # Drone, Pad, Lead, Keys, Drips, Air, Grains, Pluck
-│   │   └── Harmony.swift, SceneDirector.swift, Scale.swift, ...
-│   │
-│   ├── Visual/
-│   │   ├── VisualEngine.swift       # Coordinates image generation
-│   │   ├── GeminiClient.swift       # Gemini API (Nano Banana model)
-│   │   ├── ImageQueue.swift         # Maintains buffer of images
-│   │   ├── ImageUpscaler.swift      # CoreML RealESRGAN 4x upscale
-│   │   ├── ImageCache.swift         # Persistent image storage
-│   │   ├── MorphPlayer.swift        # GPU crossfade transitions
-│   │   ├── EffectsMetalView.swift   # Unified Metal effects renderer
-│   │   ├── DepthAnalyzer.swift      # Vision saliency analysis
-│   │   └── VisualEffects.swift      # EffectController (time driver)
-│   │
-│   ├── Shaders/
-│   │   ├── EffectsRenderer.metal    # All effects in single GPU pass
-│   │   └── DreamyEffects.metal      # SwiftUI shader wrappers (legacy)
-│   │
-│   ├── Services/
-│   │   ├── EnvironmentService.swift # API key management
-│   │   ├── SettingsService.swift    # UserDefaults persistence
-│   │   └── LMLog.swift              # Unified OSLog logging
-│   │
-│   ├── Utils/
-│   │   └── Logger.swift             # LMLog enum
-│   │
-│   └── Resources/
-│       ├── Assets.xcassets
-│       └── realesrgan512.mlmodelc   # RealESRGAN CoreML model
+  LiminalApp.swift, ContentView.swift, ControlComponents.swift, ClearImagesSection.swift
+  EffectsUniforms.swift          # must match the Metal struct exactly
+  Audio/        GenerativeEngine (+Settings), MusicConductor, MusicState, MusicScheduler, MixBus,
+                SceneDirector, Harmony, Scale, VisualCoupling, OfflineRender, Layers/ (8 layers)
+  Visual/       VisualEngine, GeminiClient, ModelRouter, ImageQueue, ImageStore, ImageUpscaler,
+                MetalFXUpscaler, ImageFraming, ImageColorStats, ImageMetadata, DepthAnalyzer,
+                EffectsMetalView, EffectsUniformsComputer, MusicModulation, MusicReactor,
+                VisualMoodBuilder, GhostTapManager, SmoothOscillator, TimerDrivenCrossfade,
+                AtomicImageBuffer, Prompt/ (PromptLibrary, PromptBuilder, ...)
+  Shaders/      EffectsRenderer.metal (all effects), DreamyEffects.metal (legacy, unused)
+  Services/     SettingsService, EnvironmentService
+  Utils/        Logger (LMLog), DebugLaunchOptions, GPUTimingStats, TestPatternGenerator
+  visionOS/     LiminalVisionApp, ControlsView, ImmersiveDomeView, OffscreenEffectsRenderer,
+                LowLevelDomeMesh, StereoMaterialBuilder, SpatialDioramaView
+LiminalTests/   AVCouplingTests, ImagePipelineTests, MusicRenderTests, PromptBuilderTests, ...
+scripts/, tools/ (ShaderBench, VibranceHarness), docs/
 ```
 
 ## Key Components
 
 ### Audio System
 
-**GenerativeEngine** is a facade over `MusicConductor` (own serial queue, 20 ms tick, nothing on MainActor). Eight synthesized layers (drone, pad, lead, keys, drips, air, grains, pluck) are shaped by a SceneDirector (stillness, drift, bloom, constellation, tide), a drifting harmonic field and rare events, and mixed through Zita reverb, delay, shimmer and a limiter. Full description: `docs/plans/music-current.md`; decisions: `docs/decisions/music.md`. The render loop can read `engine.musicState` (lock-free `MusicState`) and the image pipeline can call `setVisualMood`, `imageDidChange`, `setVisualActivity` (not yet wired).
+**GenerativeEngine** is a facade over `MusicConductor` (own serial queue, 20 ms tick, nothing on MainActor). Eight synthesized layers (drone, pad, lead, keys, drips, air, grains, pluck) are shaped by a SceneDirector (stillness, drift, bloom, constellation, tide), a drifting harmonic field and rare events, and mixed through Zita reverb, delay, shimmer and a limiter. Full description: `docs/plans/music-current.md`; decisions: `docs/decisions/music.md`. The render loop can read `engine.musicState` (lock-free `MusicState`) and the image pipeline can call `setVisualMood`, `imageDidChange`, `setVisualActivity` (wired through `VisualMoodBuilder` and `MusicReactor`; see `decisions/av-coupling.md`).
 
 **Controls** (via SettingsService): Style (`audio.style`), Density (`audio.notes`), Space (`audio.reverb`), Echo (`audio.delay`, also the visual trail), Scale with Auto (`audio.scaleAuto`, `audio.scale`).
 
 ### Visual System
 
-**Image Generation Pipeline**:
+**Image pipeline**:
 ```
-Prompt → Gemini API (gemini-2.5-flash-image) → 1024px image
-    → Resize to 512px → CoreML RealESRGAN → 2048px upscaled
-    → ImageCache (persistent ~/Library/Application Support/Liminal/)
+Style x subject x transformation x palette x composition prompt (PromptBuilder)
+  -> Gemini (gemini-3.1-flash-image, 3:2 at 2K; ModelRouter fallbacks)
+  -> ImageStore (disk, with metadata) -> upscale if small -> centre-crop to 3:2
 ```
+There is no MorphPlayer or ImageCache any more: `ImageQueue` and `ImageStore` hold images, and the crossfade is done in the shader (`transitionProgress`), driven by `TimerDrivenCrossfade` on macOS and `CGImageTransitionState` on visionOS.
 
-**MorphPlayer**: GPU-accelerated crossfade transitions via CIDissolveTransition
-- 1.5 second transitions at 30fps
-- Cubic ease-in-out for smooth motion
-- Generates saliency maps for each image (async)
+**Shader** (`EffectsRenderer.metal`, one pass): Ken Burns, distortion, stereo parallax, chromatic aberration, crossfade, spatial/saliency/fractal hue, contrast and saturation, ghost taps, stochastic bloom, feedback warping, vibrance. See `LIMINAL_EFFECTS.md` and `decisions/vibrance.md`.
 
-**EffectsMetalView**: All visual effects in single Metal GPU pass:
-- Ken Burns (scale + pan)
-- fBM Distortion (underwater warping)
-- Spatial Hue Shift (rainbow waves)
-- Saliency-Based Hue (subjects vs background)
-- Feedback Trails (expanding ghost frames)
-
-See [LIMINAL_EFFECTS.md](LIMINAL_EFFECTS.md) for detailed effect documentation.
+**Orientation**: texture row 0 is the image top everywhere (`decisions/orientation.md`).
 
 ### Settings System
 
@@ -162,9 +91,11 @@ See [LIMINAL_EFFECTS.md](LIMINAL_EFFECTS.md) for detailed effect documentation.
 | Setting | Key | Default | Description |
 |---------|-----|---------|-------------|
 | delay | audio.delay | 0.5 | Delay amount + visual trail intensity |
-| reverb | audio.reverb | 0.5 | Reverb mix |
-| notes | audio.notes | 0.5 | Shimmer note frequency |
-| currentScale | audio.scale | Pentatonic Major | Musical scale |
+| reverb | audio.reverb | 0.5 | Reverb size and shimmer |
+| notes | audio.notes | 0.5 | Density of the pointed layers |
+| style | audio.style | Drift | Music style |
+| scaleAuto / currentScale | audio.scaleAuto, audio.scale | Auto | Scale pin |
+| syncVisualsToMusic | visual.syncToMusic | true | Music drives visuals |
 | imageInterval | visual.imageInterval | 30.0 | Seconds between image advances |
 | cacheOnly | visual.cacheOnly | false | Skip generation, use cached images |
 
@@ -187,13 +118,13 @@ Uses JuceyTV pattern for Xcode Cloud compatibility:
 - SoundpipeAudioKit - Oscillators
 
 **APIs**:
-- Gemini API (gemini-2.5-flash-image / "Nano Banana") - Image generation
+- Gemini API (gemini-3.1-flash-image, fallbacks in `ImageGenerationConfig`) - Image generation
 
 **Frameworks**:
 - Metal / MetalKit - GPU effects rendering
 - CoreML - RealESRGAN upscaling
 - Vision - Saliency analysis
-- CoreImage - GPU crossfade transitions
+- MetalFX - upscaling on visionOS device
 - Combine - Reactive state management
 
 ## Logging
@@ -202,7 +133,7 @@ Uses unified OSLog via `LMLog` enum:
 
 ```swift
 LMLog.audio.info("Voice started")
-LMLog.visual.debug("Morph frame 30/60")
+LMLog.visual.debug("image queued")
 LMLog.gemini.error("API call failed")
 ```
 

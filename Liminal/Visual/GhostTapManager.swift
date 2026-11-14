@@ -78,6 +78,18 @@ final class GhostTapManager {
     private var taps: [GhostTap] = []
     private var lastSpawnTime: Float = 0
 
+    // Music scene-change burst (docs/plans/av-coupling.md 1.4, decision C8)
+    /// Burst taps only spawn while fewer than this many are active: the steady-state count at
+    /// Echo = 1 (8 s lifetime / 2 s interval), so a burst never makes the shader run more taps than it already can.
+    static let burstTapLimit = 4
+    private static let burstSize = 2
+    private static let burstSpacing: Float = 0.4
+    /// A burst that cannot fire within this many seconds (tap limit reached) is dropped.
+    private static let burstWindow: Float = 3
+    private var lastBurstSerial: UInt32 = 0
+    private var pendingBurst = 0
+    private var burstDeadline: Float?
+
     // MARK: - Init
 
     init() {}
@@ -123,6 +135,8 @@ final class GhostTapManager {
             }
         }
 
+        spawnBurstTapIfDue(currentTime: currentTime, delay: delay)
+
         let activeCount = min(taps.count, Self.maxTaps)
         return UpdateResult(data: buildShaderData(at: currentTime), activeCount: activeCount)
     }
@@ -131,6 +145,32 @@ final class GhostTapManager {
     func reset() {
         taps.removeAll()
         lastSpawnTime = 0
+        pendingBurst = 0
+        burstDeadline = nil
+    }
+
+    /// Music scene change: queue a burst of 2 taps when `serial` changed (cheap to call every frame).
+    func requestBurst(serial: UInt32) {
+        guard serial != lastBurstSerial else { return }
+        lastBurstSerial = serial
+        pendingBurst = Self.burstSize
+        burstDeadline = nil
+    }
+
+    private func spawnBurstTapIfDue(currentTime: Float, delay: Float) {
+        guard pendingBurst > 0 else { return }
+        // Echo = 0 means the user turned trails off: respect it.
+        guard delay > 0.01 else { pendingBurst = 0; return }
+        if burstDeadline == nil { burstDeadline = currentTime + Self.burstWindow }
+        if let deadline = burstDeadline, currentTime > deadline || currentTime < deadline - Self.burstWindow - 1 {
+            pendingBurst = 0; burstDeadline = nil; return
+        }
+        guard taps.count < Self.burstTapLimit, currentTime - lastSpawnTime >= Self.burstSpacing else { return }
+        taps.append(GhostTap(spawnTime: currentTime, direction: computeDirection(at: currentTime), lifetime: tapLifetime))
+        // Counts as a spawn, so the regular schedule restarts after it and the average rate stays put.
+        lastSpawnTime = currentTime
+        pendingBurst -= 1
+        if pendingBurst == 0 { burstDeadline = nil }
     }
 
     // MARK: - Private

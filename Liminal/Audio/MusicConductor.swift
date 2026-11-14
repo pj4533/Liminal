@@ -101,6 +101,11 @@ nonisolated final class MusicConductor: @unchecked Sendable {
     /// Current harmonic field (conductor queue / offline thread only).
     var field: HarmonicField { harmony.field }
 
+    #if DEBUG
+    /// Test hook (AVCouplingTests, offline thread only): the smoothed image -> music nudges.
+    var couplingProbe: (brightnessNudge: Float, warmthDb: Float) { (ctx.coupling.brightnessNudge, ctx.coupling.warmthDb) }
+    #endif
+
     // MARK: - Realtime
 
     func start() {

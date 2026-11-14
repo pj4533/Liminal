@@ -64,6 +64,12 @@ final class OffscreenEffectsRenderer {
     private var ghostTapBuffer: MTLBuffer?
     private let ghostTapManager = GhostTapManager()
 
+    /// Music scene change: forward to the ghost tap manager (cheap compare; call every frame with
+    /// `MusicModulation.ghostBurstSerial`).
+    func requestGhostBurst(serial: UInt32) {
+        ghostTapManager.requestBurst(serial: serial)
+    }
+
     // MARK: - DrawableQueue (Bridge to RealityKit)
 
     private var drawableQueue: TextureResource.DrawableQueue?
