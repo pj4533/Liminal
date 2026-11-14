@@ -21,7 +21,7 @@
 #     --seconds  collection window in seconds after warm-up (default 30)
 #     --warmup   seconds to ignore after the first PERF line (default 15)
 #     --freeze   pin effect time to T seconds (deterministic screenshots)
-#     --split    also pass -LiminalPerfSplitPasses YES (eye blit in its own command buffer)
+#     --split    also pass -LiminalPerfSplitPasses YES (no-op since direct-drawable render)
 #     --app      path to Liminal.app (default: <dd>/Build/Products/Debug-xrsimulator/Liminal.app)
 #     --dd       derived-data dir holding the build (default: $SCRATCH/dd-perf)
 #   Env: PERF_ROOT (default $SCRATCH/perf), SCRATCH (default: this session's scratchpad dir).

@@ -105,3 +105,33 @@ Read the whole per-frame path and wrote the ranked plan in `docs/plans/performan
   the bloom shimmer animates.
 - **Found while reading**: the feedback texture (index 4) is never bound on visionOS, so the
   feedback stage samples an unbound texture. Nothing was measured in this step.
+
+---
+
+## 2026-11-14: direct-drawable-render (round 1, item 1)
+
+**What**: `OffscreenEffectsRenderer` now renders each eye (stereo `renderEyeToDrawable`), the mono
+full-shader path and the debug passthrough path straight into `drawable.texture`, with
+`loadAction = .dontCare` (the fullscreen quad writes every pixel) and `storeAction = .store`. The
+2048² `outputTexture` (16 MB, shared storage) and every blit from it are gone.
+
+**Why**: nothing read `outputTexture` after the copy, and the DrawableQueue textures are already
+`.bgra8Unorm_srgb` render targets (`[.renderTarget, .shaderRead, .shaderWrite]`, both in
+`StereoMaterialBuilder` and `setupDrawableQueue`), the same format as the pipeline's colour
+attachment, so no pipeline or drawable-descriptor change is needed. This removes two 2048² copies,
+two 16 MB intermediate stores and the `.clear` of the intermediate per frame.
+
+**Safety**: a shared `makeDrawablePassDescriptor` logs the drawable size and pixel format once
+("🖼️ Direct drawable render") and asserts (Debug) / logs an error if it is not 2048x2048.
+`drawable.present()` still runs after `commit()`. The 2048² resolution is unchanged.
+
+**`-LiminalPerfSplitPasses`**: with no blit there is nothing to split. The flag is kept as a no-op
+(so `perf-run.sh --split` still parses) and its log line says so. Pass names stay `eyeL`/`eyeR`
+(`fx` for mono).
+
+**Alternatives considered**: keep the intermediate but make it `.private`/memoryless (still pays
+the copy); render both eyes into one texture array (needs drawable/material changes, out of scope).
+
+**Expected**: about 25-35 % lower `eyeL`/`eyeR` GPU time (baseline split: blitL 0.043 of 0.130 ms,
+blitR 0.030 of 0.075 ms). Measurement is done by a separate agent; the frozen screenshot must be
+checked for unchanged orientation and sRGB colour.

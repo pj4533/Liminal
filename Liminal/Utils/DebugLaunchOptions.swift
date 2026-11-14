@@ -35,8 +35,9 @@ nonisolated enum DebugLaunchOptions {
         return v > 0 ? v : 1.0
     }()
 
-    /// -LiminalPerfSplitPasses YES: put each eye's output blit in its own command buffer so
-    /// the GPU timing breakdown can separate the effects fragment pass from the copy.
+    /// -LiminalPerfSplitPasses YES: historically put each eye's output blit in its own command
+    /// buffer. Eyes now render directly into their drawables (no blit), so this is a no-op;
+    /// kept so existing perf-run invocations still parse.
     static let splitPasses: Bool = defaults.bool(forKey: "LiminalPerfSplitPasses")
 #else
     static let autoPlay = false
@@ -54,7 +55,7 @@ nonisolated enum DebugLaunchOptions {
         if defaults.object(forKey: "LiminalPerfLogInterval") != nil {
             LMLog.general.info("🧪 DEBUG FLAG applied: LiminalPerfLogInterval=\(perfLogInterval, format: .fixed(precision: 2))s")
         }
-        if splitPasses { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalPerfSplitPasses=YES (separate blit command buffers)") }
+        if splitPasses { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalPerfSplitPasses=YES (no-op: eyes render direct to drawable, no blit to split)") }
 #endif
     }()
 

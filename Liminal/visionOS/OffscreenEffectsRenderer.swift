@@ -30,7 +30,8 @@ final class OffscreenEffectsRenderer {
 
     private var sourceTexture: MTLTexture?
     private var previousTexture: MTLTexture?  // For GPU crossfade blending
-    private var outputTexture: MTLTexture?
+    // No intermediate output texture: each pass renders straight into its 2048² drawable.
+    private var loggedDrawableSize = false
     private var saliencyTexture: MTLTexture?
     private(set) var depthTexture: MTLTexture?  // ML depth map (r8Unorm)
 
@@ -155,19 +156,6 @@ final class OffscreenEffectsRenderer {
             return nil
         }
         self.samplerState = sampler
-
-        // Create output texture
-        // Use sRGB format for output - Metal auto-applies gamma encoding on write
-        let textureDescriptor = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: .bgra8Unorm_srgb,
-            width: outputSize,
-            height: outputSize,
-            mipmapped: false
-        )
-        textureDescriptor.usage = [.renderTarget, .shaderRead]
-        textureDescriptor.storageMode = .shared
-
-        self.outputTexture = device.makeTexture(descriptor: textureDescriptor)
 
         // Create ghost tap buffer (8 taps * 16 bytes each)
         let ghostTapBufferSize = GhostTapManager.maxTaps * MemoryLayout<GhostTapData>.stride
@@ -518,12 +506,6 @@ final class OffscreenEffectsRenderer {
 
         // DEBUG: Use passthrough shader to test if shader pipeline works
         if bypassShaderForDebug {
-            guard let outputTexture = outputTexture else {
-                inFlightSemaphore.signal()
-                LMLog.visual.warning("⚠️ No output texture for passthrough")
-                return false
-            }
-
             updateSourceTexture(from: sourceImage)
             guard let sourceTexture = sourceTexture else {
                 inFlightSemaphore.signal()
@@ -540,12 +522,8 @@ final class OffscreenEffectsRenderer {
                 return false
             }
 
-            // Render using passthrough shader (no effects, just samples texture)
-            let renderPassDescriptor = MTLRenderPassDescriptor()
-            renderPassDescriptor.colorAttachments[0].texture = outputTexture
-            renderPassDescriptor.colorAttachments[0].loadAction = .clear
-            renderPassDescriptor.colorAttachments[0].storeAction = .store
-            renderPassDescriptor.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
+            // Render using passthrough shader directly into the drawable (no effects, just samples texture)
+            let renderPassDescriptor = makeDrawablePassDescriptor(for: drawable.texture)
 
             guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else { return false }
 
@@ -573,22 +551,6 @@ final class OffscreenEffectsRenderer {
             encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
             encoder.endEncoding()
 
-            // Blit output to drawable
-            if let blitEncoder = commandBuffer.makeBlitCommandEncoder() {
-                blitEncoder.copy(
-                    from: outputTexture,
-                    sourceSlice: 0,
-                    sourceLevel: 0,
-                    sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
-                    sourceSize: MTLSize(width: outputSize, height: outputSize, depth: 1),
-                    to: drawable.texture,
-                    destinationSlice: 0,
-                    destinationLevel: 0,
-                    destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0)
-                )
-                blitEncoder.endEncoding()
-            }
-
             // Async completion handler - signals semaphore when GPU finishes
             commandBuffer.addCompletedHandler { [weak self] buffer in
                 self?.inFlightSemaphore.signal()
@@ -608,12 +570,6 @@ final class OffscreenEffectsRenderer {
         }
 
         // --- Full shader path below ---
-        guard let outputTexture = outputTexture else {
-            inFlightSemaphore.signal()
-            LMLog.visual.warning("⚠️ No output texture (render \(self.renderCount))")
-            return false
-        }
-
         // TIMING: Texture update phase
         let textureUpdateStart = Date()
 
@@ -669,12 +625,8 @@ final class OffscreenEffectsRenderer {
             return false
         }
 
-        // Render to our output texture
-        let renderPassDescriptor = MTLRenderPassDescriptor()
-        renderPassDescriptor.colorAttachments[0].texture = outputTexture
-        renderPassDescriptor.colorAttachments[0].loadAction = .clear
-        renderPassDescriptor.colorAttachments[0].storeAction = .store
-        renderPassDescriptor.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
+        // Render straight into the drawable (no intermediate texture, no copy)
+        let renderPassDescriptor = makeDrawablePassDescriptor(for: drawable.texture)
 
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else {
             inFlightSemaphore.signal()
@@ -706,22 +658,6 @@ final class OffscreenEffectsRenderer {
         // Draw fullscreen quad (shader generates vertices from vertexID)
         encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         encoder.endEncoding()
-
-        // Copy output to drawable
-        if let blitEncoder = commandBuffer.makeBlitCommandEncoder() {
-            blitEncoder.copy(
-                from: outputTexture,
-                sourceSlice: 0,
-                sourceLevel: 0,
-                sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
-                sourceSize: MTLSize(width: outputSize, height: outputSize, depth: 1),
-                to: drawable.texture,
-                destinationSlice: 0,
-                destinationLevel: 0,
-                destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0)
-            )
-            blitEncoder.endEncoding()
-        }
 
         gpuStats.track(commandBuffer, pass: "fx")
 
@@ -827,7 +763,6 @@ final class OffscreenEffectsRenderer {
         }
 
         guard let sourceTexture = sourceTexture,
-              let outputTexture = outputTexture,
               let ghostTapBuffer = ghostTapBuffer else {
             return false
         }
@@ -836,7 +771,6 @@ final class OffscreenEffectsRenderer {
         let leftOk = renderEyeToDrawable(
             queue: leftQueue,
             sourceTexture: sourceTexture,
-            outputTexture: outputTexture,
             ghostTapBuffer: ghostTapBuffer,
             uniforms: uniforms,
             ghostTapCount: ghostTapResult.activeCount,
@@ -847,7 +781,6 @@ final class OffscreenEffectsRenderer {
         let rightOk = renderEyeToDrawable(
             queue: rightQueue,
             sourceTexture: sourceTexture,
-            outputTexture: outputTexture,
             ghostTapBuffer: ghostTapBuffer,
             uniforms: uniforms,
             ghostTapCount: ghostTapResult.activeCount,
@@ -862,7 +795,6 @@ final class OffscreenEffectsRenderer {
     private func renderEyeToDrawable(
         queue: TextureResource.DrawableQueue,
         sourceTexture: MTLTexture,
-        outputTexture: MTLTexture,
         ghostTapBuffer: MTLBuffer,
         uniforms: EffectsUniforms,
         ghostTapCount: Int,
@@ -874,12 +806,8 @@ final class OffscreenEffectsRenderer {
             return false
         }
 
-        // Render to output texture
-        let renderPassDescriptor = MTLRenderPassDescriptor()
-        renderPassDescriptor.colorAttachments[0].texture = outputTexture
-        renderPassDescriptor.colorAttachments[0].loadAction = .clear
-        renderPassDescriptor.colorAttachments[0].storeAction = .store
-        renderPassDescriptor.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
+        // Render straight into this eye's drawable (no intermediate texture, no copy)
+        let renderPassDescriptor = makeDrawablePassDescriptor(for: drawable.texture)
 
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else {
             return false
@@ -905,34 +833,31 @@ final class OffscreenEffectsRenderer {
         encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         encoder.endEncoding()
 
-        // DEBUG perf option: time the copy separately by giving it its own command buffer.
-        var blitBuffer: MTLCommandBuffer = commandBuffer
-        if DebugLaunchOptions.splitPasses, let separate = commandQueue.makeCommandBuffer() {
-            gpuStats.track(commandBuffer, pass: "fx" + passName)
-            commandBuffer.commit()
-            blitBuffer = separate
-        }
-
-        // Copy to drawable
-        if let blitEncoder = blitBuffer.makeBlitCommandEncoder() {
-            blitEncoder.copy(
-                from: outputTexture,
-                sourceSlice: 0,
-                sourceLevel: 0,
-                sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
-                sourceSize: MTLSize(width: outputSize, height: outputSize, depth: 1),
-                to: drawable.texture,
-                destinationSlice: 0,
-                destinationLevel: 0,
-                destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0)
-            )
-            blitEncoder.endEncoding()
-        }
-
-        gpuStats.track(blitBuffer, pass: blitBuffer === commandBuffer ? "eye" + passName : "blit" + passName)
-        blitBuffer.commit()
+        // No copy to split out any more, so -LiminalPerfSplitPasses is a no-op here.
+        gpuStats.track(commandBuffer, pass: "eye" + passName)
+        commandBuffer.commit()
         drawable.present()
         return true
+    }
+
+    /// Render pass that writes the effects quad straight into a drawable texture.
+    /// The fullscreen quad covers every pixel, so the old contents are never read (.dontCare).
+    private func makeDrawablePassDescriptor(for texture: MTLTexture) -> MTLRenderPassDescriptor {
+        if !loggedDrawableSize {
+            loggedDrawableSize = true
+            let matches = texture.width == outputSize && texture.height == outputSize
+            if matches {
+                LMLog.visual.info("🖼️ Direct drawable render: \(texture.width)x\(texture.height) format=\(texture.pixelFormat.rawValue)")
+            } else {
+                LMLog.visual.error("❌ Drawable is \(texture.width)x\(texture.height), expected \(self.outputSize)x\(self.outputSize)")
+            }
+            assert(matches, "Drawable size must match outputSize")
+        }
+        let descriptor = MTLRenderPassDescriptor()
+        descriptor.colorAttachments[0].texture = texture
+        descriptor.colorAttachments[0].loadAction = .dontCare
+        descriptor.colorAttachments[0].storeAction = .store
+        return descriptor
     }
 
     // MARK: - Private
