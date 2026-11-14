@@ -176,3 +176,11 @@ Verdict: kept (>=3% GPU improvement, no new errors).
 - Frozen run: GPU mean 0.362 ms. The frozen screenshot content differs from the baseline because a different generated image was on screen, so a numeric diff is not meaningful. No errors in the logs.
 - Verdict: NOT kept. The extra pass and texture sampling cost more than the per-pixel noise it removed. Reset to fbf870e.
 - Alternative: none pursued; per-pixel evaluation is already cheap after the half-precision and octave reductions.
+
+## One command buffer per frame + in-flight bound (ed2ec02) - REVERTED
+
+- What: merged dome compute + both eye passes into a single command buffer, with an in-flight bound on the stereo path.
+- Measured (medians of 3, simulator): gpu_ms_mean 0.234 (runs 0.241/0.234/0.233) vs 0.159 before; fps_mean 61.1 (61.1/45.1/66.7) vs 46.4; frame interval p95 25.9 ms vs 51.1; dropped/5s 122.5 vs 115.3. Frozen run: gpu 0.198 ms, fps 67.4.
+- Caveat: the GPU metric changed meaning (one whole-frame span now, previously a sum of three pass spans), so GPU ms is not directly comparable; fps is bimodal and noisy in the simulator (run 2 was 45 fps).
+- Visual parity: frozen screenshot mean abs diff vs baseline was 38, too large to call parity (could not be confirmed equivalent).
+- Verdict: not kept. GPU ms (primary metric) did not improve by >=3% and parity was unconfirmed. Branch reset to 8981aaf.
