@@ -135,3 +135,13 @@ the copy); render both eyes into one texture array (needs drawable/material chan
 **Expected**: about 25-35 % lower `eyeL`/`eyeR` GPU time (baseline split: blitL 0.043 of 0.130 ms,
 blitR 0.030 of 0.075 ms). Measurement is done by a separate agent; the frozen screenshot must be
 checked for unchanged orientation and sRGB colour.
+
+### Measured result: direct-drawable-render (verdict KEEP)
+
+Median of 3 unfrozen 30 s simulator runs vs baseline (before -> after):
+- GPU ms/frame mean: 0.304 -> 0.159 (-48%); p95 0.550 -> 0.260. Runs: 0.159 / 0.229 / 0.112.
+- Per pass (run 1): dome 0.073 -> 0.050, eyeL 0.152 -> 0.067, eyeR 0.079 -> 0.042.
+- fps median 46.4 (baseline 49.9) and interval p95 ~51 ms: simulator is CPU/pacing bound and noisy (runs 46.4/49.6/38.9), so not meaningful; GPU time is the primary metric.
+- Logs: no errors; "Direct drawable render: 2048x2048 format=81" logged, resolution unchanged.
+- Visual: frozen (t=100) screenshot shows a different random source image than baseline, so a numeric diff is meaningless (mean abs diff ~30). Visually upright, correct colour, all effects present (distortion, chromatic fringing, grain, haze). Judged acceptable.
+Verdict: kept (>=3% GPU improvement, no new errors).
