@@ -130,7 +130,7 @@ nonisolated enum HarmonyChange {
 /// Chords, key wander and voice leading (decisions D20-D23).
 nonisolated final class HarmonyEngine {
     private var rng: SeededRNG
-    let palette: [ScaleType]
+    private(set) var palette: [ScaleType]
     private(set) var pinned: ScaleType?
     private(set) var field: HarmonicField
     private var roots: MarkovChain
@@ -239,6 +239,18 @@ nonisolated final class HarmonyEngine {
                 cands.append((tonic, mode)); weights.append(w)
             }
         }
+        // Off-palette (style change) or stranded: move to the nearest palette keys instead.
+        if cands.isEmpty || !palette.contains(field.mode) {
+            cands.removeAll(); weights.removeAll()
+            var best = Int.max
+            for mode in palette {
+                for tonic in 0..<12 where !(tonic == field.tonic && mode == field.mode) {
+                    let d = (mode.pitchClassMask(tonic: tonic) ^ cur).nonzeroBitCount + (tonic == field.tonic ? 0 : 1)
+                    if d < best { best = d; cands.removeAll(); weights.removeAll() }
+                    if d == best { cands.append((tonic, mode)); weights.append(1) }
+                }
+            }
+        }
         guard !cands.isEmpty else { return nil }
         let (tonic, mode) = cands[rng.weighted(weights)]
         var f = HarmonicField(tonic: tonic, mode: mode, chord: Chord(rootDegree: 0, shape: .openFifth),
@@ -259,6 +271,13 @@ nonisolated final class HarmonyEngine {
         return .key(old: old, new: field)
     }
 
+    /// New style palette. Takes effect at the next key move; returns true if the current mode is not in it
+    /// (the conductor then schedules a move at the next scene boundary).
+    func setPalette(_ p: [ScaleType]) -> Bool {
+        palette = p.isEmpty ? [.major] : p
+        return pinned == nil && !palette.contains(field.mode)
+    }
+
     /// Pin (or unpin with nil). Pinning moves to C <mode>. Returns the key change if the field changed.
     func setPinned(_ scale: ScaleType?) -> HarmonyChange? {
         pinned = scale
@@ -266,6 +285,15 @@ nonisolated final class HarmonyEngine {
         var f = HarmonicField(tonic: 0, mode: scale, chord: Chord(rootDegree: 0, shape: .openFifth), pedalMIDI: 36)
         f.chord = tonicChord(in: f)
         return apply(field: f)
+    }
+
+    /// Pedal on a given pitch class (the chord root, decision D73). Returns true if the pedal changed.
+    func setPedal(pitchClass pc: Int) -> Bool {
+        let target = HarmonyEngine.pedal(for: pc)
+        pedalOnFifth = false
+        guard target != field.pedalMIDI else { return false }
+        field.pedalMIDI = target
+        return true
     }
 
     /// Drone pedal on the tonic or (if in scale and harmless for the current chord) on the fifth.

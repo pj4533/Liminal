@@ -59,14 +59,23 @@ final class GenerativeEngine: ObservableObject {
         didSet { conductor.post(.style(style)) }
     }
 
-    /// Scale picker. The default (Pentatonic Major) means "Auto (evolving)" until the user picks a
-    /// different scale (decision D31); any other value pins the scale and disables key drift.
+    /// nil = "Auto (evolving)": key and mode wander within the style's palette. A scale pins the mode
+    /// (tonic C) and disables key drift (decision D30).
+    @Published var pinnedScale: ScaleType? = nil {
+        didSet {
+            guard pinnedScale != oldValue else { return }
+            conductor.post(.pinScale(pinnedScale))
+            LMLog.audio.debug("🎼 Scale: \(self.pinnedScale?.rawValue ?? "auto")")
+        }
+    }
+
+    /// Legacy scale property (PASS 1 UIs). Setting it pins that scale, except that the old default
+    /// (Pentatonic Major) means Auto until another scale is chosen (decision D31). New code uses
+    /// `pinnedScale`.
     @Published var currentScale: ScaleType = .pentatonicMajor {
         didSet {
             if currentScale != GenerativeEngine.autoScaleSentinel { scaleTouched = true }
-            let pin: ScaleType? = scaleTouched ? currentScale : nil
-            conductor.post(.pinScale(pin))
-            LMLog.audio.debug("🎼 Scale: \(pin?.rawValue ?? "auto")")
+            pinnedScale = scaleTouched ? currentScale : nil
         }
     }
 
@@ -87,10 +96,11 @@ final class GenerativeEngine: ObservableObject {
         let t0 = Date()
         let seed = seed ?? UInt64.random(in: 1...UInt64.max)
         self.seed = seed
-        let layers: [MusicLayer] = [DroneLayer(), PadLayer(), LeadLayer(), DripsLayer()]
+        let layers: [MusicLayer] = [DroneLayer(), PadLayer(), LeadLayer(), DripsLayer(),
+                                    KeysLayer(), AirLayer(), GrainLayer(), PluckLayer()]
         self.layers = layers
         var r = SeededRNG(seed: seed ^ 0xDE1A7)
-        mix = MixBus(layers: layers.map(\.strip), delayTime: Float(r.range(0.85...1.35)))
+        mix = MixBus(layers: layers.flatMap(\.allStrips), delayTime: Float(r.range(0.85...1.35)))
         conductor = MusicConductor(layers: layers, mix: mix, seed: seed, pinned: nil)
         engine.output = mix.output
         conductor.onNote = GenerativeEngine.noteForwarder(shimmerNotePlayed)

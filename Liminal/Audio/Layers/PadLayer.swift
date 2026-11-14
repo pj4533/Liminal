@@ -35,11 +35,12 @@ nonisolated final class PadLayer: BaseLayer {
     init() {
         left = (0..<PadLayer.voiceCount).map { _ in MorphingOscillator(waveformArray: PadTables.tables, amplitude: 0) }
         right = (0..<PadLayer.voiceCount).map { _ in MorphingOscillator(waveformArray: PadTables.tables, amplitude: 0) }
-        let lp = Panner(Mixer(left), pan: -0.6)
-        let rp = Panner(Mixer(right), pan: 0.6)
+        // Fixed pair spread via Mixer.pan (no Panner nodes, decision D68).
+        let lp = Mixer(left); lp.pan = -0.6
+        let rp = Mixer(right); rp.pan = 0.6
         let mix = Mixer(lp, rp)
         ladder = MoogLadder(mix, cutoffFrequency: 1200, resonance: 0.1)
-        let strip = LayerStrip(source: mix, filter: ladder, trim: dbToGain(-4) * 1.414 / 0.5,
+        let strip = LayerStrip(source: mix, filter: ladder, trim: dbToGain(-7) * 1.414 / 0.5,
                                reverb: 0.5, delay: 0.1)
         super.init(id: .pad, strip: strip, entryThreshold: 0.2)
         generators = left + right
@@ -57,7 +58,9 @@ nonisolated final class PadLayer: BaseLayer {
 
     private func range(_ ctx: LayerContext) -> ClosedRange<Int> {
         let s = max(-5, min(5, ctx.registerShift))
-        return (PadLayer.baseRange.lowerBound + s)...(PadLayer.baseRange.upperBound + s)
+        // Never below C3: the detuned pair is split left/right, and below 120 Hz that decorrelates the
+        // sub band (stereo gate, decision D74).
+        return max(48, PadLayer.baseRange.lowerBound + s)...(PadLayer.baseRange.upperBound + s)
     }
 
     /// Fresh voicing (first activation or after a power-down): evenly spread seeds, voice-led onto the chord.
@@ -137,7 +140,7 @@ nonisolated final class PadLayer: BaseLayer {
         guard voiced else { if isActive { initialVoicing(ctx: ctx) }; return }
         let t = ctx.time
         let active = ctx.intensity < 0.2 ? 2 : (ctx.intensity < 0.4 ? 3 : 4)
-        let b = ctx.brightness
+        let b = min(1, ctx.brightness + ctx.padBrightnessBoost)
         let width = 0.7 + 0.3 * widthLFO.unit(at: t) + 0.15 * (ctx.activity - 0.5)
         let baseIndex = min(max(0.2 + 2.6 * b, 0), 3)
         for v in 0..<PadLayer.voiceCount {

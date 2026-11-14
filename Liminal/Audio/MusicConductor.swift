@@ -8,6 +8,8 @@ nonisolated enum MusicControl {
     case pinScale(ScaleType?)                       // nil = auto (evolving)
     case visualMood(VisualMood), imageDidChange(transition: Double), visualActivity(Float)
     case limiterBypass(Bool)
+    /// Debug / harness: layers kept active regardless of scene (solo gain-staging renders).
+    case forceLayers(Set<LayerID>)
 }
 
 /// Owns time, randomness, harmony, scenes and layers (decisions D3-D6). Runs on its own serial queue in
@@ -25,6 +27,7 @@ nonisolated final class MusicConductor: @unchecked Sendable {
     private let ctx: LayerContext
     private var rng: SeededRNG
     private var colorDrift: ParameterDrift.Channel
+    private let rare: RareEventDirector
 
     // Form
     private var scenes: [MusicScene] = []          // current plus the next one during a handoff
@@ -39,11 +42,10 @@ nonisolated final class MusicConductor: @unchecked Sendable {
     private var density: Float = 0.5
     private var space: Float = 0.5
     private var delayAmount: Float = 0.5
-    private var moodTarget = VisualMood()
-    private var mood = VisualMood()
     private var activityTarget: Float = 0.5
     private var lastImageChange = -1000.0
     private var styleID: MusicStyle.ID = .drift
+    private var pendingStyleKeyMove = false
     private let inboxLock = NSLock()
     private var inbox: [MusicControl] = []
 
@@ -66,6 +68,8 @@ nonisolated final class MusicConductor: @unchecked Sendable {
     private var tickCount = 0
     private var tickTotalNs: UInt64 = 0
     private var tickMaxNs: UInt64 = 0
+    private var tickMaxAt = 0.0
+    private var slowTicks = 0
 
     /// Offline only: timeline of scenes, layers, chords, keys and events.
     var scoreLog: ScoreLog?
@@ -84,6 +88,11 @@ nonisolated final class MusicConductor: @unchecked Sendable {
         var r = root.fork(4)
         colorDrift = ParameterDrift.Channel(period: r.range(80...120), phase: r.range(0...6))
         for (i, l) in layers.enumerated() { l.prepare(rng: root.fork(100 + UInt64(l.id.rawValue) * 7 + UInt64(i))) }
+        rare = RareEventDirector(rng: root.fork(5), mix: mix)
+        rare.keys = layers.first { $0.id == .keys } as? KeysLayer
+        rare.air = layers.first { $0.id == .air } as? AirLayer
+        rare.drone = layers.first { $0.id == .drone } as? DroneLayer
+        rare.duckable = layers.filter { $0.id != .drone && $0.id != .air }.flatMap(\.allStrips)
         ctx.setEmitter { [unowned self] kind, layer, midi, vel in self.emit(kind, layer: layer, midi: midi, velocity: vel) }
     }
 
@@ -151,10 +160,14 @@ nonisolated final class MusicConductor: @unchecked Sendable {
         drainInbox()
         scenes.removeAll()
         hysteresis.removeAll()
-        for l in layers { l.silence(fade: 0, ctx: ctx) }
-        mix.setSpace(space, delayAmount: delayAmount, brightness: 0.5, over: 0.05)
+        for l in layers {
+            l.silence(fade: 0, ctx: ctx)
+            for st in l.allStrips { st.swell(to: 1, over: 0, now: t) }
+        }
+        rare.reset(at: t)
+        mix.setSpace(space, delayAmount: delayAmount, brightness: 0.5, shimmerScale: shimmerScale, over: 0.05)
         ctx.delayScale = mix.delaySendScale
-        mix.setMaster(1, over: 3)
+        mix.setMaster(MusicConductor.masterGain, over: 3)
         lastKeyMove = t
         sessionStart = t
         keyInterval = rng.range(180...480)
@@ -175,11 +188,14 @@ nonisolated final class MusicConductor: @unchecked Sendable {
         scheduler.advance(to: time)
         if time - lastModulate >= 0.0999 { modulate(time) }
         let dt = DispatchTime.now().uptimeNanoseconds &- t0
-        tickCount += 1; tickTotalNs &+= dt; tickMaxNs = max(tickMaxNs, dt)
+        tickCount += 1; tickTotalNs &+= dt
+        if dt > tickMaxNs { tickMaxNs = dt; tickMaxAt = time }
+        if dt > 2_000_000 { slowTicks += 1 }
     }
 
-    var tickStats: (count: Int, meanMs: Double, maxMs: Double) {
-        (tickCount, tickCount > 0 ? Double(tickTotalNs) / Double(tickCount) / 1e6 : 0, Double(tickMaxNs) / 1e6)
+    var tickStats: (count: Int, meanMs: Double, maxMs: Double, maxAt: Double, slow: Int) {
+        (tickCount, tickCount > 0 ? Double(tickTotalNs) / Double(tickCount) / 1e6 : 0, Double(tickMaxNs) / 1e6,
+         tickMaxAt, slowTicks)
     }
 
     private func drainInbox() {
@@ -196,30 +212,44 @@ nonisolated final class MusicConductor: @unchecked Sendable {
         case .density(let d): density = min(max(d, 0), 1)
         case .space(let s): space = min(max(s, 0), 1); spaceDirty = true
         case .delayAmount(let d): delayAmount = min(max(d, 0), 1); spaceDirty = true
-        case .style(let id): styleID = id; director.style = MusicStyle.style(id)
+        case .style(let id):
+            guard id != styleID else { break }
+            styleID = id
+            let st = MusicStyle.style(id)
+            director.style = st
+            ctx.style = st
+            spaceDirty = true
+            // Off-palette mode: move key at the next scene boundary (one-note move if possible).
+            if harmony.setPalette(st.palette) {
+                if !scenes.isEmpty { scenes[scenes.count - 1].keyMoveAtEnd = true } else { pendingStyleKeyMove = true }
+            }
         case .pinScale(let s):
             if let change = harmony.setPinned(s) { broadcast(change); logKey() }
             if s != nil { keyInterval = .infinity } else if keyInterval == .infinity { keyInterval = rng.range(180...480); lastKeyMove = scheduler.now }
-        case .visualMood(let m): moodTarget = m
+        case .visualMood(let m): ctx.coupling.setTarget(m)
         case .imageDidChange(let d): imageDidChange(transition: d)
         case .visualActivity(let a): activityTarget = min(max(a, 0), 1)
         case .limiterBypass(let b): mix.limiterBypassed = b
+        case .forceLayers(let ids): forced = ids
         }
     }
 
     private var spaceDirty = false
+    private var forced: Set<LayerID> = []
 
     // MARK: Scenes
 
     private var newest: MusicScene? { scenes.last }
 
     private func startScene(at t: Double) {
-        var s = director.next(after: newest, sessionTime: t, density: density, mood: mood, available: available)
+        var s = director.next(after: newest, sessionTime: t, density: ctx.density, mood: ctx.coupling.mood,
+                              available: available, sceneWeights: ctx.coupling.sceneWeights)
         sceneCount += 1
-        s.keyMoveAtEnd = harmony.pinned == nil && (s.handoffTime - lastKeyMove) >= keyInterval
+        s.keyMoveAtEnd = harmony.pinned == nil && ((s.handoffTime - lastKeyMove) >= keyInterval || pendingStyleKeyMove)
+        pendingStyleKeyMove = false
         scenes.append(s)
         if scenes.count > 2 { scenes.removeFirst() }
-        if harmony.setPedal(onFifth: s.pedalOnFifth) { scoreLog?.pedal(t, harmony.field.pedalMIDI) }
+        if harmony.setPedal(onFifth: s.pedalOnFifth) { pedalSince = t; scoreLog?.pedal(t, harmony.field.pedalMIDI) }
         ctx.scene = s
         for l in layers { l.sceneDidChange(s, ctx: ctx) }
         emit(.sceneChange, layer: .drone, midi: Int(s.kind.rawValue), velocity: s.peak)
@@ -242,14 +272,18 @@ nonisolated final class MusicConductor: @unchecked Sendable {
     }
 
     private func keyBias() -> Float {
-        min(max(0.6 * (newest?.brightness ?? 0) + 1.2 * (mood.brightness - 0.5) + rng.rangeF(-0.4...0.4), -1), 1)
+        min(max(0.6 * (newest?.brightness ?? 0) + ctx.coupling.keyBias + rng.rangeF(-0.4...0.4), -1), 1)
     }
 
     // MARK: Harmony
 
+    /// Master trim at full: +3 dB over PASS 1 (decision D72), so sparse scenes stay above -27 dBFS RMS.
+    static let masterGain: Float = dbToGain(3)
+
+    /// Harmonic rhythm lerp(30, 12, intensity) +-25 %, clamped 10-40 s (D43, retuned in D72).
     private func chordLength(_ i: Float) -> Double {
-        let base = 42 + (16 - 42) * Double(min(max(i, 0), 1))
-        return min(max(rng.jitter(base, 0.25), 14), 50)
+        let base = 30 + (12 - 30) * Double(min(max(i, 0), 1))
+        return min(max(rng.jitter(base, 0.25), 10), 40)
     }
 
     private func scheduleChord(from t: Double) {
@@ -262,12 +296,33 @@ nonisolated final class MusicConductor: @unchecked Sendable {
         }
     }
 
+    private var pedalSince = 0.0
+
     private func changeChord() {
-        let tension = min(max((newest?.tension ?? 0.4) + 0.25 * (ctx.intensity - 0.5), 0), 1)
+        // Cool images favour open, suspended and quartal shapes (lower tension); styles bias it too.
+        let tension = min(max((newest?.tension ?? 0.4) + 0.25 * (ctx.intensity - 0.5)
+                              - 0.2 * ctx.coupling.coolness + ctx.style.tensionBias, 0), 1)
         let c = harmony.nextChord(tension: tension)
         broadcast(harmony.apply(chord: c))
         scoreLog?.chord(scheduler.now, harmony.field)
+        movePedalWithChord()
         scheduleChord(from: scheduler.now)
+    }
+
+    /// The pedal holds at least 40 s; then, in moving scenes, it may step to the new chord's root (45 %)
+    /// or back to the tonic (60 % when away), so the bass outlines the harmony slowly (decision D73).
+    private func movePedalWithChord() {
+        let now = scheduler.now
+        guard now - pedalSince >= 40, let kind = newest?.kind, kind != .stillness else { return }
+        let f = harmony.field
+        let tonicPedal = HarmonyEngine.pedal(for: f.tonic)
+        var changed = false
+        if f.pedalMIDI != tonicPedal && rng.chance(0.6) {
+            changed = harmony.setPedal(pitchClass: f.tonic)
+        } else if f.chord.rootDegree != 0 && rng.chance(0.45) {
+            changed = harmony.setPedal(pitchClass: f.chordRootPitchClass)
+        }
+        if changed { pedalSince = now; scoreLog?.pedal(now, harmony.field.pedalMIDI) }
     }
 
     private func broadcast(_ change: HarmonyChange) {
@@ -289,11 +344,23 @@ nonisolated final class MusicConductor: @unchecked Sendable {
         let now = scheduler.now
         guard began, now - lastImageChange >= 10 else { return }
         lastImageChange = now
-        scheduler.schedule(after: max(0, transition) / 2) { [weak self] in
+        let d = min(max(transition, 0.5), 20)
+        // Air swell rises over the transition and decays after.
+        (layer(.air) as? AirLayer)?.swell(rise: d, decay: max(4, d), cut: false, ctx: ctx)
+        scheduler.schedule(after: d / 2) { [weak self] in
             guard let self else { return }
             if self.scheduler.now - self.chordStart > 8 { self.changeChord() }
+            (self.layer(.pad) as? PadLayer)?.rebloom(ctx: self.ctx)
+            if self.rng.chance(0.35) {
+                if self.rng.chance(0.5), let k = self.layer(.keys) as? KeysLayer { k.accent(ctx: self.ctx) }
+                else { (self.layer(.drips) as? DripsLayer)?.accent(ctx: self.ctx) }
+            }
         }
     }
+
+    private func layer(_ id: LayerID) -> MusicLayer? { layers.first { $0.id == id } }
+
+    private var shimmerScale: Float { ctx.style.shimmer * ctx.coupling.shimmerScale }
 
     // MARK: Modulation (10 Hz)
 
@@ -302,34 +369,43 @@ nonisolated final class MusicConductor: @unchecked Sendable {
         lastModulate = t
         modulateCount += 1
 
-        // Visual mood: 8 s low-pass on every scalar.
+        // Visual mood: 8 s low-pass on every scalar (VisualCoupling).
         let a = Float(1 - exp(-dt / 8))
-        mood.brightness += (moodTarget.brightness - mood.brightness) * a
-        mood.warmth += (moodTarget.warmth - mood.warmth) * a
-        mood.saturation += (moodTarget.saturation - mood.saturation) * a
-        mood.energy += (moodTarget.energy - mood.energy) * a
-        if mood.moodWords != moodTarget.moodWords { mood.moodWords = moodTarget.moodWords }
+        ctx.coupling.smooth(dt: dt)
         ctx.activity += (activityTarget - ctx.activity) * a
+        let cpl = ctx.coupling
 
         var intensity = MusicScene.floor
         for s in scenes { intensity = max(intensity, s.intensity(at: t)) }
         let bias = newest?.brightness ?? 0
-        let b = 0.5 + 0.3 * bias + 0.3 * (intensity - 0.4) + 0.2 * (mood.brightness - 0.5) + 0.12 * colorDrift.value(at: t)
+        let b = 0.5 + 0.3 * bias + 0.3 * (intensity - 0.4) + cpl.brightnessNudge + 0.12 * colorDrift.value(at: t)
         ctx.intensity = intensity
         ctx.brightness = min(max(b, 0), 1)
-        ctx.density = density
-        ctx.registerShift = newest?.registerShift ?? 0
-        ctx.mood = mood
+        ctx.density = min(max(density * cpl.energyScale, 0), 1)
+        ctx.registerShift = min(max((newest?.registerShift ?? 0) + cpl.registerNudge, -5), 7)
+        ctx.mood = cpl.mood
         ctx.space = space
 
         updateActivation(t)
+        // Warm images: drone up to +3 dB and air down; cool images the reverse.
+        layer(.drone)?.strip.tilt = dbToGain(cpl.warmthDb)
+        layer(.air)?.strip.tilt = dbToGain(-cpl.warmthDb)
+        rare.modulate(dt: dt, ctx: ctx)
+        if let k = rare.poll(t: t, ctx: ctx) {
+            emit(.rareEvent, layer: .drone, midi: Int(k.rawValue), velocity: 1)
+            scoreLog?.rare(t, k)
+        }
         for l in layers { l.modulate(dt: dt, ctx: ctx) }
 
         if spaceDirty || modulateCount % 5 == 0 {
-            mix.setSpace(space, delayAmount: delayAmount, brightness: ctx.brightness, over: spaceDirty ? 0.3 : 0.6)
-            ctx.delayScale = mix.delaySendScale
+            mix.setSpace(space, delayAmount: delayAmount, brightness: ctx.brightness, shimmerScale: shimmerScale,
+                         over: spaceDirty ? 0.3 : 0.6)
+            // Visual activity nudges every delay send +-15 %.
+            ctx.delayScale = mix.delaySendScale * (1 + 0.3 * (ctx.activity - 0.5))
             spaceDirty = false
         }
+        mix.modulate(t: t, dt: dt)
+        state.shimmerLevel = mix.shimmerOut
 
         publish(t)
         if modulateCount % 10 == 0 { scoreLog?.sample(t, intensity: intensity, brightness: ctx.brightness, layers: layers) }
@@ -346,8 +422,23 @@ nonisolated final class MusicConductor: @unchecked Sendable {
                 let on = hysteresis[l.id] ?? false
                 if i > th || (on && i > th - 0.05) { want = true; thr = min(thr, th) }
             }
+            // Continuity across a handoff: a sounding layer that the next scene also uses stays on while
+            // that scene emerges, instead of dipping out and back in (decision D71).
+            if !want, l.isActive, let n = newest, scenes.count > 1, n.layers.contains(l.id), n.phase(at: t) == .emerge {
+                want = true; thr = n.thresholds[l.id] ?? l.entryThreshold
+            }
             hysteresis[l.id] = want
+            if forced.contains(l.id) { want = true; thr = 0 }
             if want { desired.append((l, thr)) }
+        }
+        // Never thinner than two layers: if the arcs leave only one, keep the newest scene's lowest-threshold
+        // other layer (or the most recently sounding one) on (decision D71).
+        if desired.count < 2, let n = newest {
+            let have = Set(desired.map { $0.0.id })
+            let cands = layers.filter { n.layers.contains($0.id) && !have.contains($0.id) && $0.id != .drone }
+            if let pick = cands.first(where: { $0.isActive }) ?? cands.min(by: { (n.thresholds[$0.id] ?? 1) < (n.thresholds[$1.id] ?? 1) }) {
+                desired.append((pick, 0.99))
+            }
         }
         // Max active layers 3 + round(3 D); drop the highest thresholds first.
         let cap = 3 + Int((3 * density).rounded())
@@ -358,6 +449,7 @@ nonisolated final class MusicConductor: @unchecked Sendable {
             var fade = on ? rng.range(8...30) : rng.range(10...40)
             // The opening drone comes in within seconds so the app never starts in near-silence.
             if on && l.id == .drone && t - sessionStart < 1 { fade = rng.range(4...6) }
+            if on && l.id == .pad && t - sessionStart < 20 { fade = rng.range(6...10) }
             l.setActive(on, fade: fade, ctx: ctx)
             emit(on ? .layerEnter : .layerExit, layer: l.id)
             scoreLog?.layer(t, l.id, on)
@@ -398,7 +490,7 @@ nonisolated final class MusicConductor: @unchecked Sendable {
         state.scaleMask = f.scaleMask
         state.chordMask = f.chordMask
         state.chordRoot = UInt8(f.chordRootPitchClass)
-        for l in layers { state.setLevel(l.id, l.strip.targetLevel) }
+        for l in layers { state.setLevel(l.id, l.allStrips.map(\.targetLevel).max() ?? 0) }
         stateBus.publish(state)
     }
 }
@@ -413,6 +505,7 @@ nonisolated final class ScoreLog {
     private var pedals: [[String: Any]] = []
     private var samples: [[String: Any]] = []
     private var notes: [String: Int] = [:]
+    private var rareEvents: [[String: Any]] = []
 
     private static func r(_ x: Double) -> Double { (x * 1000).rounded() / 1000 }
     private static func r(_ x: Float) -> Double { r(Double(x)) }
@@ -436,15 +529,16 @@ nonisolated final class ScoreLog {
     }
     func pedal(_ t: Double, _ midi: Int) { pedals.append(["t": Self.r(t), "pedal": midi]) }
     func note(_ id: LayerID) { notes["\(id)", default: 0] += 1 }
+    func rare(_ t: Double, _ k: RareEventKind) { rareEvents.append(["t": Self.r(t), "kind": k.name]) }
     func sample(_ t: Double, intensity: Float, brightness: Float, layers: [MusicLayer]) {
         var lv: [String: Double] = [:]
-        for l in layers { lv["\(l.id)"] = Self.r(l.strip.targetLevel) }
+        for l in layers { lv["\(l.id)"] = Self.r(l.allStrips.map(\.targetLevel).max() ?? 0) }
         samples.append(["t": Self.r(t), "intensity": Self.r(intensity), "brightness": Self.r(brightness), "levels": lv])
     }
 
     func write(to url: URL, seed: UInt64, initialKey: HarmonicField?, perf: [String: Any]) throws {
         var root: [String: Any] = ["seed": seed, "scenes": scenes, "layerEvents": layerEvents, "chords": chords,
-                                   "keys": keys, "pedals": pedals, "samples": samples, "notes": notes, "perf": perf]
+                                   "keys": keys, "pedals": pedals, "samples": samples, "notes": notes, "rareEvents": rareEvents, "perf": perf]
         if let k = initialKey { root["initialKey"] = ["tonic": k.tonic, "mode": k.mode.rawValue] }
         let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
         try data.write(to: url)

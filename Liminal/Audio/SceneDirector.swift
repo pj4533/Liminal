@@ -1,27 +1,69 @@
 import Foundation
 
-/// A style sets palette, weights and biases (decision D32). PASS 1 ships only Drift.
+/// A style sets palette, weights and biases (decisions D32, D64).
 nonisolated struct MusicStyle {
-    enum ID: String, CaseIterable, Sendable { case drift, glass, deep, garden }
+    enum ID: String, CaseIterable, Sendable {
+        case drift, glass, deep, garden
+        var title: String { rawValue.capitalized }
+    }
 
     let id: ID
     let palette: [ScaleType]
     let kindWeights: [SceneKind: Float]
+    /// Probability weight of a layer being picked into a scene (1 = neutral, below 1 also thins it).
     let layerWeights: [LayerID: Float]
     let registerBias: Int
     let brightnessBias: Float
     let formTempo: Double            // multiplies scene durations
+    /// Shimmer return multiplier.
+    let shimmer: Float
+    /// Keys preset weights: soft keys, bell, glass.
+    let keysPresets: [Float]
+    /// Probability that a scene's drips use the mallet preset instead of the sine blip.
+    let dripsMallet: Float
+    /// Probability that a scene uses pentatonic-feeling open chord shapes (lower tension).
+    let tensionBias: Float
+
+    func weight(_ id: LayerID) -> Float { layerWeights[id] ?? 1 }
 
     static let drift = MusicStyle(
         id: .drift,
         palette: [.major, .lydian, .mixolydian, .dorian, .minor],
         kindWeights: [.stillness: 1, .drift: 1, .bloom: 1, .constellation: 1, .tide: 1],
         layerWeights: [:],
-        registerBias: 0, brightnessBias: 0, formTempo: 1)
+        registerBias: 0, brightnessBias: 0, formTempo: 1,
+        shimmer: 1, keysPresets: [1, 0.7, 0.4], dripsMallet: 0.35, tensionBias: 0)
+
+    static let glass = MusicStyle(
+        id: .glass,
+        palette: [.lydian, .major, .pentatonicMajor],
+        kindWeights: [.stillness: 0.7, .drift: 0.9, .bloom: 1.1, .constellation: 1.8, .tide: 0.6],
+        layerWeights: [.keys: 1.8, .grains: 1.8, .drips: 1.6, .pad: 0.8, .air: 0.8, .pluck: 0.7, .lead: 0.8],
+        registerBias: 3, brightnessBias: 0.25, formTempo: 0.9,
+        shimmer: 1.5, keysPresets: [0.4, 1, 1.2], dripsMallet: 0.2, tensionBias: -0.05)
+
+    static let deep = MusicStyle(
+        id: .deep,
+        palette: [.minor, .dorian, .phrygian],
+        kindWeights: [.stillness: 1.5, .drift: 1, .bloom: 0.6, .constellation: 0.5, .tide: 1.8],
+        layerWeights: [.drone: 1.5, .pad: 1.5, .air: 1.8, .grains: 0.5, .drips: 0.6, .pluck: 0.5, .keys: 0.8],
+        registerBias: -4, brightnessBias: -0.3, formTempo: 1.35,
+        shimmer: 0.7, keysPresets: [1, 1, 0.2], dripsMallet: 0.5, tensionBias: 0.05)
+
+    static let garden = MusicStyle(
+        id: .garden,
+        palette: [.pentatonicMajor, .yo, .pentatonicEgyptian, .hirajoshi],
+        kindWeights: [.stillness: 0.8, .drift: 1, .bloom: 0.9, .constellation: 1.6, .tide: 0.7],
+        layerWeights: [.pluck: 2, .drips: 1.7, .keys: 1.5, .pad: 0.55, .lead: 1.1, .grains: 0.8],
+        registerBias: 1, brightnessBias: 0.1, formTempo: 0.85,
+        shimmer: 0.9, keysPresets: [1, 0.8, 0.5], dripsMallet: 0.7, tensionBias: -0.1)
 
     static func style(_ id: ID) -> MusicStyle {
         switch id {
-        case .drift, .glass, .deep, .garden: return .drift   // PASS 2 adds the other three
+        case .drift: return .drift
+        case .glass: return .glass
+        case .deep: return .deep
+        case .garden: return .garden
         }
     }
 }
@@ -91,13 +133,16 @@ nonisolated final class SceneDirector {
     ]
 
     static let thresholdRanges: [LayerID: ClosedRange<Float>] = [
-        .drone: 0...0, .pad: 0.15...0.3, .lead: 0.35...0.6, .keys: 0.3...0.55, .drips: 0.25...0.5,
-        .air: 0.05...0.4, .grains: 0.55...0.8, .pluck: 0.4...0.65,
+        // Lead, grains and pluck lower than the plan (0.35-0.6, 0.55-0.8, 0.4-0.65): with the plan's ranges
+        // they sounded 12-16 % of a 30-minute session against 50-60 % for keys and drips (decision D71).
+        .drone: 0...0, .pad: 0.15...0.3, .lead: 0.28...0.5, .keys: 0.3...0.55, .drips: 0.25...0.5,
+        .air: 0.05...0.4, .grains: 0.42...0.65, .pluck: 0.32...0.55,
     ]
 
-    /// Session curve: 0.5 ... 1.0, periods of 437 s and 1151 s, so blooms vary over 7-19 minutes.
+    /// Session curve: 0.7 ... 1.0, periods of 437 s and 1151 s, so blooms vary over 7-19 minutes.
+    /// (Plan: 0.5 ... 1.0; narrowed in PASS 2, decision D70, so early scenes reach their feature layers.)
     static func sessionCurve(_ t: Double) -> Float {
-        Float(0.75 + 0.25 * (0.6 * sin(2 * .pi * t / 437) + 0.4 * sin(2 * .pi * t / 1151)))
+        Float(0.85 + 0.15 * (0.6 * sin(2 * .pi * t / 437) + 0.4 * sin(2 * .pi * t / 1151)))
     }
 
     /// Melodic layer that "features" a scene, used to avoid featuring the same one twice.
@@ -112,9 +157,9 @@ nonisolated final class SceneDirector {
     }
 
     func next(after previous: MusicScene?, sessionTime: Double, density: Float, mood: VisualMood,
-              available: Set<LayerID>) -> MusicScene {
+              available: Set<LayerID>, sceneWeights: [SceneKind: Float] = [:]) -> MusicScene {
         defer { count += 1 }
-        let kind = chooseKind(after: previous?.kind)
+        let kind = chooseKind(after: previous?.kind, extra: sceneWeights)
         var layers = Set<LayerID>()
         var best: (Set<LayerID>, Float) = ([], -1)
         for _ in 0..<10 {
@@ -149,6 +194,8 @@ nonisolated final class SceneDirector {
             thresholds[id] = min(rng.rangeF(r), reach)
         }
         thresholds[.drone] = 0
+        // The first scene brings the pad in right behind the drone, so the app never opens on one layer.
+        if count == 0 { thresholds[.pad] = MusicScene.floor + 0.01 }
 
         let shifts = [-5, -3, -2, 0, 0, 0, 0, 2, 3, 5, 7]
         var shift = rng.pick(shifts) + style.registerBias
@@ -167,13 +214,23 @@ nonisolated final class SceneDirector {
             pedalOnFifth: count > 0 && rng.chance(0.2))
     }
 
-    private func chooseKind(after prev: SceneKind?) -> SceneKind {
+    private func chooseKind(after prev: SceneKind?, extra: [SceneKind: Float]) -> SceneKind {
         guard let prev else { return .drift }      // the app always starts gently
         let table = SceneDirector.transitions[prev] ?? [:]
         let kinds = SceneKind.allCases
-        let w = kinds.map { (table[$0] ?? 0) * (style.kindWeights[$0] ?? 1) }
+        let w = kinds.map { (table[$0] ?? 0) * (style.kindWeights[$0] ?? 1) * (extra[$0] ?? 1) }
         return kinds[rng.weighted(w)]
     }
+
+    /// Weighted draw (style layer weights) without replacement.
+    private func draw(_ pool: inout [LayerID]) -> LayerID? {
+        guard !pool.isEmpty else { return nil }
+        let i = rng.weighted(pool.map { style.weight($0) })
+        return pool.remove(at: i)
+    }
+
+    /// A layer with weight below 1 is sometimes left out even when the kind calls for it.
+    private func keep(_ id: LayerID) -> Bool { rng.chance(min(1, style.weight(id))) }
 
     private func layerSet(for kind: SceneKind, available: Set<LayerID>) -> Set<LayerID> {
         var features: [LayerID] = [.lead, .keys, .drips, .pluck, .grains].filter { available.contains($0) }
@@ -181,28 +238,36 @@ nonisolated final class SceneDirector {
         switch kind {
         case .stillness:
             var s: Set<LayerID> = [.drone, .air]
-            if rng.chance(0.35) { s.insert(.drips) }
+            if rng.chance(0.35 * style.weight(.drips)) { s.insert(.drips) }
+            if rng.chance(0.25 * style.weight(.keys)) { s.insert(.keys) }
             return s
         case .drift:
-            return [.drone, .pad, rng.pick(features)]
+            var s: Set<LayerID> = [.drone]
+            if keep(.pad) { s.insert(.pad) }
+            var pool = features
+            if let f = draw(&pool) { s.insert(f) }
+            if rng.chance(0.75), let f = draw(&pool) { s.insert(f) }
+            if rng.chance(0.45 * style.weight(.air)) { s.insert(.air) }
+            return s
         case .bloom:
-            var s: Set<LayerID> = [.drone, .pad]
+            var s: Set<LayerID> = [.drone]
+            if keep(.pad) || keep(.pad) { s.insert(.pad) }
             var pool: [LayerID] = [.lead, .keys, .drips, .air, .grains, .pluck].filter { available.contains($0) }
-            for _ in 0..<rng.int(2...4) where !pool.isEmpty {
-                s.insert(pool.remove(at: rng.int(0...(pool.count - 1))))
-            }
-            if rng.chance(0.6) { s.insert(.lead) }
-            if rng.chance(0.5) { s.insert(.drips) }
+            for _ in 0..<rng.int(3...5) { if let f = draw(&pool) { s.insert(f) } }
+            if rng.chance(0.5 * style.weight(.lead)) { s.insert(.lead) }
             return s
         case .constellation:
             var s: Set<LayerID> = [.drone]
             var pool: [LayerID] = [.keys, .drips, .grains, .pluck].filter { available.contains($0) }
-            for _ in 0..<rng.int(2...3) where !pool.isEmpty { s.insert(pool.remove(at: rng.int(0...(pool.count - 1)))) }
-            s.insert(.drips)   // always at least one point source that exists in PASS 1
-            if rng.chance(0.5) { s.insert(.pad) }
+            for _ in 0..<rng.int(2...4) { if let f = draw(&pool) { s.insert(f) } }
+            if rng.chance(0.4 * style.weight(.pad)) { s.insert(.pad) }
+            if rng.chance(0.3 * style.weight(.air)) { s.insert(.air) }
             return s
         case .tide:
-            return [.drone, .pad, .air]
+            var s: Set<LayerID> = [.drone, .air]
+            if keep(.pad) || rng.chance(0.5) { s.insert(.pad) }
+            if rng.chance(0.3 * style.weight(.grains)) { s.insert(.grains) }
+            return s
         }
     }
 }

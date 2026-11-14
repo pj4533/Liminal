@@ -4,12 +4,13 @@ import SoundpipeAudioKit
 import AVFoundation
 import Foundation
 
-/// Buses, shared effects and master chain (section 3, decisions D10, D11, D14). Replaces `EffectsChain`.
+/// Buses, shared effects and master chain (section 3, decisions D10-D14, D57, D58).
 ///
-///     strips -> dryBus ------------------------------------------------------------+
-///     strips -> delayBus -> VariableDelay -> LPF -> delayReturn ----------------------+--> master
-///                                                          +-> Fader(0.5) -> reverbBus
-///     strips -> reverbBus -> ZitaReverb (wet) -> reverbReturn -------------------------+
+///     strips -> dryBus --------------------------------------------------------------------+
+///     strips -> delayBus -> VariableDelay (wow) -> LPF -> delayReturn ----------------------+--> master
+///                                                                 +-> Fader(0.5) -> reverbBus
+///     strips -> reverbBus -> ZitaReverb (wet) -> reverbReturn ----------------------------------+
+///               reverbBus -> HPF 400 -> PitchShifter +12 -> LPF 5k -> Costello -> shimmerReturn -+
 ///     master -> HPF 28 Hz -> masterTrim -> PeakLimiter -> -1.5 dB -> output
 nonisolated final class MixBus {
     let dryBus = Mixer()
@@ -19,6 +20,11 @@ nonisolated final class MixBus {
     let delayFilter: LowPassButterworthFilter
     let delayReturn: Fader
     let delayToReverb: Fader
+    let shimmerHP: HighPassButterworthFilter
+    let shimmerShift: PitchShifter
+    let shimmerLP: LowPassButterworthFilter
+    let shimmerVerb: CostelloReverb
+    let shimmerReturn: Fader
     let reverb: ZitaReverb
     let reverbReturn: Fader
     let master: Mixer
@@ -33,7 +39,14 @@ nonisolated final class MixBus {
     private(set) var space: Float = 0.5
     private(set) var delayAmount: Float = 0.5
 
+    private let baseDelayTime: Float
+    /// Shimmer return (linear) before the bloom envelope; published as `MusicState.shimmerLevel`.
+    private(set) var shimmerLevel: Float = 0
+    private var shimmerBloom = SoftEnv(0)
+    private var wowPhase = 0.0, flutterPhase = 0.0
+
     init(layers: [LayerStrip], delayTime: Float) {
+        baseDelayTime = delayTime
         for s in layers {
             dryBus.addInput(s.outputs.dry)
             reverbBus.addInput(s.outputs.reverbSend)
@@ -41,13 +54,22 @@ nonisolated final class MixBus {
         }
         delay = VariableDelay(delayBus, time: delayTime, feedback: 0.5, maximumTime: 10, dryWetMix: 1)
         delayFilter = LowPassButterworthFilter(delay, cutoffFrequency: 3500)
+        // Tape character is wow on the delay time only; TanhDistortion was measured at 5 % of the render
+        // budget for no audible effect at the -20 dBFS levels the delay runs at (decision D58).
         delayReturn = Fader(delayFilter, gain: dbToGain(-6))
         delayToReverb = Fader(delayReturn, gain: 0.5)
         reverbBus.addInput(delayToReverb)
         reverb = ZitaReverb(reverbBus, predelay: 60, crossoverFrequency: 200, lowReleaseTime: 5,
                             midReleaseTime: 6, dampingFrequency: 5000, dryWetMix: 1)
         reverbReturn = Fader(reverb, gain: dbToGain(-8))
-        master = Mixer(dryBus, reverbReturn, delayReturn)
+        // Feed-forward shimmer (D12, D57): octave-up of the reverb send, high-passed first so the drone
+        // and low pad do not smear through the pitch shifter, then its own long Costello tail.
+        shimmerHP = HighPassButterworthFilter(reverbBus, cutoffFrequency: 400)
+        shimmerShift = PitchShifter(shimmerHP, shift: 12, windowSize: 2048, crossfade: 1024, dryWetMix: 1)
+        shimmerLP = LowPassButterworthFilter(shimmerShift, cutoffFrequency: 5000)
+        shimmerVerb = CostelloReverb(shimmerLP, balance: 1, feedback: 0.9, cutoffFrequency: 6500)
+        shimmerReturn = Fader(shimmerVerb, gain: 0)
+        master = Mixer(dryBus, reverbReturn, delayReturn, shimmerReturn)
         highpass = HighPassButterworthFilter(master, cutoffFrequency: 28)
         masterTrim = Fader(highpass, gain: 0)
         limiter = PeakLimiter(masterTrim, attackTime: 0.01, decayTime: 0.06, preGain: 0)
@@ -61,14 +83,17 @@ nonisolated final class MixBus {
     }
 
     /// Space macro 0...1 (section 9): reverb return -12...-2 dB, RT60 3...8 s, delay send scale, feedback.
-    func setSpace(_ s: Float, delayAmount d: Float, brightness b: Float, over: Double) {
+    func setSpace(_ s: Float, delayAmount d: Float, brightness b: Float, shimmerScale: Float = 1, over: Double) {
         space = min(max(s, 0), 1)
         delayAmount = min(max(d, 0), 1)
         let ret = dbToGain(-12 + 10 * space)
         let mid = 3 + 5 * space
-        setReverb(returnGain: ret, midRT60: mid, lowRT60: max(1, mid - 1), damping: expMap(b, 3000, 8000), over: over)
+        // Low band decays faster than the mids so the stereo reverb tail does not smear the sub (D74).
+        setReverb(returnGain: ret, midRT60: mid, lowRT60: max(1, mid - 2.5), damping: expMap(b, 3000, 8000), over: over)
         let fb = 0.35 + 0.4 * (0.5 * space + 0.5 * delayAmount)
         setDelay(feedback: fb, returnGain: dbToGain(-9 + 6 * delayAmount), cutoff: expMap(b, 2500, 5000), over: over)
+        // Shimmer: -26 dB at space 0 to -12 dB at space 1, scaled by style and image; capped at -12 dB.
+        setShimmer(returnGain: dbToGain(-26 + 14 * space) * shimmerScale, over: over)
     }
 
     /// Scale for every layer's delay send (space x delay amount), 0.3 ... 1.4.
@@ -85,6 +110,36 @@ nonisolated final class MixBus {
         ParamRamp.set(delay.$feedback, feedback, over: over)
         ParamRamp.setGain(delayReturn, returnGain, over: over)
         ParamRamp.set(delayFilter.$cutoffFrequency, cutoff, over: over)
+    }
+
+    /// Shimmer return target (linear), at or below -12 dB except during a bloom (up to -8 dB).
+    func setShimmer(returnGain: Float, over: Double) {
+        shimmerLevel = min(returnGain, dbToGain(-12))
+    }
+
+    /// Rare event: shimmer return rises toward -8 dB and back over `duration` seconds.
+    func bloomShimmer(duration: Double, now: Double) {
+        shimmerBloom.go(to: 1, over: duration * 0.4, now: now)
+        bloomEnd = now + duration * 0.45
+        bloomRelease = duration * 0.55
+    }
+    private var bloomEnd = -1.0
+    private var bloomRelease = 10.0
+
+    /// Current shimmer return (linear), for MusicState.
+    private(set) var shimmerOut: Float = 0
+
+    /// 10 Hz: tape wow on the delay time (0.2 % at 0.41 Hz plus 0.06 % at 0.13 Hz), and the
+    /// shimmer return with its bloom envelope.
+    func modulate(t: Double, dt: Double) {
+        if bloomEnd > 0 && t >= bloomEnd { shimmerBloom.go(to: 0, over: bloomRelease, now: t); bloomEnd = -1 }
+        let b = shimmerBloom.tick(t)
+        let g = shimmerLevel + (dbToGain(-8) - shimmerLevel) * b
+        if abs(g - shimmerOut) > 1e-5 { ParamRamp.setGain(shimmerReturn, g, over: 0.12); shimmerOut = g }
+        wowPhase += dt * 2 * .pi * 0.41
+        flutterPhase += dt * 2 * .pi * 0.13
+        let wow = 0.002 * sin(wowPhase) + 0.0006 * sin(flutterPhase + 1)
+        ParamRamp.set(delay.$time, baseDelayTime * Float(1 + wow), over: 0.11)
     }
 
     /// Start/stop fades.

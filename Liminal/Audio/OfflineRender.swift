@@ -55,7 +55,8 @@ extension GenerativeEngine {
 
         let ticks = conductor.tickStats
         let perf: [String: Any] = ["wall_s": wall, "realtime_factor": seconds / max(wall, 1e-6),
-                                   "ticks": ticks.count, "tick_mean_ms": ticks.meanMs, "tick_max_ms": ticks.maxMs]
+                                   "ticks": ticks.count, "tick_mean_ms": ticks.meanMs, "tick_max_ms": ticks.maxMs,
+                                   "tick_max_at_s": ticks.maxAt, "ticks_over_2ms": ticks.slow]
         let scoreURL = url.deletingPathExtension().appendingPathExtension("score.json")
         try log.write(to: scoreURL, seed: seed, initialKey: initialKey, perf: perf)
     }

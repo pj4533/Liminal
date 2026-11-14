@@ -27,7 +27,7 @@ struct MusicRenderTests {
             return
         }
         if cfg["mode"] == "bench" {
-            #if DEBUG
+            #if DEBUG || LIMINAL_BENCH
             let lines = try MusicProbes.bench(dir: URL(fileURLWithPath: dir))
             try lines.joined(separator: "\n").write(toFile: dir + "/bench.txt", atomically: true, encoding: .utf8)
             #endif
@@ -47,7 +47,8 @@ struct MusicRenderTests {
         let solo = cfg["solo"]   // debug: mute every layer but this one (gain-staging checks)
         try engine.renderOffline(seconds: seconds, to: url, limiterBypassed: bypass) { e in
             guard let solo else { return }
-            for l in e.layers where "\(l.id)" != solo { l.strip.trim = 0 }
+            for l in e.layers where "\(l.id)" != solo { l.allStrips.forEach { $0.trim = 0 } }
+            if let id = e.layers.first(where: { "\($0.id)" == solo })?.id { e.conductor.post(.forceLayers([id])) }
         }
         let wall = Date().timeIntervalSince(t0)
         print("RENDERED \(url.path) \(seconds)s in \(String(format: "%.1f", wall))s wall")

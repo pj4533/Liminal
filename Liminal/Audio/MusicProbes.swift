@@ -1,4 +1,4 @@
-#if DEBUG
+#if DEBUG || LIMINAL_BENCH
 import AudioKit
 import AudioKitEX
 import SoundpipeAudioKit
@@ -54,7 +54,33 @@ enum MusicProbes {
         out.append(try time("zita") { let o = Oscillator(); o.start(); return ZitaReverb(o) })
         out.append(try time("20 faders") { let o = Oscillator(); o.start(); var n: Node = o; for _ in 0..<20 { n = Fader(n) }; return n })
         out.append(try time("20 panners") { let o = Oscillator(); o.start(); var n: Node = o; for _ in 0..<20 { n = Panner(n) }; return n })
+        out.append(try time("pitch shifter") { let o = Oscillator(); o.start(); return PitchShifter(o, shift: 12, windowSize: 2048, crossfade: 1024) })
+        out.append(try time("costello") { let o = Oscillator(); o.start(); return CostelloReverb(o, balance: 1, feedback: 0.9) })
+        out.append(try time("tanh") { let o = Oscillator(); o.start(); return TanhDistortion(o) })
+        out.append(try time("6 fm + env") { let os = (0..<6).map { _ in FMOscillator(amplitude: 0.01) }; os.forEach { $0.start() }; return Mixer(os.map { AmplitudeEnvelope($0) }) })
+        out.append(try time("8 env idle") { let os = (0..<8).map { _ in Oscillator(amplitude: 0.01) }; return Mixer(os.map { AmplitudeEnvelope($0) }) })
+        out.append(try time("pink+bpf") { let n = PinkNoise(amplitude: 0.1); n.start(); return BandPassButterworthFilter(n) })
+        out.append(try time("3 pluck") { let ps = (0..<3).map { _ in PluckedString() }; ps.forEach { $0.start() }; return Mixer(ps) })
         out.append(try time("full engine graph") { GenerativeEngineBench.graph() })
+        // First-trigger latency of PluckedString (AudioKit MIDI path).
+        do {
+            let ps = PluckedString(); ps.start()
+            var lines: [String] = []
+            var k = 0
+            try render(ps, seconds: 1, to: dir.appendingPathComponent("bench.wav")) { t in
+                guard k < 3, t >= 0.2 + Double(k) * 0.2 else { return }
+                k += 1
+                let t0 = DispatchTime.now().uptimeNanoseconds
+                let ev = MIDIEvent(noteOn: 64, velocity: 127, channel: 0)
+                let t1 = DispatchTime.now().uptimeNanoseconds
+                _ = ps.au.scheduleMIDIEventBlock
+                let t2 = DispatchTime.now().uptimeNanoseconds
+                ps.trigger(frequency: 220, amplitude: 0.5)
+                let t3 = DispatchTime.now().uptimeNanoseconds
+                lines.append("pluck trigger \(k): MIDIEvent \(Double(t1 - t0) / 1e6) ms, block \(Double(t2 - t1) / 1e6) ms, trigger \(Double(t3 - t2) / 1e6) ms, bytes \(ev.data.count)")
+            }
+            out += lines
+        }
         return out
     }
 
@@ -120,15 +146,33 @@ enum MusicProbes {
             }
             out.append("morph")
         }
+
+        // E. Fixed pan via AVAudioMixing (Mixer.pan) into a downstream Mixer, and amplitude-ramp
+        //    "envelopes" (attack 0.1 s, release 0.3 s) instead of AmplitudeEnvelope nodes.
+        do {
+            let a = Oscillator(waveform: Table(.sine), frequency: 440, amplitude: 0)
+            let b = Oscillator(waveform: Table(.sine), frequency: 660, amplitude: 0.2)
+            let ma = Mixer(a); ma.pan = -0.7
+            let mb = Mixer(b); mb.pan = 1
+            let out2 = Mixer(ma, mb)
+            a.start(); b.start()
+            var did = (false, false)
+            try render(out2, seconds: 3, to: dir.appendingPathComponent("probe-mixerpan.wav")) { t in
+                if t >= 1, !did.0 { did.0 = true; a.$amplitude.ramp(to: 0.2, duration: 0.1) }
+                if t >= 2, !did.1 { did.1 = true; a.$amplitude.ramp(to: 0, duration: 0.3) }
+            }
+            out.append("mixerpan")
+        }
         return out
     }
 }
 
 @MainActor enum GenerativeEngineBench {
     static func graph() -> Node {
-        let layers: [MusicLayer] = [DroneLayer(), PadLayer(), LeadLayer(), DripsLayer()]
+        let layers: [MusicLayer] = [DroneLayer(), PadLayer(), LeadLayer(), DripsLayer(),
+                                    KeysLayer(), AirLayer(), GrainLayer(), PluckLayer()]
         for l in layers { l.prepare(rng: SeededRNG(seed: 1)) }
-        let mix = MixBus(layers: layers.map(\.strip), delayTime: 1)
+        let mix = MixBus(layers: layers.flatMap(\.allStrips), delayTime: 1)
         return mix.output
     }
 }

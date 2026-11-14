@@ -19,6 +19,17 @@ nonisolated final class DroneLayer: BaseLayer {
     private var roamEnv = SoftEnv(0)
     private var roamOffset = 19               // semitones above pedal (3f)
     private var gliding = false
+    /// Sub swell multiplier for the sub-pulse rare event (1 = none, +4 dB peak).
+    private var subPulseEnv = SoftEnv(1)
+
+    /// Rare event: the sub partial swells +4 dB over 6 s and back over 6 s.
+    func subPulse(ctx: LayerContext) {
+        subPulseEnv.go(to: dbToGain(4), over: 6, now: ctx.time)
+        after(6.5, ctx: ctx) { [weak self] in
+            guard let self else { return }
+            self.subPulseEnv.go(to: 1, over: 6, now: ctx.time)
+        }
+    }
 
     init() {
         let soft = PadTables.softDrone
@@ -28,10 +39,11 @@ nonisolated final class DroneLayer: BaseLayer {
         }
         let mix = Mixer(oscs)
         filter = LowPassButterworthFilter(mix, cutoffFrequency: 500)
-        let strip = LayerStrip(source: mix, filter: filter, trim: dbToGain(-24) * 1.414 / 0.45,
+        let strip = LayerStrip(source: mix, filter: filter, trim: dbToGain(-27) * 1.414 / 0.45,
                                reverb: 0.25, delay: 0)
         super.init(id: .drone, strip: strip, entryThreshold: 0)
         generators = oscs
+        motionDepth = 2
     }
 
     override func prepare(rng: SeededRNG) {
@@ -87,12 +99,13 @@ nonisolated final class DroneLayer: BaseLayer {
         }
     }
 
-    /// Pedal move: dip to 40 % over 2-3 s, glide over 3-5 s, swell back (6-10 s total).
+    /// Pedal move: dip to 25 % over 2-3 s, glide over 1.5-3 s, swell back (5-10 s total). The dip is
+    /// deeper and the glide shorter than PASS 1 because the pedal now also follows chord roots (D73).
     private func movePedal(to target: Int, ctx: LayerContext) {
         guard target != pedal, !gliding else { return }
         gliding = true
-        let dip = rng.range(2...3), move = rng.range(3...5)
-        glide.go(to: 0.4, over: dip, now: ctx.time)
+        let dip = rng.range(2...3), move = rng.range(1.5...3)
+        glide.go(to: 0.25, over: dip, now: ctx.time)
         after(dip, ctx: ctx) { [weak self] in
             guard let self else { return }
             self.pedal = target
@@ -118,7 +131,7 @@ nonisolated final class DroneLayer: BaseLayer {
             let lfo = lfos.isEmpty ? 0.5 : lfos[p.rawValue].unit(at: t)
             var a = base[p.rawValue] * (1 - depth + depth * lfo) * g
             if p == .roam { a *= roam }
-            if p == .sub { a *= 0.8 + 0.4 * (1 - ctx.brightness) }   // darker = more sub
+            if p == .sub { a *= (0.8 + 0.4 * (1 - ctx.brightness)) * subPulseEnv.tick(t) }   // darker = more sub
             ParamRamp.set(oscs[p.rawValue].$amplitude, a, over: 0.12)
         }
         if !gliding {
