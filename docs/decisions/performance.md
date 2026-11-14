@@ -86,3 +86,22 @@ macOS sanity check (Debug, `-LiminalAutoPlay YES -LiminalFreezeTime 100`): `fx` 
   third of each eye pass.
 - Run-to-run variance in fps and interval p95 is large (49–64 fps), while GPU numbers are stable
   (±7 %). Use the median of 3 runs for comparisons.
+
+---
+
+## 2026-11-14: Round 1 plan
+
+Read the whole per-frame path and wrote the ranked plan in `docs/plans/performance.md`.
+
+- **Why the GPU is plausibly the bottleneck on device** although the simulator shows 0.3 ms: the
+  fragment shader evaluates about 175 trig functions and 7-16 texture samples per pixel, over 8.4 M
+  pixels per frame, plus two 2048² copies.
+- **Chosen order**: free wins first (direct-to-drawable render, dead feedback stage, redundant
+  crossfade samples), then the two low-res field pre-passes, which remove most of the per-pixel
+  math and are the only items with a look risk.
+- **Alternatives rejected**: MetalFX or lower render resolution (violates the 2048² requirement),
+  MRT stereo, compute instead of fragment, specialising stages whose amounts never reach zero.
+- **Deferred pending user sign-off**: updating the effects below display rate; it changes how fast
+  the bloom shimmer animates.
+- **Found while reading**: the feedback texture (index 4) is never bound on visionOS, so the
+  feedback stage samples an unbound texture. Nothing was measured in this step.
