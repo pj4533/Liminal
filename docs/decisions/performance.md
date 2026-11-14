@@ -293,3 +293,14 @@ section. Nothing was measured in this step; the conclusions below come from the 
   against earlier runs, not only the total.
 - Builds: visionOS Simulator and macOS both succeed.
 - Measured numbers: to be appended by the measurement step.
+
+## Dome breathing on CPU, drop per-frame compute pass (16191818) - KEPT
+
+Measured (visionOS sim, medians of 3 x 30s runs) vs previous best (MRT stereo, 2417054):
+- GPU ms mean: 0.201 -> 0.177 (-11.9%); runs 0.173 / 0.179 / 0.177. p95 0.371 -> 0.323.
+- Dome compute pass (~0.082 ms) is gone; only the eyes pass remains (~0.177 ms).
+- fps 68.3 -> 77.0 (runs 76.3 / 77.3 / 77.3); frame interval p95 21.9 -> 13.3 ms; dropped/5s 83.8 -> 2.5.
+- Frozen run (--freeze 100): fps 74.5, GPU mean 0.148 ms.
+- No errors/faults in logs.
+- Visual parity: frozen screenshots show a different source image than the baseline (image selection is not pinned by freeze), so a numeric diff (mean abs 40.7) is not meaningful; the effect look (distortion, chroma fringing, grain, hue) is equivalent. Verdict: acceptable.
+- Alternative considered: keep compute pass with cheaper kernel; rejected since CPU cost is ~0.2 ms and removes a command buffer entirely.
