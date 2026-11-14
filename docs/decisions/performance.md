@@ -216,3 +216,37 @@ section. Nothing was measured in this step; the conclusions below come from the 
 - Measured (visionOS sim, median of 3): gpu_ms_mean 0.258 (0.261/0.254/0.258), fps 74.15 (74.2/61.5/75.1), interval p95 17.7 ms. Frozen run: gpu 0.264 ms. No errors in logs.
 - Comparison to the "current best" (0.159 ms) is not apples to apples: sim host load and loaded dome image content differ between sessions (frozen screenshots differ because different generated images were loaded: 551 vs 64 in the image counter; mean abs diff 47). Not a shader regression since no shader changed.
 - Verdict: no gain (>=3% threshold not met), so the branch was reset to 173a05a per workflow rules. The harness is a tooling-only change; it can be re-applied from 51ae60c if wanted (git cherry-pick 51ae60c).
+
+## Both eyes in one MRT pass (mrt-stereo-single-pass) - implemented, awaiting measurement
+
+- What: `effectsFragment`'s body is split, with no change to any maths, into `distortedUV()`
+  (Ken Burns, turbulence, log-spherical, sinusoidal noise, UV clamp) and `shadeEye()` (stereo
+  parallax through the final colour). `effectsFragment` calls both with `uniforms.stereoOffset`,
+  so the macOS path and the visionOS mono path are unchanged. The new `effectsFragmentStereo`
+  calls `distortedUV` once and `shadeEye` twice (-|offset| for the left eye, +|offset| for the
+  right), and writes `[[color(0)]]` = left and `[[color(1)]]` = right.
+  In `OffscreenEffectsRenderer.renderStereoAndPresent`, both drawables are acquired first. If
+  both are available, one render pass (two bgra8Unorm_srgb attachments, .dontCare/.store), one
+  draw and one command buffer are encoded and tracked as pass "eyes", and then both drawables are
+  presented. If only one drawable is available, that eye is rendered through the old per-eye path,
+  so it is never left showing a stale frame silently. The fallback is logged once.
+- Why: the distortion field is about 125 of about 175 trig per eye-pixel and depends only on
+  texCoord and uniforms, so both eyes computed it twice. An MRT pass shares it at full 2048²
+  resolution without adding a pass. The low-res pre-pass from round 1 lost because the extra pass
+  cost more than it saved. This change also removes one command buffer and one pass per frame,
+  which the simulator's per-pass fixed cost can see.
+- Kept unchanged: the feedback stage stays inside `shadeEye` with texture 4 unbound and the UV
+  for each eye. Bloom noise still uses `in.position.xy`, which is the same for both eyes. The
+  `EffectsUniforms` layout is unchanged; in the stereo pipeline `stereoOffset` carries the
+  magnitude, and it is still 0 when there is no depth texture. The 2048² drawable check now runs
+  through `validateDrawableSize()` on both attachment textures on every pass, and logs once.
+- Alternatives considered: a vertex-amplification/layered render target, which RealityKit's two
+  separate DrawableQueues cannot provide since they are two textures and not an array; and
+  keeping two passes with a shared displacement texture, which was measured and lost in round 1.
+- Parity: the shader-bench harness was reverted (not on the branch), so pixel parity has to be
+  checked by frozen-time screenshot in the measurement step. The maths is moved verbatim, so a
+  zero diff is expected.
+- Builds: visionOS Simulator and macOS both succeed.
+- Measured numbers: to be appended by the measurement step. Expected: the "eyeL"+"eyeR" pair is
+  replaced by one "eyes" pass, with a lower simulator total from one fewer pass's fixed cost, and
+  about 30-35% less arithmetic across the two eyes on device.

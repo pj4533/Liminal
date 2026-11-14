@@ -241,24 +241,10 @@ vertex VertexOut effectsVertex(uint vertexID [[vertex_id]]) {
 // 1 = just source, 2 = +KenBurns, 3 = +fBM, 4 = +color, 5 = +feedback, 0 = all
 #define DEBUG_STAGE 0
 
-fragment half4 effectsFragment(
-    VertexOut in [[stage_in]],
-    texture2d<half> sourceTexture [[texture(0)]],
-    texture2d<half> saliencyTexture [[texture(2)]],
-    texture2d<half> previousTexture [[texture(3)]],
-    texture2d<half> feedbackTexture [[texture(4)]],
-    texture2d<half> depthTexture [[texture(5)]],
-    constant EffectsUniforms &uniforms [[buffer(0)]],
-    constant GhostTap *ghostTaps [[buffer(1)]]
-) {
-    constexpr sampler texSampler(address::clamp_to_edge, filter::linear);
-
-    float2 uv = in.texCoord;
-
-    // DEBUG STAGE 1: Just sample source texture (should match passthrough)
-    #if DEBUG_STAGE == 1
-    return sourceTexture.sample(texSampler, uv);
-    #endif
+// Stage A: Ken Burns + turbulence + log-spherical + sinusoidal noise, through the UV clamp.
+// Depends only on texCoord and uniforms, so both stereo eyes share the result.
+static inline float2 distortedUV(float2 texCoord, constant EffectsUniforms &uniforms) {
+    float2 uv = texCoord;
 
     // === 1. KEN BURNS TRANSFORM ===
     // Apply scale around center
@@ -268,12 +254,6 @@ fragment half4 effectsFragment(
     // Apply offset (normalized, convert to UV space)
     centered -= float2(uniforms.kenBurnsOffsetX, uniforms.kenBurnsOffsetY) * 0.05;  // scale down offset
     uv = centered + center;
-
-    // DEBUG STAGE 2: Ken Burns only
-    #if DEBUG_STAGE == 2
-    uv = clamp(uv, float2(0.001), float2(0.999));
-    return sourceTexture.sample(texSampler, uv);
-    #endif
 
     // === 2. DREAMY DISTORTION (Turbulence) ===
     // XorDev's layered sine wave turbulence — organic fluid motion
@@ -303,13 +283,32 @@ fragment half4 effectsFragment(
     // Clamp UV to valid range
     uv = clamp(uv, float2(0.001), float2(0.999));
 
+    return uv;
+}
+
+// Stage B: stereo parallax through the final colour. Everything that differs per eye lives here.
+static inline half4 shadeEye(
+    float2 uv,
+    float2 texCoord,
+    float2 fragPos,
+    float stereoOffset,
+    texture2d<half> sourceTexture,
+    texture2d<half> saliencyTexture,
+    texture2d<half> previousTexture,
+    texture2d<half> feedbackTexture,
+    texture2d<half> depthTexture,
+    constant EffectsUniforms &uniforms,
+    constant GhostTap *ghostTaps
+) {
+    constexpr sampler texSampler(address::clamp_to_edge, filter::linear);
+
     // === STEREO DEPTH PARALLAX ===
     // Per-eye shift scaled by depth so near subjects separate more than distant background.
-    if (abs(uniforms.stereoOffset) > 0.000001) {
+    if (abs(stereoOffset) > 0.000001) {
         constexpr sampler depthSampler(address::clamp_to_edge, filter::linear);
         float depthVal = float(depthTexture.sample(depthSampler, uv).r);  // 0=far, 1=near
         float boostedDepth = pow(clamp(depthVal, 0.0, 1.0), 0.75);
-        float parallax = uniforms.stereoOffset * boostedDepth;
+        float parallax = stereoOffset * boostedDepth;
         uv.x = clamp(uv.x + parallax, 0.001, 0.999);
     }
 
@@ -385,7 +384,7 @@ fragment half4 effectsFragment(
     half saliencyValue = 0.5h;  // Default to neutral
     if (uniforms.hasSaliencyMap > 0.5) {
         // Sample saliency at the original UV (before distortion for consistency)
-        saliencyValue = saliencyTexture.sample(texSampler, in.texCoord).r;
+        saliencyValue = saliencyTexture.sample(texSampler, texCoord).r;
         // Shift hue based on saliency: high saliency (subjects) shift one direction,
         // low saliency (background) shifts the other direction
         // Range: -0.5 to +0.5 * saliencyInfluence
@@ -490,7 +489,7 @@ fragment half4 effectsFragment(
     // Single random-offset sample weighted by brightness — dreamy glow around bright areas.
     // Noise varies per pixel and per frame so the bloom shimmers organically.
     if (uniforms.bloomAmount > 0.001) {
-        float2 fc = in.position.xy;
+        float2 fc = fragPos;
         // Animated pseudo-noise: varies per pixel (fc) and per frame (time)
         float2 noise = fract(sin(float2(
             dot(fc, float2(127.1, 311.7)) + uniforms.time * 43.7,
@@ -516,3 +515,66 @@ fragment half4 effectsFragment(
 
     return half4(currentColor, 1.0h);
 }
+
+fragment half4 effectsFragment(
+    VertexOut in [[stage_in]],
+    texture2d<half> sourceTexture [[texture(0)]],
+    texture2d<half> saliencyTexture [[texture(2)]],
+    texture2d<half> previousTexture [[texture(3)]],
+    texture2d<half> feedbackTexture [[texture(4)]],
+    texture2d<half> depthTexture [[texture(5)]],
+    constant EffectsUniforms &uniforms [[buffer(0)]],
+    constant GhostTap *ghostTaps [[buffer(1)]]
+) {
+    // DEBUG STAGE 1: Just sample source texture (should match passthrough)
+    #if DEBUG_STAGE == 1
+    constexpr sampler texSampler(address::clamp_to_edge, filter::linear);
+    return sourceTexture.sample(texSampler, in.texCoord);
+    #endif
+
+    // DEBUG STAGE 2: Ken Burns only
+    #if DEBUG_STAGE == 2
+    constexpr sampler texSampler(address::clamp_to_edge, filter::linear);
+    float2 kb = (in.texCoord - 0.5) / uniforms.kenBurnsScale
+              - float2(uniforms.kenBurnsOffsetX, uniforms.kenBurnsOffsetY) * 0.05 + 0.5;
+    return sourceTexture.sample(texSampler, clamp(kb, float2(0.001), float2(0.999)));
+    #endif
+
+    float2 uv = distortedUV(in.texCoord, uniforms);
+    return shadeEye(uv, in.texCoord, in.position.xy, uniforms.stereoOffset,
+                    sourceTexture, saliencyTexture, previousTexture, feedbackTexture, depthTexture,
+                    uniforms, ghostTaps);
+}
+
+// MARK: - Stereo MRT Fragment Shader (visionOS)
+// Both eyes in one pass: the distortion field (about 125 of about 175 trig per eye-pixel)
+// is computed once and shared. uniforms.stereoOffset carries the magnitude (0 when there
+// is no depth map); left eye gets -|offset|, right eye +|offset|.
+
+struct StereoEyesOut {
+    half4 left  [[color(0)]];
+    half4 right [[color(1)]];
+};
+
+fragment StereoEyesOut effectsFragmentStereo(
+    VertexOut in [[stage_in]],
+    texture2d<half> sourceTexture [[texture(0)]],
+    texture2d<half> saliencyTexture [[texture(2)]],
+    texture2d<half> previousTexture [[texture(3)]],
+    texture2d<half> feedbackTexture [[texture(4)]],
+    texture2d<half> depthTexture [[texture(5)]],
+    constant EffectsUniforms &uniforms [[buffer(0)]],
+    constant GhostTap *ghostTaps [[buffer(1)]]
+) {
+    float2 uv = distortedUV(in.texCoord, uniforms);
+    float mag = abs(uniforms.stereoOffset);
+    StereoEyesOut out;
+    out.left = shadeEye(uv, in.texCoord, in.position.xy, -mag,
+                        sourceTexture, saliencyTexture, previousTexture, feedbackTexture, depthTexture,
+                        uniforms, ghostTaps);
+    out.right = shadeEye(uv, in.texCoord, in.position.xy, mag,
+                         sourceTexture, saliencyTexture, previousTexture, feedbackTexture, depthTexture,
+                         uniforms, ghostTaps);
+    return out;
+}
+

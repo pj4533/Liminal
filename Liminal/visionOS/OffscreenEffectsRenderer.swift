@@ -23,6 +23,9 @@ final class OffscreenEffectsRenderer {
     let device: MTLDevice
     let commandQueue: MTLCommandQueue
     private let pipelineState: MTLRenderPipelineState
+    /// Both eyes in one MRT pass (effectsFragmentStereo): attachment 0 = left, 1 = right.
+    private let stereoPipelineState: MTLRenderPipelineState
+    private var loggedStereoFallback = false
     private let passthroughPipelineState: MTLRenderPipelineState  // DEBUG: Simple passthrough
     private let samplerState: MTLSamplerState
 
@@ -32,6 +35,7 @@ final class OffscreenEffectsRenderer {
     private var previousTexture: MTLTexture?  // For GPU crossfade blending
     // No intermediate output texture: each pass renders straight into its 2048² drawable.
     private var loggedDrawableSize = false
+    private var loggedDrawableSizeMismatch = false
     private var saliencyTexture: MTLTexture?
     private(set) var depthTexture: MTLTexture?  // ML depth map (r8Unorm)
 
@@ -113,6 +117,11 @@ final class OffscreenEffectsRenderer {
             return nil
         }
 
+        guard let stereoFragmentFunc = library.makeFunction(name: "effectsFragmentStereo") else {
+            LMLog.visual.error("❌ Failed to load effectsFragmentStereo")
+            return nil
+        }
+
         guard let passthroughFragFunc = library.makeFunction(name: "passthroughFragment") else {
             LMLog.visual.error("❌ Failed to load passthroughFragment")
             return nil
@@ -128,6 +137,20 @@ final class OffscreenEffectsRenderer {
             pipelineState = try device.makeRenderPipelineState(descriptor: pipelineDescriptor)
         } catch {
             LMLog.visual.error("❌ Failed to create effects pipeline: \(error.localizedDescription)")
+            return nil
+        }
+
+        // Stereo MRT pipeline: shared distortion field, two eye outputs
+        let stereoDescriptor = MTLRenderPipelineDescriptor()
+        stereoDescriptor.vertexFunction = vertexFunc
+        stereoDescriptor.fragmentFunction = stereoFragmentFunc
+        stereoDescriptor.colorAttachments[0].pixelFormat = .bgra8Unorm_srgb
+        stereoDescriptor.colorAttachments[1].pixelFormat = .bgra8Unorm_srgb
+
+        do {
+            stereoPipelineState = try device.makeRenderPipelineState(descriptor: stereoDescriptor)
+        } catch {
+            LMLog.visual.error("❌ Failed to create stereo effects pipeline: \(error.localizedDescription)")
             return nil
         }
 
@@ -767,33 +790,105 @@ final class OffscreenEffectsRenderer {
             return false
         }
 
-        // Render both eyes
-        let leftOk = renderEyeToDrawable(
-            queue: leftQueue,
+        // Acquire both drawables first so both eyes can be written by one MRT pass.
+        let leftDrawable = try? leftQueue.nextDrawable()
+        let rightDrawable = try? rightQueue.nextDrawable()
+
+        if let leftDrawable, let rightDrawable {
+            return renderBothEyes(
+                left: leftDrawable,
+                right: rightDrawable,
+                sourceTexture: sourceTexture,
+                ghostTapBuffer: ghostTapBuffer,
+                uniforms: uniforms,
+                ghostTapCount: ghostTapResult.activeCount,
+                stereoOffset: stereoOffset
+            )
+        }
+
+        // Fallback: only one eye's drawable was available. Render that eye on its own
+        // so it is not left showing a stale frame; the other eye catches up next frame.
+        if !loggedStereoFallback {
+            loggedStereoFallback = true
+            LMLog.visual.info("⚠️ Stereo MRT fallback: only \(leftDrawable != nil ? "left" : (rightDrawable != nil ? "right" : "no")) drawable available, rendering per-eye")
+        }
+
+        let leftOk = leftDrawable.map { renderEyeToDrawable(
+            drawable: $0,
             sourceTexture: sourceTexture,
             ghostTapBuffer: ghostTapBuffer,
             uniforms: uniforms,
             ghostTapCount: ghostTapResult.activeCount,
             eyeOffset: -stereoOffset,  // Left eye shifts left
             passName: "L"
-        )
+        ) } ?? false
 
-        let rightOk = renderEyeToDrawable(
-            queue: rightQueue,
+        let rightOk = rightDrawable.map { renderEyeToDrawable(
+            drawable: $0,
             sourceTexture: sourceTexture,
             ghostTapBuffer: ghostTapBuffer,
             uniforms: uniforms,
             ghostTapCount: ghostTapResult.activeCount,
             eyeOffset: stereoOffset,  // Right eye shifts right
             passName: "R"
-        )
+        ) } ?? false
 
         return leftOk && rightOk
     }
 
+    /// Render both eyes in one render pass with two colour attachments (MRT).
+    /// The distortion field is computed once per pixel and shared by both eyes.
+    private func renderBothEyes(
+        left: TextureResource.Drawable,
+        right: TextureResource.Drawable,
+        sourceTexture: MTLTexture,
+        ghostTapBuffer: MTLBuffer,
+        uniforms: EffectsUniforms,
+        ghostTapCount: Int,
+        stereoOffset: Float
+    ) -> Bool {
+        guard let commandBuffer = commandQueue.makeCommandBuffer() else { return false }
+
+        let descriptor = makeDrawablePassDescriptor(for: left.texture)
+        validateDrawableSize(right.texture)
+        descriptor.colorAttachments[1].texture = right.texture
+        descriptor.colorAttachments[1].loadAction = .dontCare
+        descriptor.colorAttachments[1].storeAction = .store
+
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: descriptor) else {
+            return false
+        }
+
+        encoder.setRenderPipelineState(stereoPipelineState)
+
+        // Shader applies -|offset| to the left eye and +|offset| to the right eye.
+        var mutableUniforms = uniforms
+        mutableUniforms.ghostTapCount = Float(ghostTapCount)
+        mutableUniforms.stereoOffset = depthTexture != nil ? abs(stereoOffset) : 0
+        encoder.setFragmentBytes(&mutableUniforms, length: MemoryLayout<EffectsUniforms>.size, index: 0)
+
+        encoder.setFragmentBuffer(ghostTapBuffer, offset: 0, index: 1)
+        encoder.setFragmentTexture(sourceTexture, index: 0)
+        encoder.setFragmentTexture(saliencyTexture, index: 2)
+        encoder.setFragmentTexture(previousTexture ?? sourceTexture, index: 3)
+        if let depthTex = depthTexture {
+            encoder.setFragmentTexture(depthTex, index: 5)
+        }
+        encoder.setFragmentSamplerState(samplerState, index: 0)
+
+        encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+        encoder.endEncoding()
+
+        gpuStats.track(commandBuffer, pass: "eyes")
+        commandBuffer.commit()
+        left.present()
+        right.present()
+        return true
+    }
+
     /// Render a single eye pass to a drawable queue.
     private func renderEyeToDrawable(
-        queue: TextureResource.DrawableQueue,
+        drawable: TextureResource.Drawable,
         sourceTexture: MTLTexture,
         ghostTapBuffer: MTLBuffer,
         uniforms: EffectsUniforms,
@@ -801,8 +896,7 @@ final class OffscreenEffectsRenderer {
         eyeOffset: Float,
         passName: String
     ) -> Bool {
-        guard let drawable = try? queue.nextDrawable(),
-              let commandBuffer = commandQueue.makeCommandBuffer() else {
+        guard let commandBuffer = commandQueue.makeCommandBuffer() else {
             return false
         }
 
@@ -843,21 +937,27 @@ final class OffscreenEffectsRenderer {
     /// Render pass that writes the effects quad straight into a drawable texture.
     /// The fullscreen quad covers every pixel, so the old contents are never read (.dontCare).
     private func makeDrawablePassDescriptor(for texture: MTLTexture) -> MTLRenderPassDescriptor {
-        if !loggedDrawableSize {
-            loggedDrawableSize = true
-            let matches = texture.width == outputSize && texture.height == outputSize
-            if matches {
-                LMLog.visual.info("🖼️ Direct drawable render: \(texture.width)x\(texture.height) format=\(texture.pixelFormat.rawValue)")
-            } else {
-                LMLog.visual.error("❌ Drawable is \(texture.width)x\(texture.height), expected \(self.outputSize)x\(self.outputSize)")
-            }
-            assert(matches, "Drawable size must match outputSize")
-        }
+        validateDrawableSize(texture)
         let descriptor = MTLRenderPassDescriptor()
         descriptor.colorAttachments[0].texture = texture
         descriptor.colorAttachments[0].loadAction = .dontCare
         descriptor.colorAttachments[0].storeAction = .store
         return descriptor
+    }
+
+    /// The render resolution must stay 2048² (user requirement); verify every drawable we write.
+    private func validateDrawableSize(_ texture: MTLTexture) {
+        let matches = texture.width == outputSize && texture.height == outputSize
+        if !loggedDrawableSize || !matches {
+            if matches {
+                loggedDrawableSize = true
+                LMLog.visual.info("🖼️ Direct drawable render: \(texture.width)x\(texture.height) format=\(texture.pixelFormat.rawValue)")
+            } else if !loggedDrawableSizeMismatch {
+                loggedDrawableSizeMismatch = true
+                LMLog.visual.error("❌ Drawable is \(texture.width)x\(texture.height), expected \(self.outputSize)x\(self.outputSize)")
+            }
+        }
+        assert(matches, "Drawable size must match outputSize")
     }
 
     // MARK: - Private
