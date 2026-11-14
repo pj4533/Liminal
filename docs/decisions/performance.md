@@ -145,3 +145,11 @@ Median of 3 unfrozen 30 s simulator runs vs baseline (before -> after):
 - Logs: no errors; "Direct drawable render: 2048x2048 format=81" logged, resolution unchanged.
 - Visual: frozen (t=100) screenshot shows a different random source image than baseline, so a numeric diff is meaningless (mean abs diff ~30). Visually upright, correct colour, all effects present (distortion, chromatic fringing, grain, haze). Judged acceptable.
 Verdict: kept (>=3% GPU improvement, no new errors).
+
+## Compile feedback-warp stage out on visionOS via function constant (231c4f1) - REVERTED
+
+- What: function constant to dead-strip the feedback-warp stage in the visionOS fragment shader, output meant to be unchanged.
+- Measured (simulator, medians of 3): GPU mean 0.282 ms vs 0.159 ms before; p95 0.52 ms vs 0.26 ms; fps 77.9 vs 46.4 (frame interval p95 13.4 ms vs 51 ms). Per-pass: dome 0.089, eyeL 0.128, eyeR 0.069. No errors in logs.
+- Verdict: not kept. GPU time did not improve (it was higher), so the rule of >=3% GPU gain was not met. The fps jump looks like simulator or host load differences between sessions, not a real gain, since GPU ms moved the wrong way.
+- Visual parity: frozen screenshots could not be compared. Mean abs diff was 46.8, but the two captures showed different source images (the image pool changes per run), so the diff says nothing about the shader.
+- Alternative to revisit: A/B the same build with the constant on and off in one session, using a fixed image, to separate shader cost from host noise.
