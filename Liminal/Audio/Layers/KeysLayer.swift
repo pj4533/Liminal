@@ -36,7 +36,7 @@ nonisolated final class KeysLayer: BaseLayer {
         }
         let mix = Mixer(groups)
         filter = LowPassButterworthFilter(mix, cutoffFrequency: 4000)
-        let strip = LayerStrip(source: mix, filter: filter, trim: dbToGain(-13) * 1.414 / 0.5,
+        let strip = LayerStrip(source: mix, filter: filter, trim: dbToGain(-14) * 1.414 / 0.5,
                                reverb: 0.6, delay: 0.35)
         var tmp = SeededRNG(seed: 0)
         loop = LoopClock(bounds: 4...9, rng: &tmp)
@@ -168,7 +168,7 @@ nonisolated final class KeysLayer: BaseLayer {
         // by 1/sqrt(notes started in the last 0.5 s), so stacked attacks stay under the bypass peak gate (D84).
         let now = ctx.time
         let together = max(1, pool.lastUsed.filter { now - $0 < 0.5 }.count)
-        let peak = amp * velocity * tilt / Float(together).squareRoot()
+        let peak = amp * velocity * tilt / Float(together).squareRoot() * ctx.shareAttack(layer: .keys)
         // If the voice is still ringing, duck it before retuning.
         ParamRamp.set(osc.$amplitude, 0, over: ParamRamp.minimum)
         after(0.025, ctx: ctx) { [weak self] in

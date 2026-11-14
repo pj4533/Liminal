@@ -381,7 +381,7 @@ nonisolated final class MusicConductor: @unchecked Sendable {
         let bias = newest?.brightness ?? 0
         let b = 0.5 + 0.6 * bias + 0.35 * (intensity - 0.4) + cpl.brightnessNudge + 0.12 * colorDrift.value(at: t)
         ctx.intensity = intensity
-        ctx.brightness = min(max(b, 0), 1)
+        ctx.brightness = MusicConductor.shapeBrightness(b)
         ctx.density = min(max(density * cpl.energyScale, 0), 1)
         ctx.registerShift = min(max((newest?.registerShift ?? 0) + cpl.registerNudge, -5), 7)
         ctx.mood = cpl.mood
@@ -410,6 +410,16 @@ nonisolated final class MusicConductor: @unchecked Sendable {
 
         publish(t)
         if modulateCount % 10 == 0 { scoreLog?.sample(t, intensity: intensity, brightness: ctx.brightness, layers: layers) }
+    }
+
+    /// Brightness macro shaping (decision D89): linear up to 0.6, then a soft knee that approaches 0.92.
+    /// A hard clamp pinned the macro at exactly 1.0 for minutes in any scene with a brightness bias above
+    /// about 0.6 (the bias weight is 0.6 since D86), so every filter, FM index and reverb damping sat fully
+    /// open with no movement left in it.
+    static func shapeBrightness(_ raw: Float) -> Float {
+        let knee: Float = 0.6, span: Float = 0.32
+        if raw <= knee { return max(raw, 0) }
+        return knee + span * tanhf((raw - knee) / span)
     }
 
     private func updateActivation(_ t: Double) {
@@ -547,6 +557,7 @@ nonisolated final class ScoreLog {
                                    "keys": keys, "pedals": pedals, "samples": samples, "notes": notes, "onsets": onsets, "rareEvents": rareEvents, "perf": perf]
         if let k = initialKey { root["initialKey"] = ["tonic": k.tonic, "mode": k.mode.rawValue] }
         let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
-        try data.write(to: url)
+        // Atomic: a plain overwrite of an existing, longer log left its old tail behind (invalid JSON, D89).
+        try data.write(to: url, options: .atomic)
     }
 }

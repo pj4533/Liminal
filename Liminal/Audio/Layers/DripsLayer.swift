@@ -83,12 +83,17 @@ nonisolated final class DripsLayer: BaseLayer {
         let osc = oscs[v]
         let fm = ctx.coupling.fmScale
         // Brighter scenes give glassier, more inharmonic drips (ratio 1:3 or 1:3.5, more index).
-        let ratio: Float = mallet ? 4 : (ctx.brightness > 0.55 && rng.chance(0.5) ? (rng.chance(0.5) ? 3 : 3.5) : 2)
-        let index0: Float = mallet ? 1.5 * fm : (0.4 + 1.6 * ctx.brightness) * velocity * fm
+        let ratio: Float = mallet ? 4 : (ctx.brightness > 0.55 && rng.chance(0.35) ? (rng.chance(0.5) ? 3 : 3.5) : 2)
+        // Key-scaled FM index (decision D89): full below G5, falling to 40 % at the top of the range, as a
+        // struck bar or string has fewer partials the higher it is. Unscaled, a ratio-3.5 drip at C7 put its
+        // sidebands at 7-20 kHz and a bright scene's drips carried a third of their power above 4 kHz.
+        let keyScale = Float(min(1, max(0.4, 1 - 0.028 * Double(midi - 79))))
+        let index0: Float = (mallet ? 1.5 * fm : (0.4 + 1.3 * ctx.brightness) * velocity * fm) * keyScale
         // High drips a little quieter (about -1.5 dB per 2 semitones above C6).
         let now = ctx.time
         let together = Float(max(1, pool.lastUsed.filter { now - $0 < 0.3 }.count))
         let peak = 0.5 * velocity * Float(max(0.45, 1 - 0.035 * Double(max(0, midi - 84)))) / together.squareRoot()
+            * ctx.shareAttack(layer: .drips, weight: 0.7)
         // Ramp envelope (D68): 8 ms attack, decay to 25 % (0.2 s mallet / 0.35 s blip), hold, release.
         let hold = mallet ? rng.range(0.03...0.08) : rng.range(0.05...0.15)
         let decay = mallet ? 0.2 : 0.35
@@ -101,7 +106,7 @@ nonisolated final class DripsLayer: BaseLayer {
             ParamRamp.set(osc.$baseFrequency, Scale.midiToFrequency(midi), over: ParamRamp.minimum)
             ParamRamp.set(osc.$modulatingMultiplier, ratio, over: ParamRamp.minimum)
             // Strike transient (decision D85): +0.9 index for the first 60 ms.
-            ParamRamp.set(osc.$modulationIndex, index0 + 0.9 * fm, over: ParamRamp.minimum)
+            ParamRamp.set(osc.$modulationIndex, index0 + 0.9 * fm * keyScale, over: ParamRamp.minimum)
             self.after(0.022, ctx: ctx) { [weak self] in
                 guard let self, self.pool.isCurrent(v, tok) else { return }
                 ParamRamp.set(osc.$amplitude, peak, over: 0.008)

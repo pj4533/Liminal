@@ -89,9 +89,9 @@ nonisolated final class MixBus {
         let ret = dbToGain(-12 + 10 * space)
         let mid = 3 + 5 * space
         // Low band decays faster than the mids so the stereo reverb tail does not smear the sub (D74).
-        setReverb(returnGain: ret, midRT60: mid, lowRT60: max(1, mid - 2.5), damping: expMap(b, 3000, 8000), over: over)
+        setReverb(returnGain: ret, midRT60: mid, lowRT60: max(1, mid - 2.5), damping: expMap(b, 3000, 6500), over: over)
         let fb = 0.35 + 0.4 * (0.5 * space + 0.5 * delayAmount)
-        setDelay(feedback: fb, returnGain: dbToGain(-9 + 6 * delayAmount), cutoff: expMap(b, 2500, 5000), over: over)
+        setDelay(feedback: fb, returnGain: dbToGain(-9 + 6 * delayAmount), cutoff: expMap(b, 2500, 4200), over: over)
         // Shimmer: -26 dB at space 0 to -12 dB at space 1, scaled by style and image; capped at -12 dB.
         setShimmer(returnGain: dbToGain(-26 + 14 * space) * shimmerScale, over: over)
     }

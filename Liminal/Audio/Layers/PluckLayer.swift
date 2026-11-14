@@ -21,7 +21,7 @@ nonisolated final class PluckLayer: BaseLayer {
         strings = (0..<PluckLayer.poolSize).map { _ in PluckedString(frequency: 220, amplitude: 0, lowestFrequency: 110) }
         let mix = Mixer(strings)
         filter = LowPassButterworthFilter(mix, cutoffFrequency: 3000)
-        let strip = LayerStrip(source: mix, filter: filter, trim: dbToGain(-8.5) * 1.414 / 0.6,
+        let strip = LayerStrip(source: mix, filter: filter, trim: dbToGain(-10) * 1.414 / 0.6,
                                reverb: 0.6, delay: 0.4)
         var tmp = SeededRNG(seed: 0)
         loop = LoopClock(bounds: 9...18, rng: &tmp)
@@ -146,7 +146,7 @@ nonisolated final class PluckLayer: BaseLayer {
         let v = next
         next = (next + 1) % PluckLayer.poolSize
         let m = max(midi, 46)          // the string's delay line is sized for 110 Hz and up
-        PluckLayer.trigger(strings[v], frequency: Scale.midiToFrequency(m), amplitude: amp * velocity)
+        PluckLayer.trigger(strings[v], frequency: Scale.midiToFrequency(m), amplitude: amp * velocity * ctx.shareAttack(layer: .pluck))
         ctx.emit(.noteOn, layer: .pluck, midi: m, velocity: velocity)
     }
 

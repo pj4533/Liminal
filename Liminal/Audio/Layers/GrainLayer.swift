@@ -28,7 +28,7 @@ nonisolated final class GrainLayer: BaseLayer {
             return m
         }
         let mix = Mixer(groups)
-        let strip = LayerStrip(source: mix, trim: dbToGain(-15) * 1.414 / 0.5, reverb: 0.8, delay: 0.2)
+        let strip = LayerStrip(source: mix, trim: dbToGain(-16) * 1.414 / 0.5, reverb: 0.8, delay: 0.2)
         super.init(id: .grains, strip: strip, entryThreshold: 0.65)
         generators = oscs
     }
@@ -81,7 +81,7 @@ nonisolated final class GrainLayer: BaseLayer {
         let tilt = Float(1 - 0.012 * Double(max(0, m - 76)))
         // Constant-loudness cloud (decision D84): above 2 grains/s each grain is scaled by sqrt(2 / rate), so
         // thick clouds add texture rather than level (overlapping grains peaked the bypassed mix at -0.4 dBFS).
-        let peak = amp * vel * tilt * Float(min(1, (2 / rate(ctx)).squareRoot()))
+        let peak = amp * vel * tilt * Float(min(1, (2 / rate(ctx)).squareRoot())) * ctx.shareAttack(layer: .grains, weight: 0.5)
         let hold = max(attack, ParamRamp.minimum) + ParamRamp.nextTick + rng.range(0...0.08)
         ParamRamp.set(osc.$amplitude, 0, over: ParamRamp.minimum)
         after(0.025, ctx: ctx) { [weak self] in

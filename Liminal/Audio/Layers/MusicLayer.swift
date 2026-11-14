@@ -160,6 +160,32 @@ nonisolated final class LayerContext {
     var field: HarmonicField { harmony.field }
     var time: Double { scheduler.now }
 
+    // MARK: Shared attack headroom (decision D89)
+
+    /// Recent note attacks from every pointed layer (time, layer, weight), a fixed ring so nothing allocates.
+    private var attackTimes = [Double](repeating: -10, count: 12)
+    private var attackLayers = [LayerID](repeating: .drone, count: 12)
+    private var attackWeights = [Float](repeating: 0, count: 12)
+    private var attackNext = 0
+
+    /// Call once per note about to be struck. Returns a gain of 1 when no other layer attacked in the last
+    /// 0.2 s, falling as `1 / sqrt(1 + 0.6 * w)` with the summed weight `w` of other layers' attacks in that
+    /// window (one coincident full-weight note: -2 dB; two: -3.4 dB). Each layer already shares headroom among
+    /// its own notes (D84); this does the same across layers, where the bypassed-mix peaks came from
+    /// (pluck + drips, keys + grain cloud). Then records this attack.
+    func shareAttack(layer: LayerID, weight: Float = 1) -> Float {
+        let now = time
+        var w: Float = 0
+        for i in 0..<attackTimes.count where attackLayers[i] != layer && now - attackTimes[i] < 0.2 && now >= attackTimes[i] {
+            w += attackWeights[i]
+        }
+        attackTimes[attackNext] = now
+        attackLayers[attackNext] = layer
+        attackWeights[attackNext] = weight
+        attackNext = (attackNext + 1) % attackTimes.count
+        return 1 / (1 + 0.6 * w).squareRoot()
+    }
+
     func setEmitter(_ e: @escaping (MusicEvent.Kind, LayerID, Int, Float) -> Void) { emitter = e }
 
     func emit(_ kind: MusicEvent.Kind, layer: LayerID, midi: Int = 0, velocity: Float = 0) {
