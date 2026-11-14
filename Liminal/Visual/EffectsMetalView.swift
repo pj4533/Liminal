@@ -73,6 +73,8 @@ final class EffectsMetalView: MTKView {
 
     // Track if we have a valid source
     private var hasValidSource = false
+    /// Normalized cover-crop applied to the current source image (re-used for its saliency map).
+    private var sourceCrop = CGRect(x: 0, y: 0, width: 1, height: 1)
 
     // MARK: - Performance Tracking
 
@@ -137,7 +139,9 @@ final class EffectsMetalView: MTKView {
             return
         }
 
-        guard let fragmentFunction = library.makeFunction(name: "effectsFragment") else {
+        // DEBUG -LiminalNoEffects: bare image via passthroughFragment (orientation/colour checks).
+        let fragmentName = DebugLaunchOptions.noEffects ? "passthroughFragment" : "effectsFragment"
+        guard let fragmentFunction = library.makeFunction(name: fragmentName) else {
             LMLog.visual.error("❌ Failed to load effectsFragment function")
             return
         }
@@ -196,8 +200,10 @@ final class EffectsMetalView: MTKView {
             return
         }
 
-        // Convert NSImage to CGImage
-        guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+        // Convert NSImage to CGImage, centre-cropped to the 3:2 display aspect
+        // (the view itself is kept at 3:2 by VisualDisplayView; docs/decisions/orientation.md).
+        // MTKTextureLoader's default origin is top-left: texture row 0 = image top.
+        guard let rawImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
             LMLog.visual.error("❌ Failed to get CGImage from NSImage")
             hasValidSource = false
             return
@@ -210,7 +216,8 @@ final class EffectsMetalView: MTKView {
                 .SRGB: false,
                 .generateMipmaps: false
             ]
-            sourceTexture = try textureLoader.newTexture(cgImage: cgImage, options: options)
+            sourceCrop = ImageFraming.coverCropRect(width: rawImage.width, height: rawImage.height)
+            sourceTexture = try textureLoader.newTexture(cgImage: ImageFraming.crop(rawImage, normalized: sourceCrop), options: options)
             hasValidSource = true
             lastSourceImageHash = newHash
             textureUpdateCount += 1
@@ -255,7 +262,8 @@ final class EffectsMetalView: MTKView {
                 .SRGB: false,
                 .generateMipmaps: false
             ]
-            saliencyTexture = try textureLoader.newTexture(cgImage: cgImage, options: options)
+            // Same normalized crop as the colour image so saliency stays registered with it.
+            saliencyTexture = try textureLoader.newTexture(cgImage: ImageFraming.crop(cgImage, normalized: sourceCrop), options: options)
             lastSaliencyImageHash = newHash
 
             if let tex = saliencyTexture {
@@ -297,7 +305,7 @@ final class EffectsMetalView: MTKView {
                 .SRGB: false,
                 .generateMipmaps: false
             ]
-            previousTexture = try textureLoader.newTexture(cgImage: cgImage, options: options)
+            previousTexture = try textureLoader.newTexture(cgImage: ImageFraming.coverCrop(cgImage), options: options)
             lastPreviousImageHash = newHash
 
             if let tex = previousTexture {

@@ -18,7 +18,7 @@ import AppKit
 /// the Gemini 3.1 switch (docs/decisions/images.md D4).
 final class SquareVisualWindowDelegate: NSObject, NSWindowDelegate {
     static let controlPanelWidth: CGFloat = 281  // 280 panel + 1 divider
-    static let visualAspect: CGFloat = 1.5       // 3:2, matches generated images
+    static let visualAspect: CGFloat = ImageFraming.displayAspect  // 3:2, matches generated images
 
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
         // Calculate title bar height for this window
@@ -358,6 +358,9 @@ struct VisualDisplayView: View {
                         uniforms: effectUniforms,
                         delay: settings.delay
                     )
+                    // Keep the image at its 3:2 display aspect even if the window is not exactly
+                    // 3:2 (min sizes, full screen): letterbox on black instead of stretching.
+                    .aspectRatio(ImageFraming.displayAspect, contentMode: .fit)
                     .frame(width: geometry.size.width, height: geometry.size.height)
 
                     // Status overlay (top corners)

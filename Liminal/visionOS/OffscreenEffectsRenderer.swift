@@ -471,7 +471,8 @@ final class OffscreenEffectsRenderer {
     }
 
     // DEBUG: Bypass shader to isolate if issue is texture update or shader
-    private let bypassShaderForDebug = false  // Now testing effectsFragment stages
+    /// DEBUG -LiminalNoEffects: render the bare image (passthroughFragment) instead of effects.
+    private let bypassShaderForDebug = DebugLaunchOptions.noEffects
 
     /// Render effects and present to DrawableQueue.
     /// - Parameters:
@@ -794,6 +795,16 @@ final class OffscreenEffectsRenderer {
         let leftDrawable = try? leftQueue.nextDrawable()
         let rightDrawable = try? rightQueue.nextDrawable()
 
+        if bypassShaderForDebug {
+            // DEBUG -LiminalNoEffects: bare image into each eye (no parallax, no effects).
+            var ok = true
+            for drawable in [leftDrawable, rightDrawable] {
+                guard let drawable else { ok = false; continue }
+                ok = renderPassthrough(to: drawable, sourceTexture: sourceTexture) && ok
+            }
+            return ok
+        }
+
         if let leftDrawable, let rightDrawable {
             return renderBothEyes(
                 left: leftDrawable,
@@ -834,6 +845,23 @@ final class OffscreenEffectsRenderer {
         ) } ?? false
 
         return leftOk && rightOk
+    }
+
+    /// DEBUG: passthroughFragment (no effects) straight into a drawable.
+    private func renderPassthrough(to drawable: TextureResource.Drawable, sourceTexture: MTLTexture) -> Bool {
+        guard let commandBuffer = commandQueue.makeCommandBuffer(),
+              let encoder = commandBuffer.makeRenderCommandEncoder(
+                descriptor: makeDrawablePassDescriptor(for: drawable.texture)) else { return false }
+        encoder.setRenderPipelineState(passthroughPipelineState)
+        let zeroUniforms = [UInt8](repeating: 0, count: MemoryLayout<EffectsUniforms>.size)
+        encoder.setFragmentBytes(zeroUniforms, length: zeroUniforms.count, index: 0)
+        encoder.setFragmentTexture(sourceTexture, index: 0)
+        encoder.setFragmentSamplerState(samplerState, index: 0)
+        encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+        encoder.endEncoding()
+        commandBuffer.commit()
+        drawable.present()
+        return true
     }
 
     /// Render both eyes in one render pass with two colour attachments (MRT).
@@ -1012,12 +1040,12 @@ final class OffscreenEffectsRenderer {
         // High quality downsampling
         context.interpolationQuality = .high
 
-        // Flip coordinate system: CGContext has origin at bottom-left,
-        // Metal textures expect top-left origin
-        context.translateBy(x: 0, y: CGFloat(targetSize))
-        context.scaleBy(x: 1.0, y: -1.0)
-
-        // Draw source image scaled to target size
+        // NO flip: a CGBitmapContext stores the image top row first in memory (its user-space
+        // origin is bottom-left, but that only affects drawing coordinates), so the buffer is
+        // already in Metal order: texture row 0 = image top. (The former translate/scale(-1)
+        // stored it upside down.) Convention: docs/decisions/orientation.md.
+        // The image is pre-cropped to ImageFraming.displayAspect (3:2) and stretched to the
+        // square target; the 3:2 dome stretches it back (anisotropic texels, no distortion).
         context.draw(cgImage, in: CGRect(x: 0, y: 0, width: targetSize, height: targetSize))
 
         texture.replace(
@@ -1077,8 +1105,7 @@ final class OffscreenEffectsRenderer {
         ) else { return false }
 
         context.interpolationQuality = .high
-        context.translateBy(x: 0, y: CGFloat(targetSize))
-        context.scaleBy(x: 1.0, y: -1.0)
+        // No flip: bitmap memory is top row first (same convention as updateSourceTexture).
         context.draw(cgImage, in: CGRect(x: 0, y: 0, width: targetSize, height: targetSize))
 
         texture.replace(
@@ -1186,9 +1213,7 @@ final class OffscreenEffectsRenderer {
             bitmapInfo: CGImageAlphaInfo.none.rawValue
         ) else { return }
 
-        // Match source texture orientation so depth samples align with color samples.
-        context.translateBy(x: 0, y: CGFloat(height))
-        context.scaleBy(x: 1.0, y: -1.0)
+        // No flip: row 0 = top, same as the source texture, so depth aligns with colour.
         context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
 
         texture.replace(

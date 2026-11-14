@@ -54,7 +54,8 @@ xcrun -sdk macosx swiftc -O -o "$BUILD/vibrance-harness" \
   "$ROOT/Liminal/EffectsUniforms.swift" \
   "$ROOT/Liminal/Visual/EffectsUniformsComputer.swift" \
   "$ROOT/Liminal/Visual/SmoothOscillator.swift" \
-  "$ROOT/Liminal/Visual/GhostTapManager.swift"
+  "$ROOT/Liminal/Visual/GhostTapManager.swift" \
+  "$ROOT/Liminal/Visual/ImageFraming.swift"
 
 # 3. Render
 for MODE in $MODES; do

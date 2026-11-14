@@ -63,8 +63,11 @@ final class StereoMaterialBuilder {
         let leftTex = SGValue.texture(leftResource)
         let rightTex = SGValue.texture(rightResource)
 
-        // Flip V coordinate: DrawableQueue content has Metal convention (top at row 0),
-        // but RealityKit mesh UVs use USD convention (V=0 at bottom).
+        // Flip V so this material samples EXACTLY like the mono UnlitMaterial fallback.
+        // Measured in the simulator with -LiminalTestPattern (docs/decisions/orientation.md):
+        // UnlitMaterial samples texture row (1 - v) * H, while ShaderGraph's image node samples
+        // row v * H (no implicit flip). Feeding it (u, 1 - v) makes both read row (1 - v) * H:
+        // mesh v = 1 (dome top) → row 0 → image top. Removing this flip turns stereo upside down.
         let rawUV = SGValue.uv0
         let flippedUV = SGValue.vector2f(rawUV.x, SGValue.float(1.0) - rawUV.y)
 

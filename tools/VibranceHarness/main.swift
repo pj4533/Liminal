@@ -106,17 +106,18 @@ let blackTex = fill1x1(.bgra8Unorm, bytes: [0, 0, 0, 255])
 let srgb = CGColorSpace(name: CGColorSpace.sRGB)!
 let bgraInfo = CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.premultipliedFirst.rawValue
 
-/// Upload exactly like OffscreenEffectsRenderer.updateSourceTexture (sRGB CGContext, BGRA, flipped).
+/// Upload exactly like OffscreenEffectsRenderer.updateSourceTexture: 3:2 cover-crop (as the dome
+/// view does before upload), sRGB CGContext, BGRA, NOT flipped (bitmap memory is top row first =
+/// Metal row 0 = image top). Output PNGs are therefore upright (square, i.e. the 3:2 frame
+/// squeezed horizontally exactly as stored in the 2048² texture).
 func loadSource(_ url: URL) -> MTLTexture {
     let src = CGImageSourceCreateWithURL(url as CFURL, nil)!
-    let img = CGImageSourceCreateImageAtIndex(src, 0, nil)!
+    let img = ImageFraming.coverCrop(CGImageSourceCreateImageAtIndex(src, 0, nil)!)
     let bpr = size * 4
     var buf = [UInt8](repeating: 0, count: bpr * size)
     let ctx = CGContext(data: &buf, width: size, height: size, bitsPerComponent: 8, bytesPerRow: bpr,
                         space: srgb, bitmapInfo: bgraInfo)!
     ctx.interpolationQuality = .high
-    ctx.translateBy(x: 0, y: CGFloat(size))
-    ctx.scaleBy(x: 1, y: -1)
     ctx.draw(img, in: CGRect(x: 0, y: 0, width: size, height: size))
     let t = makeTexture(.bgra8Unorm, size, size, usage: .shaderRead)
     t.replace(region: MTLRegionMake2D(0, 0, size, size), mipmapLevel: 0, withBytes: buf, bytesPerRow: bpr)

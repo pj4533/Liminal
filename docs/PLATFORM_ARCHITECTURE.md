@@ -7,7 +7,7 @@ This document explains the architectural differences between Liminal's macOS and
 | Aspect | macOS | visionOS | Why Different |
 |--------|-------|----------|---------------|
 | **Rendering API** | MTKView (direct Metal) | Offscreen Metal → DrawableQueue → RealityKit | MTKView unavailable on visionOS; RealityKit is native |
-| **Display Surface** | Window framebuffer | Curved dome mesh (110°×75°) | visionOS is spatial/immersive |
+| **Display Surface** | Window framebuffer (3:2, letterboxed) | Curved dome mesh (112.5°×75°, 3:2 in view angle) | visionOS is spatial/immersive |
 | **Frame Rate** | 60fps display link | 90fps RealityKit timeline | Platform requirements differ |
 | **Image Blending** | GPU shader (fragment blend) | GPU shader (fragment blend) | Same approach, platform-optimal delivery |
 | **State Management** | @Published properties | AtomicImageBuffer (lock-free) | 90fps starves MainActor |
@@ -252,3 +252,12 @@ The architecture maximizes code sharing (audio, shaders, uniforms, services) whi
 - Drawable queues no longer request `.shaderWrite`; uploaded source textures use `optimizeContentsForGPUAccess`.
 - GPU timing: `Utils/GPUTimingStats.swift`; DEBUG launch flags: `Utils/DebugLaunchOptions.swift`;
   capture script: `scripts/perf-run.sh`. See `docs/decisions/performance.md`.
+
+## Image orientation and aspect
+
+One convention on both platforms: texture row 0 / texCoord.y = 0 is the image top. The visionOS upload
+draws into the CGBitmapContext unflipped. The effects pass maps rows 1:1 into the drawable. Dome UVs
+use v = 1 at the top, and the mono UnlitMaterial and stereo ShaderGraph material both sample row
+`(1 - v) * H`. Every source is centre-cropped to 3:2 (`ImageFraming`). The square 2048² target stores
+the 3:2 frame and the 112.5°×75° dome shows it undistorted. macOS letterboxes its view to 3:2. Details,
+measurements and the DEBUG test-card flags: `docs/decisions/orientation.md`.

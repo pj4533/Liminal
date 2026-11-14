@@ -35,6 +35,11 @@ scripts/vibrance-eval.sh <input-dir> <out-dir>
   - OKLab L mean (lum) and std (contrast).
 - Inputs: 16 colorful photoreal images (`images-eval/round1/00..15.jpg`).
 
+> Orientation note (2026-11-14, docs/decisions/orientation.md O1): harness PNGs made before then are
+> upside down because the harness copied the app's old flipped upload. The harness now matches the
+> fixed upload and 3:2 cover-crop, and its output is upright. Colour metrics do not depend on
+> orientation, so the numbers below still hold.
+
 ## Key findings
 
 1. **visionOS has a double sRGB encode. This is the main cause of the "washed out" look.** Source textures are

@@ -19,7 +19,7 @@
 
 | Component | Capability |
 |-----------|------------|
-| **Curved Panel** | 110° x 75° sphere section at 2m, 32x24 vertices |
+| **Curved Panel** | 112.5° x 75° section at 2m (3:2 in view angle, see docs/decisions/orientation.md) |
 | **Effects Shader** | fBM distortion, Ken Burns, hue waves, ghost taps |
 | **DepthAnalyzer** | Vision framework saliency (exists but unused) |
 | **Performance** | ~3-5ms/frame of 11.1ms budget (lots of headroom) |

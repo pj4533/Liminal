@@ -129,6 +129,16 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
 
     /// Lists the store (sidecars only), decodes ONE random image and shows it.
     private func loadInitialImage() async {
+        #if DEBUG
+        if DebugLaunchOptions.testPattern {
+            // -LiminalTestPattern: show only the orientation/colour test card.
+            let card = TestPatternGenerator.image
+            imageBuffer.storeCurrent(card, metadata: nil)
+            await MainActor.run { self.currentImage = Self.platformImage(card) }
+            LMLog.visual.info("🧪 [ImageQueue] Test pattern shown (\(card.width)x\(card.height)); generation disabled")
+            return
+        }
+        #endif
         let files = store.imageFiles()
         await publishCachedCount(files.count)
         LMLog.visual.info("📂 [ImageQueue] \(files.count) cached images")
@@ -150,6 +160,9 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
     func start() {
         let cacheOnly = SettingsService.shared.cacheOnly
         isRunning = true
+        #if DEBUG
+        if DebugLaunchOptions.testPattern { return }  // test card only, no generation/recycling
+        #endif
         LMLog.visual.info("ImageQueue starting (cacheOnly=\(cacheOnly), cached=\(self.totalCachedCount))")
         statusMessage = nil
         if cacheOnly {
