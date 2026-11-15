@@ -12,6 +12,7 @@ Each workstream has a decision log with the reasons (what, why, alternatives, nu
 | [av-coupling.md](av-coupling.md) | Music drives clamped visual uniforms and ghost bursts; each image sends a mood to the music; "Sync visuals to music" toggle (C1-C14, I1-I12) |
 | [ui.md](ui.md) | Control UI redesign on both platforms: shared components, four sections, 1240x800 visionOS window, no truncation, new sim tap coordinates |
 | [effects-balance.md](effects-balance.md) | Effects made images unrecognisable: measured per-effect damage, slow clarity cycle, fresh-image hold, strain budget (water first, radial masked off the centre), "Effect intensity" setting (E1-E22; implemented: EffectLook, slider on both platforms; round-1 tuning E23-E26: more colour, rainbow cap; round 2 E27-E30: zoom eases out in wild stretches, more fringing and trails, calmer hue blend at full; final E31-E32: default 0.5 passes blind judging with 100 % recognised and 98.3 % orientation, verified in the visionOS 27.2 Simulator) |
+| [transitions.md](transitions.md) | Image transitions: offline transition renderer and objective checks, baseline of the shipped crossfade (start pop, end stop, double exposure when calm), design of 12 styles with per-pixel swap masks, C1 envelopes, a no-repeat director and variable duration (T1-T14; design only, not implemented yet) |
 | [final-qa.md](final-qa.md) | End-to-end QA of the merged branch on a fresh visionOS install and macOS; sim-drag helper, public log values |
 
 ## Please review (top items per workstream)

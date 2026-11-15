@@ -74,6 +74,26 @@
 //   --render-only      no GPU timing: write the PNGs (--out) and a JSON with each scenario's uniforms
 //   --png-size WxH     scale the PNGs (e.g. 768x512 = the 3:2 picture as displayed; default 2048x2048)
 //   --left-only        write only the left eye
+//   --sequence        render an image transition as a frame sequence (no GPU timing; needs --out and
+//                      --prev-image). --prev-image is image A (shown first), --image is image B.
+//                      The timeline is the app's: A alone for --seq-pre seconds (image age 30 s - pre ...),
+//                      then the crossfade (previous = A, source = B, transitionProgress linear 0...1 over
+//                      --seq-duration, image age counted from the crossfade start, vibrance factors
+//                      blended A -> B as the renderers do), then B alone for --seq-post seconds
+//                      (transitionProgress 0, previous = source, image age keeps counting, so the
+//                      fresh-image hold is in the clip). Every frame is simulated at --seq-sim-fps with
+//                      continuous feedback and ghost taps; every (sim-fps / fps)-th frame is written as
+//                      DIR/f0000-L.png ... and DIR/sequence.json lists time, phase, tp, age and the
+//                      uniforms of every written frame. scripts/tx-clip.sh wraps this (clips, filmstrips).
+//   --prev-image PATH  image A of --sequence
+//   --seq-start T      effect time at which the crossfade starts (default 113)
+//   --seq-duration S   crossfade length in seconds (default 1.5 = VisualMoodBuilder.crossfadeDuration)
+//   --seq-pre S / --seq-post S   seconds rendered before / after the crossfade (default 1 / 3)
+//   --seq-fps N        written frames per second (default 30); --seq-sim-fps N simulated (default 60)
+//   --seq-ref a|b      effect-free reference of the same timeline: image A or B alone, Ken Burns only
+//                      (every effect amount 0, no crossfade). scripts/tx-check.py scores frames against these.
+//   --tx-style NAME / --tx-seed N   transition style and seed (docs/plans/transitions.md). Recorded in
+//                      sequence.json. Only "classic" (the shipped crossfade) exists until the styles land.
 //   --gen-depth IMAGE OUT.png   run the app's DepthMapGenerator (DepthAnythingV2SmallF16.mlmodelc
 //                      must sit next to the binary; the wrapper arranges it) and save the map
 //
@@ -277,7 +297,30 @@ let setArg = takeValue("--set")
 let scenariosPath = takeValue("--scenarios")
 let intensityArg = takeValue("--intensity").map { v -> Float in guard let f = Float(v) else { fail("bad --intensity") }; return f }
 let imageAgeArg = takeValue("--image-age").map { v -> Float in guard let f = Float(v) else { fail("bad --image-age") }; return f }
-let renderOnly = takeFlag("--render-only")
+let sequenceMode = takeFlag("--sequence")
+let prevImagePath = takeValue("--prev-image")
+func floatOpt(_ flag: String, _ def: Float) -> Float {
+    guard let v = takeValue(flag) else { return def }
+    guard let f = Float(v) else { fail("bad \(flag)") }
+    return f
+}
+let seqStart = floatOpt("--seq-start", 113)
+let seqDuration = floatOpt("--seq-duration", 1.5)
+let seqPre = floatOpt("--seq-pre", 1)
+let seqPost = floatOpt("--seq-post", 3)
+let seqFps = Int(floatOpt("--seq-fps", 30))
+let seqSimFps = Int(floatOpt("--seq-sim-fps", 60))
+let seqRef = takeValue("--seq-ref")
+let txStyle = takeValue("--tx-style") ?? "classic"
+let txSeed = Int(takeValue("--tx-seed") ?? "0") ?? 0
+if sequenceMode {
+    if prevImagePath == nil { fail("--sequence needs --prev-image (image A); --image is image B") }
+    if seqFps < 1 || seqSimFps % seqFps != 0 { fail("--seq-sim-fps must be a multiple of --seq-fps") }
+    if seqDuration <= 0 { fail("--seq-duration must be > 0") }
+    if let r = seqRef, r != "a", r != "b" { fail("--seq-ref is a or b") }
+    if txStyle != "classic" { fail("--tx-style \(txStyle): only \"classic\" exists so far (docs/plans/transitions.md)") }
+}
+let renderOnly = takeFlag("--render-only") || sequenceMode
 let leftOnly = takeFlag("--left-only")
 let pngSize: (w: Int, h: Int)? = takeValue("--png-size").map { v in
     let p = v.lowercased().split(separator: "x").compactMap { Int($0) }
@@ -401,6 +444,7 @@ struct Scenario {
     let uniforms: EffectsUniforms   // stereoOffset = |eye offset|
     let taps: MTLBuffer
     let previous: MTLTexture
+    var source: MTLTexture = sourceTex
 }
 
 /// Real GhostTapManager stepped through the preceding 40 s up to t (as the render loop does).
@@ -549,7 +593,7 @@ func encodeFrame(_ cb: MTLCommandBuffer, _ sc: Scenario, _ st: FrameState, varia
             enc.setFragmentTexture(st.last[eye] ?? blackTex, index: 4)
             enc.setFragmentBytes(&ue, length: MemoryLayout<EffectsUniforms>.size, index: 0)
             enc.setFragmentBuffer(sc.taps, offset: 0, index: 1)
-            enc.setFragmentTexture(sourceTex, index: 0)
+            enc.setFragmentTexture(sc.source, index: 0)
             enc.setFragmentTexture(saliencyTex, index: 2)
             enc.setFragmentTexture(sc.previous, index: 3)
             enc.setFragmentTexture(depthTex, index: 5)
@@ -571,7 +615,7 @@ func encodeFrame(_ cb: MTLCommandBuffer, _ sc: Scenario, _ st: FrameState, varia
         enc.setFragmentTexture(st.last[1] ?? blackTex, index: 6)
         enc.setFragmentBytes(&u, length: MemoryLayout<EffectsUniforms>.size, index: 0)
         enc.setFragmentBuffer(sc.taps, offset: 0, index: 1)
-        enc.setFragmentTexture(sourceTex, index: 0)
+        enc.setFragmentTexture(sc.source, index: 0)
         enc.setFragmentTexture(saliencyTex, index: 2)
         enc.setFragmentTexture(sc.previous, index: 3)
         enc.setFragmentTexture(depthTex, index: 5)
@@ -581,6 +625,113 @@ func encodeFrame(_ cb: MTLCommandBuffer, _ sc: Scenario, _ st: FrameState, varia
     }
     st.last = [left.view, right.view]
     return (left, right)
+}
+
+/// Raw stored bytes are the shader's gamma values; interpret them as sRGB (what is shown).
+func savePNG(_ eye: Eye, _ path: String) {
+    let bpr = size * 4
+    var buf = [UInt8](repeating: 0, count: bpr * size)
+    eye.storage.getBytes(&buf, bytesPerRow: bpr, from: MTLRegionMake2D(0, 0, size, size), mipmapLevel: 0)
+    let ctx = CGContext(data: &buf, width: size, height: size, bitsPerComponent: 8, bytesPerRow: bpr,
+                        space: srgb, bitmapInfo: bgraInfo)!
+    var image = ctx.makeImage()!
+    if let ps = pngSize {
+        let small = CGContext(data: nil, width: ps.w, height: ps.h, bitsPerComponent: 8, bytesPerRow: ps.w * 4,
+                              space: srgb, bitmapInfo: bgraInfo)!
+        small.interpolationQuality = .high
+        small.draw(image, in: CGRect(x: 0, y: 0, width: ps.w, height: ps.h))
+        image = small.makeImage()!
+    }
+    writePNG(image, path)
+}
+
+// MARK: - Transition sequence (--sequence): image A -> image B on the app's timeline
+
+if sequenceMode, let outDir = outDir, let prevImagePath = prevImagePath {
+    try? FileManager.default.createDirectory(atPath: outDir, withIntermediateDirectories: true)
+    let framedA = ImageFraming.coverCrop(loadCGImage(prevImagePath))
+    let vibA = ImageColorStats.factors(for: framedA), vibB = vibrance
+    let texA = uploadColor(framedA), texB = sourceTex
+    let intensity = intensityArg ?? EffectLook.defaultIntensity
+    let imageInterval: Float = 30
+    // Every effect amount off (scripts/fx-structure.py `ref`): Ken Burns is all that is left.
+    let refOff: [String: Float] = [
+        "distortionAmplitude": 0, "logSphereAmount": 0, "fractalNoiseAmount": 0, "chromaticAmount": 0,
+        "hueBlendAmount": 0, "hueWaveIntensity": 0, "fractalHueAmount": 0, "bloomAmount": 0,
+        "ghostTapCount": 0, "feedbackMix": 0, "vibranceAmount": 0, "blackPoint": 0, "stereoOffset": 0,
+    ]
+    let stride = seqSimFps / seqFps
+    let total = Int(((seqPre + seqDuration + seqPost) * Float(seqSimFps)).rounded())
+    let st = FrameState(makeEyes(storage: .shared))
+    var frameList: [[String: Any]] = []
+
+    func scenario(at k: Int) -> (Scenario, [String: Any]) {
+        let rel = Float(k) / Float(seqSimFps) - seqPre          // seconds since the crossfade started
+        let t = seqStart + rel
+        let phase = rel < 0 ? "pre" : (rel < seqDuration ? "transition" : "post")
+        let tp: Float = phase == "transition" ? rel / seqDuration : 0
+        let age: Float = rel < 0 ? imageInterval + rel : rel     // image A has been up for one interval
+        let vib = phase == "pre" ? vibA : (phase == "post" ? vibB : VibranceFactors.lerp(vibA, vibB, tp))
+        var u: EffectsUniforms
+        var source = phase == "pre" ? texA : texB
+        var previous = phase == "transition" ? texA : source
+        if let ref = seqRef {
+            source = ref == "a" ? texA : texB
+            previous = source
+            u = EffectsUniformsComputer.compute(time: t, transitionProgress: 0, hasSaliencyMap: false,
+                vibrance: ref == "a" ? vibA : vibB, look: EffectLook(intensity: intensity, imageAge: age, imageInterval: imageInterval))
+            applyOverrides(&u, refOff)
+        } else {
+            u = EffectsUniformsComputer.compute(time: t, transitionProgress: tp, hasSaliencyMap: false, vibrance: vib,
+                look: EffectLook(intensity: intensity, imageAge: age, imageInterval: imageInterval))
+            let offset = 0.003 + 0.007 * SmoothOscillator.value(at: t)
+            u.stereoOffset = depthPath != nil ? abs(offset) : 0
+            applyOverrides(&u, globalOverrides)
+        }
+        let (buf, count) = ghostTaps(at: t)
+        if seqRef == nil && globalOverrides["ghostTapCount"] == nil { u.ghostTapCount = Float(count) }
+        var info: [String: Any] = ["time": Double(t), "rel": Double(rel), "phase": phase, "tp": Double(tp), "age": Double(age)]
+        info["uniforms"] = uniformsDict(u)
+        return (Scenario(name: "seq", uniforms: u, taps: buf, previous: previous, source: source), info)
+    }
+
+    // Warm-up at the first frame's time so the feedback trails have converged before frame 0.
+    if seqRef == nil {
+        let (first, _) = scenario(at: 0)
+        let cb = queue.makeCommandBuffer()!
+        for _ in 0..<max(1, pngFrames) { _ = encodeFrame(cb, first, st) }
+        cb.commit()
+        cb.waitUntilCompleted()
+    }
+    var written = 0
+    for k in 0...total {
+        if seqRef != nil && k % stride != 0 { continue }   // references carry no state between frames
+        let (sc, info) = scenario(at: k)
+        let cb = queue.makeCommandBuffer()!
+        let out = encodeFrame(cb, sc, st)
+        cb.commit()
+        if k % stride == 0 {
+            cb.waitUntilCompleted()
+            if let err = cb.error { fail("command buffer error: \(err)") }
+            let name = String(format: "f%04d", written)
+            savePNG(out.left, "\(outDir)/\(name)-L.png")
+            if !leftOnly { savePNG(out.right, "\(outDir)/\(name)-R.png") }
+            var entry = info
+            entry["frame"] = name
+            frameList.append(entry)
+            written += 1
+        }
+    }
+    log("wrote \(written) sequence frames to \(outDir)")
+    let text = jsonString([
+        "label": label, "image_a": prevImagePath, "image_b": imagePath, "out": outDir,
+        "tx_style": txStyle, "tx_seed": txSeed, "ref": seqRef ?? "", "intensity": Double(intensity),
+        "start": Double(seqStart), "duration": Double(seqDuration), "pre": Double(seqPre), "post": Double(seqPost),
+        "fps": seqFps, "sim_fps": seqSimFps, "frames": frameList,
+    ] as [String: Any])
+    try? text.write(toFile: jsonPath ?? "\(outDir)/sequence.json", atomically: true, encoding: .utf8)
+    print(jsonString(["out": outDir, "frames": written, "tx_style": txStyle, "ref": seqRef ?? ""] as [String: Any]))
+    exit(0)
 }
 
 // MARK: - Other GPU clients (recorded; they share the GPU and add noise)
@@ -712,21 +863,7 @@ if let outDir = outDir {
             cb.commit()
             cb.waitUntilCompleted()
             for (tag, eye) in leftOnly ? [("L", final!.left)] : [("L", final!.left), ("R", final!.right)] {
-                let bpr = size * 4
-                var buf = [UInt8](repeating: 0, count: bpr * size)
-                // Raw stored bytes are the shader's gamma values; interpret them as sRGB (what is shown).
-                eye.storage.getBytes(&buf, bytesPerRow: bpr, from: MTLRegionMake2D(0, 0, size, size), mipmapLevel: 0)
-                let ctx = CGContext(data: &buf, width: size, height: size, bitsPerComponent: 8, bytesPerRow: bpr,
-                                    space: srgb, bitmapInfo: bgraInfo)!
-                var image = ctx.makeImage()!
-                if let ps = pngSize {
-                    let small = CGContext(data: nil, width: ps.w, height: ps.h, bitsPerComponent: 8, bytesPerRow: ps.w * 4,
-                                          space: srgb, bitmapInfo: bgraInfo)!
-                    small.interpolationQuality = .high
-                    small.draw(image, in: CGRect(x: 0, y: 0, width: ps.w, height: ps.h))
-                    image = small.makeImage()!
-                }
-                writePNG(image, "\(dir)/\(sc.name)-\(tag).png")
+                savePNG(eye, "\(dir)/\(sc.name)-\(tag).png")
             }
         }
         log("wrote \(scenarios.count * (leftOnly ? 1 : 2)) PNGs to \(dir)")
