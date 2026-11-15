@@ -63,6 +63,8 @@ def ken_burns(t):
 def uniforms(t):
     s, ox, oy = ken_burns(t)
     c = color_cycle(t)
+    hb = (0.35 + 0.65 * c) * mix(tri(i, 0.15, 0.40, 0.55), tri(i, 0.25, 0.65, 0.75))
+    hw = min(c * mix(tri(i, 0.02, 0.12, 0.24), tri(i, 0.05, 0.28, 0.40)), 0.20, 0.065 / max(hb, 1e-3))
     return {"time": t, "kenBurnsScale": s, "kenBurnsOffsetX": ox, "kenBurnsOffsetY": oy,
             "distortionAmplitude": distortion(t), "distortionSpeed": 0.08,
             "logSphereAmount": log_sphere(t), "fractalNoiseAmount": fractal_noise(t),
@@ -76,7 +78,7 @@ DEFAULT_INTENSITY = 0.5
 MACRO_OMEGA = TWO_PI / 420.0              # clarity-cycle periods: 420 s, 260 s, 160 s
 MACRO_PHASE = (-0.3, -1.2, -2.4)          # starts clear, first wild stretch after about a minute
 MACRO_LO, MACRO_HI = -0.45, 0.55          # smoothstep window on the macro wave
-MACRO_BIAS = 0.50                         # (intensity - 0.5) * bias is added to the wave
+MACRO_BIAS = 0.60                         # (intensity - 0.5) * bias is added to the wave
 FRESH_FADE, FRESH_HOLD_END, FRESH_END = 1.5, 4.5, 11.0   # seconds since the crossfade started
 K_TURB, K_LOG, K_NOISE = 12.8, 26.0, 28.0  # strain_p90 per unit amount (measured, fx_model scan)
 LOG_MASK = (0.10, 0.42)                   # periphery mask on the log-spherical offset (radius)
@@ -114,10 +116,10 @@ def proposed(t, intensity=DEFAULT_INTENSITY, age=None, tp=0.0):
     t01 = (distortion(t) - 0.02) / 0.06
     l01 = (log_sphere(t) - 0.003) / 0.017
     n01 = (fractal_noise(t) - 0.005) / 0.025
-    a_clear = tri(i, 0.010, 0.024, 0.030)
-    a_t = a_clear + (tri(i, 0.016, 0.056, 0.080) - a_clear) * d * (0.55 + 0.45 * t01)
+    a_clear = tri(i, 0.010, 0.028, 0.036)
+    a_t = a_clear + (tri(i, 0.016, 0.058, 0.080) - a_clear) * d * (0.55 + 0.45 * t01)
     a_l = tri(i, 0.0, 0.011, 0.020) * smoothstep(0.45, 0.90, d) * (0.35 + 0.65 * l01)
-    a_n = tri(i, 0.0, 0.011, 0.026) * smoothstep(0.20, 0.80, d) * (0.35 + 0.65 * n01)
+    a_n = tri(i, 0.0, 0.011, 0.022) * smoothstep(0.20, 0.80, d) * (0.35 + 0.65 * n01)
     # Recognisability budget: the radial and the crystalline warp give way before the water does.
     budget = strain_budget(i)
     st = K_TURB * a_t
@@ -133,16 +135,18 @@ def proposed(t, intensity=DEFAULT_INTENSITY, age=None, tp=0.0):
     a_l += tri(i, 0.0, 0.006, 0.020) * b
     a_n += tri(i, 0.004, 0.020, 0.060) * b
     c = color_cycle(t)
+    hb = (0.35 + 0.65 * c) * mix(tri(i, 0.15, 0.40, 0.55), tri(i, 0.25, 0.65, 0.75))
+    hw = min(c * mix(tri(i, 0.02, 0.12, 0.24), tri(i, 0.05, 0.28, 0.40)), 0.20, 0.065 / max(hb, 1e-3))
     s = 1.18 + 0.10 * math.sin(t * 0.05) + 0.04 * math.sin(t * 0.03)
     _, ox, oy = ken_burns(t)
     return {"time": t, "kenBurnsScale": s, "kenBurnsOffsetX": ox, "kenBurnsOffsetY": oy,
             "distortionAmplitude": a_t, "distortionSpeed": 0.08,
             "logSphereAmount": a_l, "fractalNoiseAmount": a_n,
-            "chromaticAmount": min(chromatic(t) * mix(tri(i, 0.3, 0.6, 0.9), tri(i, 0.4, 0.9, 1.0)), 0.02) * (1 + 3 * b),
-            "fractalHueAmount": fractal_hue(t) * mix(tri(i, 0.2, 0.5, 0.8), tri(i, 0.3, 0.85, 1.0)),
-            "hueBlendAmount": c * mix(tri(i, 0.15, 0.40, 0.60), tri(i, 0.25, 0.70, 0.80)),
-            "hueWaveIntensity": c * mix(tri(i, 0.02, 0.10, 0.30), tri(i, 0.05, 0.30, 0.60)),
-            "feedbackMix": mix(tri(i, 0.10, 0.20, 0.27), tri(i, 0.14, 0.28, 0.30)),
+            "chromaticAmount": min(chromatic(t) * mix(tri(i, 0.3, 0.9, 1.1), tri(i, 0.4, 1.15, 1.3)), 0.02) * (1 + 3 * b),
+            "fractalHueAmount": fractal_hue(t) * mix(tri(i, 0.2, 0.75, 1.0), tri(i, 0.3, 1.0, 1.15)),
+            "hueBlendAmount": hb,
+            "hueWaveIntensity": hw,
+            "feedbackMix": mix(tri(i, 0.10, 0.22, 0.27), tri(i, 0.14, 0.28, 0.29)),
             "bloomAmount": tri(i, 0.30, 0.50, 0.50),
             "_drive": d}
 

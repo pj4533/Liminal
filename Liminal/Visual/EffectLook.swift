@@ -29,29 +29,36 @@ nonisolated struct EffectLook: Sendable, Equatable {
         static let macroOmega: Float = 2 * .pi / 420     // periods 420 s, 260 s, 160 s
         static let macroPhase: (Float, Float, Float) = (-0.3, -1.2, -2.4)
         static let macroLo: Float = -0.45, macroHi: Float = 0.55
-        static let macroBias: Float = 0.50               // (intensity - 0.5) * bias is added to the wave
+        static let macroBias: Float = 0.60               // (intensity - 0.5) * bias is added to the wave (E23)
         // Fresh-image hold (plan 4.2), seconds since the crossfade started
         static let freshFade: Float = 1.5, freshHoldEnd: Float = 4.5, freshEnd: Float = 11
         // Strain per unit amount (fx_model scan) and the recognisability budget (plan 4.3)
         static let kTurb: Float = 12.8, kLog: Float = 26, kNoise: Float = 28
         static let budget: (Float, Float, Float) = (0.30, 0.90, 1.45)
         // Warps
-        static let waterClear: (Float, Float, Float) = (0.010, 0.024, 0.030)
-        static let waterWild: (Float, Float, Float) = (0.016, 0.056, 0.080)
+        static let waterClear: (Float, Float, Float) = (0.010, 0.028, 0.036)   // E23: water is the loved one
+        static let waterWild: (Float, Float, Float) = (0.016, 0.058, 0.080)
         static let logSphereMax: (Float, Float, Float) = (0, 0.011, 0.020)
         static let logSphereWindow: (Float, Float) = (0.45, 0.90)  // drive window where the radial fades in
-        static let noiseMax: (Float, Float, Float) = (0, 0.011, 0.026)
+        static let noiseMax: (Float, Float, Float) = (0, 0.011, 0.022)        // E24: less shatter at I = 1
         static let noiseWindow: (Float, Float) = (0.20, 0.80)
         // Transition boost, additive, times sin(pi * tp)
         static let boostWater: (Float, Float, Float) = (0.05, 0.16, 0.40)
         static let boostLogSphere: (Float, Float, Float) = (0, 0.006, 0.020)
         static let boostNoise: (Float, Float, Float) = (0.004, 0.020, 0.060)
         // Colour and the rest (plan 4.4): (clear, wild) anchor triples
-        static let hueBlend = (clear: (Float(0.15), Float(0.40), Float(0.60)), wild: (Float(0.25), Float(0.70), Float(0.80)))
-        static let hueWave = (clear: (Float(0.02), Float(0.10), Float(0.30)), wild: (Float(0.05), Float(0.30), Float(0.60)))
-        static let fractalHue = (clear: (Float(0.2), Float(0.5), Float(0.8)), wild: (Float(0.3), Float(0.85), Float(1.0)))
-        static let chromatic = (clear: (Float(0.3), Float(0.6), Float(0.9)), wild: (Float(0.4), Float(0.9), Float(1.0)))
-        static let feedbackMix = (clear: (Float(0.10), Float(0.20), Float(0.27)), wild: (Float(0.14), Float(0.28), Float(0.30)))
+        // Round 1 (E23-E25): more colour everywhere (judges rated the default 2.6 of 5), fewer stacked rainbows.
+        static let hueBlend = (clear: (Float(0.15), Float(0.40), Float(0.55)), wild: (Float(0.25), Float(0.65), Float(0.75)))
+        static let hueWave = (clear: (Float(0.02), Float(0.12), Float(0.24)), wild: (Float(0.05), Float(0.28), Float(0.40)))
+        static let fractalHue = (clear: (Float(0.2), Float(0.75), Float(1.0)), wild: (Float(0.3), Float(1.0), Float(1.15)))
+        static let chromatic = (clear: (Float(0.3), Float(0.9), Float(1.1)), wild: (Float(0.4), Float(1.15), Float(1.3)))
+        static let feedbackMix = (clear: (Float(0.10), Float(0.22), Float(0.27)), wild: (Float(0.14), Float(0.28), Float(0.29)))
+        /// The hue blend follows the colour cycle between this floor and 1 (it used to dip to 0: plain-photo moments).
+        static let hueBlendFloor: Float = 0.35
+        /// Spatial rainbow limits: hue waves at most `hueWaveCap`, and hue waves x hue blend at most
+        /// `rainbowCap` (several stacked rainbow cycles merged figure and ground on the round-0 tree).
+        static let hueWaveCap: Float = 0.20
+        static let rainbowCap: Float = 0.065
         static let bloom: (Float, Float, Float) = (0.30, 0.50, 0.50)
     }
 

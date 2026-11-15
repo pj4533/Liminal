@@ -67,8 +67,11 @@ enum EffectsUniformsComputer {
         noise = min(noise, Caps.fractalNoiseBase) + tri(T.boostNoise) * boost
 
         // Autonomous color cycling - smooth oscillator produces organic, non-repeating patterns.
-        // Few hue bands in clear stretches, more in wild ones.
+        // Few hue bands in clear stretches, more in wild ones; the blend never drops to a plain photo,
+        // and stacked spatial rainbows are capped (E25).
         let colorCycle = SmoothOscillator.value(at: time)
+        let hueBlend = (T.hueBlendFloor + (1 - T.hueBlendFloor) * colorCycle) * mix(T.hueBlend)
+        let hueWave = min(colorCycle * mix(T.hueWave), T.hueWaveCap, T.rainbowCap / max(hueBlend, 1e-3))
 
         let chromaticBase = min(max(chromaticRaw(time: time) * mix(T.chromatic) * (1 + a * (0.30 * e - 0.10))
             + a * 0.002 * music.pulseMotion, 0), Caps.chromaticBase)
@@ -83,8 +86,8 @@ enum EffectsUniformsComputer {
             distortionAmplitude: water,
             distortionSpeed: 0.08,
             hueBaseShift: music.hueBaseShift,
-            hueWaveIntensity: colorCycle * mix(T.hueWave),
-            hueBlendAmount: colorCycle * mix(T.hueBlend),
+            hueWaveIntensity: hueWave,
+            hueBlendAmount: hueBlend,
             contrastBoost: 1.4,
             saturationBoost: 1.3,
             // Ghost taps travel 6% of image size - slow drift; swells to 8% after a music scene change

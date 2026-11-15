@@ -204,3 +204,88 @@ moves far faster: the water boost changes up to 0.009 per frame.
   with the identical value**, so this is unrelated to this work: bloom at the default is unchanged, and the
   failure predates it, probably from the calm-music redesign. It is left for a separate fix. Every other
   coupling check passes: distortion slew 0.00017, correlation 0.999, toggle off with 0 mismatches.
+
+## Tuning round 1 (after the round-0 blind judges)
+
+Round 0 (3 blind judges, 180 frames) solved the original problem: 100 % of frames recognised at every
+intensity, orientation 94 % at the default once the top-down ferris wheel is excluded. It failed on
+trippiness instead: 1.84 / **2.59** / **3.93** at intensity 0.25 / 0.5 / 1.0, against the targets of at least
+3.0 at the default and 4.0 at 1.0. The judges rated clear-stretch frames about 2 and wild-stretch frames 3 to 3.4
+at the default. At 1.0 the worst frames were the blossoming tree, where several stacked rainbow cycles
+(hue waves 0.21-0.24 with hue blend 0.3-0.4) merged figure and ground, and the hourglass, where turbulence
+plus crystalline noise melted the outline. The radial was near zero in most of those frames.
+
+A ridge regression of the round-0 ratings on the uniforms (R² 0.77, `scratchpad/fx/round1-work/tripmodel.py`)
+ranks what makes a frame look trippy to the judges: chromatic aberration and fractal hue first, then
+hue waves and feedback. Warp amount adds nothing once colour is accounted for. So round 1 raises colour
+and fringing, which are cheap for recognisability, caps stacked rainbows, and leaves the warp budget alone.
+
+### E23. More colour and fringing in every stretch, and a little more water
+- What:
+  - Chromatic mix (clear, wild) at the default: 0.6 / 0.9 becomes 0.9 / 1.15; at 1.0, 0.9 / 1.0 becomes 1.1 / 1.3.
+    It stays under the 0.02 cap.
+  - Fractal hue at the default: 0.5 / 0.85 becomes 0.75 / 1.0; at 1.0, 0.8 / 1.0 becomes 1.0 / 1.15.
+  - Clear-stretch hue waves at the default: 0.10 becomes 0.12. Clear-stretch feedback: 0.20 becomes 0.22.
+  - The hue blend no longer follows the colour cycle down to 0. It moves between 35 % and 100 % of its
+    amount (`hueBlendFloor`).
+  - Water clear amount: 0.024 / 0.030 becomes 0.028 / 0.036 at the default / 1.0. Water wild at the default:
+    0.056 becomes 0.058.
+  - `macroBias` 0.50 becomes 0.60, so intensity 1.0 spends more time wild and 0.25 more time clear. The
+    default's cycle is unchanged.
+- Why:
+  - The clear stretches were the tame ones. Before this change the colour cycle could dip the hue blend to
+    nearly 0, which gave plain-photo moments.
+  - Chromatic aberration and fractal hue are what the judges responded to. Both keep each pixel's
+    luminance, so the outlines that make a subject recognisable stay.
+  - The user loves the water warp, and the default HOG loss had headroom (0.077 against a 0.10 gate).
+
+### E24. Crystalline noise at intensity 1.0 is capped at 0.022 (was 0.026)
+- Why: in the round-0 hourglass and tree frames at 1.0, the noise on top of turbulence made a
+  high-frequency shatter that hid the outline. The radial stays as in round 0: it was not the cause.
+
+### E25. Stacked rainbows are capped
+- What:
+  - Hue-wave anchors are lowered: clear (0.02, 0.12, 0.24), wild (0.05, 0.28, 0.40).
+  - Hue waves are capped at 0.20 absolute (`hueWaveCap`).
+  - Hue waves times hue blend is capped at 0.065 (`rainbowCap`). Within that cap the blend wins and the
+    waves give way.
+- Why:
+  - The product of the two is the strength of the spatial rainbow. Above about 0.07 the rainbow ran through
+    the tree several times and the judges lost the figure.
+  - The hue blend alone, a global shift with contrast and saturation, keeps the structure, so it is the
+    one allowed to stay high.
+  - The cap is a min() of continuous functions, so it adds no jumps; the no-pops test still passes.
+
+### E26. Judge set: venus flytrap replaces the top-down ferris wheel; new frame names per round
+- What:
+  - `fx-judge-set.py` now uses r2-07 (venus flytrap, a dark scene with a clear up) in place of r2-03.
+  - The new `--prefix` option, together with a new `--seed`, gives every round its own frame names and
+    shuffle. Round 1 uses `view-NNN`, seed 4139.
+- Why:
+  - A top-down photo has no up, so every orientation answer on it was "cannot tell". That cost 16.7 points
+    on the strict orientation score whatever the effects did.
+  - The near-symmetric hourglass is kept on purpose, even though it causes most of the orientation misses,
+    so the test stays hard.
+  - The flytrap is another dark, low-key scene, the kind where the tree failed.
+  - Judges must not be able to match frames across rounds.
+
+### Round 1 results (before judging)
+- Judge set, `--mode app`, 180 frames (`scratchpad/fx/round1`, key in `round1/key`):
+
+| intensity | mean HOG loss | max HOG loss | max strain p90 | max fold | gate |
+|---|---|---|---|---|---|
+| 0.25 | 0.064 | 0.109 | 0.50 | 0 | PASS |
+| 0.5 | 0.090 | 0.147 | 0.81 | 0.0008 | PASS |
+| 1.0 | 0.124 | 0.189 | 1.28 | 0.0024 | PASS |
+
+  HOG loss rises with the extra colour, since HOG sees gradient changes from hue, and with the darker flytrap
+  fixture. Every gate still passes.
+- Trippiness predicted by the round-0 regression on the new uniforms: 2.13 / 3.19 / 4.14 (round 0: 1.84 /
+  2.59 / 3.93 actual, 1.84 / 2.63 / 3.90 fitted). This is a proxy only; the blind judges decide.
+- Contact sheet (`round1/sheet.jpg`): every subject is recognisable and upright at the default and at 1.0. The
+  tree at 1.0 keeps its trunk and crown, the rainbow stays within the blossoms and no longer floods
+  figure and ground together, and the default is clearly psychedelic in every column.
+- The shader is unchanged (same metallib hash). shader-bench default median: 3.62 ms against 3.56 ms in round 0,
+  which is within run-to-run noise.
+- Unit tests pass. The golden values were regenerated from `fx_model.py golden`, and the random-input test
+  now also asserts the rainbow cap.

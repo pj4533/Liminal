@@ -3,9 +3,9 @@
 
     python3 scripts/fx-judge-set.py --out JUDGE_DIR --key KEY_DIR [--mode app|proto|current]
         [--fixtures a.jpg,b.jpg,...] [--times 47,160,...] [--ages 3,8,...]
-        [--intensities 0.25,0.5,1.0] [--seed 7]
+        [--intensities 0.25,0.5,1.0] [--seed 7] [--prefix frame]
 
-JUDGE_DIR gets only frame-001.png ... (768x512, shuffled; nothing in a name or in the directory
+JUDGE_DIR gets only <prefix>-001.png ... (768x512, shuffled; nothing in a name or in the directory
 tells the subject, the intensity or the time). KEY_DIR (keep it away from the judges) gets:
   key.json      frame -> fixture, subject (prompt text from truth.json), intensity, time, image age,
                 rotation (0, or 180 for the orientation decoys: --flip-fraction of the frames are
@@ -47,7 +47,9 @@ _spec = importlib.util.spec_from_file_location("fx_structure", os.path.join(HERE
 fx_structure = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(fx_structure)
 
-DEFAULT_FIXTURES = "r2-04.jpg,r2-08.jpg,r2-11.jpg,r2-03.jpg,r2-05.jpg,f-02.jpg"
+DEFAULT_FIXTURES = "r2-04.jpg,r2-08.jpg,r2-11.jpg,r2-07.jpg,r2-05.jpg,f-02.jpg"
+# r2-07 (venus flytrap, dark scene, clear up) replaced the top-down ferris wheel r2-03 in round 1:
+# a top-down shot has no up, so its orientation answers were "cannot tell" by construction.
 # Ten times that sample the clarity cycle at the default intensity as it is distributed over a long
 # session (drive 0, 1, .5, .05, 0, .67, .84, 1, .18, 0: 40 % clear, 30 % wild), and image ages that
 # sample a 30 s image interval (1 of 10 still held clear, 2 ramping, 7 settled).
@@ -94,6 +96,8 @@ def main():
     p.add_argument("--ages", default=DEFAULT_AGES)
     p.add_argument("--intensities", default="0.25,0.5,1.0")
     p.add_argument("--seed", type=int, default=7)
+    p.add_argument("--prefix", default="frame",
+                   help="frame file prefix; use a new prefix and seed per judging round so frames cannot be matched across rounds")
     p.add_argument("--flip-fraction", type=float, default=0.25,
                    help="fraction of frames shown rotated 180 degrees (orientation decoys; recorded in the key)")
     a = p.parse_args()
@@ -158,7 +162,7 @@ def main():
     for n, e in enumerate(entries, 1):
         work = os.path.join(key, "work", e["stem"])
         uni = json.load(open(os.path.join(work, "uniforms.json")))["uniforms"][e["name"]]
-        frame = f"frame-{n:03d}.png"
+        frame = f"{a.prefix}-{n:03d}.png"
         ref = f"refs/{e['stem']}-{e['name']}.png"
         shutil.copyfile(os.path.join(work, e["name"] + "-L.png"), os.path.join(out, frame))
         shutil.copyfile(os.path.join(work, e["name"] + "_ref-L.png"), os.path.join(key, ref))

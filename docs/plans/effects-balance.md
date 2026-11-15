@@ -312,7 +312,7 @@ change both and regenerate.
 FX_FIXTURES=<fixture dir> python3 scripts/fx-judge-set.py --out <fx>/judge --key <fx>/judge-key
 ```
 
-Defaults: 6 fixtures (`r2-04, r2-08, r2-11, r2-03, r2-05, f-02`) x 10 (time, image age) pairs x intensities
+Defaults: 6 fixtures (`r2-04, r2-08, r2-11, r2-07, r2-05, f-02`; r2-07 replaced the top-down r2-03 in round 1) x 10 (time, image age) pairs x intensities
 0.25, 0.5, 1.0 = 180 frames at 768x512, left eye, 30 feedback frames. The times
 (20, 100, 190, 255, 330, 425, 540, 600, 675, 760 s) sample the default clarity cycle in its long-run
 proportions (4 clear, 3 wild, 3 between); the ages (20, 25, 9, 14, 3, 28, 12, 7, 17, 22 s) sample a 30 s image
