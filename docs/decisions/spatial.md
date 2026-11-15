@@ -58,6 +58,38 @@ relief down as `EffectLook.drive` rises, and dipping it mid-transition, keeps ge
 in agreement when it matters (clear stretches) and reads as the scene melting and re-forming.
 Only public outputs of the effect code are read; none of it is edited.
 
+## S7. Bands continue at the image's angular rate (30% mirrored, to ±60°), not 60% squeezed
+
+Implementation, phase 1. The plan put 60% of the image into each vertical band and reached ±59.4°
+by spacing the band in tan(elevation). The hero rows are linear in elevation (like the old dome),
+so that would compress the mirrored picture about 2x right at the seam. The bands now keep the
+image's own rate (75° per unit v): each mirrors the 30% of the image nearest its edge and reaches
+±60°, so the reflection is continuous in scale as well as position. 12 rows per band
+(113 x 97 = 10,961 vertices per tile, 21.5k triangles; 64.5k for the shell).
+
+## S8. One material per tile with baked constants; uv1 carries the band coordinate
+
+ShaderGraphCoder can promote parameters, but nothing changes per frame, so each tile gets its own
+`ShaderGraphMaterial` with its gain and rear-fade range baked in (three graphs built once at entry,
+all sampling the same `TextureResource`). `faceCulling = .none` because the side tiles are
+mirrored with a negative x scale. The texture-stereo A/B (`-LiminalShellTextureStereo`) puts the
+old stereo material on the hero and the left-eye texture on the sides.
+
+## S9. Per-frame vertex write with vDSP
+
+The per-vertex Swift loop cost ~1.6 ms per frame in the Debug build the simulator and perf
+harness use (`@_optimize(speed)` is ignored at -Onone). The breathing wave is split into column,
+row and per-vertex terms with angle-sum identities and everything (breathing, relief blend,
+1/(1 + k q), interleaved write) is done with a few hundred vDSP calls: 0.22 ms per frame in Debug in
+the simulator, and the Release cost is lower still.
+
+## S10. Harness notes
+
+`-LiminalShellYaw` / `-LiminalShellPitch` take degrees. Pass negative angles as their positive
+equivalent (304 for -56): the argument domain reads a value that starts with `-` as the next key.
+`-LiminalHideControls YES` closes the controls window after the space opens so screenshots are
+unobstructed.
+
 ## Device checklist (to fill in)
 
 - Stereo comfort at Depth 0.6 and 1.0
