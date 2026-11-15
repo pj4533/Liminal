@@ -238,13 +238,13 @@ struct EffectsUniforms {
     float txEnv;                // envelope E, 0...1
     float txSeed;               // 0...1: direction, centre, wedge count, channel order
     float txSoft;               // swap mask edge softness; negative = reversed order
-    float txAmount;             // style amount: Prism stagger, fold, swirl angle, current, ring, depth swell, drip
+    float txAmount;             // style amount: Prism stagger, fold, swirl angle, wave, lens, ring, tone fold, drip
 };
 
 // TransitionStyle raw values (ImageTransition.swift)
 constant int TX_CLASSIC = 0;
 constant int TX_TIDE = 1;
-constant int TX_UNDERTOW = 2;
+constant int TX_FACETS = 2;
 constant int TX_PRISM = 3;
 constant int TX_RAINBOW = 4;
 constant int TX_KALEIDOSCOPE = 5;
@@ -252,7 +252,7 @@ constant int TX_WHIRLPOOL = 6;
 constant int TX_DIVE = 7;
 [[maybe_unused]] constant int TX_AFTERIMAGE = 8;   // whole-frame swap; its trails do the dissolving
 constant int TX_RIPPLE = 9;
-constant int TX_DEPTHWASH = 10;
+constant int TX_SOLARIZE = 10;
 constant int TX_MELT = 11;
 constant int TX_SHATTER = 12;
 
@@ -333,7 +333,7 @@ static inline WarpOut distortedUV(float2 texCoord, constant EffectsUniforms &uni
     uv = centered + center;
 
     // === 1.5 TRANSITION UV MOVES (docs/plans/transitions.md 6) ===
-    // Kaleidoscope, Whirlpool, Undertow, Ripple, Melt and Depthwash move UVs here; txEnv is 0 outside a transition.
+    // Kaleidoscope, Whirlpool, Tide, Facets, Ripple and Melt move UVs here; txEnv is 0 outside a transition.
     if (uniforms.txEnv > 0.0) {
         int style = int(uniforms.txStyle + 0.5);
         if (style == TX_KALEIDOSCOPE) {
@@ -361,14 +361,36 @@ static inline WarpOut distortedUV(float2 texCoord, constant EffectsUniforms &uni
             float sn = sincos(ang, cs);
             uv = c0 + float2(d.x * cs - d.y * sn, d.x * sn + d.y * cs);
             o.field = saturate(r / 0.65);
-        } else if (style == TX_UNDERTOW) {
-            // A one-way current: the picture is pulled along the seed direction in streaks.
+        } else if (style == TX_TIDE) {
+            // A breaking wave rolls across the frame along the seed direction and leaves the new
+            // picture behind it: the front is where the swap mask is (same threshold as swapWeight).
             float a = uniforms.txSeed * 6.2831853;
             float2 dir = float2(cos(a), sin(a));
-            float across = dot(uv, float2(-dir.y, dir.x));
-            float streak = 0.5 + 0.3 * sin(across * 19.0 + uniforms.txSeed * 40.0)
-                               + 0.2 * sin(across * 47.0 - uniforms.time * 0.7);
-            uv -= dir * (uniforms.txAmount * uniforms.txEnv * streak);
+            float2 perp = float2(-dir.y, dir.x);
+            float along = dot(texCoord - 0.5, dir);
+            float s = max(abs(uniforms.txSoft), 0.02);
+            float th = mix(-s, 1.0 + s, uniforms.txMix);
+            float front = uniforms.txSoft < 0.0 ? 0.85 - 1.7 * th : -0.85 + 1.7 * th;
+            float x = (along - front) * 3.5;
+            float k = uniforms.txAmount * uniforms.txEnv * exp(-x * x);
+            float across = dot(uv, perp);
+            uv -= dir * (k * (0.6 + 0.4 * sin(across * 13.0 + uniforms.time * 1.3 + uniforms.txSeed * 20.0)));
+            uv += perp * (0.5 * k * sin(along * 24.0 - uniforms.time * 2.0));
+            o.field = (along + 0.85) / 1.7;
+        } else if (style == TX_FACETS) {
+            // A compound eye: the picture breaks into hexagonal lenses. Each lens first flattens to
+            // its centre colour (a hex mosaic), then shows its patch inverted and magnified; the
+            // lenses exchange one by one, in a random order loosely from the centre out.
+            float n = 6.0 + 4.0 * fract(uniforms.txSeed * 3.3);
+            float2 p = (uv - 0.5) * n;
+            const float2 hs = float2(1.0, 1.7320508);
+            float4 hc = floor(float4(p, p - float2(0.5, 1.0)) / hs.xyxy) + 0.5;
+            float2 ca = hc.xy * hs, cb = (hc.zw + 0.5) * hs;
+            float2 cell = dot(p - ca, p - ca) < dot(p - cb, p - cb) ? ca : cb;
+            float2 lens = 0.5 + (cell - 1.6 * (p - cell)) / n;
+            uv = mix(uv, lens, uniforms.txAmount * uniforms.txEnv);
+            float h = fract(sin(dot(cell, float2(12.9898, 78.233))) * 43758.5453);
+            o.field = 0.6 * h + 0.4 * saturate(length(cell) / n * 1.6);
         } else if (style == TX_RIPPLE) {
             // A drop in a pond: rings travel out from a seeded point; the new picture rides the front.
             float2 c0 = 0.5 + 0.30 * (float2(fract(uniforms.txSeed * 5.17), fract(uniforms.txSeed * 9.31)) - 0.5);
@@ -388,11 +410,6 @@ static inline WarpOut distortedUV(float2 texCoord, constant EffectsUniforms &uni
             float drop = uniforms.txAmount * uniforms.txEnv * (0.15 + 0.85 * n) * (0.3 + 0.7 * texCoord.y);
             uv.y -= drop;
             o.field = 0.2 + 0.65 * texCoord.y - 0.35 * (n - 0.5);
-        } else if (style == TX_DEPTHWASH) {
-            // Near things swell toward the viewer (a 3D push), the far ones hold still.
-            constexpr sampler ds(address::clamp_to_edge, filter::linear);
-            float z = float(depthTexture.sample(ds, clamp(uv, float2(0.001), float2(0.999))).r);
-            uv = 0.5 + (uv - 0.5) / (1.0 + uniforms.txAmount * uniforms.txEnv * z);
         }
     }
 
@@ -434,19 +451,12 @@ static inline WarpOut distortedUV(float2 texCoord, constant EffectsUniforms &uni
         float2 dir = float2(cos(seedAng), sin(seedAng));
         float fd = clamp(dot(flow, dir), -1.0, 1.0);
         if (style == TX_TIDE) {
-            o.field = 0.5 + 0.4 * fd;
-        } else if (style == TX_UNDERTOW) {
-            o.field = 0.5 + 0.8 * dot(texCoord - 0.5, dir) + 0.3 * dot(flow, dir);
+            o.field += 0.05 * fd;   // a ragged wave front
         } else if (style == TX_PRISM) {
             // A light sweep across the frame along the split direction, loosened by the flow.
             o.field = 0.5 + 0.7 * dot(texCoord - 0.5, dir) + 0.25 * fd;
         } else if (style == TX_SHATTER) {
             o.field = fract(floor(crystal * 3.0 + uniforms.txSeed * 7.0) * 0.618034 + uniforms.txSeed);
-        } else if (style == TX_DEPTHWASH) {
-            // Depth order (0 = far: the background changes first), sampled once for both eyes.
-            constexpr sampler ds(address::clamp_to_edge, filter::linear);
-            float depth = float(depthTexture.sample(ds, clamp(uv, float2(0.001), float2(0.999))).r);
-            o.field = 0.7 * depth + 0.3 * (0.5 + 0.5 * fd);
         } else if (style == TX_RAINBOW) {
             // A sweep across the frame, banded by the strongest terms of the hue-wave field.
             float t = uniforms.time;
@@ -454,8 +464,9 @@ static inline WarpOut distortedUV(float2 texCoord, constant EffectsUniforms &uni
                         + 0.8 * sin(uv.y * 3.0 + t * 0.18) + 0.7 * sin((uv.x + uv.y) * 4.0 + t * 0.12);
             o.field = 0.55 * (0.5 + dot(texCoord - 0.5, dir)) + 0.45 * (0.5 + 0.5 * sin(bands * 1.7));
         } else if (style == TX_DIVE) {
-            o.field = length(texCoord - 0.5) * 1.4;   // the centre first: out the far side of the tunnel
-        } else if (style != TX_KALEIDOSCOPE && style != TX_WHIRLPOOL && style != TX_RIPPLE && style != TX_MELT) {
+            o.field = length(texCoord - 0.5) * 1.4 + 0.15 * fd;   // the centre first, ragged: out the far side of the tunnel
+        } else if (style != TX_KALEIDOSCOPE && style != TX_WHIRLPOOL && style != TX_RIPPLE && style != TX_MELT
+                   && style != TX_FACETS) {
             // Flow term that spreads orders whose values bunch up (a dark picture's luma), so the
             // whole frame never swaps in one frame.
             o.field = 0.5 + 0.5 * fd;
@@ -516,10 +527,12 @@ static inline half4 shadeEye(
     // Sample RGB channels at slightly offset UVs for prismatic fringing.
     // Radial: stronger at edges, zero at center.
     float2 chromOffset = (uv - 0.5) * uniforms.chromaticAmount;
-    // Prism: a wide straight split along the seed direction on top of the radial fringing.
+    // Prism: a wide straight split along the seed direction plus a twist (red turns one way about
+    // the centre, blue the other), on top of the radial fringing.
     if (int(uniforms.txStyle + 0.5) == TX_PRISM && uniforms.txEnv > 0.0) {
         float a = uniforms.txSeed * 6.2831853;
-        chromOffset += float2(cos(a), sin(a)) * (0.35 * uniforms.txAmount * uniforms.txEnv);
+        float k = uniforms.txAmount * uniforms.txEnv;
+        chromOffset += float2(cos(a), sin(a)) * (0.35 * k) + float2(0.5 - uv.y, uv.x - 0.5) * (0.7 * k);
     }
     half4 prevColor = half4(
         previousTexture.sample(texSampler, uv + chromOffset).r,
@@ -542,6 +555,14 @@ static inline half4 shadeEye(
         );
         w = swapWeight(warp, uniforms);
         color = half4(mix(prevColor.rgb, sourceRGB, w), 1.0h);
+        if (int(uniforms.txStyle + 0.5) == TX_SOLARIZE) {
+            // The tone curve folds over itself (f = 1 an S-curve, 2 solarized, 3 two bands), each
+            // channel a little out of phase, so darks and lights trade places in coloured contours.
+            half k = half(uniforms.txEnv);
+            // The phase offsets scale with the value, so blacks stay black (no flat colour flood).
+            half3 ph = color.rgb * (3.14159h * (1.0h + half(uniforms.txAmount) * k) + k * half3(0.0h, 1.2h, 2.4h));
+            color.rgb = mix(color.rgb, 0.5h - 0.5h * cos(ph), 0.85h * k);
+        }
     }
     // Bloom and ghost taps sample the picture this pixel is showing (transitions.md T7): no glow or
     // echo of the new picture over the old one before the swap reaches it.

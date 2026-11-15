@@ -321,3 +321,104 @@ hidden, f = flows into the effects, a = awesome):
 - Against main: 1.020 / 1.020 overall in this (noisier) session, round 0 measured about 1.015.
 - Transition frames against round 0's: 0.94-1.07 per style (Melt 1.07 and Kaleidoscope 1.06 the
   highest, Prism and Tide cheaper), single runs, so only "no style became much heavier".
+
+## Tuning round 2
+
+### T33. Round 1 blind scores per style
+Two blind judges, 26 clips (`tx/round1/blind`, key `tx/round1-key.json`), mean of the 4 ratings per
+style (axes as in T27); "< 3.5" marks what round 2 had to fix.
+
+| style | d | s | h | f | a | judges' words | round 2 |
+|---|---|---|---|---|---|---|---|
+| classic (control) | 3.50 | 4.00 | 4.00 | 4.75 | 4.25 | "melts well", "near the classic baseline" | unchanged, never picked |
+| Tide | 3.00 | 3.75 | 3.75 | 3.75 | 3.25 | "diagonal swept liquid warp, similar to several others" | reworked (T34) |
+| Undertow | 2.75 | 3.75 | 3.50 | 3.75 | 3.25 | "gentle wavy smear, near the classic" | replaced by Facets (T35) |
+| Prism | 3.00 | 3.75 | 4.00 | 4.50 | 3.50 | "RGB explosion" (one judge) / "generic rainbow-fringe wash" (other) | twist added (T34) |
+| Rainbow | 3.50 | 3.75 | 3.50 | 4.00 | 3.50 | "rainbow aurora colour wash", "colour gradient blobs" | unchanged |
+| Kaleidoscope | 5.00 | 3.25 | 3.50 | 3.25 | 4.75 | "very distinct, gorgeous; slightly canned, first frames snap" | smoother fold (T34) |
+| Whirlpool | 3.75 | 4.00 | 4.00 | 4.00 | 4.00 | "swap disguised in the spin" | unchanged |
+| Dive | 3.75 | 3.50 | 3.00 | 3.75 | 3.50 | "zoom-through, new image visible early, zoom-dissolve" | retuned (T34) |
+| Afterimage | 3.50 | 3.50 | 3.75 | 3.50 | 3.25 | "flat purple wash, loses detail", "dim and muddy middle" | retuned (T34) |
+| Ripple | 3.75 | 3.75 | 3.75 | 3.75 | 3.75 | "pond-surface caustics, distinct" | unchanged |
+| Depthwash | 2.50 | 3.75 | 3.25 | 3.75 | 3.00 | "magenta warp blend, similar to others", "busy" | replaced by Solarize (T35) |
+| Melt | 4.00 | 4.00 | 3.75 | 4.00 | 4.00 | "vertical drip, distinct direction", "wave-fold stripes" | unchanged |
+| Shatter | 3.50 | 3.25 | 3.50 | 4.00 | 3.75 | "caustic shatter; somewhat messy, noisy fragments" | softer (T34) |
+
+- Melt and Ripple (round 1's replacements) landed in the distinct group; Kaleidoscope, Whirlpool and
+  Melt carried the "awesome" axis. The look-alike group shrank to Tide, Undertow, Depthwash (and Prism
+  on the busy pair): all three still read as "a stronger live warp".
+- Scores per style: `tx/r2work/round1-style-scores.json` in the session scratchpad.
+
+### T34. Reworked and retuned
+- Tide: keeps today's water surge (the user's liked look, a little lower: water 0.05 / 0.13 / 0.26)
+  and adds a breaking wave that rolls across the frame along the seed direction. The wave is a band
+  (Gaussian, about 0.3 of the frame wide) of strong push along the direction with crest ripples
+  across it, and its centre sits exactly on the swap threshold (stage A recomputes swapWeight's
+  threshold), so the new picture is left behind the wave. Mask softness 0.50 -> 0.14, window
+  0.26-0.74, 2.0-2.8 s. The pop (2.9 / 3.6) and the exit jolt (2.8 / 2.5) are gone: 1.3 / 1.3 and
+  1.77 / 1.57.
+- Prism: the straight split gets a twist (red turns one way about the centre, blue the other,
+  `0.7 txAmount E`), so the plateau is a spectral pinwheel rather than a sideways fringe.
+- Kaleidoscope: fold 0.78 -> 0.72 at the default, 3.6-4.5 s, window 0.32-0.60, softness 0.24.
+  A slow spin of the wedges was tried and dropped: sweeping the fold seams across detail raised the
+  frame steps to 0.072. A centre-out "blossom" of the fold also measured worse (0.083: the ramp got
+  steeper). Without them step_max is 0.055 / 0.055 (round 1 0.059 / 0.062).
+- Dive: trails 0.12 -> 0.03 at the default and a ragged (flow-shifted) iris, against the double image
+  at the deepest zoom. The numbers barely move (swap_vis -0.22 / -0.05); the trails were not the main
+  carrier of the double image.
+- Afterimage: feedback target 0.82 -> 0.64, feedback warp x(1 + 8E), bloom +0.18, contrast +0.15,
+  ghost reach x(1 + 1.5E), hue blend +0.35: shorter, streakier, brighter trails instead of a
+  flat wash.
+- Shatter: noise a little lower (0.048 at the default), mask softness 0.14 -> 0.20, window 0.30-0.70,
+  2.2-3.0 s ("harsh, messy").
+
+### T35. Undertow and Depthwash replaced by Facets and Solarize
+- Both kept their raw value (2 and 10), as Echo and Embers did in T30.
+- Why replaced: two rounds of judges grouped both with the generic warp, and both kept the
+  "live warp plus a mask" carrier that T27 identified as the problem.
+- Facets (geometric, raw 2): a compound eye. UVs are pulled toward a hexagonal lens grid (6-10 cells
+  across, by seed): `lens = cell - 1.6 local`. Mixing toward it first flattens each cell to its
+  centre colour (a hex mosaic, at amount 0.38) and then shows each patch inverted and magnified. Lens
+  amount 0.55 / 0.80 / 0.95. The cells exchange one at a time in a random order, loosely from the
+  centre out (`0.6 hash + 0.4 r`).
+- Solarize (colour, raw 10): the tone curve folds over itself. In the crossfade branch
+  `0.5 - 0.5 cos(c (pi (1 + amount E) + E (0, 1.2, 2.4)))` is mixed in at 0.85 E, giving an S-curve,
+  then solarized, then two bands, with each channel a little out of phase. The phase offsets scale
+  with the value, so blacks stay black. The first try used a constant offset and flooded dark
+  backgrounds with flat cyan. The fold amount is 0.6 / 1.1 / 1.6. The swap uses the flow order with
+  softness 0.30, and is hidden because both pictures are tone-inverted at the plateau.
+- No style needs a depth map any more. `TransitionDirector.eligible` keeps its `hasDepth` parameter,
+  which the renderers pass, but no longer filters on it.
+- Families: flow = Tide, Melt, Ripple; colour = Prism, Rainbow, Solarize; geometric = Kaleidoscope,
+  Whirlpool, Dive, Shatter, Facets; temporal = Afterimage. Gentle set (offered below intensity 0.25):
+  Tide, Afterimage, Melt, Rainbow, Ripple. Facets is favoured in wild stretches, Solarize in clear ones.
+
+### T36. Measured, round 2 (default intensity, seed 0; `tx/round2` in the session scratchpad)
+| style | swap_vis p1 / p2 | double p1 / p2 | pop p1 / p2 | seam_out p1 / p2 | step_max p1 / p2 |
+|---|---|---|---|---|---|
+| Tide | 0.24 / 0.08 | 0.21 / 0.08 | 1.3 / 1.3 | 1.77 / 1.57 | 0.045 / 0.053 |
+| Facets | 0.13 / -0.16 | 0.10 / 0.07 | 2.0 / 1.6 | 1.00 / 0.98 | 0.037 / 0.030 |
+| Prism | 0.25 / 0.23 | 0.19 / 0.19 | 1.9 / 1.7 | 1.59 / 1.38 | 0.025 / 0.028 |
+| Kaleidoscope | 0.06 / 0.09 | 0.11 / 0.11 | 1.2 / 1.2 | 1.05 / 1.11 | 0.055 / 0.055 |
+| Dive | -0.22 / -0.05 | 0.10 / 0.06 | 1.4 / 1.6 | 1.69 / 1.87 | 0.051 / 0.044 |
+| Afterimage | 0.26 / -0.03 | 0.22 / 0.07 | 2.5 / 2.3 | 1.06 / 1.03 | 0.024 / 0.031 |
+| Solarize | 0.35 / 0.18 | 0.30 / 0.16 | 1.6 / 2.1 | 1.07 / 1.07 | 0.025 / 0.059 |
+| Shatter | 0.19 / -0.42 | 0.17 / 0.05 | 2.0 / 1.9 | 1.32 / 1.35 | 0.024 / 0.032 |
+- Unchanged styles (Rainbow, Whirlpool, Ripple, Melt) measure as in round 1.
+- Every exit jolt is now under the 2.5 limit (Tide was the last one above it). The step limit
+  (0.050) is still exceeded by Kaleidoscope (0.055), Tide p2 (0.053, on the moving wave crest),
+  Solarize p2 (0.059, the tone fold on the bright sky) and Dive / Whirlpool p1 (0.051).
+- Solarize on the calm pair has the highest "both visible" score (0.35 / 0.30): the swap_vis metric
+  compares structure against effects-off references, and a tone-inverted frame resembles both. Its
+  clips are the judges' call.
+- Outside transitions: frames against main's shader differ by at most 1 of 255, in under 0.00025 %
+  of pixels (r2-04 and r2-07 at t = 47 / 160 / 330 / 600, both eyes). The effects-balance gates
+  (`fx-judge-set.py --mode app`, 16 fixtures, 480 frames) PASS at 0.25 / 0.5 / 1.0 (hog loss mean
+  0.063 / 0.092 / 0.124, strain p90 max 0.50 / 0.80 / 1.18, the same as round 1).
+
+### T37. GPU, round 2 (interleaved A/B, 2048^2 MRT stereo, non-transition t = 47/113/600/2000)
+- Round 2 against round 1: 1.013, and reversed (round 1 as B) 1.012. Both orders show the same
+  ~1.2 % order bias, so the net change is about 1.000. The new stage B code (Prism twist, Solarize)
+  sits in branches that are not taken outside a transition.
+- Against main: 1.023 (round 1: 1.020). Main A/A in the same session: 0.997. The other workstream's
+  simulator was running.

@@ -130,7 +130,6 @@ struct ImageTransitionTests {
         for k in 0..<200 {
             let p = d.next(time: Float(k) * 30, intensity: 0.1, energy: nil, hasDepth: false, imageInterval: 8)
             #expect(p.style.isGentle, "only gentle styles below 0.25")
-            #expect(p.style != .depthwash, "no depth style without a depth map")
             #expect(p.duration >= 1.5 && p.duration <= 1.6 + 1e-6, "8 s interval: at most 20 % (1.6 s)")
             if k > 0 { #expect(d.history[d.history.count - 2] != p.style, "no immediate repeat") }
         }

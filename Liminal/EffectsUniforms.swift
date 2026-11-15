@@ -44,7 +44,7 @@ struct EffectsUniforms {
     var txEnv: Float = 0  // envelope E, 0...1 (shader-side fold / swirl / tap gain)
     var txSeed: Float = 0  // 0...1: direction, centre, wedge count, channel order
     var txSoft: Float = 0  // swap mask edge softness; negative = reversed order
-    var txAmount: Float = 0  // style amount: Prism stagger, fold, swirl angle, Echo tap gain
+    var txAmount: Float = 0  // style amount: Prism stagger, fold, swirl angle, wave, lens, tone fold
 }
 
 /// Ghost tap data for shader. Must match Metal struct layout.

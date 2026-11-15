@@ -120,7 +120,7 @@ Pass as launch arguments, for example `-LiminalAutoPlay YES`. Defined in `Limina
 | `-LiminalSyncLog YES` | One SYNC log line per second (coupling state) |
 | `-LiminalSyncStrength <x>` | Exaggerate the music-to-visuals coupling for tuning |
 | `-LiminalEffectIntensity <0-1>` | Override the Effect intensity setting for this launch without changing it |
-| `-LiminalTransitionStyle <name>` | Use this transition style for every image change (tide, undertow, prism, rainbow, kaleidoscope, whirlpool, dive, afterimage, ripple, depthwash, melt, shatter, classic) |
+| `-LiminalTransitionStyle <name>` | Use this transition style for every image change (tide, facets, prism, rainbow, kaleidoscope, whirlpool, dive, afterimage, ripple, solarize, melt, shatter, classic) |
 | `-LiminalTransitionSeed <n>` | Pin the transition seed too (same spec as `scripts/tx-clip.sh --style/--seed`) |
 
 ## Scripts (`scripts/`)
