@@ -63,11 +63,15 @@ nonisolated struct SoftEnv {
 
 /// Per-layer output: level fader, panner, reverb and delay sends (decision D10).
 /// The panner fans out to the dry bus and both send faders (fan-out verified by probe A).
+/// Strips built with a `dry` gain get one more fader between the panner and the dry bus, so a layer can be
+/// heard mostly through the reverb (decision D93: the struck layers are mostly wet).
 nonisolated final class LayerStrip {
     let level: Fader
     let panner: Panner
     let reverbSend: Fader
     let delaySend: Fader
+    /// Optional dry fader (nil = the panner feeds the dry bus at unity).
+    let dryGain: Fader?
     /// Linear gain applied at full activation (gain staging, section 3).
     var trim: Float
     private var fade = SoftEnv(0)
@@ -83,7 +87,7 @@ nonisolated final class LayerStrip {
     private var lastWritten: Float = -1
     private(set) var pan: Float = 0
 
-    var outputs: (dry: Node, reverbSend: Node, delaySend: Node) { (panner, reverbSend, delaySend) }
+    var outputs: (dry: Node, reverbSend: Node, delaySend: Node) { (dryGain ?? panner, reverbSend, delaySend) }
 
     /// Fade position 0...1 (the conductor's target level, published in `MusicState.layerLevels`).
     var targetLevel: Float { min(1, fade.value * swellEnv.value + boostEnv.value) }
@@ -91,13 +95,15 @@ nonisolated final class LayerStrip {
     var fadeValue: Float { fade.value }
     var fadeTarget: Float { fade.target }
 
-    init(source: Node, filter: Node? = nil, trim: Float, reverb: Float, delay: Float, pan: Float = 0) {
+    init(source: Node, filter: Node? = nil, trim: Float, reverb: Float, delay: Float, pan: Float = 0, dry: Float? = nil) {
         self.trim = trim
         level = Fader(filter ?? source, gain: 0)
-        panner = Panner(level, pan: pan)
+        let p = Panner(level, pan: pan)
+        panner = p
         self.pan = pan
-        reverbSend = Fader(panner, gain: reverb)
-        delaySend = Fader(panner, gain: delay)
+        reverbSend = Fader(p, gain: reverb)
+        delaySend = Fader(p, gain: delay)
+        dryGain = dry.map { Fader(p, gain: $0) }
     }
 
     func fade(to v: Float, over: Double, now: Double) { fade.go(to: v, over: over, now: now) }
@@ -136,6 +142,11 @@ nonisolated final class LayerContext {
     let harmony: HarmonyEngine
     var intensity: Float = MusicScene.floor
     var brightness: Float = 0.5
+    /// Brightness for the beds (drone, pad), on the pre-calm curve (decision D94).
+    var bedBrightness: Float = 0.5
+    /// Layers active after the last activation pass; rare events that borrow a layer respect the cap (D102).
+    var activeLayers = 0
+    var layerCap = 4
     var density: Float = 0.5
     var registerShift: Int = 0
     var mood = VisualMood()

@@ -140,7 +140,7 @@ nonisolated final class PadLayer: BaseLayer {
         guard voiced else { if isActive { initialVoicing(ctx: ctx) }; return }
         let t = ctx.time
         let active = ctx.intensity < 0.2 ? 2 : (ctx.intensity < 0.4 ? 3 : 4)
-        let b = min(1, ctx.brightness + ctx.padBrightnessBoost)
+        let b = min(1, ctx.bedBrightness + ctx.padBrightnessBoost)
         let width = 0.7 + 0.3 * widthLFO.unit(at: t) + 0.15 * (ctx.activity - 0.5)
         let baseIndex = min(max(0.2 + 2.6 * b, 0), 3)
         for v in 0..<PadLayer.voiceCount {

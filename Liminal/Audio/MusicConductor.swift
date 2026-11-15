@@ -170,7 +170,7 @@ nonisolated final class MusicConductor: @unchecked Sendable {
         mix.setMaster(MusicConductor.masterGain, over: 3)
         lastKeyMove = t
         sessionStart = t
-        keyInterval = rng.range(100...220)
+        keyInterval = rng.range(180...360)
         began = true
         startScene(at: t)
         scheduleChord(from: t)
@@ -225,7 +225,7 @@ nonisolated final class MusicConductor: @unchecked Sendable {
             }
         case .pinScale(let s):
             if let change = harmony.setPinned(s) { broadcast(change); logKey() }
-            if s != nil { keyInterval = .infinity } else if keyInterval == .infinity { keyInterval = rng.range(100...220); lastKeyMove = scheduler.now }
+            if s != nil { keyInterval = .infinity } else if keyInterval == .infinity { keyInterval = rng.range(180...360); lastKeyMove = scheduler.now }
         case .visualMood(let m): ctx.coupling.setTarget(m)
         case .imageDidChange(let d): imageDidChange(transition: d)
         case .visualActivity(let a): activityTarget = min(max(a, 0), 1)
@@ -264,7 +264,7 @@ nonisolated final class MusicConductor: @unchecked Sendable {
         if s.keyMoveAtEnd, let f = harmony.proposeKeyMove(brightnessBias: keyBias()) {
             broadcast(harmony.apply(field: f))
             lastKeyMove = scheduler.now
-            keyInterval = rng.range(100...220)
+            keyInterval = rng.range(180...360)
             logKey()
             scheduleChord(from: scheduler.now)
         }
@@ -277,14 +277,14 @@ nonisolated final class MusicConductor: @unchecked Sendable {
 
     // MARK: Harmony
 
-    /// Master trim at full: +4.5 dB over PASS 1 (decisions D72, D86), so sparse scenes stay above -27 dBFS RMS
-    /// with the beds (pad, drone) lowered.
-    static let masterGain: Float = dbToGain(4.5)
+    /// Master trim at full: +4.5 dB over PASS 1 (decisions D72, D86), +1.5 dB for the calm mix (D105), whose
+    /// struck layers are quieter and mostly wet, so the mean stays near -25 dBFS RMS.
+    static let masterGain: Float = dbToGain(6)
 
-    /// Harmonic rhythm lerp(27, 11, intensity) +-25 %, clamped 10-40 s (D43, retuned in D72 and D86).
+    /// Harmonic rhythm lerp(40, 22, intensity) +-25 %, clamped 18-55 s (D43, retuned in D72, D86 and D101).
     private func chordLength(_ i: Float) -> Double {
-        let base = 27 + (11 - 27) * Double(min(max(i, 0), 1))
-        return min(max(rng.jitter(base, 0.25), 10), 40)
+        let base = 40 + (22 - 40) * Double(min(max(i, 0), 1))
+        return min(max(rng.jitter(base, 0.25), 18), 55)
     }
 
     private func scheduleChord(from t: Double) {
@@ -310,11 +310,11 @@ nonisolated final class MusicConductor: @unchecked Sendable {
         scheduleChord(from: scheduler.now)
     }
 
-    /// The pedal holds at least 40 s; then, in moving scenes, it may step to the new chord's root (45 %)
+    /// The pedal holds at least 60 s (D101); then, in moving scenes, it may step to the new chord's root (45 %)
     /// or back to the tonic (60 % when away), so the bass outlines the harmony slowly (decision D73).
     private func movePedalWithChord() {
         let now = scheduler.now
-        guard now - pedalSince >= 40, let kind = newest?.kind, kind != .stillness else { return }
+        guard now - pedalSince >= 60, let kind = newest?.kind, kind != .stillness else { return }
         let f = harmony.field
         let tonicPedal = HarmonyEngine.pedal(for: f.tonic)
         var changed = false
@@ -352,7 +352,7 @@ nonisolated final class MusicConductor: @unchecked Sendable {
             guard let self else { return }
             if self.scheduler.now - self.chordStart > 8 { self.changeChord() }
             (self.layer(.pad) as? PadLayer)?.rebloom(ctx: self.ctx)
-            if self.rng.chance(0.35) {
+            if self.rng.chance(0.2) {   // D102 (was 0.35)
                 if self.rng.chance(0.5), let k = self.layer(.keys) as? KeysLayer { k.accent(ctx: self.ctx) }
                 else { (self.layer(.drips) as? DripsLayer)?.accent(ctx: self.ctx) }
             }
@@ -379,9 +379,15 @@ nonisolated final class MusicConductor: @unchecked Sendable {
         var intensity = MusicScene.floor
         for s in scenes { intensity = max(intensity, s.intensity(at: t)) }
         let bias = newest?.brightness ?? 0
-        let b = 0.5 + 0.6 * bias + 0.35 * (intensity - 0.4) + cpl.brightnessNudge + 0.12 * colorDrift.value(at: t)
+        // Calm brightness macro (decision D94): lower centre, half the scene and intensity weight, ceiling 0.70.
+        let drift = colorDrift.value(at: t)
+        let b = 0.42 + 0.4 * bias + 0.2 * (intensity - 0.4) + cpl.brightnessNudge + 0.1 * drift
         ctx.intensity = intensity
         ctx.brightness = MusicConductor.shapeBrightness(b)
+        // The beds (drone, pad) keep the previous macro and scene biases, which the user liked, with only the
+        // top of the curve trimmed.
+        let bed = 0.5 + 0.6 * (newest?.bedBrightness ?? 0) + 0.35 * (intensity - 0.4) + cpl.brightnessNudge + 0.12 * drift
+        ctx.bedBrightness = MusicConductor.shapeBedBrightness(bed)
         ctx.density = min(max(density * cpl.energyScale, 0), 1)
         ctx.registerShift = min(max((newest?.registerShift ?? 0) + cpl.registerNudge, -5), 7)
         ctx.mood = cpl.mood
@@ -412,12 +418,18 @@ nonisolated final class MusicConductor: @unchecked Sendable {
         if modulateCount % 10 == 0 { scoreLog?.sample(t, intensity: intensity, brightness: ctx.brightness, layers: layers) }
     }
 
-    /// Brightness macro shaping (decision D89): linear up to 0.6, then a soft knee that approaches 0.92.
-    /// A hard clamp pinned the macro at exactly 1.0 for minutes in any scene with a brightness bias above
-    /// about 0.6 (the bias weight is 0.6 since D86), so every filter, FM index and reverb damping sat fully
-    /// open with no movement left in it.
+    /// Brightness macro shaping (decisions D89, D94): linear up to 0.5, then a soft knee that approaches 0.70
+    /// (the pointed layers' filters and the reverb damping never open fully; was knee 0.6, ceiling 0.92).
     static func shapeBrightness(_ raw: Float) -> Float {
-        let knee: Float = 0.6, span: Float = 0.32
+        let knee: Float = 0.5, span: Float = 0.2
+        if raw <= knee { return max(raw, 0) }
+        return knee + span * tanhf((raw - knee) / span)
+    }
+
+    /// Bed brightness (drone, pad; D94): the D89 curve with its ceiling lowered from 0.92 to 0.80, so the pad's
+    /// ladder tops out at 3.6 kHz instead of 6 kHz and is otherwise unchanged.
+    static func shapeBedBrightness(_ raw: Float) -> Float {
+        let knee: Float = 0.6, span: Float = 0.2
         if raw <= knee { return max(raw, 0) }
         return knee + span * tanhf((raw - knee) / span)
     }
@@ -451,13 +463,23 @@ nonisolated final class MusicConductor: @unchecked Sendable {
                 desired.append((pick, 0.99))
             }
         }
-        // Max active layers 3 + round(3 D); drop the highest thresholds first.
-        let cap = 3 + Int((3 * density).rounded())
-        let keep = Set(desired.sorted { $0.1 < $1.1 }.prefix(cap).map { $0.0.id })
+        // Max active layers 3 + round(2 D) (4 at default density, D101); drop the highest thresholds first.
+        let cap = 3 + Int((2 * density).rounded())
+        var keep = Set(desired.sorted { $0.1 < $1.1 }.prefix(cap).map { $0.0.id })
+        // A layer still fading out above 20 % counts against the cap, so a newcomer waits for it instead of
+        // briefly making five audible layers (D101; the fades are 20-50 s long now).
+        let fadingOut = layers.filter { !keep.contains($0.id) && $0.strip.fadeValue > 0.2 }.count
+        let staying = layers.filter { keep.contains($0.id) && $0.isActive }.count
+        var budget = cap - staying - fadingOut
+        for (l, _) in desired.sorted(by: { $0.1 < $1.1 }) where keep.contains(l.id) && !l.isActive {
+            if budget > 0 { budget -= 1 } else { keep.remove(l.id) }
+        }
+        ctx.activeLayers = keep.count + fadingOut
+        ctx.layerCap = cap
         for l in layers {
             let on = keep.contains(l.id)
             guard on != l.isActive else { continue }
-            var fade = on ? rng.range(8...30) : rng.range(10...40)
+            var fade = on ? rng.range(15...40) : rng.range(20...50)   // slow entries and exits (D101)
             // The opening drone comes in within seconds so the app never starts in near-silence.
             if on && l.id == .drone && t - sessionStart < 1 { fade = rng.range(4...6) }
             if on && l.id == .pad && t - sessionStart < 20 { fade = rng.range(6...10) }

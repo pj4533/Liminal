@@ -100,7 +100,7 @@ final class GenerativeEngine: ObservableObject {
                                     KeysLayer(), AirLayer(), GrainLayer(), PluckLayer()]
         self.layers = layers
         var r = MusicRNG(seed: seed ^ 0xDE1A7)
-        mix = MixBus(layers: layers.flatMap(\.allStrips), delayTime: Float(r.range(0.85...1.35)))
+        mix = MixBus(layers: layers.flatMap(\.allStrips), delayTime: Float(r.range(1.3...2.1)))   // slow, dark echoes (D92)
         conductor = MusicConductor(layers: layers, mix: mix, seed: seed, pinned: nil)
         engine.output = mix.output
         conductor.onNote = GenerativeEngine.noteForwarder(shimmerNotePlayed)
