@@ -45,7 +45,16 @@ struct MusicRenderTests {
         let engine = GenerativeEngine(seed: seed)
         let t0 = Date()
         let solo = cfg["solo"]   // debug: mute every layer but this one (gain-staging checks)
+        // Stems (diagnosis): `only=<layer>` zeroes every other layer's trim WITHOUT forcing the layer on, so the
+        // score is the same as the full render's and the stem is that layer exactly as it sounds in the piece.
+        // `mute=a,b` zeroes the named layers' trims; the names reverb, delay and shimmer mute those returns.
+        let only = cfg["only"]
+        let mute = Set((cfg["mute"] ?? "").split(separator: ",").map(String.init))
         try engine.renderOffline(seconds: seconds, to: url, limiterBypassed: bypass) { e in
+            for l in e.layers where (only != nil && "\(l.id)" != only) || mute.contains("\(l.id)") {
+                l.allStrips.forEach { $0.trim = 0 }
+            }
+            e.mix.mutedReturns = mute.intersection(["reverb", "delay", "shimmer"])
             guard let solo else { return }
             for l in e.layers where "\(l.id)" != solo { l.allStrips.forEach { $0.trim = 0 } }
             if let id = e.layers.first(where: { "\($0.id)" == solo })?.id { e.conductor.post(.forceLayers([id])) }

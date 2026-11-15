@@ -15,6 +15,10 @@ mkdir -p "$OUT"
 MODE=render; [ "$LABEL" = probe ] && MODE=probe
 printf 'enabled=1\nmode=%s\nlabel=%s\nseconds=%s\nseed=%s\nbypass=%s\noutdir=%s\n' "$MODE" "$LABEL" "$SECS" "$SEED" "$BYPASS" "$OUT" > /private/tmp/liminal-render-config.txt
 [ -n "${SOLO:-}" ] && echo "solo=$SOLO" >> /private/tmp/liminal-render-config.txt
+# ONLY=<layer> renders that layer's stem with the score unchanged (other trims zeroed, nothing forced).
+# MUTE=a,b zeroes layers' trims; reverb, delay and shimmer mute those returns. Diagnosis only.
+[ -n "${ONLY:-}" ] && echo "only=$ONLY" >> /private/tmp/liminal-render-config.txt
+[ -n "${MUTE:-}" ] && echo "mute=$MUTE" >> /private/tmp/liminal-render-config.txt
 cd "$ROOT"
 # CONFIG=Release renders with optimized DSP (realistic CPU numbers); default Debug.
 CONFIG=${CONFIG:-Debug}
@@ -23,4 +27,8 @@ xcodebuild test -scheme Liminal -configuration "$CONFIG" -destination 'platform=
   -only-testing:LiminalTests/MusicRenderTests CODE_SIGNING_ALLOWED=NO "${EXTRA[@]}" 2>&1 | grep -E "RENDERED|error: |TEST (SUCCEEDED|FAILED)|\*\* "
 rm -f /private/tmp/liminal-render-config.txt
 if [ "$MODE" = probe ]; then python3 "$ROOT/scripts/analyze-probes.py" "$OUT"; exit; fi
+# NOANALYZE=1 skips the analysis (stem renders are analysed by their own script).
+[ -n "${NOANALYZE:-}" ] && exit 0
 python3 "$ROOT/scripts/analyze-audio.py" "$OUT/$LABEL.wav" --json "$OUT/$LABEL.json"
+# Relaxation metrics (docs/plans/music-calm.md): written beside the analysis as <label>.calm.json.
+python3 "$ROOT/scripts/analyze-calm.py" "$OUT/$LABEL.wav" --json "$OUT/$LABEL.calm.json" --quiet

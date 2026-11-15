@@ -147,14 +147,14 @@ nonisolated final class DroneLayer: BaseLayer {
             let lfo = lfos.isEmpty ? 0.5 : lfos[p.rawValue].unit(at: t)
             var a = base[p.rawValue] * (1 - depth + depth * lfo) * g
             if p == .roam { a *= roam }
-            if p == .sub { a *= (0.8 + 0.4 * (1 - ctx.brightness)) * subPulseEnv.tick(t) }   // darker = more sub
+            if p == .sub { a *= (0.8 + 0.4 * (1 - ctx.bedBrightness)) * subPulseEnv.tick(t) }   // darker = more sub
             ParamRamp.set(oscs[p.rawValue].$amplitude, a, over: 0.12)
         }
         if !gliding {
             let beat = 0.05 + 0.25 * beatLFO.unit(at: t)
             ParamRamp.set(oscs[P.rootB.rawValue].$frequency, Scale.midiToFrequency(pedal) + beat, over: 0.12)
         }
-        ParamRamp.set(filter.$cutoffFrequency, expMap(ctx.brightness, 220, 1100), over: 0.12)
+        ParamRamp.set(filter.$cutoffFrequency, expMap(ctx.bedBrightness, 220, 1100), over: 0.12)
     }
 
     override func didSilence(fade: Double, ctx: LayerContext) {

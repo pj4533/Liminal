@@ -3,11 +3,12 @@ import AudioKitEX
 import SoundpipeAudioKit
 import Foundation
 
-/// Air (plan section 7, decisions D60, D83): white noise through two cascaded band-passes whose centre sweeps 450 Hz-6.5 kHz
-/// over 20-60 s. (The plan's Brownian rumble was dropped: panned with the air walk it decorrelated the
-/// sub-120 Hz band below the 0.9 gate, and the drone already owns that register.) Level breathes on a slow
-/// channel and the layer walks across the stereo field (+-0.7). Also the voice of image transitions and
-/// of the air-swell rare event: a riser that opens the filter upward and then drops into the reverb.
+/// Breath (decision D99; was the air of D60, D83, D86, which swept to 6.5 kHz). White noise through two
+/// cascaded band-passes whose centre moves through 250 Hz-1.2 kHz over 20-60 s: wind and breath, never hiss.
+/// Level breathes on a slow 30-70 s channel and the layer walks across the stereo field (+-0.7). Also the voice
+/// of image transitions and of the air-swell rare event: a gentle swell that opens the band a little and
+/// sinks back into the reverb. (The Brownian rumble of the plan was dropped: panned with the air walk it
+/// decorrelated the sub-120 Hz band, and the drone owns that register.)
 nonisolated final class AirLayer: BaseLayer {
     private let pink: WhiteNoise
     private let band: BandPassButterworthFilter
@@ -28,7 +29,7 @@ nonisolated final class AirLayer: BaseLayer {
         pink = WhiteNoise(amplitude: 0)
         band = BandPassButterworthFilter(pink, centerFrequency: 1200, bandwidth: 800)
         band2 = BandPassButterworthFilter(band, centerFrequency: 1200, bandwidth: 800)
-        let strip = LayerStrip(source: band2, trim: dbToGain(-19) * 1.414, reverb: 0.4, delay: 0)
+        let strip = LayerStrip(source: band2, trim: dbToGain(-22) * 1.414, reverb: 0.5, delay: 0)
         super.init(id: .air, strip: strip, entryThreshold: 0.2)
         generators = [pink]
     }
@@ -42,10 +43,10 @@ nonisolated final class AirLayer: BaseLayer {
     private func reroll() {
         sweep = ParameterDrift.Channel(period: rng.range(20...60), phase: rng.range(0...6))
         width = ParameterDrift.Channel(period: rng.range(15...40), phase: rng.range(0...6))
-        breath = ParameterDrift.Channel(period: rng.range(22...55), phase: rng.range(0...6))
+        breath = ParameterDrift.Channel(period: rng.range(30...70), phase: rng.range(0...6))
     }
 
-    /// Scene colour 0...1 (decision D86): where in the 450 Hz-6.5 kHz range this scene's air sits. Tide is a
+    /// Scene colour 0...1 (decisions D86, D99): where in the 250 Hz-1.2 kHz range this scene's air sits. Tide is a
     /// low wind, constellation a high hiss. The sweep moves around it instead of covering the whole range in
     /// every scene, so sections differ in their top-end colour, not just in which notes play.
     private var colour = SoftEnv(0.5)
@@ -64,18 +65,17 @@ nonisolated final class AirLayer: BaseLayer {
         colour.go(to: rng.rangeF(r), over: rng.range(15...30), now: ctx.time)
     }
 
-    /// Rise over `rise` seconds. `cut`: drop back sharply at the top so the reverb carries the tail
-    /// (air-swell rare event); otherwise decay over `decay` seconds (image transitions).
+    /// Rise over `rise` seconds, then decay over `decay` seconds. `cut` (the air-swell rare event) no longer
+    /// cuts off (D99): it lets the reverb carry a slightly longer tail.
     func swell(rise: Double, decay: Double, cut: Bool, ctx: LayerContext) {
         borrow(level: 0.8, attack: min(rise, 3), ctx: ctx)
         riser.go(to: 1, over: rise, now: ctx.time)
         riserReverb.go(to: cut ? 1 : 0.5, over: rise, now: ctx.time)
         after(rise, ctx: ctx) { [weak self] in
             guard let self else { return }
-            let fall = cut ? 0.35 : decay
-            self.riser.go(to: 0, over: fall, now: ctx.time)
-            self.releaseBorrow(over: cut ? 0.35 : decay, ctx: ctx)
-            self.after(cut ? 1.5 : decay, ctx: ctx) { [weak self] in
+            self.riser.go(to: 0, over: decay, now: ctx.time)
+            self.releaseBorrow(over: decay, ctx: ctx)
+            self.after(decay, ctx: ctx) { [weak self] in
                 guard let self else { return }
                 self.riserReverb.go(to: 0, over: 6, now: ctx.time)
             }
@@ -87,8 +87,8 @@ nonisolated final class AirLayer: BaseLayer {
         let r = riser.tick(t)
         let rv = riserReverb.tick(t)
         let c = colour.tick(t)
-        let pos = min(max(0.35 * (sweep.unit(at: t) - 0.5) + c + 0.15 * (ctx.brightness - 0.5) + 0.5 * r, 0), 1)
-        let center = expMap(pos, 450, 6500)
+        let pos = min(max(0.35 * (sweep.unit(at: t) - 0.5) + c + 0.15 * (ctx.brightness - 0.5) + 0.2 * r, 0), 1)
+        let center = expMap(pos, 250, 1200)
         let bw = center * (0.3 + 0.5 * width.unit(at: t))
         ParamRamp.set(band.$centerFrequency, center, over: 0.12)
         ParamRamp.set(band.$bandwidth, bw, over: 0.12)
@@ -103,8 +103,8 @@ nonisolated final class AirLayer: BaseLayer {
         // High bands quieter (-5 dB at the top): white noise at 5 kHz reads much louder than at 500 Hz, and a
         // high air scene otherwise dominated the spectral centroid (D86).
         let tiltHigh = 1 - 0.45 * pos
-        ParamRamp.set(pink.$amplitude, min(1, 0.5 * b * norm * tiltHigh * (1 + 1.6 * r)), over: 0.12)
+        ParamRamp.set(pink.$amplitude, min(1, 0.5 * b * norm * tiltHigh * (1 + 0.6 * r)), over: 0.12)
         strip.setPan(0.7 * panWalk.value(at: t) * (1 - r), over: 0.12)
-        strip.setSends(reverb: 0.4 + 0.5 * rv, delay: 0, over: 0.12)
+        strip.setSends(reverb: 0.5 + 0.4 * rv, delay: 0, over: 0.12)
     }
 }

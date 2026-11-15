@@ -1,7 +1,8 @@
 import Foundation
 
-/// Rare, memorable gestures (plan section 7, decision D66): one every 120-360 s, each kind with an
-/// 8-minute cooldown and an intensity window. Events borrow layers that may not be in the current
+/// Rare, memorable gestures (plan section 7, decisions D66, D102): one every 240-600 s, the first after
+/// 150-300 s, each kind with an 8-minute cooldown and an intensity window. All of them are slow and soft:
+/// the cascade is a 4-6 note fall, the toll three low warm notes, the bloom a dark halo. Events borrow layers that may not be in the current
 /// scene (see `BaseLayer.borrow`), so they can happen in any scene.
 nonisolated enum RareEventKind: UInt8, CaseIterable {
     case arpeggioCascade = 1, shimmerBloom, airSwell, subPulse, bellToll, hush
@@ -26,7 +27,7 @@ nonisolated final class RareEventDirector {
     private var lastFired: [RareEventKind: Double] = [:]
     private(set) var nextTime: Double = 0
     static let cooldown = 480.0
-    static let interval = 120.0...360.0
+    static let interval = 240.0...600.0
 
     weak var keys: KeysLayer?
     weak var air: AirLayer?
@@ -43,7 +44,7 @@ nonisolated final class RareEventDirector {
     func reset(at t: Double) {
         lastFired.removeAll()
         // The first event comes a little earlier than the steady-state interval so short sessions hear one.
-        nextTime = t + rng.range(75...180)
+        nextTime = t + rng.range(150...300)
     }
 
     /// Called at 10 Hz. Returns the event that fired, if any.
@@ -52,6 +53,7 @@ nonisolated final class RareEventDirector {
         nextTime = t + rng.range(RareEventDirector.interval)
         let candidates = RareEventKind.allCases.filter { k in
             k.allowed(intensity: ctx.intensity) && t - (lastFired[k] ?? -1e9) >= RareEventDirector.cooldown && available(k)
+                && fits(k, ctx: ctx)
         }
         guard !candidates.isEmpty else {
             nextTime = t + rng.range(20...45)     // try again soon
@@ -63,6 +65,19 @@ nonisolated final class RareEventDirector {
         lastFired[k] = t
         fire(k, ctx: ctx)
         return k
+    }
+
+    /// An event that borrows a layer from outside the scene must not make more layers sound than the cap (D102).
+    private func fits(_ k: RareEventKind, ctx: LayerContext) -> Bool {
+        let borrowed: BaseLayer? = {
+            switch k {
+            case .arpeggioCascade, .bellToll: return keys
+            case .airSwell: return air
+            default: return nil
+            }
+        }()
+        guard let l = borrowed, !l.isActive else { return true }
+        return ctx.activeLayers < ctx.layerCap
     }
 
     private func available(_ k: RareEventKind) -> Bool {
@@ -84,7 +99,7 @@ nonisolated final class RareEventDirector {
             ctx.scheduler.schedule(after: 0) { [weak self] in self?.padBoost(ctx: ctx, up: true) }
             ctx.scheduler.schedule(after: 11) { [weak self] in self?.padBoost(ctx: ctx, up: false) }
         case .airSwell:
-            air?.swell(rise: 8, decay: 4, cut: true, ctx: ctx)
+            air?.swell(rise: rng.range(10...14), decay: 6, cut: true, ctx: ctx)
         case .subPulse:
             drone?.subPulse(ctx: ctx)
         case .bellToll:
