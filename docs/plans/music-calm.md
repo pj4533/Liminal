@@ -1,6 +1,6 @@
 # Music: calm redesign (diagnosis and plan)
 
-Status: plan only. No engine sound has changed yet. What is already in the tree: stem and return-mute options for the offline renderer, `scripts/analyze-calm.py`, `scripts/music-criteria-calm.json`, and `check-music.py --criteria`.
+Status: implemented (decisions D91-D106 in `docs/decisions/music.md`, which record where the implementation differs from this plan: the beds keep the old brightness curve, the pad is in every scene, air tops out at 1.2 kHz, the lead is 5 dB quieter, the body-band step metric uses a 25 ms window, the Deep centroid floor is 200 Hz). `music-criteria-calm.json` below is now `scripts/music-criteria.json`; the old gates are in `music-criteria-legacy.json`.
 
 ## 1. The feedback and what it means
 

@@ -7,8 +7,8 @@ Usage: analyze-calm.py file.wav [--json out.json] [--merge analysis.json]
 What is measured, and why (the user's words: "super high pitched bell and tinks ... too abrasive"):
   brightness   power-weighted share of the mix above 2 / 3 / 5 / 8 kHz (dB re total), spectral centroid,
                and the loudest moments of the top bands (p95 / p99 of 50 ms frames, dBFS).
-  sharpness    how fast and how loud things start. Envelopes of the band above 200 Hz and of the band above
-               1.5 kHz (10 ms RMS, 5 ms hop); an "attack step" is the linear rise of the envelope inside
+  sharpness    how fast and how loud things start. Envelopes of the band above 200 Hz (25 ms RMS) and of the
+               band above 1.5 kHz (10 ms RMS), 5 ms hop; an "attack step" is the linear rise of the envelope inside
                30 ms. Steps above a level are counted per minute and the steepest are reported. Plus crest
                factor and spectral flux of the band above 2 kHz.
   busyness     attack steps per minute and high-band flux (note counts come from the score log).
@@ -67,7 +67,7 @@ del Z, P, mag
 
 # ---- band envelopes: 10 ms RMS, 5 ms hop, dBFS
 win, hop = int(0.010*sr), int(0.005*sr)
-def env_db(sig):
+def env_db(sig, win=win):
     n = (len(sig) - win)//hop + 1
     c = np.concatenate([[0.0], np.cumsum(sig.astype(np.float64)**2)])
     i = np.arange(n)*hop
@@ -112,10 +112,21 @@ def steps(e_db, thr_db, look=6, refractory=20):
         out[th] = round(n/(dur/60), 2)
     return out, float(db(np.percentile(st, 99.9))), float(db(st.max()))
 
-body = env_db(band(lo=200))
+# The body band uses a 25 ms RMS window (decision D104). With 10 ms the envelope follows the roughness of two
+# loud partials 40-100 Hz apart (a held major second in the pad, or a lead note over the previous one's
+# release), and a loud, slow, beating chord counted as 6-12 "attacks" per minute with no note starting at all.
+# 25 ms is still shorter than the 30 ms look-back, so a fast attack steps by its full height as before (an 8 ms
+# attack to -24 dBFS still reads about -24, an 80 ms one about -32). The 10 ms figures are kept as *_10ms.
+body_src = band(lo=200)
+body10 = env_db(body_src)
+c, p, mx = steps(body10, (-24, -30, -36))
+res["attacks_gt-24dB_per_min_10ms"] = c[-24]; res["attacks_gt-30dB_per_min_10ms"] = c[-30]
+res["attack_step_dBFS_p999_10ms"] = round(p, 1); res["attack_step_dBFS_max_10ms"] = round(mx, 1)
+body = env_db(body_src, win=int(0.025*sr))
 c, p, mx = steps(body, (-24, -30, -36))
 res["attacks_gt-24dB_per_min"] = c[-24]; res["attacks_gt-30dB_per_min"] = c[-30]; res["attacks_gt-36dB_per_min"] = c[-36]
 res["attack_step_dBFS_p999"] = round(p, 1); res["attack_step_dBFS_max"] = round(mx, 1)
+del body_src, body10
 c, p, mx = steps(e15, (-34, -40, -46))
 res["hf_attacks_gt-34dB_per_min"] = c[-34]; res["hf_attacks_gt-40dB_per_min"] = c[-40]; res["hf_attacks_gt-46dB_per_min"] = c[-46]
 res["hf_attack_step_dBFS_p999"] = round(p, 1); res["hf_attack_step_dBFS_max"] = round(mx, 1)

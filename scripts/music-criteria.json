@@ -1,5 +1,5 @@
 {
-  "_doc": "Relaxation gates (docs/plans/music-calm.md section 6). They replace music-criteria.json when the calm redesign lands: check-music.py <label> --criteria scripts/music-criteria-calm.json --bypass <label>-bypass --other <other-seed-label>. src a = audio analysis json (calm.* = analyze-calm.py metrics), s = score log, b = limiter-bypassed render analysis. All gate at pass 1.",
+  "_doc": "Relaxation gates (docs/plans/music-calm.md section 6, decisions D91, D104): check-music.py <label> --bypass <label>-bypass --other <other-seed-label>. The pre-calm gates (bright, busy) are kept in music-criteria-legacy.json for reference only. src a = audio analysis json (calm.* = analyze-calm.py metrics), s = score log, b = limiter-bypassed render analysis. All gate at pass 1. The body-band attack steps use a 25 ms window (D104).",
   "criteria": [
     {"id": "true_peak", "src": "a", "metric": "true_peak_dBFS", "max": -3.0, "pass": 1},
     {"id": "clip_samples", "src": "a", "metric": "clip_samples(|x|>=0.999)", "max": 0, "pass": 1},
@@ -12,8 +12,9 @@
     {"id": "lr_corr", "src": "a", "metric": "stereo_LR_correlation", "min": 0.2, "max": 0.85, "pass": 1},
     {"id": "sub_corr", "src": "a", "metric": "stereo_corr_below120", "min": 0.9, "pass": 1},
     {"id": "tick_mean", "src": "s", "metric": "perf.tick_mean_ms", "max": 0.2, "pass": 1},
-    {"id": "tick_max", "src": "s", "metric": "perf.tick_max_ms", "max": 2.0, "pass": 1},
-    {"id": "centroid_power", "src": "a", "metric": "calm.centroid_power_Hz", "min": 220, "max": 480, "pass": 1},
+    {"id": "tick_max", "src": "s", "metric": "perf.tick_max_ms", "max": 2.0, "pass": 1, "note": "wall-clock; inflated when several renders share the CPU"},
+    {"id": "realtime_factor", "src": "s", "metric": "perf.realtime_factor", "min": 2.0, "pass": 1, "note": "offline render speed (CPU headroom)"},
+    {"id": "centroid_power", "src": "a", "metric": "calm.centroid_power_Hz", "min": 200, "max": 480, "pass": 1, "note": "floor 220 -> 200 for the Deep style (D106)"},
     {"id": "share_gt2k", "src": "a", "metric": "calm.share_gt2k_dB", "max": -17, "pass": 1},
     {"id": "share_gt3k", "src": "a", "metric": "calm.share_gt3k_dB", "max": -24, "pass": 1},
     {"id": "share_gt3k_minute", "src": "a", "metric": "calm.share_gt3k_dB_max_minute", "max": -17, "pass": 1},

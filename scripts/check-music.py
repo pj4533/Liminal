@@ -2,8 +2,8 @@
 """PASS/FAIL table for a render. Usage:
   check-music.py <label> [--dir DIR] [--pass N] [--bypass LABEL] [--criteria FILE] [--calm FILE] [--other LABEL]
 Reads DIR/<label>.json (analyze-audio.py), DIR/<label>.score.json (score log) and optionally the
-analysis of a limiter-bypassed render. Criteria: scripts/music-criteria.json, or --criteria FILE
-(scripts/music-criteria-calm.json holds the relaxation gates of docs/plans/music-calm.md). The relaxation
+analysis of a limiter-bypassed render. Criteria: scripts/music-criteria.json (the relaxation gates of
+docs/plans/music-calm.md, decision D91), or --criteria FILE (music-criteria-legacy.json: the pre-calm gates). The relaxation
 metrics of analyze-calm.py are read from DIR/<label>.calm.json (or --calm FILE) as calm.<metric>.
 --other LABEL names a render of a different seed: the gate seeds_differ compares the two score logs.
 Exit 1 if a gate of pass <= N fails."""

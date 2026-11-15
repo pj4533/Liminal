@@ -1,5 +1,5 @@
 {
-  "_doc": "Acceptance gates from docs/plans/music.md section 11 (thresholds unchanged; the analyzer metrics behind spec_novelty, selfsim_*, onsets, distinct_chords, pcs_gt5 and pc_entropy were corrected in decision D82, legacy values are still in the analysis json as *_legacy / *_whole). pass = first pass that gates on it. src a = audio analysis json, s = score log, b = limiter-bypassed render analysis.",
+  "_doc": "LEGACY, not used since the calm redesign (decision D91): they rewarded brightness and busyness (centroid 450-1400 Hz, >= 150 onsets per 5 min). Acceptance gates from docs/plans/music.md section 11 (thresholds unchanged; the analyzer metrics behind spec_novelty, selfsim_*, onsets, distinct_chords, pcs_gt5 and pc_entropy were corrected in decision D82, legacy values are still in the analysis json as *_legacy / *_whole). pass = first pass that gates on it. src a = audio analysis json, s = score log, b = limiter-bypassed render analysis.",
   "criteria": [
     {"id": "true_peak",        "src": "a", "metric": "true_peak_dBFS",                 "max": -1.0,  "pass": 1},
     {"id": "clip_samples",     "src": "a", "metric": "clip_samples(|x|>=0.999)",       "max": 0,     "pass": 1},
