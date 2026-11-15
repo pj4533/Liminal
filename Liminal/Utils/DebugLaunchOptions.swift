@@ -72,6 +72,13 @@ nonisolated enum DebugLaunchOptions {
         return max(0, defaults.float(forKey: "LiminalSyncStrength"))
     }()
 
+    /// -LiminalEffectIntensity <0...1>: use this effect intensity instead of the "Effect intensity"
+    /// setting (simulator checks, perf runs). The setting itself is not changed.
+    static let effectIntensity: Float? = {
+        guard defaults.object(forKey: "LiminalEffectIntensity") != nil else { return nil }
+        return min(max(defaults.float(forKey: "LiminalEffectIntensity"), 0), 1)
+    }()
+
     /// -LiminalAllowGeneration YES: let an automated/debug launch call Gemini. Without it, any launch
     /// that uses the automation flags above (perf runs, screenshots, sim checks) never generates new
     /// images: it shows cached images, or the test card when the cache is empty. Testing must not
@@ -83,7 +90,7 @@ nonisolated enum DebugLaunchOptions {
         return autoPlay || openDome || freezeTime != nil || testPattern || testImagePath != nil
             || defaults.object(forKey: "LiminalPerfLogInterval") != nil || splitPasses
             || forceStereoFlatDepth || forceMonoMaterial || noEffects || syncLog
-            || defaults.object(forKey: "LiminalSyncStrength") != nil
+            || defaults.object(forKey: "LiminalSyncStrength") != nil || effectIntensity != nil
     }
 #else
     static let allowGeneration = false
@@ -100,6 +107,7 @@ nonisolated enum DebugLaunchOptions {
     static let noEffects = false
     static let syncLog = false
     static let syncStrength: Float = 1
+    static let effectIntensity: Float? = nil
 #endif
 
     private static let logOnce: Void = {
@@ -118,6 +126,7 @@ nonisolated enum DebugLaunchOptions {
         if noEffects { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalNoEffects=YES (passthrough, no effects)") }
         if blocksImageGeneration { LMLog.general.info("🧪 DEBUG: automation launch, Gemini image generation OFF (cached images only; pass -LiminalAllowGeneration YES to override)") }
         if syncLog { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalSyncLog=YES (🎼 SYNC lines)") }
+        if let i = effectIntensity { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalEffectIntensity=\(i, format: .fixed(precision: 2)) (overrides the Effect intensity setting)") }
         if syncStrength != 1 { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalSyncStrength=\(syncStrength, format: .fixed(precision: 2))") }
 #endif
     }()
@@ -128,4 +137,8 @@ nonisolated enum DebugLaunchOptions {
     /// Effect time to use given the real elapsed time.
     @inline(__always)
     static func effectTime(_ real: Float) -> Float { freezeTime ?? real }
+
+    /// Effect intensity to use given the setting.
+    @inline(__always)
+    static func effectIntensity(setting: Float) -> Float { effectIntensity ?? setting }
 }

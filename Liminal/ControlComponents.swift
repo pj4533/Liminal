@@ -39,6 +39,8 @@ struct ValueSlider: View {
     @Binding var value: Float
     var minimumLabel: String? = nil
     var maximumLabel: String? = nil
+    /// Optional caption under the slider.
+    var explanation: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -61,6 +63,12 @@ struct ValueSlider: View {
             .labelsHidden()
             .accessibilityLabel(title)
             .accessibilityValue("\(Int((value * 100).rounded())) percent")
+            if let explanation {
+                Text(explanation)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .wrapping()
+            }
         }
     }
 

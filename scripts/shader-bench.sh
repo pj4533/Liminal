@@ -26,6 +26,7 @@ SRC="$SCRIPT_DIR/shader-bench.swift"
 APP_SRCS=(
   "$ROOT/Liminal/EffectsUniforms.swift"
   "$ROOT/Liminal/Visual/EffectsUniformsComputer.swift"
+  "$ROOT/Liminal/Visual/EffectLook.swift"
   "$ROOT/Liminal/Visual/MusicModulation.swift"
   "$ROOT/Liminal/Visual/SmoothOscillator.swift"
   "$ROOT/Liminal/Visual/GhostTapManager.swift"

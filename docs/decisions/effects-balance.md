@@ -131,3 +131,76 @@ Status: diagnosis and design (E1 to E14). Implementation decisions are appended 
 By eye, the default's wildest frames keep the hourglass, romanesco, accordion, ferris wheel and jellyfish
 readable and are clearly psychedelic. Not yet judged blind. If the default reads as too tame, raise colour
 before warp (plan 8.4).
+
+## Implementation
+
+### E15. `EffectLook` holds the look; `EffectsUniformsComputer.compute(..., look:)` applies it
+The setting, the image age and every tuning constant (`EffectLook.Tuning`) live in
+`Liminal/Visual/EffectLook.swift`, which the shader bench also compiles. Reason: one place to retune.
+Both renderers and the bench call the same `compute`, so they cannot drift. The default argument
+(intensity 0.5, no image age) is the shipped look, so `compute(time:)` callers and the bench's default
+runs measure what ships.
+
+### E16. Golden parity with the prototype
+`LiminalTests/EffectLookTests.goldenParityWithModel` checks the drive and 12 uniforms at the 12 inputs of
+`fx_model.py golden` (tolerance 1e-4). Reason: the plan's measurements were made with the Python prototype.
+The `--mode app` judge set reproduces the prototype's numbers to the third decimal (table below), which
+confirms the port. If a number is retuned, change `fx_model.proposed()` too and regenerate the golden rows.
+
+### E17. The budget is fitted after the music factors and before the absolute caps and the transition boost
+Reason: loud music can raise the water, but it can never push the combined warp past the budget. The caps
+(0.10 / 0.020 / 0.036) and the chromatic cap keep their "before the transition boost" meaning from the
+av-coupling work. The feedback-mix cap is now relative to the look's base (±0.04, never above 0.34), and
+the bloom cap scales with the base (0.72 at 0.5).
+
+### E18. Image age starts at the crossfade, not at the first image
+macOS (`MusicSyncBox.transitionStart`) and visionOS (`transitionStartEffectTime`) record the effect time when
+a crossfade starts. The first image has no crossfade, so its age is nil and the fresh hold is 1. Reason:
+sessions already start clear (E6). On macOS the value resets when Play restarts the effect clock.
+
+### E19. The renderers ease intensity with a 0.5 s one-pole (`EffectIntensitySmoother`)
+Reason: dragging the slider must not step the picture. The smoother holds its value when the same frame
+asks twice (macOS evaluates uniforms more than once per tick). It snaps when the clock restarts or jumps by
+more than 1 s. With `-LiminalFreezeTime` the target is used directly.
+
+### E20. DEBUG flag `-LiminalEffectIntensity X` overrides the setting without changing it
+Reason: sim checks and perf runs need a fixed intensity without touching the user's saved value. Like the
+other automation flags, it blocks Gemini generation.
+
+### E21. The slider sits first in the Visuals section on both platforms
+It is the shared `ValueSlider` with "Subtle"/"Wild" end labels and a caption. `ValueSlider` gained an
+optional `explanation` for that caption. Reason: this is the control the user asked for, so it should be
+the first thing in Visuals. The shared component shows the value as a percentage and wraps its labels.
+
+### E22. Slew test skips the crossfade
+`noPopsAtFullIntensity` checks a step below 0.002 per 1/90 s over 900 s at I = 1, with images every 30 s,
+except during the first 1.5 s of each image. Reason: the drive falls to clear during the crossfade, and
+that fall (up to 0.003 per frame in hue-wave intensity) hides under the transition melt. The melt itself
+moves far faster: the water boost changes up to 0.009 per frame.
+
+## Implementation results
+
+- Unit tests (`LiminalTests`, macOS) pass, including the new `EffectLookTests` (golden parity, 10 000
+  random inputs within the budget and caps, strain monotonic in intensity, clarity cycle bounded and slow
+  with clear and wild shares, fresh hold, no pops, no radial or noise at I = 0, smoother).
+- Judge set, `--mode app`, 180 frames (`scratchpad/fx/round0`):
+
+| intensity | mean HOG loss | max HOG loss | max strain p90 | max fold | gate |
+|---|---|---|---|---|---|
+| 0.25 | 0.054 | 0.090 | 0.48 | 0 | PASS |
+| 0.5 | 0.077 | 0.133 | 0.78 | 0.0006 | PASS |
+| 1.0 | 0.112 | 0.198 | 1.30 | 0.0025 | PASS |
+
+- GPU (shader-bench on an M4, 2048² MRT stereo, simulator idle in the background):
+  - Same uniforms, main's shader A against the new shader B, interleaved: B/A is 1.012 as the median of
+    trials (trials 0.993 to 1.030).
+  - The only scenario that moves is t37, a near-clear moment (2.87 to 3.23 ms). There the fractal-noise
+    amount is between 0.00002 and 0.001: the new shader evaluates it and the old one skipped it. This is
+    the cost of E10, which removes the pop.
+  - End to end (shipped uniforms with the shipped shader, against the new ones), median over the same
+    scenarios: 3.77 ms shipped, 3.56 ms new (0.94). In clear stretches both warp branches are skipped
+    (t260: 2.90 ms).
+- `scripts/av-coupling-check.sh` fails on the bloom 3–30 Hz band (0.0579 against 0.05). **Main fails
+  with the identical value**, so this is unrelated to this work: bloom at the default is unchanged, and the
+  failure predates it, probably from the calm-music redesign. It is left for a separate fix. Every other
+  coupling check passes: distortion slew 0.00017, correlation 0.999, toggle off with 0 mismatches.

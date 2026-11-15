@@ -150,6 +150,9 @@ struct ControlsView: View {
 
     private var visualsSection: some View {
         ControlSection(title: "Visuals", systemImage: "sparkles") {
+            ValueSlider(title: "Effect intensity", value: $settings.effectIntensity,
+                        minimumLabel: "Subtle", maximumLabel: "Wild",
+                        explanation: "How far the effects bend the picture. Low keeps the image clear.")
             ExplainedToggle(title: "Sync visuals to music",
                             explanation: "Color, motion and bloom follow the music as it plays.",
                             isOn: $settings.syncVisualsToMusic)

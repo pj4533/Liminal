@@ -322,6 +322,10 @@ struct ImmersiveDomeView: View {
             var activityThrottle = VisualActivityThrottle()
             var lastSyncLogTime = Date.distantPast
             let musicBus = music.musicState
+            // Effect look (docs/plans/effects-balance.md 7.3): intensity eased toward the setting,
+            // image age from the start of the current crossfade.
+            var intensitySmoother = EffectIntensitySmoother()
+            var transitionStartEffectTime: Float?
 
             while !Task.isCancelled {
                 frameCount += 1
@@ -372,6 +376,7 @@ struct ImmersiveDomeView: View {
                     let wasFirst = transitionState.currentImage == nil
                     transitionState.lastGeneration = generation
                     transitionState.transitionTo(framedImage)
+                    if !wasFirst { transitionStartEffectTime = effectTime }
                     LMLog.visual.info("🎬 New image detected (gen \(generation)), triggering transition")
                     // Visuals -> music at the crossfade start.
                     postVisualMood(metadata: metadata, image: framedImage, imageChanged: !wasFirst)
@@ -438,21 +443,29 @@ struct ImmersiveDomeView: View {
                                                 enabled: settings.syncVisualsToMusic, baseHueRate: 0)
                 }
                 renderer.requestGhostBurst(serial: modulation.ghostBurstSerial)
+                let intensityTarget = DebugLaunchOptions.effectIntensity(setting: settings.effectIntensity)
+                let look = EffectLook(
+                    intensity: DebugLaunchOptions.freezeTime != nil
+                        ? intensityTarget : intensitySmoother.next(target: intensityTarget, time: effectTime),
+                    imageAge: transitionStartEffectTime.map { effectTime - $0 }.flatMap { $0 >= 0 ? $0 : nil },
+                    imageInterval: Float(settings.imageInterval))
                 let uniforms = EffectsUniformsComputer.compute(
                     time: effectTime,
                     transitionProgress: transitionProgress,
                     hasSaliencyMap: false,
                     vibrance: vibrance,
-                    music: modulation
+                    music: modulation,
+                    look: look
                 )
 
-                // Visuals -> music activity (un-modulated oscillators, at most 2 Hz)
-                let activity = EffectsUniformsComputer.visualActivity(time: effectTime, transitionProgress: transitionProgress)
+                // Visuals -> music activity (un-modulated oscillators, follows the clarity drive; at most 2 Hz)
+                let activity = EffectsUniformsComputer.visualActivity(time: effectTime, transitionProgress: transitionProgress,
+                                                                      look: look)
                 if let a = activityThrottle.next(activity, at: Double(effectTime)) { music.setVisualActivity(a) }
                 if DebugLaunchOptions.syncLog, frameStartTime.timeIntervalSince(lastSyncLogTime) >= 1 {
                     lastSyncLogTime = frameStartTime
                     let neutral = EffectsUniformsComputer.compute(time: effectTime, transitionProgress: transitionProgress,
-                                                                  hasSaliencyMap: false, vibrance: vibrance)
+                                                                  hasSaliencyMap: false, vibrance: vibrance, look: look)
                     let line = MusicSyncLog.line(reactor: reactor, state: musicBus.read(), uniforms: uniforms, neutral: neutral,
                                                  mood: sentMood.load(), activity: activityThrottle.lastSent)
                     LMLog.visual.info("\(line, privacy: .public)")

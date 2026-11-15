@@ -468,13 +468,9 @@ let globalOverrides: [String: Float] = {
 /// scenario's "intensity" / "age") reach the app's own computer here (docs/plans/effects-balance.md
 /// 7.1), so the bench renders exactly what the setting does.
 func computeUniforms(t: Float, tp: Float, intensity: Float?, age: Float?) -> EffectsUniforms {
-    if intensity != nil || age != nil {
-        // WIRE-UP POINT (effects-balance implementation): replace this `fail` by
-        //   return EffectsUniformsComputer.compute(time: t, transitionProgress: tp, hasSaliencyMap: false,
-        //       vibrance: vibrance, look: EffectLook(intensity: intensity ?? EffectLook.defaultIntensity, imageAge: age))
-        fail("intensity / image age are not wired to EffectsUniformsComputer yet (docs/plans/effects-balance.md 7.1)")
-    }
-    return EffectsUniformsComputer.compute(time: t, transitionProgress: tp, hasSaliencyMap: false, vibrance: vibrance)
+    // Default (no --intensity / --image-age): intensity 0.5, age nil = the shipped default look.
+    EffectsUniformsComputer.compute(time: t, transitionProgress: tp, hasSaliencyMap: false, vibrance: vibrance,
+        look: EffectLook(intensity: intensity ?? EffectLook.defaultIntensity, imageAge: age))
 }
 
 func makeScenario(_ name: String, t: Float, tp: Float, over: [String: Float] = [:],

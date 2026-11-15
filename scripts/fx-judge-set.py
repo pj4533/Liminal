@@ -18,8 +18,7 @@ tells the subject, the intensity or the time). KEY_DIR (keep it away from the ju
 
 Modes
   app      (default) the app's own EffectsUniformsComputer with the Effect-intensity setting and the
-           image age, and the working-tree shader. Needs the wire-up in shader-bench.swift
-           (computeUniforms); fails with a clear message until then.
+           image age, and the working-tree shader (EffectLook via shader-bench --intensity / --image-age).
   proto    the design prototype: uniforms from fx_model.proposed(), shader = working tree plus the
            two planned edits (periphery mask on the log-spherical offset, lower skip thresholds),
            patched into a temporary copy. For validating the plan's numbers before implementation.
