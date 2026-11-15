@@ -84,3 +84,6 @@ External/
 
 ## Claude Code local state
 .claude/
+
+# Python bytecode (scripts/)
+__pycache__/

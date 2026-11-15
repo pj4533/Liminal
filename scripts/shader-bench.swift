@@ -62,6 +62,18 @@
 //   --json PATH        also write the JSON summary to PATH
 //   --label TEXT       free text recorded in the JSON
 //   --compare A B      no GPU timing: compare same-named PNGs in dirs A and B
+//   --set k=v,k=v      override uniforms after EffectsUniformsComputer.compute, in every scenario
+//                      (field names of EffectsUniforms, e.g. logSphereAmount=0,feedbackMix=0).
+//                      Effect attribution: switch one effect off, or all but one.
+//   --scenarios FILE   replace --times / trans113 by a JSON list of scenarios:
+//                      [{"name": "a", "time": 37, "tp": 0, "set": {"logSphereAmount": 0}}, ...]
+//                      ("tp" = transitionProgress, "set" = per-scenario overrides applied after --set;
+//                      optional "intensity" and "age" per scenario, as --intensity / --image-age).
+//   --intensity X      Effect-intensity setting 0...1 passed to compute() (docs/plans/effects-balance.md)
+//   --image-age S      seconds since the current image's crossfade began, passed to compute()
+//   --render-only      no GPU timing: write the PNGs (--out) and a JSON with each scenario's uniforms
+//   --png-size WxH     scale the PNGs (e.g. 768x512 = the 3:2 picture as displayed; default 2048x2048)
+//   --left-only        write only the left eye
 //   --gen-depth IMAGE OUT.png   run the app's DepthMapGenerator (DepthAnythingV2SmallF16.mlmodelc
 //                      must sit next to the binary; the wrapper arranges it) and save the map
 //
@@ -261,6 +273,18 @@ let outDir = takeValue("--out")
 let pngFrames = Int(takeValue("--png-frames") ?? "30") ?? 30
 let jsonPath = takeValue("--json")
 let label = takeValue("--label") ?? ""
+let setArg = takeValue("--set")
+let scenariosPath = takeValue("--scenarios")
+let intensityArg = takeValue("--intensity").map { v -> Float in guard let f = Float(v) else { fail("bad --intensity") }; return f }
+let imageAgeArg = takeValue("--image-age").map { v -> Float in guard let f = Float(v) else { fail("bad --image-age") }; return f }
+let renderOnly = takeFlag("--render-only")
+let leftOnly = takeFlag("--left-only")
+let pngSize: (w: Int, h: Int)? = takeValue("--png-size").map { v in
+    let p = v.lowercased().split(separator: "x").compactMap { Int($0) }
+    guard p.count == 2, p[0] > 0, p[1] > 0 else { fail("bad --png-size (want WxH)") }
+    return (p[0], p[1])
+}
+if renderOnly && outDir == nil { fail("--render-only needs --out DIR") }
 if !args.isEmpty { fail("unknown arguments: \(args.joined(separator: " "))") }
 
 let size = 2048            // OffscreenEffectsRenderer.outputSize — never reduce
@@ -404,17 +428,87 @@ func ghostTaps(at t: Float) -> (MTLBuffer, Int) {
     return (buf, last.activeCount)
 }
 
-func makeScenario(_ name: String, t: Float, tp: Float) -> Scenario {
-    var u = EffectsUniformsComputer.compute(time: t, transitionProgress: tp, hasSaliencyMap: false, vibrance: vibrance)
+/// Uniform fields that --set / a scenario's "set" may override (every Float of EffectsUniforms).
+let uniformFields: [String: WritableKeyPath<EffectsUniforms, Float>] = [
+    "time": \.time, "kenBurnsScale": \.kenBurnsScale, "kenBurnsOffsetX": \.kenBurnsOffsetX,
+    "kenBurnsOffsetY": \.kenBurnsOffsetY, "distortionAmplitude": \.distortionAmplitude,
+    "distortionSpeed": \.distortionSpeed, "hueBaseShift": \.hueBaseShift,
+    "hueWaveIntensity": \.hueWaveIntensity, "hueBlendAmount": \.hueBlendAmount,
+    "contrastBoost": \.contrastBoost, "saturationBoost": \.saturationBoost,
+    "ghostTapMaxDistance": \.ghostTapMaxDistance, "saliencyInfluence": \.saliencyInfluence,
+    "hasSaliencyMap": \.hasSaliencyMap, "transitionProgress": \.transitionProgress,
+    "ghostTapCount": \.ghostTapCount, "chromaticAmount": \.chromaticAmount,
+    "feedbackWarpAmount": \.feedbackWarpAmount, "feedbackMix": \.feedbackMix,
+    "bloomRadius": \.bloomRadius, "bloomAmount": \.bloomAmount, "stereoOffset": \.stereoOffset,
+    "logSphereAmount": \.logSphereAmount, "fractalNoiseAmount": \.fractalNoiseAmount,
+    "fractalHueAmount": \.fractalHueAmount, "vibranceAmount": \.vibranceAmount, "blackPoint": \.blackPoint,
+]
+func uniformsDict(_ u: EffectsUniforms) -> [String: Double] {
+    var d: [String: Double] = [:]
+    for (k, kp) in uniformFields { d[k] = Double(u[keyPath: kp]) }
+    return d
+}
+func applyOverrides(_ u: inout EffectsUniforms, _ over: [String: Float]) {
+    for (k, v) in over {
+        guard let kp = uniformFields[k] else { fail("unknown uniform '\(k)' (known: \(uniformFields.keys.sorted().joined(separator: ", ")))") }
+        u[keyPath: kp] = v
+    }
+}
+let globalOverrides: [String: Float] = {
+    var d: [String: Float] = [:]
+    for pair in (setArg ?? "").split(separator: ",") {
+        let kv = pair.split(separator: "=")
+        guard kv.count == 2, let v = Float(kv[1]) else { fail("bad --set entry '\(pair)'") }
+        d[String(kv[0])] = v
+    }
+    return d
+}()
+
+/// The app's uniforms for one scenario. Intensity / image age (--intensity, --image-age, or a
+/// scenario's "intensity" / "age") reach the app's own computer here (docs/plans/effects-balance.md
+/// 7.1), so the bench renders exactly what the setting does.
+func computeUniforms(t: Float, tp: Float, intensity: Float?, age: Float?) -> EffectsUniforms {
+    if intensity != nil || age != nil {
+        // WIRE-UP POINT (effects-balance implementation): replace this `fail` by
+        //   return EffectsUniformsComputer.compute(time: t, transitionProgress: tp, hasSaliencyMap: false,
+        //       vibrance: vibrance, look: EffectLook(intensity: intensity ?? EffectLook.defaultIntensity, imageAge: age))
+        fail("intensity / image age are not wired to EffectsUniformsComputer yet (docs/plans/effects-balance.md 7.1)")
+    }
+    return EffectsUniformsComputer.compute(time: t, transitionProgress: tp, hasSaliencyMap: false, vibrance: vibrance)
+}
+
+func makeScenario(_ name: String, t: Float, tp: Float, over: [String: Float] = [:],
+                  intensity: Float? = intensityArg, age: Float? = imageAgeArg) -> Scenario {
+    var u = computeUniforms(t: t, tp: tp, intensity: intensity, age: age)
     let (buf, count) = ghostTaps(at: t)
     u.ghostTapCount = Float(count)
     let offset = 0.003 + 0.007 * SmoothOscillator.value(at: t)
     u.stereoOffset = depthPath != nil ? abs(offset) : 0   // renderer: 0 without a depth map
+    applyOverrides(&u, globalOverrides)
+    applyOverrides(&u, over)
     return Scenario(name: name, uniforms: u, taps: buf, previous: tp > 0 ? previousTex : sourceTex)
 }
 
-var scenarios = times.map { makeScenario("t\(Int($0))", t: $0, tp: 0) }
-if withTransition { scenarios.append(makeScenario("trans113", t: 113, tp: 0.5)) }
+var scenarios: [Scenario]
+if let scenariosPath = scenariosPath {
+    guard let data = FileManager.default.contents(atPath: scenariosPath),
+          let list = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]], !list.isEmpty else {
+        fail("cannot read scenario list \(scenariosPath)")
+    }
+    scenarios = list.map { item in
+        guard let name = item["name"] as? String, let t = (item["time"] as? NSNumber)?.floatValue else {
+            fail("scenario needs \"name\" and \"time\"")
+        }
+        let tp = (item["tp"] as? NSNumber)?.floatValue ?? 0
+        let over = (item["set"] as? [String: NSNumber] ?? [:]).mapValues { $0.floatValue }
+        return makeScenario(name, t: t, tp: tp, over: over,
+                            intensity: (item["intensity"] as? NSNumber)?.floatValue ?? intensityArg,
+                            age: (item["age"] as? NSNumber)?.floatValue ?? imageAgeArg)
+    }
+} else {
+    scenarios = times.map { makeScenario("t\(Int($0))", t: $0, tp: 0) }
+    if withTransition { scenarios.append(makeScenario("trans113", t: 113, tp: 0.5)) }
+}
 
 // MARK: - Targets (DrawableQueue-like rotation per eye, each with its bgra8Unorm view)
 
@@ -550,14 +644,16 @@ func runFrames(_ count: Int, _ st: FrameState, bFirst: Bool = false) -> [FrameRe
 
 log("scenarios: \(scenarios.map { "\($0.name)(taps \(Int($0.uniforms.ghostTapCount)))" }.joined(separator: " ")), \(mono ? "mono 2 passes" : "MRT stereo"), inflight \(inflight), variants \(variants.map { $0.name }.joined(separator: "/"))")
 let timedState = FrameState(timedEyes)
-log("warm-up \(warmupFrames) frames ...")
-_ = runFrames(warmupFrames, timedState)
+if !renderOnly {
+    log("warm-up \(warmupFrames) frames ...")
+    _ = runFrames(warmupFrames, timedState)
+}
 
 var frames = [[Double]](repeating: [], count: variants.count)                       // [variant]
 var perScenario = [[[Double]]](repeating: [[Double]](repeating: [], count: scenarios.count), count: variants.count)
 var trialMedians = [[Double]](repeating: [], count: variants.count)
 var trialOut: [[String: Any]] = []
-for tr in 0..<trials {
+for tr in 0..<(renderOnly ? 0 : trials) {
     let start = Date()
     let res = runFrames(framesPerTrial, timedState, bFirst: tr % 2 == 1)
     let wall = Date().timeIntervalSince(start) * 1000 / Double(framesPerTrial * variants.count)
@@ -619,17 +715,25 @@ if let outDir = outDir {
             for _ in 0..<max(1, pngFrames) { final = encodeFrame(cb, sc, st, variant: v) }
             cb.commit()
             cb.waitUntilCompleted()
-            for (tag, eye) in [("L", final!.left), ("R", final!.right)] {
+            for (tag, eye) in leftOnly ? [("L", final!.left)] : [("L", final!.left), ("R", final!.right)] {
                 let bpr = size * 4
                 var buf = [UInt8](repeating: 0, count: bpr * size)
                 // Raw stored bytes are the shader's gamma values; interpret them as sRGB (what is shown).
                 eye.storage.getBytes(&buf, bytesPerRow: bpr, from: MTLRegionMake2D(0, 0, size, size), mipmapLevel: 0)
                 let ctx = CGContext(data: &buf, width: size, height: size, bitsPerComponent: 8, bytesPerRow: bpr,
                                     space: srgb, bitmapInfo: bgraInfo)!
-                writePNG(ctx.makeImage()!, "\(dir)/\(sc.name)-\(tag).png")
+                var image = ctx.makeImage()!
+                if let ps = pngSize {
+                    let small = CGContext(data: nil, width: ps.w, height: ps.h, bitsPerComponent: 8, bytesPerRow: ps.w * 4,
+                                          space: srgb, bitmapInfo: bgraInfo)!
+                    small.interpolationQuality = .high
+                    small.draw(image, in: CGRect(x: 0, y: 0, width: ps.w, height: ps.h))
+                    image = small.makeImage()!
+                }
+                writePNG(image, "\(dir)/\(sc.name)-\(tag).png")
             }
         }
-        log("wrote \(scenarios.count * 2) PNGs to \(dir)")
+        log("wrote \(scenarios.count * (leftOnly ? 1 : 2)) PNGs to \(dir)")
     }
 }
 
@@ -647,6 +751,19 @@ let gitHead: String = {
     p.waitUntilExit()
     return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 }()
+
+if renderOnly {
+    var sc: [String: Any] = [:]
+    for s in scenarios { sc[s.name] = uniformsDict(s.uniforms) }
+    let text = jsonString([
+        "label": label, "git_head": gitHead, "image": imagePath, "out": outDir ?? "",
+        "vibrance_factors": ["amount": Double(vibrance.amount), "dark": Double(vibrance.dark)],
+        "png_frames": pngFrames, "uniforms": sc,
+    ] as [String: Any])
+    print(text)
+    if let jsonPath = jsonPath { try? text.write(toFile: jsonPath, atomically: true, encoding: .utf8) }
+    exit(0)
+}
 
 var summary: [String: Any] = [
     "label": label,

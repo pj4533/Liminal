@@ -11,6 +11,7 @@ Each workstream has a decision log with the reasons (what, why, alternatives, nu
 | [orientation.md](orientation.md) | One image orientation convention (row 0 = top), removed two cancelling flips, 3:2 crop, 112.5 x 75 degree dome, test-card debug flags |
 | [av-coupling.md](av-coupling.md) | Music drives clamped visual uniforms and ghost bursts; each image sends a mood to the music; "Sync visuals to music" toggle (C1-C14, I1-I12) |
 | [ui.md](ui.md) | Control UI redesign on both platforms: shared components, four sections, 1240x800 visionOS window, no truncation, new sim tap coordinates |
+| [effects-balance.md](effects-balance.md) | Effects made images unrecognisable: measured per-effect damage, slow clarity cycle, fresh-image hold, strain budget (water first, radial masked off the centre), "Effect intensity" setting (E1-E14; implementation pending) |
 | [final-qa.md](final-qa.md) | End-to-end QA of the merged branch on a fresh visionOS install and macOS; sim-drag helper, public log values |
 
 ## Please review (top items per workstream)
