@@ -57,6 +57,10 @@ struct ControlsView: View {
             audioEngine.apply(settings)
             applyDebugLaunchOptions()
         }
+        // The space can also close without the button (Digital Crown, Home): keep the label in sync.
+        .onReceive(NotificationCenter.default.publisher(for: ImmersiveDomeView.didCloseNotification)) { _ in
+            isImmersed = false
+        }
         .onChange(of: settings.delay) { _, newValue in audioEngine.delay = newValue }
         .onChange(of: settings.reverb) { _, newValue in audioEngine.space = newValue }
         .onChange(of: settings.notes) { _, newValue in audioEngine.density = newValue }
@@ -232,6 +236,11 @@ extension ControlsView {
                         try? await Task.sleep(nanoseconds: 500_000_000)
                         dismissWindow()
                         LMLog.general.info("🧪 DEBUG: controls window closed (-LiminalHideControls)")
+                    }
+                    if let delay = DebugLaunchOptions.autoExitAfter {
+                        try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                        LMLog.general.info("🧪 DEBUG: auto-exit (-LiminalAutoExitAfter), same path as Exit Liminal")
+                        toggleImmersive()
                     }
                 } else {
                     LMLog.general.error("🧪 DEBUG: auto-open of the immersive space failed: \(String(describing: result), privacy: .public)")

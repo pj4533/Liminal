@@ -117,6 +117,10 @@ struct ImmersiveDomeView: View {
 
     // Shell geometry, fades and relief constants: ShellLayout (docs/plans/spatial.md).
 
+    /// Posted when the immersive space goes away by any route (button, Digital Crown, Home), so the
+    /// controls window's Enter/Exit label stays in sync.
+    static let didCloseNotification = Notification.Name("LiminalImmersiveSpaceDidClose")
+
     /// Shell centre until HeadPoseProvider places it: standing eye height.
     private static let shellCentre = ShellPlacement.fallbackCentre
 
@@ -145,6 +149,7 @@ struct ImmersiveDomeView: View {
             .onDisappear {
                 renderTask?.cancel()
                 headPose?.stop()
+                NotificationCenter.default.post(name: Self.didCloseNotification, object: nil)
                 LMLog.visual.info("🎬 SHELL: Render loop cancelled")
             }
 
@@ -221,6 +226,7 @@ struct ImmersiveDomeView: View {
             LMLog.visual.info("🎨 Waiting for first image...")
             var waitCount = 0
             while visualEngine.imageBuffer.loadCurrent() == nil {
+                if Task.isCancelled { return }
                 waitCount += 1
                 loadingState = "Waiting for image... \(waitCount)s"
                 if waitCount % 10 == 0 {
@@ -248,6 +254,14 @@ struct ImmersiveDomeView: View {
 
             loadingState = "Preparing 3D depth..."
             await generateAndApplyDepth(for: cgImage, logLabel: "initial")
+        }
+
+        // Left the space while setting up (the .task is cancelled on disappear, after onDisappear
+        // already ran): starting the loop now would leave it running with nothing to cancel it.
+        guard !Task.isCancelled else {
+            headPose?.stop()
+            LMLog.visual.info("🎬 SHELL: setup cancelled (space closed), render loop not started")
+            return
         }
 
         // Everything is ready — show the shell and start rendering

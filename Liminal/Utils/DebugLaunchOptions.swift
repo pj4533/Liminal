@@ -88,6 +88,8 @@ nonisolated enum DebugLaunchOptions {
     // Spatial shell harness (docs/plans/spatial.md). The simulator camera is fixed and looks forward,
     // so these move the scene instead of the head.
 
+    /// Negative values must be passed with a leading space (e.g. `-LiminalShellYaw " -90"`):
+    /// the argument domain reads a bare "-90" as the next key and drops the value.
     /// -LiminalShellYaw <deg> (visionOS): rotate the immersive scene so the content at this azimuth
     /// (positive = to the viewer's right) is straight ahead.
     static let shellYaw: Float = defaults.float(forKey: "LiminalShellYaw")
@@ -118,6 +120,14 @@ nonisolated enum DebugLaunchOptions {
     /// -LiminalHideControls YES (visionOS): close the controls window once the immersive space is open,
     /// so simulator screenshots show the scene unobstructed.
     static let hideControls: Bool = defaults.bool(forKey: "LiminalHideControls")
+
+    /// -LiminalAutoExitAfter <seconds> (visionOS): after the auto-opened immersive space has been up
+    /// this long, leave it through the same path as the Exit Liminal button (verifies Exit in the
+    /// simulator, where taps on the window do not work).
+    static let autoExitAfter: Double? = {
+        let v = defaults.double(forKey: "LiminalAutoExitAfter")
+        return v > 0 ? v : nil
+    }()
 
     /// -LiminalDepthImage <path> (visionOS): use this grey depth image (0 far, 1 near, made from the
     /// cover-cropped image) instead of the ML depth map. Depth Anything returns an all-zero map in the
@@ -176,6 +186,7 @@ nonisolated enum DebugLaunchOptions {
     static let shellDepth: Float? = nil
     static let shellTextureStereo = false
     static let hideControls = false
+    static let autoExitAfter: Double? = nil
     static let depthImagePath: String? = nil
     static let shellCycle: [(image: String, depth: String?)] = []
     static let shellCycleSeconds: Double = 12

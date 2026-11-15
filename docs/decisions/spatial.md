@@ -162,6 +162,26 @@ the transitions workstream; transitions only reach the shell through the effecte
 - perf-run (30 s after 15 s warm-up): 78.4 fps, 2.17 dropped per 5 s, GPU 0.128 ms, against the
   phase 0 baseline of 78.0 fps, 2.5 dropped, 0.138 ms. Render target unchanged at 2048x2048.
 
+## S17. Independent review fixes
+
+- Setup cancelled by leaving the space early (while waiting for the first image, ARKit entry pose or
+  the depth map) no longer starts the render loop afterwards. Before, `.task` cancellation ran after
+  `onDisappear`, so the loop started with nothing left to cancel it and kept rendering.
+- The controls window's Enter/Exit label follows the space when it closes another way (Digital
+  Crown, Home): `ImmersiveDomeView` posts `didCloseNotification` from `onDisappear`. Before, the
+  button stayed on "Exit Liminal" and the first tap did nothing visible.
+- `-LiminalAutoExitAfter <s>` (DEBUG) leaves the space through the Exit button's code path, so Exit is
+  verified in the simulator where window taps do not work.
+- Harness: negative yaw/pitch values need a leading space (`-LiminalShellYaw " -90"`); a bare "-90"
+  is read as the next key and the flag is silently ignored.
+- Review verdict, no change needed: stereo comes from real geometry (both eyes see the same relief
+  mesh), so left/right cannot be swapped; near (depth 1) maps to a smaller radius (measured: near
+  regions shift 73-74 px vs 55 px for the far background under a 0.3 m head offset, uniform with
+  Depth 0); image upright; fixed bounds contain the viewer, so the shell is never culled.
+- Known, not from this branch: each image change still costs one 65-90 ms render-loop frame
+  (cover-crop, colour stats and texture upload on the main actor); the main-branch baseline logs show
+  the same hitch.
+
 ## Device checklist (to fill in on Apple Vision Pro, visionOS 27.2.1)
 
 - Real ML depth relief (the simulator's Depth Anything output is all zeros)
