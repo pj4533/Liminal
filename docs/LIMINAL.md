@@ -75,7 +75,7 @@ scripts/, tools/ (ShaderBench, VibranceHarness), docs/
 **Image pipeline**:
 ```
 Style x subject x transformation x palette x composition prompt (PromptBuilder)
-  -> Gemini (gemini-3.1-flash-image, 3:2 at 2K; ModelRouter fallbacks)
+  -> Gemini (gemini-nano-banana-2.1, 3:2 at 2K; ModelRouter fallback; GenerationBudget cap)
   -> ImageStore (disk, with metadata) -> upscale if small -> centre-crop to 3:2
 ```
 There is no MorphPlayer or ImageCache any more: `ImageQueue` and `ImageStore` hold images, and the crossfade is done in the shader (`transitionProgress`), driven by `TimerDrivenCrossfade` on macOS and `CGImageTransitionState` on visionOS.
@@ -118,7 +118,7 @@ Uses JuceyTV pattern for Xcode Cloud compatibility:
 - SoundpipeAudioKit - Oscillators
 
 **APIs**:
-- Gemini API (gemini-3.1-flash-image, fallbacks in `ImageGenerationConfig`) - Image generation
+- Gemini API (gemini-nano-banana-2.1, fallback in `ImageGenerationConfig`) - Image generation
 
 **Frameworks**:
 - Metal / MetalKit - GPU effects rendering

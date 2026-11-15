@@ -47,11 +47,12 @@ struct ModelRouterTests {
         var router = ModelRouter(config: config)
         var rng = SeededRNG(seed: 1)
         let spec = sampleSpec()
-        router.recordFailure(model: config.primaryModel, error: .http(status: 429, message: "quota"), now: t0)
-        #expect(router.model(for: spec, now: t0, using: &rng) == config.fallbackModels[0])
-        router.recordFailure(model: config.fallbackModels[0], error: .http(status: 503, message: ""), now: t0)
-        #expect(router.model(for: spec, now: t0, using: &rng) == config.fallbackModels[1])
-        router.recordFailure(model: config.fallbackModels[1], error: .network("offline"), now: t0)
+        let codes: [GeminiError] = [.http(status: 429, message: "quota"), .http(status: 503, message: ""), .network("offline")]
+        // Walk the whole chain, whatever its length: each failure moves to the next model.
+        for (i, model) in config.chain.enumerated() {
+            #expect(router.model(for: spec, now: t0, using: &rng) == model)
+            router.recordFailure(model: model, error: codes[i % codes.count], now: t0)
+        }
         #expect(router.model(for: spec, now: t0, using: &rng) == nil)
         #expect(router.allCoolingDown(now: t0))
         #expect(router.delayBeforeNextAttempt(now: t0) == ModelRouter.baseCooldown)
@@ -90,6 +91,10 @@ struct ModelRouterTests {
     }
 
     @Test func strongSurrealSometimesUsesSurrealModel() {
+        // The split is off in the shipping config (D35); the mechanism is kept and tested here.
+        var config = self.config
+        config.surrealModel = "test-surreal-model"
+        config.surrealModelShare = 0.5
         var router = ModelRouter(config: config)
         var rng = SeededRNG(seed: 9)
         let spec = sampleSpec(strong: true)

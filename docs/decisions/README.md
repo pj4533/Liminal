@@ -5,7 +5,7 @@ Each workstream has a decision log with the reasons (what, why, alternatives, nu
 | Doc | Summary |
 |-----|---------|
 | [performance.md](performance.md) | visionOS render path cut from 3 command buffers to one MRT stereo pass, direct-to-drawable, CPU dome breathing, shader ALU savings; 2048x2048 kept |
-| [images.md](images.md) | New Gemini image pipeline: gemini-3.1-flash-image at 3:2 2K, style x subject x transformation x palette prompts, Clear All Images, cache epoch bump |
+| [images.md](images.md) | New Gemini image pipeline: gemini-nano-banana-2.1 (latest model, D35) at 3:2 2K, spending cap (D34), style x subject x transformation x palette prompts, Clear All Images, cache epoch bump |
 | [music.md](music.md) | Three-voice engine replaced by an eight-layer generative engine with scenes, drifting key and mode, four styles, off-main conductor; then reworked to be calm and relaxing after listening feedback (D91-D106) |
 | [vibrance.md](vibrance.md) | Color-loss fix: correct visionOS sRGB encoding, real feedback on visionOS, chroma-preserving blends, final vibrance stage, per-image factor |
 | [orientation.md](orientation.md) | One image orientation convention (row 0 = top), removed two cancelling flips, 3:2 crop, 112.5 x 75 degree dome, test-card debug flags |

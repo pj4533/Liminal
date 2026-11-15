@@ -17,7 +17,7 @@ Liminal creates endless, evolving ambient soundscapes synchronized with AI-gener
 ## Features
 
 - **Generative Audio**: eight-layer synthesized ambient engine (drone, pad, lead, keys, drips, air, grains, pluck) with evolving scenes, key drift, rare events and four styles (Drift, Glass, Deep, Garden); no samples. See `docs/decisions/music.md`
-- **AI Visuals**: Gemini image generation (gemini-3.1-flash-image, 3:2 at 2K) driven by a style/subject/transformation/palette prompt system for varied, photoreal-but-surreal imagery. See `docs/decisions/images.md`
+- **AI Visuals**: Gemini image generation (gemini-nano-banana-2.1, the latest model, 3:2 at 2K; hourly and daily spending cap) driven by a style/subject/transformation/palette prompt system for varied, photoreal-but-surreal imagery. See `docs/decisions/images.md`
 - **GPU Effects**: one Metal fragment shader with Ken Burns motion, turbulence distortion, chromatic aberration, crossfade, hue shifts, ghost taps, stochastic bloom, feedback warping and a final vibrance stage that keeps colors vivid
 - **Audio-visual coupling**: the music drives the visuals (note glow, scene intensity, chord-tied hue, ghost-tap burst on scene change) and each new image sends a mood (brightness, warmth, saturation, energy, mood words) back to the music. A "Sync visuals to music" switch turns the music-to-visuals direction off. See `docs/decisions/av-coupling.md`
 - **macOS and visionOS**: a window with a control panel on macOS; on visionOS a control window plus an immersive curved dome (112.5 x 75 degrees, 2048x2048 per eye, stereo with ML depth) and a Spatial Diorama
@@ -93,7 +93,7 @@ Shader pipeline order (`Liminal/Shaders/EffectsRenderer.metal`): Ken Burns, dist
 | **Sync visuals to music** | Music drives hue, motion, bloom and ghost bursts (on by default) |
 | **Debug effect** | Debug visualization of the effect (macOS panel) |
 | **Cache only** | Skip generation and recycle cached images |
-| **New images per hour / day** | Spending cap on Gemini image generation (default 20 / 100); past it, cached images are shown |
+| **New images per hour / day** | Spending cap on Gemini image generation (default 20 / 50); past it, cached images are shown |
 | **Clear All Images** | Wipes every cached image after confirmation and restarts generation |
 | **Reset All Settings** | Restores defaults |
 

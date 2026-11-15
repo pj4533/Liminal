@@ -23,7 +23,7 @@ nonisolated final class GenerationBudget: @unchecked Sendable {
     }
 
     static let defaultPerHour = 20
-    static let defaultPerDay = 100
+    static let defaultPerDay = 50
 
     enum Verdict: Equatable {
         case allowed

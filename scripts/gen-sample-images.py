@@ -2,7 +2,7 @@
 """Generate images for a prompt file and lay them out on a labelled contact sheet.
 
     scripts/gen-sample-images.py --prompts prompts.txt --out DIR
-        [--model gemini-3.1-flash-image] [--aspect 3:2] [--size 1K]
+        [--model gemini-nano-banana-2.1] [--aspect 3:2] [--size 1K]
         [--limit N] [--concurrency 3] [--cols 4] [--thumb-width 640] [--retries 2]
 
 Input is plain text (one prompt per line, '#' comments) or the JSONL written by
@@ -171,7 +171,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--prompts", required=True)
     ap.add_argument("--out", required=True)
-    ap.add_argument("--model", default="gemini-3.1-flash-image")
+    ap.add_argument("--model", default="gemini-nano-banana-2.1")
     ap.add_argument("--strong-model", default=None,
                     help="model for prompts tagged needsStrongSurreal (default: same as --model)")
     ap.add_argument("--aspect", default="3:2")

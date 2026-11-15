@@ -206,7 +206,7 @@ nonisolated extension PromptLibrary {
         ),
         Style(
             id: "cosmicDream", family: .abstract, weight: 6,
-            lead: "Photorealistic wide view of an impossible place",
+            lead: "Real landscape photograph of an impossible place",
             camera: "24mm lens, deep focus",
             lighting: "Luminous atmospheric light with depth in layers",
             texture: "Real materials, wet stone, mist and fine detail into the distance",
@@ -229,7 +229,7 @@ nonisolated extension PromptLibrary {
     ]
 
     /// Fixed closing sentences. This exact wording tested clean (no borders, no text).
-    static let tail = "One large focal subject filling at least a third of the picture with a strong readable silhouette, crisp edges and rich tactile surface texture, uncluttered surroundings. Full-bleed photograph: the scene fills the entire image edge to edge. Physically plausible materials and light, as if really photographed. The image contains only the scene itself: no lettering, no logos, no people."
+    static let tail = "One large focal subject filling at least a third of the picture, crisp readable silhouette, uncluttered surroundings. Full-bleed photograph: the scene fills the entire image edge to edge. Plausible materials and light, a genuine camera photograph: true-to-life textures, natural imperfections, real depth of field, subtle grain. No lettering, no logos, no people anywhere."
 
     static let fullBleedSentence = "Full-bleed photograph: the scene fills the entire image edge to edge."
 
