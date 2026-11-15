@@ -131,6 +131,19 @@ nonisolated enum ShellLayout {
         1 / (1 / baseRadius + k * q * inverseSpan)
     }
 
+    /// How much the relief melts toward the smooth shell in a wild stretch (EffectLook drive = 1)
+    /// and at the middle of a crossfade (decision S6).
+    static let reliefDriveMelt: Float = 0.6
+    static let reliefTransitionDip: Float = 0.5
+
+    /// Relief strength k for the frame: the Depth setting, scaled down while the effects are wild
+    /// (the texture is warped away from the undistorted image the relief came from) and dipping
+    /// mid-transition, so the scene melts and re-forms around image changes.
+    static func reliefStrength(depth: Float, drive: Float, transitionProgress p: Float) -> Float {
+        let d = min(max(drive, 0), 1), t = min(max(p, 0), 1)
+        return min(max(depth, 0), 1) * (1 - reliefDriveMelt * d) * (1 - reliefTransitionDip * sin(.pi * t))
+    }
+
     /// Vertical fade (brightness) at band coordinate b. Mirrors the material graph.
     static func verticalFade(band b: Float) -> Float {
         1 - smoothstep(bandFadeStart, 1, b)

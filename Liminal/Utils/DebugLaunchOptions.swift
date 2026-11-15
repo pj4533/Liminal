@@ -119,11 +119,31 @@ nonisolated enum DebugLaunchOptions {
     /// so simulator screenshots show the scene unobstructed.
     static let hideControls: Bool = defaults.bool(forKey: "LiminalHideControls")
 
+    /// -LiminalDepthImage <path> (visionOS): use this grey depth image (0 far, 1 near, made from the
+    /// cover-cropped image) instead of the ML depth map. Depth Anything returns an all-zero map in the
+    /// visionOS simulator, so relief can only be inspected there with a depth map made on the Mac.
+    static let depthImagePath: String? = defaults.string(forKey: "LiminalDepthImage")
+
+    /// -LiminalShellCycle "img1.jpg|depth1.png,img2.jpg|depth2.png" (visionOS): every
+    /// -LiminalShellCycleSeconds (default 12) show the next image of this list (depth map optional),
+    /// so image changes can be recorded with fixed images and Mac-made depth maps.
+    static let shellCycle: [(image: String, depth: String?)] = {
+        guard let s = defaults.string(forKey: "LiminalShellCycle") else { return [] }
+        return s.split(separator: ",").map { item in
+            let parts = item.split(separator: "|").map(String.init)
+            return (parts[0], parts.count > 1 ? parts[1] : nil)
+        }
+    }()
+    static let shellCycleSeconds: Double = {
+        let v = defaults.double(forKey: "LiminalShellCycleSeconds")
+        return v > 0 ? v : 12
+    }()
+
     /// True when any shell harness flag is set (they also block generation).
     static var anyShellFlag: Bool {
         defaults.object(forKey: "LiminalShellYaw") != nil || defaults.object(forKey: "LiminalShellPitch") != nil
             || defaults.object(forKey: "LiminalShellHeadOffset") != nil || shellDepth != nil || shellTextureStereo
-            || hideControls
+            || hideControls || depthImagePath != nil || !shellCycle.isEmpty
     }
 
     static var blocksImageGeneration: Bool {
@@ -156,6 +176,9 @@ nonisolated enum DebugLaunchOptions {
     static let shellDepth: Float? = nil
     static let shellTextureStereo = false
     static let hideControls = false
+    static let depthImagePath: String? = nil
+    static let shellCycle: [(image: String, depth: String?)] = []
+    static let shellCycleSeconds: Double = 12
 #endif
 
     private static let logOnce: Void = {
@@ -182,6 +205,7 @@ nonisolated enum DebugLaunchOptions {
             LMLog.general.info("🧪 DEBUG FLAG applied: LiminalShellHeadOffset=\(shellHeadOffset.x, format: .fixed(precision: 3)),\(shellHeadOffset.y, format: .fixed(precision: 3)),\(shellHeadOffset.z, format: .fixed(precision: 3))")
         }
         if let d = shellDepth { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalShellDepth=\(d, format: .fixed(precision: 2))") }
+        if let p = depthImagePath { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalDepthImage=\(p, privacy: .public) (replaces the ML depth map)") }
         if shellTextureStereo { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalShellTextureStereo=YES (per-eye texture parallax, hero tile)") }
         if syncStrength != 1 { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalSyncStrength=\(syncStrength, format: .fixed(precision: 2))") }
 #endif

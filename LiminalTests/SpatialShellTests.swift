@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 import simd
+import CoreGraphics
 @testable import Liminal
 
 /// ShellLayout (docs/plans/spatial.md section 2): grid, UVs, seams, fades, relief radius.
@@ -113,5 +114,131 @@ struct SpatialShellLayoutTests {
         let up = simd_normalize(SIMD3<Float>(0, 1, -1))
         let u = ShellLayout.viewRotation(yawDeg: 0, pitchDeg: 45).act(up)
         #expect(simd_distance(u, SIMD3<Float>(0, 0, -1)) < 1e-4)
+    }
+}
+
+/// DepthReliefField + ReliefBlend (docs/plans/spatial.md section 3).
+struct DepthReliefFieldTests {
+
+    private let cols = DepthReliefField.columns, rows = DepthReliefField.rows
+
+    /// Depth image: near (1) at the top-left, far (0) at the bottom-right, with a sharp near block.
+    private func gradient(width: Int = 64, height: Int = 48, block: Bool = true) -> [Float] {
+        var d = [Float](repeating: 0, count: width * height)
+        for y in 0..<height {
+            for x in 0..<width {
+                var v = 1 - (Float(x) / Float(width - 1) + Float(y) / Float(height - 1)) / 2
+                if block, x > width / 2, x < width * 3 / 4, y > height / 3, y < height * 2 / 3 { v = 1 }
+                d[y * width + x] = v
+            }
+        }
+        return d
+    }
+
+    private func qAt(_ f: DepthReliefField, u: Float, v: Float) -> Float {
+        let c = Int((u * Float(ShellLayout.columns)).rounded())
+        let r = ShellLayout.bandRows + Int((v * Float(ShellLayout.heroRows)).rounded())
+        return f.q[r * cols + c]
+    }
+
+    @Test func constantDepthGivesSmoothShell() {
+        let f = DepthReliefField.build(depth: [Float](repeating: 0.37, count: 64 * 48), width: 64, height: 48)
+        #expect(f.q.count == ShellLayout.vertexCount)
+        #expect(f.q.allSatisfy { $0 == 0 })
+    }
+
+    @Test func nearIsInFrontAndOrientationMatchesImage() {
+        let f = DepthReliefField.build(depth: gradient(block: false), width: 64, height: 48)
+        // Image top-left (u 0, v 1) is near -> positive q (smaller radius); bottom-right far.
+        #expect(qAt(f, u: 0.05, v: 0.95) > 0.2)
+        #expect(qAt(f, u: 0.95, v: 0.05) < -0.2)
+        #expect(ShellLayout.radius(q: qAt(f, u: 0.05, v: 0.95), k: 1) < ShellLayout.baseRadius)
+        // Median-centred: roughly half in front.
+        let hero = (ShellLayout.bandRows...(ShellLayout.bandRows + ShellLayout.heroRows)).flatMap { r in
+            (0..<cols).map { f.q[r * cols + $0] }
+        }
+        let front = Float(hero.filter { $0 > 0 }.count) / Float(hero.count)
+        #expect(front > 0.35 && front < 0.65)
+    }
+
+    @Test func radiusStaysInBoundsForNoisyInput() {
+        var rng = SystemRandomNumberGenerator()
+        let d = (0..<(80 * 60)).map { _ in Float.random(in: 0...1, using: &rng) }
+        let f = DepthReliefField.build(depth: d, width: 80, height: 60)
+        for q in f.q {
+            #expect(q >= -0.5 && q <= 0.5)
+            let r = ShellLayout.radius(q: q, k: 1)
+            #expect(r >= 1.58 && r <= 5.86)
+        }
+    }
+
+    @Test func slopeLimitHolds() {
+        let f = DepthReliefField.build(depth: gradient(), width: 64, height: 48)
+        let step = DepthReliefField.maxNeighbourStep(f.q, cols: cols, rows: rows)
+        #expect(step <= DepthReliefField.qSlopeLimit + 1e-5)
+        #expect(f.range.max > 0.1)  // the near block survives the limit
+    }
+
+    @Test func slopeLimitLeavesSmoothFieldsAlone() {
+        let smooth = (0..<(10 * 8)).map { Float($0 % 10) * 0.01 }
+        #expect(DepthReliefField.slopeLimited(smooth, cols: 10, rows: 8, limit: 0.05) == smooth)
+        var spike = [Float](repeating: 0, count: 100)
+        spike[55] = 1
+        let limited = DepthReliefField.slopeLimited(spike, cols: 10, rows: 10, limit: 0.1)
+        #expect(DepthReliefField.maxNeighbourStep(limited, cols: 10, rows: 10) <= 0.1 + 1e-6)
+        #expect(limited.allSatisfy { $0 >= 0 && $0 <= 1 })
+    }
+
+    @Test func bandsTaperToZeroAtTheOuterEdge() {
+        let f = DepthReliefField.build(depth: gradient(), width: 64, height: 48)
+        for c in 0..<cols {
+            #expect(abs(f.q[c]) < 0.02)
+            #expect(abs(f.q[(rows - 1) * cols + c]) < 0.02)
+        }
+    }
+
+    @Test func percentilesHandleFlatAndTinyInputs() {
+        #expect(DepthReliefField.percentile([], 0.5) == 0)
+        #expect(DepthReliefField.percentile([3], 0.98) == 3)
+        #expect(DepthReliefField.percentile([0, 1], 0.5) == 0.5)
+        // Mostly flat with a few outliers: outliers clipped, not a crash or NaN.
+        var d = [Float](repeating: 0.5, count: 64 * 48)
+        d[10] = 1; d[20] = 0
+        let f = DepthReliefField.build(depth: d, width: 64, height: 48)
+        #expect(f.q.allSatisfy { $0.isFinite })
+    }
+
+    @Test func buildFromCGImage() throws {
+        let w = 64, h = 48
+        let bytes = gradient(width: w, height: h).map { UInt8($0 * 255) }
+        let provider = try #require(CGDataProvider(data: Data(bytes) as CFData))
+        let image = try #require(CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 8, bytesPerRow: w,
+                                         space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGBitmapInfo(rawValue: 0),
+                                         provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent))
+        let f = try #require(DepthReliefField.build(depthImage: image))
+        #expect(qAt(f, u: 0.05, v: 0.95) > 0.2)
+    }
+
+    @Test func reliefStrength() {
+        #expect(ShellLayout.reliefStrength(depth: 1, drive: 0, transitionProgress: 0) == 1)
+        #expect(abs(ShellLayout.reliefStrength(depth: 1, drive: 1, transitionProgress: 0) - 0.4) < 1e-6)
+        #expect(abs(ShellLayout.reliefStrength(depth: 0.6, drive: 0, transitionProgress: 0.5) - 0.3) < 1e-6)
+        #expect(ShellLayout.reliefStrength(depth: 0, drive: 0.3, transitionProgress: 0.2) == 0)
+    }
+
+    @Test func blendHoldsOldFieldUntilNewDepthThenEases() {
+        var b = ReliefBlend()
+        b.imageChanged(generation: 1)
+        b.depthArrived([1], generation: 1, now: 10)
+        #expect(b.weight(transitionProgress: nil, now: 10) == 0)
+        #expect(b.weight(transitionProgress: nil, now: 10.7) == 1)
+        b.imageChanged(generation: 2)
+        #expect(b.previous == [1] && b.current == nil)
+        #expect(b.weight(transitionProgress: 0.5, now: 11) == 0)  // new depth late: hold old field
+        b.depthArrived([0], generation: 1, now: 11)               // stale generation ignored
+        #expect(b.current == nil)
+        b.depthArrived([2], generation: 2, now: 11)
+        #expect(b.weight(transitionProgress: 0.5, now: 12) == 0.5)
+        #expect(b.weight(transitionProgress: nil, now: 12) == 1)
     }
 }

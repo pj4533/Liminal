@@ -90,6 +90,32 @@ equivalent (304 for -56): the argument domain reads a value that starts with `-`
 `-LiminalHideControls YES` closes the controls window after the space opens so screenshots are
 unobstructed.
 
+## S11. Relief: exact slope limit, late depth held, and the k coupling landed with phase 2
+
+- The slope limit is the mean of the lower and upper Lipschitz envelopes (two-pass L1 chamfer),
+  not an iterative relaxation: it is exact (every neighbour step <= 0.035 1/m / 0.458 = 0.076 in q),
+  deterministic, stays inside the input range and leaves already-smooth fields untouched.
+- The depth map is generated from the cover-cropped image, so it already spans the image; no
+  second crop is applied.
+- `ReliefBlend` keeps previous/current fields by image generation. The new field morphs in with
+  the crossfade's progress; a late field is held at the old one and eases in over 0.6 s; a field
+  for a superseded generation is dropped.
+- `k = depth x (1 - 0.6 drive) x (1 - 0.5 sin(pi p))` (planned for phase 3) is already in, because it
+  is one pure function of public outputs (`EffectLook.drive`, transition progress) and it is what
+  hides the relief/warp mismatch. The Depth setting itself is still the DEBUG flag / default 0.6.
+- Measured in the simulator, Debug: relief field build 25 to 120 ms off the main actor (Release
+  will be well under the 5 ms target only if optimised; it runs once per image off the render loop
+  either way); per-frame vertex write with relief 0.3 to 0.5 ms.
+
+## S12. The simulator's ML depth map is all zeros; relief is checked with Mac-made depth
+
+Depth Anything in the visionOS simulator returns an all-zero map (logged: min = max = 0), so the
+relief field there is flat and only the device exercises real ML depth. For simulator checks,
+`-LiminalDepthImage <png>` and `-LiminalShellCycle "img|depth,..."` feed depth maps produced on the
+Mac with the same model (same cover crop, 518x392, min-max normalised). With depth 1 and a 15 cm
+head offset the near cliff of fixture r2-01 shifts 40 px and the far sky 29 to 32 px, against a
+uniform 33 to 35 px with depth 0.
+
 ## Device checklist (to fill in)
 
 - Stereo comfort at Depth 0.6 and 1.0

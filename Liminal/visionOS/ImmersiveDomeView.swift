@@ -21,6 +21,7 @@
 import SwiftUI
 import RealityKit
 import OSLog
+import ImageIO
 
 // MARK: - Simple CGImage Transition State (Value Type, No @Published)
 
@@ -96,6 +97,8 @@ struct ImmersiveDomeView: View {
 
     // Spatial shell tile mesh (LowLevelMesh, CPU-written relief + breathing), shared by all tiles
     @State private var shellMesh: SpatialShellMesh?
+    /// Depth relief fields (previous / current image) for the shell.
+    @State private var relief = ReliefBlend()
 
     // Depth map generation
     @State private var depthGenerator: DepthMapGenerator?
@@ -231,6 +234,7 @@ struct ImmersiveDomeView: View {
             let cgImage = ImageFraming.coverCrop(rawImage)
             transitionState.setInitialImage(cgImage)
             transitionState.lastGeneration = initial.generation
+            relief.imageChanged(generation: initial.generation)
             LMLog.visual.info("🎬 Initial image set directly from CGImage (gen \(transitionState.lastGeneration))")
             // Visuals -> music: first image sets the mood, no imageDidChange (no crossfade).
             postVisualMood(metadata: initial.metadata, image: cgImage, imageChanged: false)
@@ -320,6 +324,10 @@ struct ImmersiveDomeView: View {
             var lastFrameTime = Date()
             var totalRenderTime: Double = 0
             var totalMeshTime: Double = 0
+            var lastReliefK: Float = 0
+            var lastCycleSwitch = Date()
+            var cycleIndex = 0
+            var lastReliefW: Float = 0
             var maxRenderTime: Double = 0
             var droppedFrames = 0
             var lastStatsTime = Date()
@@ -377,13 +385,22 @@ struct ImmersiveDomeView: View {
 
                 // Check for new images from AtomicImageBuffer (thread-safe)
                 // One atomic read of image, metadata and generation (C10).
+                // DEBUG -LiminalShellCycle: switch to the next fixture image every N seconds.
+                if !Self.debugCycle.isEmpty, frameStartTime.timeIntervalSince(lastCycleSwitch) >= DebugLaunchOptions.shellCycleSeconds {
+                    lastCycleSwitch = frameStartTime
+                    cycleIndex = (cycleIndex + 1) % Self.debugCycle.count
+                    visualEngine.imageBuffer.storeCurrent(Self.debugCycle[cycleIndex].image, metadata: nil)
+                    LMLog.visual.info("🧪 DEBUG: shell cycle -> image \(cycleIndex)")
+                }
                 let (rawImage, metadata, generation) = visualEngine.imageBuffer.loadCurrentWithMetadata()
                 if let rawImage = rawImage, generation != transitionState.lastGeneration {
                     // Centre-crop to the dome's 3:2 once; colour AND depth use the framed image.
                     let framedImage = ImageFraming.coverCrop(rawImage)
+                    let depthOverride = Self.debugDepth(for: rawImage)
                     let wasFirst = transitionState.currentImage == nil
                     transitionState.lastGeneration = generation
                     transitionState.transitionTo(framedImage)
+                    relief.imageChanged(generation: generation)
                     if !wasFirst { transitionStartEffectTime = effectTime }
                     LMLog.visual.info("🎬 New image detected (gen \(generation)), triggering transition")
                     // Visuals -> music at the crossfade start.
@@ -394,11 +411,14 @@ struct ImmersiveDomeView: View {
                         let imageBuffer = visualEngine.imageBuffer
                         Task.detached {
                             do {
-                                let depth = try await depthGen.generateDepth(from: framedImage)
+                                let depth: CGImage
+                                if let d = depthOverride { depth = d } else { depth = try await depthGen.generateDepth(from: framedImage) }
+                                let field = Self.buildRelief(depth, generation: generation)
                                 await MainActor.run {
                                     imageBuffer.storeDepth(depth)
                                     self.effectsRenderer?.updateDepthTexture(from: depth)
                                     self.lastDepthGeneration = imageBuffer.loadDepthWithGeneration().generation
+                                    self.relief.depthArrived(field.q, generation: generation, now: Date().timeIntervalSince1970)
                                 }
                             } catch {
                                 await MainActor.run {
@@ -479,10 +499,18 @@ struct ImmersiveDomeView: View {
                     LMLog.visual.info("\(line, privacy: .public)")
                 }
 
-                // Shell vertices: relief + breathing (CPU, ~14k vertices)
+                // Shell vertices: relief + breathing (vDSP, ~11k vertices). Relief strength follows the
+                // Depth amount, the clarity cycle and the transition (ShellLayout.reliefStrength).
                 let meshStart = Date()
-                shellMesh?.update(previous: nil, current: nil, weight: 1, k: 0, time: effectTime)
+                let reliefK = ShellLayout.reliefStrength(
+                    depth: DebugLaunchOptions.shellDepth ?? ShellLayout.defaultDepth,
+                    drive: look.drive(time: effectTime), transitionProgress: transitionProgress)
+                let reliefW = relief.weight(transitionProgress: transitionState.isTransitioning ? transitionState.transitionProgress : nil,
+                                            now: frameStartTime.timeIntervalSince1970)
+                shellMesh?.update(previous: relief.previous, current: relief.current, weight: reliefW, k: reliefK, time: effectTime)
                 totalMeshTime += Date().timeIntervalSince(meshStart) * 1000
+                lastReliefK = reliefK
+                lastReliefW = reliefW
 
                 // Render frame: one mono effects pass shown on every tile (decision S4); the per-eye
                 // stereo path only for the DEBUG texture-stereo A/B.
@@ -527,7 +555,7 @@ struct ImmersiveDomeView: View {
 
                     let perfLine = "📊 visionOS PERF: fps=\(String(format: "%.1f", actualFPS)) (\(String(format: "%.0f", fpsPercent))% of 60) | render avg=\(String(format: "%.1f", avgRenderTime))ms max=\(String(format: "%.1f", maxRenderTime))ms | dropped=\(droppedFrames) | transition=\(String(format: "%.0f", transitionState.transitionProgress * 100))% | interval p95=\(String(format: "%.2f", intervalP95))ms | \(gpuFragment)"
                     LMLog.visual.info("\(perfLine, privacy: .public)")
-                    LMLog.visual.info("🔮 3D STATUS: depth=\(hasDepth) textureStereo=\(hasStereo) gen=\(transitionState.lastGeneration) mesh avg=\(String(format: "%.3f", totalMeshTime / Double(max(frameCount, 1))), privacy: .public)ms")
+                    LMLog.visual.info("🔮 3D STATUS: depth=\(hasDepth) textureStereo=\(hasStereo) gen=\(transitionState.lastGeneration) mesh avg=\(String(format: "%.3f", totalMeshTime / Double(max(frameCount, 1))), privacy: .public)ms relief k=\(String(format: "%.3f", lastReliefK), privacy: .public) w=\(String(format: "%.2f", lastReliefW), privacy: .public) fields=\(relief.previous != nil ? 1 : 0)+\(relief.current != nil ? 1 : 0)")
 
                     frameCount = 0
                     totalRenderTime = 0
@@ -601,6 +629,7 @@ struct ImmersiveDomeView: View {
             effectsRenderer?.updateDepthTexture(from: flat)
             lastDepthGeneration = visualEngine.imageBuffer.loadDepthWithGeneration().generation
             LMLog.visual.info("🗺️ \(logLabel): FLAT debug depth uploaded (\(flat.width)x\(flat.height))")
+            relief.depthArrived(DepthReliefField.flat.q, generation: transitionState.lastGeneration, now: Date().timeIntervalSince1970)
             return
         }
         guard let generator = await ensureDepthGeneratorReady() else {
@@ -609,14 +638,52 @@ struct ImmersiveDomeView: View {
         }
 
         do {
-            let depth = try await generator.generateDepth(from: image)
+            let depth: CGImage
+            if let d = Self.debugDepthImage { depth = d } else { depth = try await generator.generateDepth(from: image) }
             visualEngine.imageBuffer.storeDepth(depth)
             effectsRenderer?.updateDepthTexture(from: depth)
             lastDepthGeneration = visualEngine.imageBuffer.loadDepthWithGeneration().generation
             LMLog.visual.info("🗺️ \(logLabel): Depth generated + uploaded (\(depth.width)x\(depth.height))")
+            let generation = transitionState.lastGeneration
+            let field = await Task.detached(priority: .userInitiated) { Self.buildRelief(depth, generation: generation) }.value
+            relief.depthArrived(field.q, generation: generation, now: Date().timeIntervalSince1970)
         } catch {
             LMLog.visual.error("🗺️ \(logLabel): Depth generation failed: \(error.localizedDescription)")
         }
+    }
+
+    /// DEBUG -LiminalDepthImage: depth map loaded from a file (nil when the flag is not set).
+    nonisolated private static let debugDepthImage: CGImage? = {
+        guard let path = DebugLaunchOptions.depthImagePath,
+              let src = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil) else { return nil }
+        return CGImageSourceCreateImageAtIndex(src, 0, nil)
+    }()
+
+    /// DEBUG -LiminalShellCycle: (image, depth) pairs loaded from files.
+    nonisolated private static let debugCycle: [(image: CGImage, depth: CGImage?)] = {
+        func load(_ path: String) -> CGImage? {
+            guard let src = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil) else { return nil }
+            return CGImageSourceCreateImageAtIndex(src, 0, nil)
+        }
+        return DebugLaunchOptions.shellCycle.compactMap { item in
+            load(item.image).map { ($0, item.depth.flatMap(load)) }
+        }
+    }()
+
+    /// DEBUG depth override for a source image: its -LiminalShellCycle depth map, else -LiminalDepthImage.
+    nonisolated private static func debugDepth(for image: CGImage) -> CGImage? {
+        debugCycle.first { $0.image === image }?.depth ?? debugDepthImage
+    }
+
+    /// Relief field for a depth map (off the main actor; a few ms). Logs range, slope and time.
+    nonisolated private static func buildRelief(_ depth: CGImage, generation: UInt64) -> DepthReliefField {
+        let start = Date()
+        let field = DepthReliefField.build(depthImage: depth) ?? .flat
+        let ms = Date().timeIntervalSince(start) * 1000
+        let r = field.range
+        let step = DepthReliefField.maxNeighbourStep(field.q, cols: DepthReliefField.columns, rows: DepthReliefField.rows)
+        LMLog.visual.info("🏔️ Relief field gen=\(generation) q=[\(String(format: "%.3f", r.min), privacy: .public), \(String(format: "%.3f", r.max), privacy: .public)] maxStep=\(String(format: "%.4f", step), privacy: .public) built in \(String(format: "%.1f", ms), privacy: .public)ms")
+        return field
     }
 
     /// Constant 0.5 depth map (DEBUG -LiminalForceStereoFlatDepth), same size as DepthAnything output.
