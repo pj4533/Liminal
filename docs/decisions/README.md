@@ -13,6 +13,7 @@ Each workstream has a decision log with the reasons (what, why, alternatives, nu
 | [ui.md](ui.md) | Control UI redesign on both platforms: shared components, four sections, 1240x800 visionOS window, no truncation, new sim tap coordinates |
 | [effects-balance.md](effects-balance.md) | Effects made images unrecognisable: measured per-effect damage, slow clarity cycle, fresh-image hold, strain budget (water first, radial masked off the centre), "Effect intensity" setting (E1-E22; implemented: EffectLook, slider on both platforms; round-1 tuning E23-E26: more colour, rainbow cap; round 2 E27-E30: zoom eases out in wild stretches, more fringing and trails, calmer hue blend at full; final E31-E32: default 0.5 passes blind judging with 100 % recognised and 98.3 % orientation, verified in the visionOS 27.2 Simulator) |
 | [final-qa.md](final-qa.md) | End-to-end QA of the merged branch on a fresh visionOS install and macOS; sim-drag helper, public log values |
+| [spatial.md](spatial.md) | One unified immersive mode: mirror-wrap depth-relief shell, mono effects texture on real 3D geometry; plan in docs/plans/spatial.md |
 
 ## Please review (top items per workstream)
 
