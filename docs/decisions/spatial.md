@@ -193,3 +193,33 @@ the transitions workstream; transitions only reach the shell through the effecte
 - Progressive versus full immersion
 - Texture-stereo A/B (`-LiminalShellTextureStereo YES`); if the geometry alone reads well, remove
   `StereoMaterialBuilder` and the stereo render path
+
+## S18. Summary: what was built, what is device-only, open risks
+
+**Built.** The Dome and Spatial Diorama modes are one immersive space (one Enter/Exit Liminal button,
+one Depth slider). It is a wrap-around shell of three tiles covering 337.5 x 120 degrees (image
+straight ahead as an undistorted 3:2 at 112.5 x 75 degrees, mirrored continuations to the sides,
+above and below, a 22.5 degree gap behind that fades to black). All tiles show the same mono
+2048x2048 effects texture from `OffscreenEffectsRenderer`, so every tuned effect and every
+transition appears everywhere with no shader change. Depth comes from moving shell vertices by a
+relief field built from the ML depth map (near = smaller radius), so both eyes see real geometry:
+true stereo and head-motion parallax. ARKit sets the entry pose and re-centres slowly. Removed:
+`LowLevelDomeMesh`, `SpatialDioramaView`; `StereoMaterialBuilder` is DEBUG A/B only.
+
+**Numbers (simulator, Debug, fixture r2-02 with Mac-made depth).** 78.5 fps, GPU 0.122 ms mean
+(p95 0.205, max 0.414), 2.67 dropped per 5 s; mesh update 0.5-0.64 ms CPU per frame. Parallax with a
+0.3 m head shift at Depth 0.6: near 73-74 px, far 55 px; Depth 0 uniform. Render target stays 2048x2048.
+
+**Device-only (not verifiable in the simulator).** Real ML depth (simulator output is all zeros),
+stereo comfort, M2 frame time and heat at 90 Hz, head parallax feel, ARKit pose when seated versus
+standing, seams and rear fade in a headset, progressive versus full immersion.
+
+**Open risks.** (1) If depth relief is uncomfortable, lower the Depth default. (2) If RealityKit cannot
+hold 90 Hz on the M2, CompositorServices stays the fallback (S2). (3) Image-change hitch of 65-90 ms
+on the main actor predates this branch. (4) Mirrored continuations repeat the image, not new
+content; wider generation was not tried and no Gemini calls were made.
+
+**What to check on the headset.** Enter Liminal and look around: effects on all sides; lean and
+walk 0.3 m to see parallax; set Depth 0, 0.6, 1.0 and judge comfort; exit with the Digital Crown and
+confirm the button reads "Enter Liminal"; watch a few image changes for pops. The checklist above
+lists the rest.

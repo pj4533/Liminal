@@ -13,7 +13,7 @@ Each workstream has a decision log with the reasons (what, why, alternatives, nu
 | [ui.md](ui.md) | Control UI redesign on both platforms: shared components, four sections, 1240x800 visionOS window, no truncation, new sim tap coordinates |
 | [effects-balance.md](effects-balance.md) | Effects made images unrecognisable: measured per-effect damage, slow clarity cycle, fresh-image hold, strain budget (water first, radial masked off the centre), "Effect intensity" setting (E1-E22; implemented: EffectLook, slider on both platforms; round-1 tuning E23-E26: more colour, rainbow cap; round 2 E27-E30: zoom eases out in wild stretches, more fringing and trails, calmer hue blend at full; final E31-E32: default 0.5 passes blind judging with 100 % recognised and 98.3 % orientation, verified in the visionOS 27.2 Simulator) |
 | [final-qa.md](final-qa.md) | End-to-end QA of the merged branch on a fresh visionOS install and macOS; sim-drag helper, public log values |
-| [spatial.md](spatial.md) | One unified immersive mode: mirror-wrap depth-relief shell, mono effects texture on real 3D geometry; plan in docs/plans/spatial.md |
+| [spatial.md](spatial.md) | One unified immersive mode replaces Dome and Spatial Diorama: 337.5 x 120 degree mirror-wrap shell of three tiles, ML depth as real vertex relief (true stereo and parallax), every effect on it from the one 2048x2048 mono render, ARKit placement, Depth slider; sim-verified at 78.5 fps, device checks open (S1-S18); plan in docs/plans/spatial.md |
 
 ## Please review (top items per workstream)
 
@@ -35,6 +35,11 @@ Each workstream has a decision log with the reasons (what, why, alternatives, nu
 ### Vibrance
 - No effect amount was reduced and nothing was removed; vibrance is a final stage (V4) plus a per-image factor (V5). Check that the saturation boost (+26.8% mean) suits your taste.
 - Open (V8): the encoding fix and feedback binding are verified in the Simulator only; check on a device.
+
+### Spatial
+- Built only in the visionOS Simulator (Mac GPU); nothing measured on a real Vision Pro. Check real ML depth relief, stereo comfort at Depth 0.6 and 1.0 (is the default right?), M2 frame time and heat at 90 Hz, mirror seams and rear fade, ARKit entry pose.
+- The -LiminalShellTextureStereo A/B did not run; if geometry alone reads well, `StereoMaterialBuilder` and the stereo render path can go.
+- Known, older than this branch: every image change costs one 65-90 ms main-actor frame (cover-crop, colour stats, upload); a candidate for the transitions workstream.
 
 ### Orientation
 - Verified upright on all paths with a test card, but only in the Simulator and on macOS; confirm on a device.

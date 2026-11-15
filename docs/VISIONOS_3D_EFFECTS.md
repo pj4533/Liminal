@@ -1,5 +1,7 @@
 # Liminal visionOS 3D/AR Effects Brainstorm
 
+> **Historical (January 2026 brainstorm).** The Spatial Diorama / `Spatial3DImage` direction was dropped: the system renders it, so no effects can be applied. Dome and diorama are now one depth-relief shell with every effect (see `docs/decisions/spatial.md`).
+
 *Brainstormed: January 2026*
 
 ## Design Criteria

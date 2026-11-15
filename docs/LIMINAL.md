@@ -37,7 +37,7 @@ AUDIO: GenerativeEngine (facade)    VISUAL: VisualEngine
   / setVisualActivity
                                       macOS: EffectsMetalView (MTKView)
                                       visionOS: OffscreenEffectsRenderer (one MRT pass, both eyes)
-                                                -> DrawableQueue -> RealityKit dome
+                                                -> DrawableQueue -> RealityKit depth-relief shell
 ```
 
 ## File Structure

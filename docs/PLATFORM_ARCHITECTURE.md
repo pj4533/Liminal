@@ -7,7 +7,7 @@ This document explains the architectural differences between Liminal's macOS and
 | Aspect | macOS | visionOS | Why Different |
 |--------|-------|----------|---------------|
 | **Rendering API** | MTKView (direct Metal) | Offscreen Metal → DrawableQueue → RealityKit | MTKView unavailable on visionOS; RealityKit is native |
-| **Display Surface** | Window framebuffer (3:2, letterboxed) | Curved dome mesh (112.5°×75°, 3:2 in view angle) | visionOS is spatial/immersive |
+| **Display Surface** | Window framebuffer (3:2, letterboxed) | Wrap-around depth-relief shell (three tiles, 337.5°×120°; centre 112.5°×75° is the undistorted 3:2 image) | visionOS is spatial/immersive |
 | **Frame Rate** | 60fps display link | 90fps RealityKit timeline | Platform requirements differ |
 | **Image Blending** | GPU shader (fragment blend) | GPU shader (fragment blend) | Same approach, platform-optimal delivery |
 | **State Management** | @Published properties | AtomicImageBuffer (lock-free) | 90fps starves MainActor |
@@ -31,7 +31,7 @@ This document explains the architectural differences between Liminal's macOS and
 Metal (offscreen) → DrawableQueue → TextureResource → RealityKit Entity
 ```
 
-The `OffscreenEffectsRenderer` renders both eyes in one MRT pass straight into the 2048×2048 drawables of two `TextureResource.DrawableQueue`s (no intermediate texture or blit), which RealityKit displays on the curved dome mesh.
+The `OffscreenEffectsRenderer` renders both eyes in one MRT pass straight into the 2048×2048 drawables of two `TextureResource.DrawableQueue`s (no intermediate texture or blit), which RealityKit shows on the shell. Dome and Spatial Diorama no longer exist: one immersive space has the effects and real 3D geometry (the ML depth map displaces the shell's vertices, so both eyes see true stereo and head-motion parallax). Left and right eyes get the same mono effects texture; see `decisions/spatial.md`.
 
 ### Problem 2: MainActor Starvation
 
@@ -172,7 +172,7 @@ EffectsRenderer.metal (shader + GPU blend)
     ↓
 DrawableQueue → TextureResource
     ↓
-RealityKit Curved Dome Mesh
+RealityKit wrap-around shell (3 tiles, depth-relief LowLevelMesh)
 ```
 
 ---
@@ -263,7 +263,7 @@ The architecture maximizes code sharing (audio, shaders, uniforms, services) whi
 
 - Both eyes render in a single MRT pass directly into the two RealityKit `DrawableQueue` drawables
   (2048x2048 each); there is no intermediate output texture or blit, and the distortion field is computed once.
-- Dome breathing is computed on the CPU (no per-frame compute command buffer).
+- Relief and breathing are computed on the CPU (vDSP, about 0.5-0.64 ms per frame in Debug) (no per-frame compute command buffer).
 - Drawable queues no longer request `.shaderWrite`; uploaded source textures use `optimizeContentsForGPUAccess`.
 - GPU timing: `Utils/GPUTimingStats.swift`; DEBUG launch flags: `Utils/DebugLaunchOptions.swift`;
   capture script: `scripts/perf-run.sh`. See `docs/decisions/performance.md`.
