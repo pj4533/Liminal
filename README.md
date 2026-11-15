@@ -93,6 +93,7 @@ Shader pipeline order (`Liminal/Shaders/EffectsRenderer.metal`): Ken Burns, dist
 | **Sync visuals to music** | Music drives hue, motion, bloom and ghost bursts (on by default) |
 | **Debug effect** | Debug visualization of the effect (macOS panel) |
 | **Cache only** | Skip generation and recycle cached images |
+| **New images per hour / day** | Spending cap on Gemini image generation (default 20 / 100); past it, cached images are shown |
 | **Clear All Images** | Wipes every cached image after confirmation and restarts generation |
 | **Reset All Settings** | Restores defaults |
 
@@ -102,9 +103,12 @@ On macOS the panel scrolls, and Cache only, Clear All Images and Reset live in a
 
 Pass as launch arguments, for example `-LiminalAutoPlay YES`. Defined in `Liminal/Utils/DebugLaunchOptions.swift`.
 
+**Any launch that uses these flags never calls Gemini** (no API spend from testing): it shows cached images, or the test card when the cache is empty. Add `-LiminalAllowGeneration YES` to deliberately allow generation; the in-app hourly/daily image limit still applies (`docs/decisions/images.md` D34).
+
 | Flag | Effect |
 |------|--------|
 | `-LiminalAutoPlay YES` | Start playback at launch |
+| `-LiminalAllowGeneration YES` | Let an automated launch generate new images (off by default) |
 | `-LiminalOpenDome YES` | Open the immersive dome automatically (visionOS) |
 | `-LiminalFreezeTime <s>` | Pin the effect clock for deterministic screenshots (bypasses coupling) |
 | `-LiminalPerfLogInterval <s>` | Interval of the PERF log lines (default 1) |

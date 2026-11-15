@@ -146,6 +146,12 @@ extension ContentView {
                     PlaybackStatus(isPlaying: audioEngine.isRunning,
                                    cachedCount: visualEngine.totalCachedCount,
                                    queuedCount: visualEngine.queuedCount)
+                    if let status = visualEngine.statusMessage {
+                        Label(status, systemImage: "info.circle")
+                            .font(.callout)
+                            .foregroundStyle(.yellow)
+                            .wrapping()
+                    }
                 }
 
                 ControlSection(title: "Music", systemImage: "music.note") {
@@ -226,6 +232,9 @@ struct SettingsSheetView: View {
                                 .font(.callout)
                                 .foregroundStyle(.yellow)
                                 .wrapping()
+                        }
+                        if !settings.cacheOnly {
+                            ImageLimitSection(settings: settings)
                         }
                         Divider()
                         ClearImagesSection(visualEngine: visualEngine)

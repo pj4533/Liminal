@@ -38,9 +38,9 @@ struct ControlsView: View {
                 // ViewThatFits would always fall back to the narrowest layout.
                 ViewThatFits(in: .horizontal) {
                     HStack(alignment: .top, spacing: 24) {
-                        column { playbackSection }
+                        column { playbackSection; imagesSection }
                         column { musicSection }
-                        column { visualsSection; imagesSection }
+                        column { visualsSection }
                     }
                     HStack(alignment: .top, spacing: 24) {
                         column { playbackSection; visualsSection }
@@ -100,6 +100,12 @@ struct ControlsView: View {
             PlaybackStatus(isPlaying: audioEngine.isRunning,
                            cachedCount: visualEngine.totalCachedCount,
                            queuedCount: visualEngine.queuedCount)
+            if let status = visualEngine.statusMessage {
+                Label(status, systemImage: "info.circle")
+                    .font(.callout)
+                    .foregroundStyle(.yellow)
+                    .wrapping()
+            }
         }
     }
 
@@ -155,6 +161,9 @@ struct ControlsView: View {
                     .font(.callout)
                     .foregroundStyle(.yellow)
                     .wrapping()
+            }
+            if !settings.cacheOnly {
+                ImageLimitSection(settings: settings)
             }
         }
     }

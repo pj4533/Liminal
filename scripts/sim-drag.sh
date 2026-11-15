@@ -4,8 +4,8 @@
 # CGEvent drags with delta fields set (scripts/sim-drag.swift, compiled on first use into $TMPDIR).
 # The slider moves less than the pointer (damped and not constant): +160 px moved it 11-22 points in testing; check the screenshot.
 # Usage: scripts/sim-drag.sh <x0> <y0> <x1> <y1>
-# Default control-window slider rows (1240x800 window, fresh launch); track x=1700..2140, 50% thumb ~1920:
-#   Density y=1071   Space y=1173   Echo y=1275
+# Default control-window slider rows (1240x960 window, fresh launch); track x=1700..2140, 50% thumb ~1920:
+#   Density y=960   Space y=1062   Echo y=1163
 set -e
 DIR=${0:A:h}
 BIN=${TMPDIR:-/tmp}/liminal-sim-drag

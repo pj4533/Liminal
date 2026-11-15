@@ -21,7 +21,7 @@ macOS:
 
 **U2. Four sections everywhere:** Playback, Music, Visuals, Images & Storage.
 
-**U3. visionOS: one window, no settings sheet.** All controls now fit in the window. The window opens at 1240x800 (`defaultSize`; 1280x720 is the visionOS default), which fits three columns: Playback | Music | Visuals + Images & Storage. `ViewThatFits` falls back to two columns, then to one scrolling column, when the window is narrowed. Columns set an `idealWidth`, because otherwise the wrapping captions report their one-line width and `ViewThatFits` always picks the single column. The settings sheet is gone, so the gear button and the clipped sheet went with it. Its items moved into the Visuals and Images & Storage cards.
+**U3. visionOS: one window, no settings sheet.** All controls now fit in the window. The window opens at 1240x960 (`defaultSize`; 1280x720 is the visionOS default), which fits three columns: Playback + Images & Storage | Music | Visuals. `ViewThatFits` falls back to two columns, then to one scrolling column, when the window is narrowed. Columns set an `idealWidth`, because otherwise the wrapping captions report their one-line width and `ViewThatFits` always picks the single column. The settings sheet is gone, so the gear button and the clipped sheet went with it. Its items moved into the Visuals and Images & Storage cards.
 
 **U4. visionOS hit targets.** Play/Stop, Enter/Exit Dome, Spatial Diorama, Clear All Images and Reset All Settings are each at least 60 pt tall (HIG). They are full width or sized to their full label. Play is tinted blue and turns red when it becomes Stop. I did not use ornaments: the actions fit in the window, and ornament positions are harder to drive with `sim-tap.sh`.
 
@@ -35,14 +35,14 @@ macOS:
 
 ## Simulator tap coordinates (changed)
 
-These apply to the 1240x800 window at its default position after a fresh launch, in screenshot pixels:
+These apply to the 1240x960 window at its default position after a fresh launch, in screenshot pixels:
 
 | Control | x | y |
 |---|---|---|
-| Play / Stop | 1371 | 935 |
-| Enter / Exit Dome | 1371 | 1041 |
-| Spatial Diorama | 1371 | 1139 |
-| Clear All Images | 2378 | 1316 (opens popover; tap 1350 1500 to dismiss) |
+| Play / Stop | 1371 | 831 |
+| Enter / Exit Dome | 1371 | 937 |
+| Spatial Diorama | 1371 | 1035 |
+| Clear All Images | 1283 | 1392 (opens popover; tap 1350 1500 to dismiss) |
 
 Updated in `scripts/sim-tap.sh` (header), `scripts/perf-run.sh` (fallback taps) and `docs/research/visionos-sim-automation/README.md`.
 

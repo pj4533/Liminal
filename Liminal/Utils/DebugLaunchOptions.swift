@@ -71,7 +71,23 @@ nonisolated enum DebugLaunchOptions {
         guard defaults.object(forKey: "LiminalSyncStrength") != nil else { return 1 }
         return max(0, defaults.float(forKey: "LiminalSyncStrength"))
     }()
+
+    /// -LiminalAllowGeneration YES: let an automated/debug launch call Gemini. Without it, any launch
+    /// that uses the automation flags above (perf runs, screenshots, sim checks) never generates new
+    /// images: it shows cached images, or the test card when the cache is empty. Testing must not
+    /// spend API budget by accident (2026-11-14 budget alert).
+    static let allowGeneration: Bool = defaults.bool(forKey: "LiminalAllowGeneration")
+
+    static var blocksImageGeneration: Bool {
+        guard !allowGeneration else { return false }
+        return autoPlay || openDome || freezeTime != nil || testPattern || testImagePath != nil
+            || defaults.object(forKey: "LiminalPerfLogInterval") != nil || splitPasses
+            || forceStereoFlatDepth || forceMonoMaterial || noEffects || syncLog
+            || defaults.object(forKey: "LiminalSyncStrength") != nil
+    }
 #else
+    static let allowGeneration = false
+    static let blocksImageGeneration = false
     static let autoPlay = false
     static let openDome = false
     static let freezeTime: Float? = nil
@@ -100,6 +116,7 @@ nonisolated enum DebugLaunchOptions {
         if forceStereoFlatDepth { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalForceStereoFlatDepth=YES (stereo material + flat depth)") }
         if forceMonoMaterial { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalForceMonoMaterial=YES (mono UnlitMaterial)") }
         if noEffects { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalNoEffects=YES (passthrough, no effects)") }
+        if blocksImageGeneration { LMLog.general.info("🧪 DEBUG: automation launch, Gemini image generation OFF (cached images only; pass -LiminalAllowGeneration YES to override)") }
         if syncLog { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalSyncLog=YES (🎼 SYNC lines)") }
         if syncStrength != 1 { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalSyncStrength=\(syncStrength, format: .fixed(precision: 2))") }
 #endif

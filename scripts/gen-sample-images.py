@@ -164,6 +164,9 @@ def ffmpeg_sheet(out_dir, rows, cols, thumb_width, sheet_path):
     return sheet_path if os.path.exists(sheet_path) else None
 
 
+MAX_IMAGES_WITHOUT_FLAG = 12
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--prompts", required=True)
@@ -178,12 +181,19 @@ def main():
     ap.add_argument("--cols", type=int, default=4)
     ap.add_argument("--thumb-width", type=int, default=640)
     ap.add_argument("--retries", type=int, default=2)
+    ap.add_argument("--allow-more", action="store_true",
+                    help=f"allow more than {MAX_IMAGES_WITHOUT_FLAG} paid generations in one run")
     args = ap.parse_args()
 
     key = load_key()
     items = load_prompts(args.prompts)
     if args.limit:
         items = items[:args.limit]
+    # Every image is a billed API call: cap runs unless explicitly allowed.
+    if len(items) > MAX_IMAGES_WITHOUT_FLAG and not args.allow_more:
+        print(f"capping to {MAX_IMAGES_WITHOUT_FLAG} images (each is a paid API call); "
+              f"pass --allow-more to generate all {len(items)}", file=sys.stderr)
+        items = items[:MAX_IMAGES_WITHOUT_FLAG]
     os.makedirs(args.out, exist_ok=True)
 
     def work(index_item):

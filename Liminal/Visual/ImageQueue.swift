@@ -152,6 +152,16 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
         let files = store.imageFiles()
         await publishCachedCount(files.count)
         LMLog.visual.info("📂 [ImageQueue] \(files.count) cached images")
+        #if DEBUG
+        if files.isEmpty, DebugLaunchOptions.blocksImageGeneration {
+            // Automation launch with an empty cache: show the test card rather than call Gemini.
+            let card = TestPatternGenerator.image
+            imageBuffer.storeCurrent(card, metadata: nil)
+            await MainActor.run { self.currentImage = Self.platformImage(card) }
+            LMLog.visual.info("🧪 [ImageQueue] empty cache on an automation launch: test card shown, no generation")
+            return
+        }
+        #endif
         guard !imageBuffer.hasCurrent(), let pick = files.randomElement() else { return }
         let entry = store.entry(id: pick.id, url: pick.url)
         guard let item = await makeDisplayItem(entry) else { return }
@@ -166,9 +176,15 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
 
     // MARK: - Public API
 
+    /// Cache Only setting, or a DEBUG automation launch (which must never spend API budget).
+    @MainActor
+    private var generationDisabled: Bool {
+        SettingsService.shared.cacheOnly || DebugLaunchOptions.blocksImageGeneration
+    }
+
     @MainActor
     func start() {
-        let cacheOnly = SettingsService.shared.cacheOnly
+        let cacheOnly = generationDisabled
         isRunning = true
         #if DEBUG
         if DebugLaunchOptions.testPattern || DebugLaunchOptions.testImagePath != nil { return }  // fixed image only
@@ -206,7 +222,7 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
     /// Request a new image (mood change trigger).
     @MainActor
     func requestNewImage() {
-        guard !SettingsService.shared.cacheOnly else { return }
+        guard !generationDisabled else { return }
         if generationTask == nil || generationTask?.isCancelled == true {
             startContinuousGeneration()
         }
@@ -229,7 +245,7 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
         imageBuffer.clear()
         await state.reset()
         director.reset()
-        let cacheOnly = await MainActor.run { SettingsService.shared.cacheOnly }
+        let cacheOnly = await MainActor.run { self.generationDisabled }
         await MainActor.run {
             self.currentImage = nil
             self.nextImage = nil
@@ -421,6 +437,19 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
                     continue
                 }
 
+                // Spending cap (D34): past the hourly/daily limit, show cached images until it rolls.
+                if case .limited(let resumeAt, let perHour) = GenerationBudget.shared.check(now: now) {
+                    let mins = max(1, Int(ceil(resumeAt.timeIntervalSince(now) / 60)))
+                    let msg = perHour
+                        ? "Hourly image limit reached, showing cached images (new ones in about \(mins) min)"
+                        : "Daily image limit reached, showing cached images (new ones in about \(mins < 120 ? "\(mins) min" : "\(mins / 60) h"))"
+                    await MainActor.run { self.statusMessage = msg }
+                    LMLog.visual.info("💰 [Budget] \(msg, privacy: .public)")
+                    await self.recycleOneFromCache()
+                    try? await Task.sleep(nanoseconds: 30_000_000_000)
+                    continue
+                }
+
                 let spec = self.promptSource?() ?? self.director.next()
                 guard let model = router.model(for: spec, now: now, using: &rng) else { continue }
                 let clearGeneration = self.store.clearGeneration
@@ -428,6 +457,7 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
                 await MainActor.run { self.isGenerating = true }
                 do {
                     let generated = try await self.requestImage(spec: spec, model: model)
+                    GenerationBudget.shared.record()
                     router.recordSuccess(model: model)
                     await MainActor.run { self.isGenerating = false; self.statusMessage = nil }
                     guard !Task.isCancelled else { break }

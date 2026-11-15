@@ -93,6 +93,15 @@ final class SettingsService: ObservableObject {
         didSet { defaults.set(syncVisualsToMusic, forKey: Keys.syncVisualsToMusic) }
     }
 
+    /// Spending cap: new Gemini images allowed per rolling hour / 24 h (GenerationBudget, D34).
+    @Published var maxImagesPerHour: Int {
+        didSet { defaults.set(maxImagesPerHour, forKey: GenerationBudget.Keys.perHour) }
+    }
+
+    @Published var maxImagesPerDay: Int {
+        didSet { defaults.set(maxImagesPerDay, forKey: GenerationBudget.Keys.perDay) }
+    }
+
     /// Generic debug toggle for testing new effects (not persisted)
     @Published var debugEffectEnabled: Bool = true
 
@@ -115,6 +124,9 @@ final class SettingsService: ObservableObject {
         self.cacheOnly = defaults.object(forKey: Keys.cacheOnly) as? Bool ?? Self.defaultCacheOnly
         self.syncVisualsToMusic = defaults.object(forKey: Keys.syncVisualsToMusic) as? Bool ?? Self.defaultSyncVisualsToMusic
 
+        self.maxImagesPerHour = defaults.object(forKey: GenerationBudget.Keys.perHour) as? Int ?? GenerationBudget.defaultPerHour
+        self.maxImagesPerDay = defaults.object(forKey: GenerationBudget.Keys.perDay) as? Int ?? GenerationBudget.defaultPerDay
+
         LMLog.state.info("Settings loaded: scale=\(self.currentScale.rawValue), delay=\(self.delay), reverb=\(self.reverb), notes=\(self.notes)")
     }
 
@@ -130,6 +142,8 @@ final class SettingsService: ObservableObject {
         imageInterval = Self.defaultImageInterval
         cacheOnly = Self.defaultCacheOnly
         syncVisualsToMusic = Self.defaultSyncVisualsToMusic
+        maxImagesPerHour = GenerationBudget.defaultPerHour
+        maxImagesPerDay = GenerationBudget.defaultPerDay
         LMLog.state.info("Settings reset to defaults")
     }
 }

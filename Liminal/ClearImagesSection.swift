@@ -76,12 +76,6 @@ struct ClearImagesSection: View {
                 .foregroundStyle(.secondary)
                 .wrapping()
 
-            if let status = visualEngine.statusMessage {
-                Text(status)
-                    .font(.caption)
-                    .foregroundStyle(.yellow)
-                    .wrapping()
-            }
         }
         .task { await refresh() }
         .onReceive(NotificationCenter.default.publisher(for: .imageCacheCleared)) { _ in
