@@ -242,3 +242,77 @@ struct DepthReliefFieldTests {
         #expect(b.weight(transitionProgress: nil, now: 12) == 1)
     }
 }
+
+/// ShellPlacement / ShellRecentre / DepthSettingSmoother / breathing amplitude (phase 3).
+struct SpatialShellPlacementTests {
+
+    private func transform(yaw: Float, position: SIMD3<Float>, pitch: Float = 0) -> simd_float4x4 {
+        let q = simd_quatf(angle: yaw, axis: [0, 1, 0]) * simd_quatf(angle: pitch, axis: [1, 0, 0])
+        var m = simd_float4x4(q)
+        m.columns.3 = SIMD4(position, 1)
+        return m
+    }
+
+    @Test func yawRoundTripsAndIgnoresPitch() {
+        for deg: Float in [0, 30, -45, 90, 170, -170] {
+            let y = deg * .pi / 180
+            let got = ShellPlacement.yaw(of: transform(yaw: y, position: .zero, pitch: 0.4))
+            #expect(abs(remainder(got - y, 2 * .pi)) < 1e-4)
+        }
+        #expect(ShellPlacement.yaw(of: matrix_identity_float4x4) == 0)
+        let p = ShellPlacement.position(of: transform(yaw: 1, position: [0.2, 1.6, -0.3]))
+        #expect(simd_distance(p, [0.2, 1.6, -0.3]) < 1e-6)
+    }
+
+    @Test func recentreIgnoresSmallHeadMotion() {
+        var r = ShellRecentre(centre: [0, 1.5, 0])
+        for _ in 0..<600 { r.update(head: [0.3, 1.5, 0], dt: 0.1) }
+        #expect(r.centre == [0, 1.5, 0])
+        #expect(!r.isRecentring)
+    }
+
+    @Test func recentreEasesWithTimeConstantAndSettles() {
+        var r = ShellRecentre(centre: [0, 1.5, 0])
+        let head = SIMD3<Float>(1, 1.5, 0)
+        // One time constant (3 s) covers 1 - 1/e of the way.
+        for _ in 0..<30 { r.update(head: head, dt: 0.1) }
+        #expect(abs(r.centre.x - (1 - exp(-1))) < 0.01)
+        #expect(r.isRecentring)
+        for _ in 0..<300 { r.update(head: head, dt: 0.1) }
+        #expect(!r.isRecentring)
+        #expect(simd_distance(r.centre, head) < ShellPlacement.recentreStop)
+        // Settled: the next small move does not restart it (hysteresis).
+        let before = r.centre
+        r.update(head: head + [0.2, 0, 0], dt: 0.1)
+        #expect(r.centre == before)
+    }
+
+    @Test func recentreIsFrameRateIndependent() {
+        var a = ShellRecentre(centre: .zero), b = ShellRecentre(centre: .zero)
+        let head = SIMD3<Float>(0, 0, 2)
+        for _ in 0..<20 { a.update(head: head, dt: 0.1) }
+        for _ in 0..<200 { b.update(head: head, dt: 0.01) }
+        #expect(abs(a.centre.z - b.centre.z) < 1e-3)
+    }
+
+    @Test func depthSmootherStartsAtTargetThenEases() {
+        var s = DepthSettingSmoother()
+        #expect(s.next(target: 0.6, dt: 0.011) == 0.6)
+        let one = s.next(target: 1, dt: 0.5)  // one time constant
+        #expect(abs(one - (0.6 + 0.4 * (1 - exp(-1)))) < 1e-4)
+        for _ in 0..<500 { _ = s.next(target: 1, dt: 0.011) }
+        #expect(abs((s.value ?? 0) - 1) < 1e-3)
+        #expect(s.next(target: 5, dt: 100) <= 1)
+    }
+
+    @Test func breathingStaysWithinComfortCap() {
+        #expect(ShellLayout.breathingAmplitude(amount: 0, energy: 1, pulseMotion: 1) == ShellLayout.breathingCalm)
+        #expect(abs(ShellLayout.breathingAmplitude(amount: 1, energy: 1, pulseMotion: 1) - ShellLayout.breathingAmplitude) < 1e-6)
+        for a: Float in [-1, 0, 0.5, 1, 3] {
+            for e: Float in [0, 0.5, 2] {
+                let v = ShellLayout.breathingAmplitude(amount: a, energy: e, pulseMotion: e)
+                #expect(v >= ShellLayout.breathingCalm && v <= 0.03 + 1e-6)
+            }
+        }
+    }
+}

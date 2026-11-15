@@ -2,6 +2,10 @@
 
 *Implemented: March 2026*
 
+> **Superseded (November 2026).** The dome and the Spatial Diorama were merged into one immersive space, a
+> wrap-around depth-relief shell with the effects on every tile. `LowLevelDomeMesh` and `SpatialDioramaView`
+> are gone. See `docs/plans/spatial.md` and `docs/decisions/spatial.md`. This file is kept as history.
+
 ## Overview
 
 Seven phases of 3D spatial effects were implemented for the visionOS dome experience. These transform the flat 2D shader output into a living, breathing 3D scene with depth displacement, stereoscopic rendering, atmospheric fog, particle transitions, and Apple's visionOS 26 spatial diorama API.

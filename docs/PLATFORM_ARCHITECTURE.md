@@ -129,10 +129,13 @@ The actual visual effects are 100% identical on both platforms. The same Metal s
 
 | File | Purpose |
 |------|---------|
-| `visionOS/LiminalVisionApp.swift` | App entry point with ImmersiveSpace |
+| `visionOS/LiminalVisionApp.swift` | App entry point with the one ImmersiveSpace (`liminalSpace`) |
 | `visionOS/ControlsView.swift` | Control window (1240x800, three columns, no settings sheet) |
-| `visionOS/SpatialDioramaView.swift`, `LowLevelDomeMesh.swift`, `StereoMaterialBuilder.swift` | Diorama, dome mesh and stereo material |
-| `visionOS/ImmersiveDomeView.swift` | RealityKit curved panel + render loop + `CGImageTransitionState` |
+| `visionOS/SpatialShellMesh.swift`, `ShellMaterialBuilder.swift` | Wrap-around shell tile (LowLevelMesh, CPU relief + breathing) and its faded material |
+| `visionOS/HeadPoseProvider.swift` | ARKit entry pose and slow re-centre |
+| `visionOS/StereoMaterialBuilder.swift` | Old per-eye texture parallax, DEBUG A/B only (`-LiminalShellTextureStereo`) |
+| `Visual/Spatial/ShellLayout.swift`, `DepthReliefField.swift`, `ShellPlacement.swift` | Pure shell geometry, depth relief and placement logic (all platforms, unit tested) |
+| `visionOS/ImmersiveDomeView.swift` | RealityKit spatial shell + render loop + `CGImageTransitionState` |
 | `visionOS/OffscreenEffectsRenderer.swift` | Metal → DrawableQueue bridge |
 | `Visual/AtomicImageBuffer.swift` | Lock-free image passing |
 

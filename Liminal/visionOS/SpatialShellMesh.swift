@@ -156,12 +156,14 @@ final class SpatialShellMesh {
     /// Write every vertex. `previous` / `current` are per-vertex q fields (DepthReliefField.q,
     /// vertexCount values; nil or wrong size = flat). q = previous + (current - previous) * weight,
     /// radius = 1 / (1/rho0 + k * q * inverseSpan) + breathing.
-    func update(previous: [Float]?, current: [Float]?, weight: Float, k: Float, time: Float) {
+    /// `breathingAmplitude`: metres (ShellLayout.breathingAmplitude(amount:energy:pulseMotion:)).
+    func update(previous: [Float]?, current: [Float]?, weight: Float, k: Float, time: Float,
+                breathingAmplitude: Float = ShellLayout.breathingAmplitude) {
         let n = vertexCount
         let N = vDSP_Length(n), C = vDSP_Length(cols)
         let rho0 = ShellLayout.baseRadius
         let t = time * ShellLayout.breathingSpeed
-        let ampOverRho = ShellLayout.breathingAmplitude / rho0
+        let ampOverRho = min(max(breathingAmplitude, 0), ShellLayout.breathingAmplitude) / rho0
 
         // Breathing (ShellLayout.breathing), split by angle-sum identities:
         //   wave = 0.4 sin(6u + t) + 0.3 sin(5v + 0.7t)

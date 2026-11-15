@@ -23,6 +23,7 @@ final class SettingsService: ObservableObject {
         static let cacheOnly = "visual.cacheOnly"
         static let syncVisualsToMusic = "visual.syncToMusic"
         static let effectIntensity = "visual.effectIntensity"
+        static let depthStrength = "visual.depthStrength"
     }
 
     // MARK: - Defaults
@@ -41,6 +42,7 @@ final class SettingsService: ObservableObject {
     static let defaultCacheOnly: Bool = false
     static let defaultSyncVisualsToMusic: Bool = true
     static let defaultEffectIntensity: Float = EffectLook.defaultIntensity
+    static let defaultDepthStrength: Float = ShellLayout.defaultDepth
 
     // MARK: - Published Settings
 
@@ -101,6 +103,12 @@ final class SettingsService: ObservableObject {
         didSet { defaults.set(effectIntensity, forKey: Keys.effectIntensity) }
     }
 
+    /// "Depth", 0 (flat) ... 1 (deepest): strength of the visionOS shell's depth relief
+    /// (docs/plans/spatial.md section 3). Unused on macOS.
+    @Published var depthStrength: Float {
+        didSet { defaults.set(depthStrength, forKey: Keys.depthStrength) }
+    }
+
     /// Spending cap: new Gemini images allowed per rolling hour / 24 h (GenerationBudget, D34).
     @Published var maxImagesPerHour: Int {
         didSet { defaults.set(maxImagesPerHour, forKey: GenerationBudget.Keys.perHour) }
@@ -133,6 +141,8 @@ final class SettingsService: ObservableObject {
         self.syncVisualsToMusic = defaults.object(forKey: Keys.syncVisualsToMusic) as? Bool ?? Self.defaultSyncVisualsToMusic
         self.effectIntensity = min(max(defaults.object(forKey: Keys.effectIntensity) as? Float ?? Self.defaultEffectIntensity, 0), 1)
 
+        self.depthStrength = min(max(defaults.object(forKey: Keys.depthStrength) as? Float ?? Self.defaultDepthStrength, 0), 1)
+
         self.maxImagesPerHour = defaults.object(forKey: GenerationBudget.Keys.perHour) as? Int ?? GenerationBudget.defaultPerHour
         self.maxImagesPerDay = defaults.object(forKey: GenerationBudget.Keys.perDay) as? Int ?? GenerationBudget.defaultPerDay
 
@@ -152,6 +162,7 @@ final class SettingsService: ObservableObject {
         cacheOnly = Self.defaultCacheOnly
         syncVisualsToMusic = Self.defaultSyncVisualsToMusic
         effectIntensity = Self.defaultEffectIntensity
+        depthStrength = Self.defaultDepthStrength
         maxImagesPerHour = GenerationBudget.defaultPerHour
         maxImagesPerDay = GenerationBudget.defaultPerDay
         LMLog.state.info("Settings reset to defaults")

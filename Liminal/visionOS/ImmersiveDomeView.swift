@@ -104,6 +104,11 @@ struct ImmersiveDomeView: View {
     @State private var depthGenerator: DepthMapGenerator?
     @State private var lastDepthGeneration: UInt64 = 0
 
+    /// ARKit head pose: entry placement and slow re-centre (fallback centre when unavailable).
+    @State private var headPose: HeadPoseProvider?
+    /// Entry yaw of the shell (radians), applied under the DEBUG view rotation.
+    @State private var shellYaw: Float = 0
+
     // DEBUG A/B only (-LiminalShellTextureStereo): old per-eye texture parallax on the hero tile
     @State private var stereoMaterialBuilder: StereoMaterialBuilder?
 
@@ -112,8 +117,8 @@ struct ImmersiveDomeView: View {
 
     // Shell geometry, fades and relief constants: ShellLayout (docs/plans/spatial.md).
 
-    /// Shell centre until HeadPoseProvider places it (phase 3): standing eye height.
-    private static let shellCentre = SIMD3<Float>(0, 1.5, 0)
+    /// Shell centre until HeadPoseProvider places it: standing eye height.
+    private static let shellCentre = ShellPlacement.fallbackCentre
 
     /// DEBUG harness (-LiminalShellYaw / -LiminalShellPitch): rotating the scene by this brings the
     /// content at (yaw, pitch) in front of the fixed simulator camera. Identity in Release.
@@ -139,7 +144,8 @@ struct ImmersiveDomeView: View {
             }
             .onDisappear {
                 renderTask?.cancel()
-                LMLog.visual.info("🎬 CURVED PANEL: Render loop cancelled")
+                headPose?.stop()
+                LMLog.visual.info("🎬 SHELL: Render loop cancelled")
             }
 
             // Loading indicator overlay
@@ -201,6 +207,7 @@ struct ImmersiveDomeView: View {
         }
 
         await buildTiles(mesh: mesh, monoTexture: monoTexture, root: root)
+        await placeShellAtHead(root)
 
         // Ensure depth model is ready before first render so the first image has depth.
         _ = await ensureDepthGeneratorReady()
@@ -306,6 +313,21 @@ struct ImmersiveDomeView: View {
         LMLog.visual.info("🎨 ✅ Shell tiles built (\(root.children.count)) texture=\(DebugLaunchOptions.shellTextureStereo && stereoMaterialBuilder != nil ? "stereo A/B" : "mono", privacy: .public)")
     }
 
+    /// Entry placement: centre the shell on the head and face the entry yaw (ARKit), else the
+    /// fallback centre facing forward. The DEBUG head offset / view rotation apply on top.
+    @MainActor
+    private func placeShellAtHead(_ root: Entity) async {
+        let provider = HeadPoseProvider()
+        headPose = provider
+        await provider.start()
+        let pose = await provider.entryPose()
+        let centre = pose?.position ?? Self.shellCentre
+        shellYaw = pose?.yaw ?? 0
+        root.position = centre - DebugLaunchOptions.shellHeadOffset
+        root.orientation = simd_quatf(angle: shellYaw, axis: [0, 1, 0]) * Self.debugViewRotation
+        LMLog.visual.info("🧭 SHELL placed at (\(String(format: "%.2f, %.2f, %.2f", centre.x, centre.y, centre.z), privacy: .public)) yaw=\(String(format: "%.1f", shellYaw * 180 / .pi), privacy: .public)° source=\(pose == nil ? "fallback" : "ARKit", privacy: .public)")
+    }
+
     // MARK: - Render Loop
 
     @MainActor
@@ -349,6 +371,11 @@ struct ImmersiveDomeView: View {
             // image age from the start of the current crossfade.
             var intensitySmoother = EffectIntensitySmoother()
             var transitionStartEffectTime: Float?
+            // Spatial comfort: Depth setting eased, slow re-centre on the head (docs/plans/spatial.md 5).
+            var depthSmoother = DepthSettingSmoother()
+            var recentre = ShellRecentre(centre: (shellRoot?.position ?? Self.shellCentre) + DebugLaunchOptions.shellHeadOffset)
+            var lastPoseTime = Date()
+            var lastBreathing: Float = 0
 
             while !Task.isCancelled {
                 frameCount += 1
@@ -502,12 +529,32 @@ struct ImmersiveDomeView: View {
                 // Shell vertices: relief + breathing (vDSP, ~11k vertices). Relief strength follows the
                 // Depth amount, the clarity cycle and the transition (ShellLayout.reliefStrength).
                 let meshStart = Date()
+                let depthSetting = depthSmoother.next(target: DebugLaunchOptions.shellDepth ?? settings.depthStrength,
+                                                      dt: Float(frameInterval / 1000))
                 let reliefK = ShellLayout.reliefStrength(
-                    depth: DebugLaunchOptions.shellDepth ?? ShellLayout.defaultDepth,
+                    depth: depthSetting,
                     drive: look.drive(time: effectTime), transitionProgress: transitionProgress)
                 let reliefW = relief.weight(transitionProgress: transitionState.isTransitioning ? transitionState.transitionProgress : nil,
                                             now: frameStartTime.timeIntervalSince1970)
-                shellMesh?.update(previous: relief.previous, current: relief.current, weight: reliefW, k: reliefK, time: effectTime)
+                // Music -> geometry: breathing swells 2 -> 3 cm with the music's energy and slow pulse.
+                let breathing = ShellLayout.breathingAmplitude(amount: modulation.amount, energy: modulation.energy,
+                                                               pulseMotion: modulation.pulseMotion)
+                shellMesh?.update(previous: relief.previous, current: relief.current, weight: reliefW, k: reliefK, time: effectTime,
+                                  breathingAmplitude: breathing)
+                lastBreathing = breathing
+                // Slow re-centre, about 10 Hz (no-op without ARKit tracking).
+                let poseDt = frameStartTime.timeIntervalSince(lastPoseTime)
+                if poseDt >= 0.1, let head = headPose?.headTransform() {
+                    lastPoseTime = frameStartTime
+                    let wasRecentring = recentre.isRecentring
+                    let centre = recentre.update(head: ShellPlacement.position(of: head), dt: Float(poseDt))
+                    shellRoot?.position = centre - DebugLaunchOptions.shellHeadOffset
+                    if recentre.isRecentring != wasRecentring {
+                        LMLog.visual.info("🧭 SHELL re-centre \(recentre.isRecentring ? "started" : "settled", privacy: .public)")
+                    }
+                } else if poseDt >= 0.1 {
+                    lastPoseTime = frameStartTime
+                }
                 totalMeshTime += Date().timeIntervalSince(meshStart) * 1000
                 lastReliefK = reliefK
                 lastReliefW = reliefW
@@ -555,7 +602,7 @@ struct ImmersiveDomeView: View {
 
                     let perfLine = "📊 visionOS PERF: fps=\(String(format: "%.1f", actualFPS)) (\(String(format: "%.0f", fpsPercent))% of 60) | render avg=\(String(format: "%.1f", avgRenderTime))ms max=\(String(format: "%.1f", maxRenderTime))ms | dropped=\(droppedFrames) | transition=\(String(format: "%.0f", transitionState.transitionProgress * 100))% | interval p95=\(String(format: "%.2f", intervalP95))ms | \(gpuFragment)"
                     LMLog.visual.info("\(perfLine, privacy: .public)")
-                    LMLog.visual.info("🔮 3D STATUS: depth=\(hasDepth) textureStereo=\(hasStereo) gen=\(transitionState.lastGeneration) mesh avg=\(String(format: "%.3f", totalMeshTime / Double(max(frameCount, 1))), privacy: .public)ms relief k=\(String(format: "%.3f", lastReliefK), privacy: .public) w=\(String(format: "%.2f", lastReliefW), privacy: .public) fields=\(relief.previous != nil ? 1 : 0)+\(relief.current != nil ? 1 : 0)")
+                    LMLog.visual.info("🔮 3D STATUS: depth=\(hasDepth) textureStereo=\(hasStereo) gen=\(transitionState.lastGeneration) mesh avg=\(String(format: "%.3f", totalMeshTime / Double(max(frameCount, 1))), privacy: .public)ms relief k=\(String(format: "%.3f", lastReliefK), privacy: .public) breath=\(String(format: "%.3f", lastBreathing), privacy: .public)m w=\(String(format: "%.2f", lastReliefW), privacy: .public) fields=\(relief.previous != nil ? 1 : 0)+\(relief.current != nil ? 1 : 0)")
 
                     frameCount = 0
                     totalRenderTime = 0

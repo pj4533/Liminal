@@ -1,5 +1,8 @@
 # Spatial plan: one unified, depth-relief, wrap-around immersive space
 
+> Status (2026-11-15): phases 0 to 5 implemented on feature/spatial. Device checks remain; see the
+> device checklist in docs/decisions/spatial.md.
+
 Branch `feature/spatial`. Decisions with reasons: [docs/decisions/spatial.md](../decisions/spatial.md).
 
 ## 1. Goal and decision

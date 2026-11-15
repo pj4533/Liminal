@@ -116,11 +116,60 @@ Mac with the same model (same cover crop, 518x392, min-max normalised). With dep
 head offset the near cliff of fixture r2-01 shifts 40 px and the far sky 29 to 32 px, against a
 uniform 33 to 35 px with depth 0.
 
-## Device checklist (to fill in)
+## S13. ARKit entry pose works in the simulator; re-centre polls at 10 Hz
 
-- Stereo comfort at Depth 0.6 and 1.0
+`HeadPoseProvider` runs a `WorldTrackingProvider` (no authorization prompt needed for the device
+anchor) and waits up to 1 s at entry for a tracked pose. Contrary to the plan's expectation, the
+visionOS 27.2 simulator does report one: the logs show `SHELL placed at (0.00, 1.60, 0.00) yaw=-0.0°
+source=ARKit`, so the fallback (0, 1.5, 0) is only used when tracking is unsupported or late. The
+re-centre (`ShellRecentre`, pure, unit tested) queries the device anchor every 0.1 s rather than every
+frame: start at 0.35 m, ease with a 3 s time constant (frame-rate independent), stop within 5 cm
+(hysteresis, so the shell does not creep after small head moves). Only position is re-centred; the
+entry yaw stays, so turning the head looks around the scene instead of dragging it along.
+
+## S14. Depth setting, eased; breathing coupled to the music within the 3 cm cap
+
+- "Depth" (`SettingsService.depthStrength`, default 0.6, persisted, reset with the others) is a slider
+  in the Visuals section. The render loop eases it with a 0.5 s one-pole (`DepthSettingSmoother`), so
+  dragging the slider or a reset reshapes the relief smoothly rather than in one frame (comfort).
+  `-LiminalShellDepth` still overrides it.
+- Breathing amplitude is 2 cm at rest and rises toward the 3 cm comfort cap with the music's scene
+  energy and slow geometry pulse, scaled by the coupling's master wet (`MusicModulation.amount`), so
+  it is 2 cm when "Sync visuals to music" is off. The mesh clamps it to 3 cm. Colour, glow, ghost-tap
+  bursts and the other music couplings already reach every tile through the shared effects texture.
+
+## S15. One immersive space and one button
+
+`LiminalVisionApp` has a single `ImmersiveSpace(id: "liminalSpace")` with
+`.progressive(0.4...1.0, initialAmount: 1.0)` and `.full`; at full the simulator room no longer shows
+behind or below the shell. `ControlsView` has one "Enter Liminal" / "Exit Liminal" button (accessibility
+id still `enterDome`) and the Depth slider. `SpatialDioramaView.swift` is deleted; no source or script
+mentions the diorama any more. `-LiminalOpenDome YES` opens `liminalSpace`, so `perf-run.sh` is
+unchanged apart from comments, its log check and the re-measured `sim-tap.sh` coordinates
+(Play 1371 826, Enter Liminal 1371 930). `ImmersiveDomeView.swift` keeps its name for merge safety with
+the transitions workstream; transitions only reach the shell through the effected texture and
+`transitionProgress`, so any new transition type is inherited unchanged.
+
+## S16. Final verification (simulator, Debug)
+
+- All three builds (macOS, visionOS simulator, generic visionOS device) succeed; LiminalTests pass,
+  including six new placement tests.
+- Screenshots at yaw 0, 56, 112, 180, 304 (-56) and pitch 45, 315 (-45): effects on every tile, seams
+  continuous, rear gap and top/bottom fade to black.
+- Recording across two image changes at depth 1: k dips to about 0.62 mid-transition and returns to 1,
+  the relief blend weight goes 0 -> 0.7 -> 1, and the effected morph plays on the shell with no pop.
+- Recordings at effect intensity 0, 0.5 and 1 show the expected range from clear to wild.
+- perf-run (30 s after 15 s warm-up): 78.4 fps, 2.17 dropped per 5 s, GPU 0.128 ms, against the
+  phase 0 baseline of 78.0 fps, 2.5 dropped, 0.138 ms. Render target unchanged at 2048x2048.
+
+## Device checklist (to fill in on Apple Vision Pro, visionOS 27.2.1)
+
+- Real ML depth relief (the simulator's Depth Anything output is all zeros)
+- Stereo comfort at Depth 0.6 and 1.0; whether the default should change
 - Head-motion parallax and re-centre at 0.35 m
-- Entry pose (position and yaw) from ARKit
+- Entry pose (position and yaw) from ARKit when entering seated and standing
 - Frame time and heat on M2 at 90 Hz
 - Mirror seams and rear fade
 - Progressive versus full immersion
+- Texture-stereo A/B (`-LiminalShellTextureStereo YES`); if the geometry alone reads well, remove
+  `StereoMaterialBuilder` and the stereo render path

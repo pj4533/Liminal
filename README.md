@@ -20,7 +20,7 @@ Liminal creates endless, evolving ambient soundscapes synchronized with AI-gener
 - **AI Visuals**: Gemini image generation (gemini-nano-banana-2.1, the latest model, 3:2 at 2K; hourly and daily spending cap) driven by a style/subject/transformation/palette prompt system for varied, photoreal-but-surreal imagery. See `docs/decisions/images.md`
 - **GPU Effects**: one Metal fragment shader with Ken Burns motion, turbulence distortion, chromatic aberration, crossfade, hue shifts, ghost taps, stochastic bloom, feedback warping and a final vibrance stage that keeps colors vivid; a slow clarity cycle and a strain budget keep the image recognisable, scaled by the Effect intensity setting
 - **Audio-visual coupling**: the music drives the visuals (note glow, scene intensity, chord-tied hue, ghost-tap burst on scene change) and each new image sends a mood (brightness, warmth, saturation, energy, mood words) back to the music. A "Sync visuals to music" switch turns the music-to-visuals direction off. See `docs/decisions/av-coupling.md`
-- **macOS and visionOS**: a window with a control panel on macOS; on visionOS a control window plus an immersive curved dome (112.5 x 75 degrees, 2048x2048 per eye, stereo with ML depth) and a Spatial Diorama
+- **macOS and visionOS**: a window with a control panel on macOS; on visionOS a control window plus one immersive space: a 3D shell that wraps 337.5 x 120 degrees around you (the image straight ahead, mirrored continuations to the sides, above and below), pushed into real depth from the ML depth map, with every effect on it (one 2048x2048 effects render). See `docs/decisions/spatial.md`
 - **Indirect Control**: shape the experience through abstract sliders rather than direct manipulation
 
 ## Requirements
@@ -74,7 +74,7 @@ GenerativeEngine (facade)           Gemini -> ImageQueue / ImageStore (disk)
  MixBus: Zita reverb, delay,         EffectsUniformsComputer (single source of truth)
  shimmer, limiter                     -> EffectsMetalView (macOS, MTKView)
         |                             -> OffscreenEffectsRenderer (visionOS, MRT stereo ->
-        |  MusicState (lock-free)         DrawableQueue -> RealityKit dome)
+        |  MusicState (lock-free)         DrawableQueue -> RealityKit shell)
         +-----> MusicReactor / MusicModulation -> uniforms
         <----- VisualMoodBuilder: setVisualMood / imageDidChange / setVisualActivity
 ```
@@ -98,7 +98,7 @@ Shader pipeline order (`Liminal/Shaders/EffectsRenderer.metal`): Ken Burns, dist
 | **Clear All Images** | Wipes every cached image after confirmation and restarts generation |
 | **Reset All Settings** | Restores defaults |
 
-On macOS the panel scrolls, and Cache only, Clear All Images and Reset live in a "Storage & Settings" sheet (Cmd-,). On visionOS all controls are in the control window (Playback, Music, Visuals, Images & Storage), plus Enter/Exit Dome and Spatial Diorama.
+On macOS the panel scrolls, and Cache only, Clear All Images and Reset live in a "Storage & Settings" sheet (Cmd-,). On visionOS all controls are in the control window (Playback, Music, Visuals, Images & Storage), plus Enter/Exit Liminal (the immersive space) and a Depth slider for how far the relief comes toward you.
 
 ## Debug launch flags (DEBUG builds only, compiled out of Release)
 
@@ -110,12 +110,16 @@ Pass as launch arguments, for example `-LiminalAutoPlay YES`. Defined in `Limina
 |------|--------|
 | `-LiminalAutoPlay YES` | Start playback at launch |
 | `-LiminalAllowGeneration YES` | Let an automated launch generate new images (off by default) |
-| `-LiminalOpenDome YES` | Open the immersive dome automatically (visionOS) |
+| `-LiminalOpenDome YES` | Open the immersive space automatically (visionOS) |
+| `-LiminalShellYaw <deg>`, `-LiminalShellPitch <deg>` | Rotate the immersive scene so that direction faces the fixed simulator camera (negative angles as positive equivalents, e.g. 304) |
+| `-LiminalShellHeadOffset "x,y,z"`, `-LiminalShellDepth <0...1>` | Imitate a head offset (parallax in the simulator) / override the Depth setting |
+| `-LiminalDepthImage <png>`, `-LiminalShellCycle "img\|depth,..."` | Use Mac-made depth maps (the simulator's ML depth is all zeros) / cycle fixture images |
+| `-LiminalHideControls YES`, `-LiminalShellTextureStereo YES` | Close the controls window once the space is open / old per-eye texture parallax A/B |
 | `-LiminalFreezeTime <s>` | Pin the effect clock for deterministic screenshots (bypasses coupling) |
 | `-LiminalPerfLogInterval <s>` | Interval of the PERF log lines (default 1) |
 | `-LiminalPerfSplitPasses YES` | Legacy split-pass option (no-op since the direct-drawable render) |
 | `-LiminalTestPattern YES` / `-LiminalTestImage <path>` | Show a generated orientation test card / a given image |
-| `-LiminalForceStereoFlatDepth YES`, `-LiminalForceMonoMaterial YES` | Force flat depth / the mono dome material |
+| `-LiminalForceStereoFlatDepth YES`, `-LiminalForceMonoMaterial YES` | Force flat depth / the mono fallback material |
 | `-LiminalNoEffects YES` | Bypass all effects |
 | `-LiminalSyncLog YES` | One SYNC log line per second (coupling state) |
 | `-LiminalSyncStrength <x>` | Exaggerate the music-to-visuals coupling for tuning |

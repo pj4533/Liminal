@@ -9,8 +9,8 @@
 #        -LiminalAutoPlay YES -LiminalOpenDome YES -LiminalPerfLogInterval 1 [-LiminalFreezeTime <t>]
 #      (these are compiled out of Release; see Liminal/Utils/DebugLaunchOptions.swift).
 #   3. Streams the app's unified log (subsystem com.saygoodnight.Liminal) to <out>/log.txt.
-#   4. Waits for the dome render loop's first "📊 visionOS PERF" line. If the auto-open flag did not
-#      open the dome within ~25s it falls back to scripts/sim-tap.sh (Play, then Enter Dome).
+#   4. Waits for the immersive render loop's first "📊 visionOS PERF" line. If the auto-open flag did not
+#      open the immersive space within ~25s it falls back to scripts/sim-tap.sh (Play, then Enter Liminal).
 #   5. Warms up (default 15s), collects --seconds of PERF lines, takes a screenshot, and prints a
 #      JSON summary (also written to <out>/summary.json).
 #
@@ -109,11 +109,11 @@ perf_count() { local c; c=$(grep -c "visionOS PERF" "$LOG" 2>/dev/null); echo ${
 waited=0; tapped=0
 while (( $(perf_count) == 0 )); do
   sleep 1; (( waited++ ))
-  if (( waited == 25 && tapped == 0 )) && ! grep -q "auto-opened liminalDome" "$LOG"; then
-    log "dome not open after 25s; falling back to sim-tap (Play, Enter Dome)"
-    grep -q "auto-play started" "$LOG" || "$SCRIPT_DIR/sim-tap.sh" 1371 831
+  if (( waited == 25 && tapped == 0 )) && ! grep -q "auto-opened the immersive space" "$LOG"; then
+    log "dome not open after 25s; falling back to sim-tap (Play, Enter Liminal)"
+    grep -q "auto-play started" "$LOG" || "$SCRIPT_DIR/sim-tap.sh" 1371 826
     sleep 2
-    "$SCRIPT_DIR/sim-tap.sh" 1371 937
+    "$SCRIPT_DIR/sim-tap.sh" 1371 930
     tapped=1
   fi
   if (( waited >= 150 )); then

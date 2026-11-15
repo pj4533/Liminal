@@ -20,7 +20,7 @@ nonisolated enum DebugLaunchOptions {
     /// -LiminalAutoPlay YES: start audio + visual playback as soon as the controls appear.
     static let autoPlay: Bool = defaults.bool(forKey: "LiminalAutoPlay")
 
-    /// -LiminalOpenDome YES (visionOS): open the "liminalDome" immersive space once the window appears.
+    /// -LiminalOpenDome YES (visionOS): open the immersive space ("liminalSpace") once the window appears.
     static let openDome: Bool = defaults.bool(forKey: "LiminalOpenDome")
 
     /// -LiminalFreezeTime <seconds>: pin the effect clock to a constant for deterministic screenshots.
@@ -184,7 +184,7 @@ nonisolated enum DebugLaunchOptions {
     private static let logOnce: Void = {
 #if DEBUG
         if autoPlay { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalAutoPlay=YES (auto-start playback)") }
-        if openDome { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalOpenDome=YES (auto-open immersive dome)") }
+        if openDome { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalOpenDome=YES (auto-open the immersive space)") }
         if let t = freezeTime { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalFreezeTime=\(t, format: .fixed(precision: 2))s (effect time pinned)") }
         if defaults.object(forKey: "LiminalPerfLogInterval") != nil {
             LMLog.general.info("🧪 DEBUG FLAG applied: LiminalPerfLogInterval=\(perfLogInterval, format: .fixed(precision: 2))s")

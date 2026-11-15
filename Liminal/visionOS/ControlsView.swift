@@ -20,7 +20,6 @@ struct ControlsView: View {
     @Environment(\.dismissWindow) private var dismissWindow
 
     @State private var isImmersed = false
-    @State private var isDioramaActive = false
 
     /// Minimum column width that keeps every label on one line at visionOS type sizes.
     private static let columnWidth: CGFloat = 360
@@ -93,10 +92,7 @@ struct ControlsView: View {
             .tint(audioEngine.isRunning ? .red : .blue)
             .accessibilityIdentifier("play")
 
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 12) { domeButton; dioramaButton }
-                VStack(spacing: 12) { domeButton; dioramaButton }
-            }
+            immersiveButton
 
             PlaybackStatus(isPlaying: audioEngine.isRunning,
                            cachedCount: visualEngine.totalCachedCount,
@@ -110,29 +106,18 @@ struct ControlsView: View {
         }
     }
 
-    private var domeButton: some View {
-        Button(action: toggleDome) {
-            Label(isImmersed ? "Exit Dome" : "Enter Dome",
+    /// One immersive mode: the wrap-around depth-relief shell with the effects on it
+    /// (docs/plans/spatial.md). The id stays "enterDome" for scripts/sim-tap.sh.
+    private var immersiveButton: some View {
+        Button(action: toggleImmersive) {
+            Label(isImmersed ? "Exit Liminal" : "Enter Liminal",
                   systemImage: isImmersed ? "arrow.down.right.and.arrow.up.left"
-                                          : "arrow.up.left.and.arrow.down.right")
-                .fixedSize()
+                                          : "visionpro")
                 .frame(maxWidth: .infinity, minHeight: ControlMetrics.buttonHeight)
         }
         .buttonStyle(.bordered)
         .buttonBorderShape(.roundedRectangle(radius: 20))
         .accessibilityIdentifier("enterDome")
-    }
-
-    private var dioramaButton: some View {
-        Button(action: toggleDiorama) {
-            Label(isDioramaActive ? "Exit Diorama" : "Spatial Diorama",
-                  systemImage: isDioramaActive ? "cube.transparent" : "cube.transparent.fill")
-                .fixedSize()
-                .frame(maxWidth: .infinity, minHeight: ControlMetrics.buttonHeight)
-        }
-        .buttonStyle(.bordered)
-        .buttonBorderShape(.roundedRectangle(radius: 20))
-        .accessibilityIdentifier("spatial")
     }
 
     // MARK: Music
@@ -154,6 +139,9 @@ struct ControlsView: View {
             ValueSlider(title: "Effect intensity", value: $settings.effectIntensity,
                         minimumLabel: "Subtle", maximumLabel: "Wild",
                         explanation: "How far the effects bend the picture. Low keeps the image clear.")
+            ValueSlider(title: "Depth", value: $settings.depthStrength,
+                        minimumLabel: "Flat", maximumLabel: "Deep",
+                        explanation: "How far near parts of the picture come toward you in the immersive space.")
             ExplainedToggle(title: "Sync visuals to music",
                             explanation: "Color, motion and bloom follow the music as it plays.",
                             isOn: $settings.syncVisualsToMusic)
@@ -208,34 +196,14 @@ struct ControlsView: View {
         }
     }
 
-    private func toggleDome() {
+    private func toggleImmersive() {
         Task {
             if isImmersed {
                 await dismissImmersiveSpace()
                 isImmersed = false
             } else {
-                if isDioramaActive {
-                    await dismissImmersiveSpace()
-                    isDioramaActive = false
-                }
-                let result = await openImmersiveSpace(id: "liminalDome")
+                let result = await openImmersiveSpace(id: LiminalVisionApp.immersiveSpaceID)
                 if case .opened = result { isImmersed = true }
-            }
-        }
-    }
-
-    private func toggleDiorama() {
-        Task {
-            if isDioramaActive {
-                await dismissImmersiveSpace()
-                isDioramaActive = false
-            } else {
-                if isImmersed {
-                    await dismissImmersiveSpace()
-                    isImmersed = false
-                }
-                let result = await openImmersiveSpace(id: "liminalDiorama")
-                if case .opened = result { isDioramaActive = true }
             }
         }
     }
@@ -256,17 +224,17 @@ extension ControlsView {
             Task {
                 // Give the window a moment to finish presenting before requesting the space.
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
-                let result = await openImmersiveSpace(id: "liminalDome")
+                let result = await openImmersiveSpace(id: LiminalVisionApp.immersiveSpaceID)
                 if case .opened = result {
                     isImmersed = true
-                    LMLog.general.info("🧪 DEBUG: auto-opened liminalDome immersive space")
+                    LMLog.general.info("🧪 DEBUG: auto-opened the immersive space")
                     if DebugLaunchOptions.hideControls {
                         try? await Task.sleep(nanoseconds: 500_000_000)
                         dismissWindow()
                         LMLog.general.info("🧪 DEBUG: controls window closed (-LiminalHideControls)")
                     }
                 } else {
-                    LMLog.general.error("🧪 DEBUG: auto-open of liminalDome failed: \(String(describing: result), privacy: .public)")
+                    LMLog.general.error("🧪 DEBUG: auto-open of the immersive space failed: \(String(describing: result), privacy: .public)")
                 }
             }
         }
