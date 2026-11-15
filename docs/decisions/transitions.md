@@ -4,8 +4,9 @@ Decision log for the transitions workstream. Plan with all numbers: `docs/plans/
 Request: the transition between images (distort, switch, come back) is liked but is the same every time;
 make a family of them that flows out of and back into the live effects.
 
-Status: implemented on both platforms (T15-T26), round 0 clips rendered; blind judging and the
-simulator / macOS run of plan 8.3 are next.
+Status: implemented on both platforms (T15-T26), round 0 judged blind, round 1 tuned and rendered
+(T27-T32; Echo and Embers replaced by Ripple and Melt). Round 1 judging and the simulator / macOS run
+of plan 8.3 are next.
 
 ## Tooling and diagnosis
 
@@ -221,3 +222,102 @@ swap fields) and `swapWeight` in stage B. Tests: `LiminalTests/ImageTransitionTe
   Echo, Embers, Kaleidoscope, Rainbow and Whirlpool are 1.05-1.09). Against main's transition frame
   they are 1.12-1.22 x: main switched the ghost taps off during a transition, and taps now run through
   it (T7). Worth a check on device: a transition lasts 2-4 s of every image interval.
+
+## Tuning round 1
+
+### T27. Round 0 blind scores per style
+Two blind judges, 26 clips (each style on both pairs, today's transition twice as the hidden control),
+1-5 per axis, mean of the 4 ratings per style (d = distinct from the others, s = smooth, h = swap
+hidden, f = flows into the effects, a = awesome):
+
+| style | d | s | h | f | a | judges' words | round 1 |
+|---|---|---|---|---|---|---|---|
+| classic (control) | 2.75 | 4.00 | 3.25 | 3.50 | 3.00 | "clearly a dissolve, bland" | unchanged, never picked |
+| Tide | 3.00 | 3.75 | 3.75 | 3.75 | 3.75 | "sheared liquid smear, similar to others", "oil slick" | unchanged (today's look, liked by the user) |
+| Undertow | 3.00 | 3.75 | 4.00 | 3.75 | 3.50 | "near-duplicate of Tide" | reworked (T28) |
+| Prism | 2.50 | 4.00 | 3.75 | 3.75 | 3.00 | "fringed liquid warp, like 03/09", "crossfade visible" | reworked (T28) |
+| Rainbow front | 3.50 | 3.75 | 4.00 | 4.25 | 4.25 | "grows out of and settles into the trippy look" | unchanged |
+| Kaleidoscope | 4.75 | 3.50 | 4.50 | 3.50 | 4.75 | "very distinct and striking", "frame jumps between mirror states" | slower release (T29) |
+| Whirlpool | 3.25 | 4.00 | 4.00 | 3.50 | 3.75 | "swap totally hidden in the vortex" (its two clips judged alike) | unchanged |
+| Dive | 4.00 | 3.75 | 2.50 | 3.50 | 3.25 | "ghosted double image of both photos at the midpoint" | retuned (T29) |
+| Afterimage | 3.25 | 4.00 | 4.25 | 3.25 | 3.25 | "zoom into a flat blurry orange field, middle plain" | retuned (T29) |
+| Echo | 2.25 | 4.25 | 3.00 | 3.50 | 2.75 | "flame-like ghost dissolve, plain crossfade visible" | replaced by Ripple (T30) |
+| Depthwash | 2.75 | 4.00 | 3.75 | 4.50 | 3.50 | "neon hue melt, similar to Rainbow" | reworked (T28) |
+| Embers | 2.25 | 3.25 | 2.75 | 2.75 | 2.50 | "abrupt jump between frames 4 and 5", "generic" | replaced by Melt (T30) |
+| Shatter | 3.75 | 3.50 | 4.00 | 3.75 | 4.25 | "water-caustic shatter, slightly harsh/abrupt" | softer edge (T29) |
+
+- What the scores say: the styles whose carrier is a UV move (Kaleidoscope, Whirlpool, Shatter) or a
+  strong colour field (Rainbow) were seen as distinct; every style that is "the live warp, a bit more,
+  plus a mask" (Tide, Undertow, Prism, Depthwash, Echo, Embers) collapsed into one look-alike group
+  ("liquid smear with fringing"). The fix is a different *geometry* per style, not stronger amounts.
+
+### T28. Undertow, Prism, Depthwash: each gets its own movement
+- Undertow: a one-way current. The picture is pulled along the seed direction in streaks (two sines
+  across the direction), up to `txAmount` = 0.05 / 0.10 / 0.16 at the three intensity anchors; the
+  turbulence amount drops a little so the current, not the water, is the look.
+- Prism: a wide straight RGB split along the seed direction (`0.35 txAmount E`, about 0.06 of the frame
+  at the plateau, on top of the radial fringing), and the swap is a light sweep along the same
+  direction (`0.7 dot(uv, dir) + 0.25 flow`) with the channel stagger, so the new picture arrives
+  red, then green, then blue across the frame. One uniform branch in stage B (`txEnv > 0`).
+- Depthwash (visionOS only, needs depth): near things swell toward the viewer (`uv` scaled about the
+  centre by `1 + txAmount E depth`), the far ones hold still, and the swap stays far-to-near. The
+  fractal hue boost that made it look like Rainbow is cut to a third.
+
+### T29. Smoothness and the visible double exposure
+- Kaleidoscope: the fast frame steps were in the unfold (tp 0.79-0.90), not at the swap. Plateau
+  0.30-0.60 and 3.2-4.2 s give the unfold 40 % of a longer transition; mask softness 0.15 -> 0.22.
+  step_max 0.063 -> 0.059 / 0.062 (still above 0.050: the unfold is large motion by design).
+- Dive: the double exposure was the feedback trails (feedbackAdd 0.30) dragging the old picture over
+  the new at the deepest zoom. Trails 0.06 / 0.12 / 0.18, zoom 1 + 0.5 / 1.0 / 1.8, mask 0.22 -> 0.16,
+  window 0.34-0.58, 2.6-3.4 s. seam_out 2.28 / 2.58 -> 1.69 / 1.87 (both under the gate now).
+- Afterimage: the trails cycle colour (hue blend +0.25 E, hue base +0.18 E, chromatic x(1 + 2E)) and
+  the feedback target is lower (0.82 at the default, was 0.88) so the smear keeps streaks of detail
+  instead of a flat field. Its swap window widens to 0.30-0.60: with less feedback the narrow window
+  popped (2.7 -> 2.0).
+- Shatter: mask softness 0.08 -> 0.14, window 0.32-0.68 ("slightly harsh").
+
+### T30. Echo and Embers replaced by Ripple and Melt
+- Both kept the raw value (9 and 11) so uniforms and the director's tables only rename.
+- Why replaced and not tuned: both used a carrier that cannot hide edges (ghost taps, bloom), so the
+  swap read as a dissolve whatever the amounts; judges grouped them with the generic liquid styles.
+  Removing Echo's tap-gain code also takes the per-frame tap alpha select out of every frame's loop
+  (the tap loop is the same as main's again).
+- Ripple (geometric, gentle): a drop in a pond. Concentric rings (`sin(30 r - 6 t)`, radial UV push of
+  0.015 / 0.035 / 0.055) travel out from a seeded point and the new picture rides the expanding front
+  (`r / 0.75 + 0.08 ring`).
+- Melt (flow, gentle): the picture drips. Narrow drips (sine peaks to the 6th and 4th power) on a slow
+  sag pull the picture downward, stretching more toward the bottom; drip length 0.12 / 0.24 / 0.36. The
+  new picture arrives from the top down along the drip-shaped front.
+- Families now: flow = Tide, Undertow, Depthwash, Melt; colour = Prism, Rainbow; geometric =
+  Kaleidoscope, Whirlpool, Dive, Shatter, Ripple; temporal = Afterimage. Ripple and Melt are offered at
+  low intensity and favoured in clear stretches.
+
+### T31. Measured, round 1 (default intensity, seed 0; `tx/round1` in the session scratchpad)
+| style | p1 swap_vis / double | p2 swap_vis / double | pop p1 / p2 | seam_out p1 / p2 | step_max p1 / p2 |
+|---|---|---|---|---|---|
+| Undertow | 0.16 / 0.12 | 0.17 / 0.14 | 1.4 / 1.3 | 1.27 / 1.38 | 0.023 / 0.026 |
+| Prism | 0.26 / 0.22 | 0.23 / 0.19 | 1.9 / 1.7 | 1.52 / 1.40 | 0.024 / 0.027 |
+| Kaleidoscope | 0.04 / 0.11 | 0.09 / 0.11 | 1.2 / 1.3 | 1.61 / 1.82 | 0.059 / 0.062 |
+| Dive | -0.22 / 0.10 | -0.06 / 0.06 | 1.3 / 1.5 | 1.69 / 1.87 | 0.050 / 0.044 |
+| Afterimage | 0.19 / 0.16 | -0.05 / 0.06 | 2.0 / 2.4 | 1.06 / 1.02 | 0.016 / 0.029 |
+| Ripple | 0.32 / 0.27 | 0.15 / 0.13 | 1.4 / 2.1 | 1.06 / 1.07 | 0.037 / 0.054 |
+| Depthwash | 0.23 / 0.21 | 0.05 / 0.05 | 2.3 / 3.0 | 1.03 / 1.04 | 0.022 / 0.039 |
+| Melt | 0.19 / 0.16 | 0.11 / 0.08 | 1.1 / 1.3 | 1.20 / 1.38 | 0.024 / 0.023 |
+| Shatter | 0.18 / 0.16 | -0.41 / 0.05 | 2.1 / 1.7 | 1.51 / 1.60 | 0.027 / 0.034 |
+- Unchanged styles measure as in round 0 (Tide still pops on the calm pair, 2.9 / 3.6, and its
+  seam_out is 2.8 / 2.5; left alone because it is the user's liked look).
+- Still visible on the calm pair: Prism and Ripple (and Rainbow, unchanged). Both now have a clear
+  geometric front (a spectral sweep, an expanding ring), which is different from a whole-frame
+  dissolve; whether the judges still read it as a visible swap is round 1's question.
+- Outside transitions: frames against main's shader differ by at most 1 of 255 in under 0.001 % of
+  pixels (compiler rounding; r2-04 and r2-07 at t = 47 / 160 / 330 / 600, both eyes). The
+  effects-balance gates (`fx-judge-set.py --mode app`, 150 frames) PASS at 0.25 / 0.5 / 1.0 (hog loss
+  mean 0.068 / 0.095 / 0.127).
+
+### T32. GPU, round 1 (interleaved A/B, 2048^2 MRT stereo, the other workstream's simulator running)
+- Non-transition frames, round 1 against round 0: B/A 1.009 and 0.994 overall (per scenario
+  1.003-1.017); main against itself in the same session 0.993 (0.970-1.004). Within noise; the Prism
+  branch in stage B is the only new code on the normal path and Echo's tap select left it.
+- Against main: 1.020 / 1.020 overall in this (noisier) session, round 0 measured about 1.015.
+- Transition frames against round 0's: 0.94-1.07 per style (Melt 1.07 and Kaleidoscope 1.06 the
+  highest, Prism and Tide cheaper), single runs, so only "no style became much heavier".

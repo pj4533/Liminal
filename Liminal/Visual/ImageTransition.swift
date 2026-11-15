@@ -22,7 +22,7 @@ nonisolated enum TransitionStyle: Int, CaseIterable, Sendable {
     /// The pre-family crossfade: sin(pi * tp) boost, whole-frame eased dissolve over the full duration.
     /// Default of `compute` (golden parity) and the hidden control of the judge sets; never picked.
     case classic = 0
-    case tide, undertow, prism, rainbow, kaleidoscope, whirlpool, dive, afterimage, echo, depthwash, embers, shatter
+    case tide, undertow, prism, rainbow, kaleidoscope, whirlpool, dive, afterimage, ripple, depthwash, melt, shatter
 
     /// The styles the director picks from.
     static let family: [TransitionStyle] = allCases.filter { $0 != .classic }
@@ -36,17 +36,17 @@ nonisolated enum TransitionStyle: Int, CaseIterable, Sendable {
 
     var familyGroup: TransitionFamily {
         switch self {
-        case .classic, .tide, .undertow, .depthwash: return .flow
-        case .prism, .rainbow, .embers: return .colour
-        case .kaleidoscope, .whirlpool, .dive, .shatter: return .geometric
-        case .afterimage, .echo: return .temporal
+        case .classic, .tide, .undertow, .depthwash, .melt: return .flow
+        case .prism, .rainbow: return .colour
+        case .kaleidoscope, .whirlpool, .dive, .shatter, .ripple: return .geometric
+        case .afterimage: return .temporal
         }
     }
 
     /// Offered at any intensity (plan 7.1); the others need intensity >= 0.25.
     var isGentle: Bool {
         switch self {
-        case .tide, .undertow, .afterimage, .depthwash, .embers, .rainbow: return true
+        case .tide, .undertow, .afterimage, .depthwash, .melt, .rainbow, .ripple: return true
         default: return false
         }
     }
@@ -60,14 +60,14 @@ nonisolated enum TransitionStyle: Int, CaseIterable, Sendable {
         case .undertow:     return TransitionShape(s0: 0.30, s1: 0.70, duration: (2.2, 3.2), soft: 0.18)
         case .prism:        return TransitionShape(s0: 0.26, s1: 0.76, duration: (2.2, 3.0), soft: 0.30)
         case .rainbow:      return TransitionShape(s0: 0.30, s1: 0.72, duration: (2.4, 3.4), soft: 0.12)
-        case .kaleidoscope: return TransitionShape(s0: 0.38, s1: 0.64, duration: (2.8, 3.8), soft: 0.15)
+        case .kaleidoscope: return TransitionShape(s0: 0.30, s1: 0.60, duration: (3.2, 4.2), soft: 0.22)
         case .whirlpool:    return TransitionShape(s0: 0.30, s1: 0.60, duration: (2.4, 3.4), soft: 0.20)
-        case .dive:         return TransitionShape(s0: 0.36, s1: 0.64, duration: (2.2, 3.0), soft: 0.22)
-        case .afterimage:   return TransitionShape(s0: 0.32, s1: 0.52, duration: (2.8, 4.0), soft: 0.35)
-        case .echo:         return TransitionShape(s0: 0.36, s1: 0.68, duration: (2.6, 3.6), soft: 0.22)
+        case .dive:         return TransitionShape(s0: 0.34, s1: 0.58, duration: (2.6, 3.4), soft: 0.16)
+        case .afterimage:   return TransitionShape(s0: 0.30, s1: 0.60, duration: (2.8, 4.0), soft: 0.35)
+        case .ripple:       return TransitionShape(s0: 0.28, s1: 0.70, duration: (2.4, 3.4), soft: 0.12)
         case .depthwash:    return TransitionShape(s0: 0.26, s1: 0.74, duration: (3.0, 4.5), soft: 0.22)
-        case .embers:       return TransitionShape(s0: 0.30, s1: 0.66, duration: (2.4, 3.4), soft: 0.20)
-        case .shatter:      return TransitionShape(s0: 0.34, s1: 0.66, duration: (1.8, 2.6), soft: 0.08)
+        case .melt:         return TransitionShape(s0: 0.30, s1: 0.70, duration: (2.6, 3.6), soft: 0.12)
+        case .shatter:      return TransitionShape(s0: 0.32, s1: 0.68, duration: (1.8, 2.6), soft: 0.14)
         }
     }
 }
@@ -173,15 +173,19 @@ nonisolated struct TransitionBoost: Sendable, Equatable {
             b.chromaticMul = 1 + 4 * e
             b.feedbackAdd = 0.10 * e
         case .undertow:
-            b.water = tri(0.05, 0.15, 0.32) * e
-            b.feedbackAdd = tri(0.15, 0.30, 0.40) * e
+            // Round 1: a one-way current (streaked UV pull along the seed direction) instead of
+            // more of Tide's water, which judges could not tell apart.
+            b.shaderAmount = tri(0.05, 0.10, 0.16)
+            b.water = tri(0.03, 0.08, 0.18) * e
+            b.feedbackAdd = tri(0.15, 0.25, 0.35) * e
             b.feedbackWarpMul = 1 + 2 * e
             b.chromaticMul = 1 + 2 * e
         case .prism:
             b.chromaticAdd = tri(0.035, 0.07, 0.11) * e
             b.hueBlendAdd = 0.15 * e
-            b.water = tri(0.04, 0.10, 0.16) * e
-            b.shaderAmount = tri(0.10, 0.18, 0.25)
+            b.water = tri(0.03, 0.07, 0.12) * e
+            b.feedbackAdd = 0.08 * e
+            b.shaderAmount = tri(0.10, 0.18, 0.25)   // channel stagger; the shader's directional split is 0.35 x this
         case .rainbow:
             b.hueWaveTarget = tri(0.30, 0.45, 0.60)
             b.hueBlendTarget = tri(0.55, 0.80, 0.90)
@@ -200,32 +204,35 @@ nonisolated struct TransitionBoost: Sendable, Equatable {
             b.feedbackAdd = 0.12 * e
             b.chromaticMul = 1 + 1.5 * e
         case .dive:
-            b.kenBurnsMul = 1 + tri(0.4, 0.9, 1.6) * e
+            b.kenBurnsMul = 1 + tri(0.5, 1.0, 1.8) * e
             b.logSphere = tri(0.006, 0.016, 0.030) * e
-            b.feedbackAdd = tri(0.15, 0.30, 0.40) * e
+            b.feedbackAdd = tri(0.06, 0.12, 0.18) * e   // round 1: long trails were the visible double exposure
             b.chromaticMul = 1 + 3 * e
         case .afterimage:
-            b.feedbackTarget = tri(0.80, 0.88, 0.93)
+            b.feedbackTarget = tri(0.74, 0.82, 0.88)
             b.feedbackPull = e
             b.feedbackWarpMul = 1 + 3 * e
-            b.water = tri(0.03, 0.06, 0.11) * e
+            b.water = tri(0.05, 0.10, 0.16) * e
             b.bloomAdd = 0.10 * e
-        case .echo:
-            b.shaderAmount = tri(2.5, 4.0, 5.5)   // tap alpha gain at the plateau (shader caps alpha at 0.85)
-            b.ghostReachMul = 1 + 1.5 * e
-            b.water = tri(0.05, 0.12, 0.18) * e
+            // Round 1: the trails cycle colour so the smear has streaks, not a flat field.
+            b.hueBlendAdd = 0.25 * e
+            b.hueBase = 0.18 * e
+            b.chromaticMul = 1 + 2 * e
+        case .ripple:
+            b.shaderAmount = tri(0.015, 0.035, 0.055)   // ring displacement
+            b.water = tri(0.02, 0.05, 0.10) * e
             b.chromaticMul = 1 + 2 * e
             b.feedbackAdd = 0.10 * e
         case .depthwash:
-            b.fractalHueAdd = tri(0.15, 0.30, 0.40) * e
+            b.shaderAmount = tri(0.25, 0.50, 0.80)   // near things swell toward the viewer
+            b.fractalHueAdd = tri(0.05, 0.10, 0.15) * e
             b.water = tri(0.04, 0.09, 0.15) * e
             b.chromaticMul = 1 + 1.5 * e
-        case .embers:
-            b.bloomAdd = tri(0.20, 0.40, 0.55) * e
-            b.bloomRadiusMul = 1 + e
-            b.contrastAdd = 0.15 * e
-            b.noise = tri(0.006, 0.020, 0.035) * e
-            b.water = tri(0.04, 0.10, 0.16) * e
+        case .melt:
+            b.shaderAmount = tri(0.12, 0.24, 0.36)   // drip length
+            b.water = tri(0.03, 0.06, 0.10) * e
+            b.feedbackAdd = tri(0.10, 0.20, 0.30) * e
+            b.hueBlendAdd = 0.10 * e
         case .shatter:
             b.noise = tri(0.025, 0.055, 0.10) * e
             b.chromaticMul = 1 + 3 * e
@@ -266,7 +273,7 @@ nonisolated struct TransitionDirector: Sendable {
         var w: Float = s == .tide ? 0.7 : 1
         switch s {
         case .kaleidoscope, .whirlpool, .dive, .shatter, .prism: w *= 1 + d          // wild stretch
-        case .tide, .undertow, .depthwash, .embers, .afterimage: w *= 2 - d          // clear stretch
+        case .tide, .undertow, .depthwash, .melt, .ripple, .afterimage: w *= 2 - d          // clear stretch
         default: break
         }
         if s == .kaleidoscope || s == .shatter { w *= 1 + 0.5 * min(max((i - 0.25) / 0.75, 0), 1) }
