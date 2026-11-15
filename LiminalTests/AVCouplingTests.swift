@@ -18,8 +18,8 @@ struct AVCouplingTests {
             let u = EffectsUniformsComputer.compute(time: t, music: m)
             #expect(u.bloomAmount <= 0.72 + 1e-6)
             #expect(u.vibranceAmount <= 0.50 + 1e-6)
-            // Feedback mix moves at most 0.04 from its look base (0.20...0.28 at the default intensity).
-            #expect(u.feedbackMix >= 0.16 - 1e-6 && u.feedbackMix <= 0.32 + 1e-6)
+            // Feedback mix moves at most 0.04 from its look base (0.25...0.30 at the default intensity).
+            #expect(u.feedbackMix >= 0.21 - 1e-6 && u.feedbackMix <= 0.34 + 1e-6)
             #expect(u.feedbackWarpAmount <= 0.04 + 1e-6)
             #expect(u.ghostTapMaxDistance <= 0.08 + 1e-6)
             #expect(u.distortionAmplitude <= 0.10 + 1e-6)

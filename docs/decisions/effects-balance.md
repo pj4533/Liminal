@@ -289,3 +289,73 @@ and fringing, which are cheap for recognisability, caps stacked rainbows, and le
   which is within run-to-run noise.
 - Unit tests pass. The golden values were regenerated from `fx_model.py golden`, and the random-input test
   now also asserts the rainbow cap.
+
+## Tuning round 2 (after the round-1 blind judges)
+
+Round 1 (judges J1 and J3 on all 180 frames, J2 on frames 1-103) passed every recognition and orientation
+gate: recognised 100 / 100 / 95 %, upright 100 / 91.7 / 86.7 % at intensity 0.25 / 0.5 / 1.0. It missed
+one number: trippiness at 1.0 was **3.94** against 4.0, and the default cleared 3.0 by only 0.06 (3.06).
+
+The worst frames were all at 1.0, and the radial was small in every one of them (0.003-0.016):
+- A Ken Burns close-up (scale 1.25 and up) at the water's wild peak (0.070) turned the romanesco into a
+  crop of texture with no silhouette. Judges said "unrecognizable" or "orange coral" (view-100, view-169).
+- A colour stack on a dark scene (hue blend 0.47, hue waves 0.14, fractal hue 0.2, chromatic) hid the
+  tree's trunk, so judges could not find up (view-062, view-092, view-106).
+
+Round-0 and round-1 ratings were refit together (330 frames, ridge regression on the uniforms plus a
+per-fixture term, `scratchpad/fx/round2-work/data.py`, `sim.py`):
+- **Trippiness:** R² 0.85. Per standard deviation, the strongest terms are chromatic +0.42, fractal hue +0.25 and feedback (trails) +0.23. The water warp scores −0.11, the Ken Burns zoom +0.06 and the hue blend +0.09.
+- **Orientation on the flipped frames:** R² 0.54. The Ken Burns zoom (−0.11) and the hue blend (−0.09) are the two biggest losses.
+
+So round 2 adds trippiness through fringing and trails, which cost no orientation, and it takes back the zoom and some of the hue blend in the wild stretches.
+
+### E27. The Ken Burns zoom eases out in wild stretches
+- **What:** the zoom is cut by a fraction of (scale − 1): `kenBurnsRelief` (0, 0.30, 0.60) times the clarity drive (`macroDrive`).
+  - At 1.0 in a wild stretch, a 1.30 zoom becomes 1.12. At the default it becomes 1.21.
+  - Intensity 0 is unchanged, and the pan is unchanged.
+  - The drive used is the clarity cycle without the fresh-image hold. A crossfade therefore never zooms; the zoom changes over minutes, at under 1e-4 per frame.
+- **Why:**
+  - The silhouette is what carries recognition and orientation. Judges lost the romanesco and the tree only on close-ups combined with heavy effects.
+  - When the warps and colour are wild, the picture should show the whole subject. In clear stretches the close-ups are harmless, and they stay.
+  - The model puts the trippiness cost at −0.05 at 1.0, against +0.08 to +0.13 in orientation on the flipped frames.
+  - The new test `wildStretchesZoomOut` checks it.
+
+### E28. Water at 1.0: wild value 0.072 (was 0.080)
+- **Why:**
+  - Round 1's suggestion was "do not raise water at 1.0 beyond about 0.065". The peak frames at 0.070-0.073 were the streaked ones.
+  - 0.072 times the oscillator gives about 0.065 at the peaks. The default (0.058) and the clear values are unchanged, so the water still leads, as the user wants.
+  - Max strain p90 at 1.0 drops from 1.28 to 1.18.
+
+### E29. More fringing and trails
+- **What:**
+  - Chromatic (clear, wild): 0.9 / 1.15 becomes **1.0 / 1.3** at the default, and 1.1 / 1.3 becomes **1.3 / 1.6** at 1.0. The 0.02 cap is unchanged, so 1.0 simply spends more time near it.
+  - Feedback mix: 0.22 / 0.28 becomes **0.25 / 0.30** at the default, and 0.27 / 0.29 becomes **0.31 / 0.34** at 1.0. The music cap at 0.34 is unchanged.
+  - The AV-coupling test's feedback range follows: base 0.25-0.30 ± 0.04.
+- **Why:**
+  - These are the two strongest trippiness terms that do not cost orientation (chromatic −0.04 and feedback +0.05 on all frames).
+  - Fringing is radial and keeps luminance. Trails smear motion, not shape.
+  - Predicted trippiness goes from 3.04 to 3.25 at the default and from 3.95 to 4.34 at 1.0, which gives margin against the model's round-1 optimism (+0.13 to +0.2).
+
+### E30. Hue blend at 1.0: wild value 0.68 (was 0.75)
+- **Why:**
+  - Hue blends of 0.43-0.47 were present in every colour-wrecked frame at 1.0. The default (0.65) is unchanged.
+  - The rainbow cap (E25) now leaves the hue waves slightly more room at 1.0, because the product cap divides by a smaller blend.
+
+Kept: `macroBias` stays 0.60. At 0.8 the model gained only +0.04 at 1.0, but intensity 1.0 would sit wild 58 % of the time and clear only 8 %. At 0.60 the shares are 52 % and 15 %, which keeps the breathing the user asked for. The radial, the noise, the hue waves, the fractal hue and the budget are unchanged.
+
+### Round 2 results (before judging)
+- Judge set `scratchpad/fx/round2` with new names `pic-NNN` and seed 9277, so it cannot be matched to round 0 or round 1. The key is in `round2/key`.
+
+| intensity | mean HOG loss | max HOG loss | max strain p90 | max fold | gate |
+|---|---|---|---|---|---|
+| 0.25 | 0.065 | 0.111 | 0.50 | 0 | PASS |
+| 0.5 | 0.091 | 0.155 | 0.80 | 0.0007 | PASS |
+| 1.0 | 0.122 | 0.189 | 1.18 | 0.0014 | PASS |
+
+- Predicted trippiness on the actual round-2 uniforms (the 2-round model): 2.13 / 3.25 / **4.34**. Predicted orientation (all frames): 1.00 / 0.95 / 0.89, against 0.99 / 0.93 / 0.85 for round 1's uniforms.
+- **Contact sheet** (`round2/sheet.jpg`):
+  - At 1.0 the romanesco shows its whole cone silhouette in every column, including t = 425, round 1's worst frame.
+  - The tree keeps its trunk and the ground line in every column, and the hourglass and flytrap read upright.
+  - The default is clearly psychedelic in every column, with stronger fringing at the edges.
+- **Shader:** unchanged (no diff to `EffectsRenderer.metal`), so the GPU cost is the same code path. Only uniform values moved, and none of them gates a branch.
+- **Tests:** the unit tests pass. The golden values were regenerated from `fx_model.py golden`, and the random-input test now caps the hue blend at 0.68.

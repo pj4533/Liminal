@@ -117,7 +117,7 @@ def proposed(t, intensity=DEFAULT_INTENSITY, age=None, tp=0.0):
     l01 = (log_sphere(t) - 0.003) / 0.017
     n01 = (fractal_noise(t) - 0.005) / 0.025
     a_clear = tri(i, 0.010, 0.028, 0.036)
-    a_t = a_clear + (tri(i, 0.016, 0.058, 0.080) - a_clear) * d * (0.55 + 0.45 * t01)
+    a_t = a_clear + (tri(i, 0.016, 0.058, 0.072) - a_clear) * d * (0.55 + 0.45 * t01)
     a_l = tri(i, 0.0, 0.011, 0.020) * smoothstep(0.45, 0.90, d) * (0.35 + 0.65 * l01)
     a_n = tri(i, 0.0, 0.011, 0.022) * smoothstep(0.20, 0.80, d) * (0.35 + 0.65 * n01)
     # Recognisability budget: the radial and the crystalline warp give way before the water does.
@@ -135,18 +135,19 @@ def proposed(t, intensity=DEFAULT_INTENSITY, age=None, tp=0.0):
     a_l += tri(i, 0.0, 0.006, 0.020) * b
     a_n += tri(i, 0.004, 0.020, 0.060) * b
     c = color_cycle(t)
-    hb = (0.35 + 0.65 * c) * mix(tri(i, 0.15, 0.40, 0.55), tri(i, 0.25, 0.65, 0.75))
+    hb = (0.35 + 0.65 * c) * mix(tri(i, 0.15, 0.40, 0.55), tri(i, 0.25, 0.65, 0.68))
     hw = min(c * mix(tri(i, 0.02, 0.12, 0.24), tri(i, 0.05, 0.28, 0.40)), 0.20, 0.065 / max(hb, 1e-3))
     s = 1.18 + 0.10 * math.sin(t * 0.05) + 0.04 * math.sin(t * 0.03)
+    s = 1 + (s - 1) * (1 - tri(i, 0.0, 0.30, 0.60) * macro_drive(t, i))   # Ken Burns relief (E27)
     _, ox, oy = ken_burns(t)
     return {"time": t, "kenBurnsScale": s, "kenBurnsOffsetX": ox, "kenBurnsOffsetY": oy,
             "distortionAmplitude": a_t, "distortionSpeed": 0.08,
             "logSphereAmount": a_l, "fractalNoiseAmount": a_n,
-            "chromaticAmount": min(chromatic(t) * mix(tri(i, 0.3, 0.9, 1.1), tri(i, 0.4, 1.15, 1.3)), 0.02) * (1 + 3 * b),
+            "chromaticAmount": min(chromatic(t) * mix(tri(i, 0.3, 1.0, 1.3), tri(i, 0.4, 1.3, 1.6)), 0.02) * (1 + 3 * b),
             "fractalHueAmount": fractal_hue(t) * mix(tri(i, 0.2, 0.75, 1.0), tri(i, 0.3, 1.0, 1.15)),
             "hueBlendAmount": hb,
             "hueWaveIntensity": hw,
-            "feedbackMix": mix(tri(i, 0.10, 0.22, 0.27), tri(i, 0.14, 0.28, 0.29)),
+            "feedbackMix": mix(tri(i, 0.10, 0.25, 0.31), tri(i, 0.14, 0.30, 0.34)),
             "bloomAmount": tri(i, 0.30, 0.50, 0.50),
             "_drive": d}
 

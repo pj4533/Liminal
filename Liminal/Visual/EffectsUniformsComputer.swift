@@ -50,7 +50,10 @@ enum EffectsUniformsComputer {
         let boost = sin(Float.pi * min(max(transitionProgress, 0), 1))
 
         // Ken Burns: smooth continuous motion (music runs its clock 0.85x...1.35x via motionLead)
-        let kenBurns = computeKenBurns(time: time + music.motionLead)
+        // In wild stretches the zoom eases back so the whole silhouette stays in view (E27).
+        let kb = computeKenBurns(time: time + music.motionLead)
+        let relief = tri(T.kenBurnsRelief) * EffectLook.macroDrive(time: time, intensity: i)
+        let kenBurns = KenBurnsParams(scale: 1 + (kb.scale - 1) * (1 - relief), offsetX: kb.offsetX, offsetY: kb.offsetY)
 
         // Warps (plan 4.3 and 5): water always present; radial and noise only in the wilder part of the cycle.
         let waterClear = tri(T.waterClear)
