@@ -31,13 +31,14 @@ struct CGImageTransitionState {
     var transitionStartTime: Date?
     var lastGeneration: UInt64 = 0
 
-    private let crossfadeDuration: Double = VisualMoodBuilder.crossfadeDuration
+    /// The running (or last) transition; its duration drives the progress (docs/plans/transitions.md 7).
+    var spec: TransitionSpec = .classic
 
     /// Raw linear transition progress (0-1)
     var transitionProgress: Float {
         guard let startTime = transitionStartTime else { return 0 }
         let elapsed = Date().timeIntervalSince(startTime)
-        let progress = min(elapsed / crossfadeDuration, 1.0)
+        let progress = min(elapsed / Double(max(spec.duration, 0.1)), 1.0)
         return Float(progress)
     }
 
@@ -326,6 +327,7 @@ struct ImmersiveDomeView: View {
             // image age from the start of the current crossfade.
             var intensitySmoother = EffectIntensitySmoother()
             var transitionStartEffectTime: Float?
+            var lastEnergy: Float?   // music energy of the last frame (nil when the visuals do not follow the music)
 
             while !Task.isCancelled {
                 frameCount += 1
@@ -375,11 +377,19 @@ struct ImmersiveDomeView: View {
                     let framedImage = ImageFraming.coverCrop(rawImage)
                     let wasFirst = transitionState.currentImage == nil
                     transitionState.lastGeneration = generation
+                    if !wasFirst {
+                        transitionState.spec = visualEngine.nextTransition(
+                            effectTime: effectTime,
+                            intensity: DebugLaunchOptions.effectIntensity(setting: settings.effectIntensity),
+                            energy: lastEnergy,
+                            hasDepth: lastDepthGeneration > 0 && !DebugLaunchOptions.forceStereoFlatDepth)
+                    }
                     transitionState.transitionTo(framedImage)
                     if !wasFirst { transitionStartEffectTime = effectTime }
                     LMLog.visual.info("🎬 New image detected (gen \(generation)), triggering transition")
                     // Visuals -> music at the crossfade start.
-                    postVisualMood(metadata: metadata, image: framedImage, imageChanged: !wasFirst)
+                    postVisualMood(metadata: metadata, image: framedImage, imageChanged: !wasFirst,
+                                   musicDuration: transitionState.spec.musicDuration)
 
                     // Trigger depth map generation in background (~31ms, images change every ~30s)
                     if let depthGen = depthGenerator, !DebugLaunchOptions.forceStereoFlatDepth {
@@ -443,29 +453,33 @@ struct ImmersiveDomeView: View {
                                                 enabled: settings.syncVisualsToMusic, baseHueRate: 0)
                 }
                 renderer.requestGhostBurst(serial: modulation.ghostBurstSerial)
+                lastEnergy = modulation.amount > 0 ? modulation.energy : nil
                 let intensityTarget = DebugLaunchOptions.effectIntensity(setting: settings.effectIntensity)
                 let look = EffectLook(
                     intensity: DebugLaunchOptions.freezeTime != nil
                         ? intensityTarget : intensitySmoother.next(target: intensityTarget, time: effectTime),
                     imageAge: transitionStartEffectTime.map { effectTime - $0 }.flatMap { $0 >= 0 ? $0 : nil },
-                    imageInterval: Float(settings.imageInterval))
+                    imageInterval: Float(settings.imageInterval),
+                    transitionDuration: transitionState.spec.duration)
                 let uniforms = EffectsUniformsComputer.compute(
                     time: effectTime,
                     transitionProgress: transitionProgress,
                     hasSaliencyMap: false,
                     vibrance: vibrance,
                     music: modulation,
-                    look: look
+                    look: look,
+                    transition: transitionState.spec
                 )
 
                 // Visuals -> music activity (un-modulated oscillators, follows the clarity drive; at most 2 Hz)
                 let activity = EffectsUniformsComputer.visualActivity(time: effectTime, transitionProgress: transitionProgress,
-                                                                      look: look)
+                                                                      look: look, transition: transitionState.spec)
                 if let a = activityThrottle.next(activity, at: Double(effectTime)) { music.setVisualActivity(a) }
                 if DebugLaunchOptions.syncLog, frameStartTime.timeIntervalSince(lastSyncLogTime) >= 1 {
                     lastSyncLogTime = frameStartTime
                     let neutral = EffectsUniformsComputer.compute(time: effectTime, transitionProgress: transitionProgress,
-                                                                  hasSaliencyMap: false, vibrance: vibrance, look: look)
+                                                                  hasSaliencyMap: false, vibrance: vibrance, look: look,
+                                                                  transition: transitionState.spec)
                     let line = MusicSyncLog.line(reactor: reactor, state: musicBus.read(), uniforms: uniforms, neutral: neutral,
                                                  mood: sentMood.load(), activity: activityThrottle.lastSent)
                     LMLog.visual.info("\(line, privacy: .public)")
@@ -549,8 +563,10 @@ struct ImmersiveDomeView: View {
     /// Visuals -> music. `imageDidChange` is posted immediately (the conductor lands its chord change on the
     /// crossfade midpoint); the mood needs one 32x32 pass over the image, done off the render loop.
     @MainActor
-    private func postVisualMood(metadata: ImageMetadata?, image: CGImage, imageChanged: Bool) {
-        if imageChanged { music.imageDidChange(transitionDuration: VisualMoodBuilder.crossfadeDuration) }
+    private func postVisualMood(metadata: ImageMetadata?, image: CGImage, imageChanged: Bool,
+                                musicDuration: Double = VisualMoodBuilder.crossfadeDuration) {
+        // Twice the swap time: the conductor lands its chord change at half of it, i.e. on the swap.
+        if imageChanged { music.imageDidChange(transitionDuration: musicDuration) }
         let music = self.music
         let record = sentMood
         Task.detached(priority: .utility) {

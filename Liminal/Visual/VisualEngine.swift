@@ -41,6 +41,16 @@ final class VisualEngine: ObservableObject {
     @Published private(set) var isClearing = false
 
     private let imageQueue = ImageQueue()
+    /// One per session, shared by both platforms' crossfades (docs/plans/transitions.md 7).
+    private var transitionDirector: TransitionDirector = {
+        var d = TransitionDirector(seed: UInt64.random(in: 0...UInt64.max))
+        if let name = DebugLaunchOptions.transitionStyle {
+            if let style = TransitionStyle(name: name) { d.pinnedStyle = style }
+            else { LMLog.visual.warning("Unknown -LiminalTransitionStyle \(name, privacy: .public)") }
+        }
+        d.pinnedSeed = DebugLaunchOptions.transitionSeed
+        return d
+    }()
     private var scheduledTimer: Timer?
     private var cancellables = Set<AnyCancellable>()
 
@@ -123,6 +133,15 @@ final class VisualEngine: ObservableObject {
         scheduledTimer = nil
         imageQueue.stop()
         LMLog.visual.info("VisualEngine stopped")
+    }
+
+    /// The transition for the crossfade that starts now (call once per crossfade).
+    /// - Parameters: energy = music energy when the visuals follow the music, else nil.
+    func nextTransition(effectTime: Float, intensity: Float, energy: Float?, hasDepth: Bool) -> TransitionSpec {
+        let spec = transitionDirector.next(time: effectTime, intensity: intensity, energy: energy, hasDepth: hasDepth,
+                                           imageInterval: Float(scheduledInterval))
+        LMLog.visual.info("🌀 TRANSITION style=\(spec.style.name, privacy: .public) seed=\(String(format: "%.3f", spec.seed), privacy: .public) duration=\(String(format: "%.2f", spec.duration), privacy: .public)s flip=\(spec.flip)")
+        return spec
     }
 
     /// Manually request the next image

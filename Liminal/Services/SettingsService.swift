@@ -128,7 +128,9 @@ final class SettingsService: ObservableObject {
         self.style = MusicStyle.ID(rawValue: defaults.string(forKey: Keys.style) ?? "") ?? Self.defaultStyle
         self.scaleAuto = defaults.object(forKey: Keys.scaleAuto) as? Bool ?? Self.defaultScaleAuto
 
-        self.imageInterval = defaults.object(forKey: Keys.imageInterval) as? Double ?? Self.defaultImageInterval
+        // -LiminalImageInterval (DEBUG) wins; assigning in init does not run didSet, so it is not saved.
+        self.imageInterval = DebugLaunchOptions.imageInterval
+            ?? defaults.object(forKey: Keys.imageInterval) as? Double ?? Self.defaultImageInterval
         self.cacheOnly = defaults.object(forKey: Keys.cacheOnly) as? Bool ?? Self.defaultCacheOnly
         self.syncVisualsToMusic = defaults.object(forKey: Keys.syncVisualsToMusic) as? Bool ?? Self.defaultSyncVisualsToMusic
         self.effectIntensity = min(max(defaults.object(forKey: Keys.effectIntensity) as? Float ?? Self.defaultEffectIntensity, 0), 1)

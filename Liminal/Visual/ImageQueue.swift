@@ -131,6 +131,14 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
     /// Lists the store (sidecars only), decodes ONE random image and shows it.
     private func loadInitialImage() async {
         #if DEBUG
+        if let files = DebugLaunchOptions.testImageDirectoryFiles {
+            // -LiminalTestImage <directory>: show the first image; start() cycles the rest.
+            guard let item = Self.testDirectoryItem(files[0]) else { return }
+            imageBuffer.storeCurrent(item.cgImage, metadata: nil)
+            await MainActor.run { self.currentImage = item.image }
+            LMLog.visual.info("🧪 [ImageQueue] Test directory: \(files.count) images to cycle; generation disabled")
+            return
+        }
         if let path = DebugLaunchOptions.testImagePath,
            let src = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil),
            let img = CGImageSourceCreateImageAtIndex(src, 0, nil) {
@@ -194,6 +202,7 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
         let cacheOnly = generationDisabled
         isRunning = true
         #if DEBUG
+        if DebugLaunchOptions.testImageDirectoryFiles != nil { startTestDirectoryCycler(); return }
         if DebugLaunchOptions.testPattern || DebugLaunchOptions.testImagePath != nil { return }  // fixed image only
         #endif
         LMLog.visual.info("ImageQueue starting (cacheOnly=\(cacheOnly), cached=\(self.totalCachedCount))")
@@ -405,6 +414,35 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
             LMLog.visual.info("♻️ [Recycler] stopped")
         }
     }
+
+    #if DEBUG
+    // MARK: - Test directory (-LiminalTestImage <directory>)
+
+    private static func testDirectoryItem(_ url: URL) -> DisplayItem? {
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let img = CGImageSourceCreateImageAtIndex(src, 0, nil) else { return nil }
+        return DisplayItem(id: nil, cgImage: img, image: platformImage(img), metadata: nil)
+    }
+
+    /// Keeps the queue topped up with the directory's images in order (wrapping), like the recycler.
+    private func startTestDirectoryCycler() {
+        guard let files = DebugLaunchOptions.testImageDirectoryFiles,
+              generationTask == nil || generationTask?.isCancelled == true else { return }
+        generationTask = Task.detached { [weak self] in
+            var index = 1
+            while !Task.isCancelled {
+                guard let self else { return }
+                if await self.pendingCount() < self.config.targetPendingCount,
+                   let item = Self.testDirectoryItem(files[index % files.count]) {
+                    await self.enqueue(item)
+                    LMLog.visual.info("🧪 [ImageQueue] queued test image \(files[index % files.count].lastPathComponent, privacy: .public)")
+                    index += 1
+                }
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+        }
+    }
+    #endif
 
     // MARK: - Generation
 
