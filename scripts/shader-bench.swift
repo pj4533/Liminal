@@ -87,13 +87,16 @@
 //                      uniforms of every written frame. scripts/tx-clip.sh wraps this (clips, filmstrips).
 //   --prev-image PATH  image A of --sequence
 //   --seq-start T      effect time at which the crossfade starts (default 113)
-//   --seq-duration S   crossfade length in seconds (default 1.5 = VisualMoodBuilder.crossfadeDuration)
+//   --seq-duration S   crossfade length in seconds (default: 1.5 for classic, else the style's mid range)
 //   --seq-pre S / --seq-post S   seconds rendered before / after the crossfade (default 1 / 3)
 //   --seq-fps N        written frames per second (default 30); --seq-sim-fps N simulated (default 60)
 //   --seq-ref a|b      effect-free reference of the same timeline: image A or B alone, Ken Burns only
 //                      (every effect amount 0, no crossfade). scripts/tx-check.py scores frames against these.
-//   --tx-style NAME / --tx-seed N   transition style and seed (docs/plans/transitions.md). Recorded in
-//                      sequence.json. Only "classic" (the shipped crossfade) exists until the styles land.
+//   --tx-style NAME / --tx-seed N   transition style and seed (docs/plans/transitions.md; names in
+//                      ImageTransition.swift, "classic" = the pre-family crossfade). The spec is
+//                      TransitionSpec.pinned(style, seed: N), as the app's debug flags give it; without
+//                      --seq-duration the style's mid duration is used. Applies to --sequence and to
+//                      every scenario; a --scenarios entry may set its own "tx_style" / "tx_seed".
 //   --gen-depth IMAGE OUT.png   run the app's DepthMapGenerator (DepthAnythingV2SmallF16.mlmodelc
 //                      must sit next to the binary; the wrapper arranges it) and save the map
 //
@@ -305,7 +308,7 @@ func floatOpt(_ flag: String, _ def: Float) -> Float {
     return f
 }
 let seqStart = floatOpt("--seq-start", 113)
-let seqDuration = floatOpt("--seq-duration", 1.5)
+let seqDurationArg = takeValue("--seq-duration").map { v -> Float in guard let f = Float(v) else { fail("bad --seq-duration") }; return f }
 let seqPre = floatOpt("--seq-pre", 1)
 let seqPost = floatOpt("--seq-post", 3)
 let seqFps = Int(floatOpt("--seq-fps", 30))
@@ -313,12 +316,20 @@ let seqSimFps = Int(floatOpt("--seq-sim-fps", 60))
 let seqRef = takeValue("--seq-ref")
 let txStyle = takeValue("--tx-style") ?? "classic"
 let txSeed = Int(takeValue("--tx-seed") ?? "0") ?? 0
+guard let txStyleValue = TransitionStyle(name: txStyle) else {
+    fail("--tx-style \(txStyle): one of \(TransitionStyle.allCases.map { $0.name }.joined(separator: ", "))")
+}
+/// The transition of --sequence (and of scenarios without their own "tx_style"): same mapping as the
+/// app's -LiminalTransitionStyle / -LiminalTransitionSeed. Duration: --seq-duration, else the style's mid range.
+let txSpec: TransitionSpec = txStyleValue == .classic
+    ? TransitionSpec(style: .classic, seed: 0, duration: seqDurationArg ?? 1.5, flip: false)
+    : TransitionSpec.pinned(txStyleValue, seed: txSeed, duration: seqDurationArg)
+let seqDuration = txSpec.duration
 if sequenceMode {
     if prevImagePath == nil { fail("--sequence needs --prev-image (image A); --image is image B") }
     if seqFps < 1 || seqSimFps % seqFps != 0 { fail("--seq-sim-fps must be a multiple of --seq-fps") }
     if seqDuration <= 0 { fail("--seq-duration must be > 0") }
     if let r = seqRef, r != "a", r != "b" { fail("--seq-ref is a or b") }
-    if txStyle != "classic" { fail("--tx-style \(txStyle): only \"classic\" exists so far (docs/plans/transitions.md)") }
 }
 let renderOnly = takeFlag("--render-only") || sequenceMode
 let leftOnly = takeFlag("--left-only")
@@ -486,6 +497,8 @@ let uniformFields: [String: WritableKeyPath<EffectsUniforms, Float>] = [
     "bloomRadius": \.bloomRadius, "bloomAmount": \.bloomAmount, "stereoOffset": \.stereoOffset,
     "logSphereAmount": \.logSphereAmount, "fractalNoiseAmount": \.fractalNoiseAmount,
     "fractalHueAmount": \.fractalHueAmount, "vibranceAmount": \.vibranceAmount, "blackPoint": \.blackPoint,
+    "txStyle": \.txStyle, "txMix": \.txMix, "txEnv": \.txEnv, "txSeed": \.txSeed, "txSoft": \.txSoft,
+    "txAmount": \.txAmount,
 ]
 func uniformsDict(_ u: EffectsUniforms) -> [String: Double] {
     var d: [String: Double] = [:]
@@ -511,15 +524,17 @@ let globalOverrides: [String: Float] = {
 /// The app's uniforms for one scenario. Intensity / image age (--intensity, --image-age, or a
 /// scenario's "intensity" / "age") reach the app's own computer here (docs/plans/effects-balance.md
 /// 7.1), so the bench renders exactly what the setting does.
-func computeUniforms(t: Float, tp: Float, intensity: Float?, age: Float?) -> EffectsUniforms {
+func computeUniforms(t: Float, tp: Float, intensity: Float?, age: Float?, spec: TransitionSpec = txSpec) -> EffectsUniforms {
     // Default (no --intensity / --image-age): intensity 0.5, age nil = the shipped default look.
     EffectsUniformsComputer.compute(time: t, transitionProgress: tp, hasSaliencyMap: false, vibrance: vibrance,
-        look: EffectLook(intensity: intensity ?? EffectLook.defaultIntensity, imageAge: age))
+        look: EffectLook(intensity: intensity ?? EffectLook.defaultIntensity, imageAge: age,
+                         transitionDuration: spec.duration),
+        transition: spec)
 }
 
 func makeScenario(_ name: String, t: Float, tp: Float, over: [String: Float] = [:],
-                  intensity: Float? = intensityArg, age: Float? = imageAgeArg) -> Scenario {
-    var u = computeUniforms(t: t, tp: tp, intensity: intensity, age: age)
+                  intensity: Float? = intensityArg, age: Float? = imageAgeArg, spec: TransitionSpec = txSpec) -> Scenario {
+    var u = computeUniforms(t: t, tp: tp, intensity: intensity, age: age, spec: spec)
     let (buf, count) = ghostTaps(at: t)
     u.ghostTapCount = Float(count)
     let offset = 0.003 + 0.007 * SmoothOscillator.value(at: t)
@@ -541,9 +556,14 @@ if let scenariosPath = scenariosPath {
         }
         let tp = (item["tp"] as? NSNumber)?.floatValue ?? 0
         let over = (item["set"] as? [String: NSNumber] ?? [:]).mapValues { $0.floatValue }
+        var spec = txSpec
+        if let st = item["tx_style"] as? String {
+            guard let style = TransitionStyle(name: st) else { fail("scenario \(name): unknown tx_style \(st)") }
+            spec = style == .classic ? .classic : TransitionSpec.pinned(style, seed: (item["tx_seed"] as? NSNumber)?.intValue ?? 0)
+        }
         return makeScenario(name, t: t, tp: tp, over: over,
                             intensity: (item["intensity"] as? NSNumber)?.floatValue ?? intensityArg,
-                            age: (item["age"] as? NSNumber)?.floatValue ?? imageAgeArg)
+                            age: (item["age"] as? NSNumber)?.floatValue ?? imageAgeArg, spec: spec)
     }
 } else {
     scenarios = times.map { makeScenario("t\(Int($0))", t: $0, tp: 0) }
@@ -679,11 +699,14 @@ if sequenceMode, let outDir = outDir, let prevImagePath = prevImagePath {
             source = ref == "a" ? texA : texB
             previous = source
             u = EffectsUniformsComputer.compute(time: t, transitionProgress: 0, hasSaliencyMap: false,
-                vibrance: ref == "a" ? vibA : vibB, look: EffectLook(intensity: intensity, imageAge: age, imageInterval: imageInterval))
+                vibrance: ref == "a" ? vibA : vibB, look: EffectLook(intensity: intensity, imageAge: age, imageInterval: imageInterval,
+                                                                     transitionDuration: txSpec.duration))
             applyOverrides(&u, refOff)
         } else {
             u = EffectsUniformsComputer.compute(time: t, transitionProgress: tp, hasSaliencyMap: false, vibrance: vib,
-                look: EffectLook(intensity: intensity, imageAge: age, imageInterval: imageInterval))
+                look: EffectLook(intensity: intensity, imageAge: age, imageInterval: imageInterval,
+                                 transitionDuration: txSpec.duration),
+                transition: txSpec)
             let offset = 0.003 + 0.007 * SmoothOscillator.value(at: t)
             u.stereoOffset = depthPath != nil ? abs(offset) : 0
             applyOverrides(&u, globalOverrides)
@@ -725,7 +748,8 @@ if sequenceMode, let outDir = outDir, let prevImagePath = prevImagePath {
     log("wrote \(written) sequence frames to \(outDir)")
     let text = jsonString([
         "label": label, "image_a": prevImagePath, "image_b": imagePath, "out": outDir,
-        "tx_style": txStyle, "tx_seed": txSeed, "ref": seqRef ?? "", "intensity": Double(intensity),
+        "tx_style": txStyle, "tx_seed": txSeed, "tx_spec_seed": Double(txSpec.seed), "tx_flip": txSpec.flip,
+        "ref": seqRef ?? "", "intensity": Double(intensity),
         "start": Double(seqStart), "duration": Double(seqDuration), "pre": Double(seqPre), "post": Double(seqPost),
         "fps": seqFps, "sim_fps": seqSimFps, "frames": frameList,
     ] as [String: Any])

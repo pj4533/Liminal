@@ -79,6 +79,15 @@ nonisolated enum DebugLaunchOptions {
         return min(max(defaults.float(forKey: "LiminalEffectIntensity"), 0), 1)
     }()
 
+    /// -LiminalTransitionStyle <name>: every image transition uses this style (TransitionStyle names,
+    /// docs/plans/transitions.md); -LiminalTransitionSeed <n> pins its seed too (same mapping as
+    /// scripts/shader-bench.sh --tx-style / --tx-seed). Not an automation flag: generation stays as set.
+    static let transitionStyle: String? = defaults.string(forKey: "LiminalTransitionStyle")
+    static let transitionSeed: Int? = {
+        guard defaults.object(forKey: "LiminalTransitionSeed") != nil else { return nil }
+        return defaults.integer(forKey: "LiminalTransitionSeed")
+    }()
+
     /// -LiminalAllowGeneration YES: let an automated/debug launch call Gemini. Without it, any launch
     /// that uses the automation flags above (perf runs, screenshots, sim checks) never generates new
     /// images: it shows cached images, or the test card when the cache is empty. Testing must not
@@ -108,6 +117,8 @@ nonisolated enum DebugLaunchOptions {
     static let syncLog = false
     static let syncStrength: Float = 1
     static let effectIntensity: Float? = nil
+    static let transitionStyle: String? = nil
+    static let transitionSeed: Int? = nil
 #endif
 
     private static let logOnce: Void = {
@@ -127,6 +138,8 @@ nonisolated enum DebugLaunchOptions {
         if blocksImageGeneration { LMLog.general.info("🧪 DEBUG: automation launch, Gemini image generation OFF (cached images only; pass -LiminalAllowGeneration YES to override)") }
         if syncLog { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalSyncLog=YES (🎼 SYNC lines)") }
         if let i = effectIntensity { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalEffectIntensity=\(i, format: .fixed(precision: 2)) (overrides the Effect intensity setting)") }
+        if let s = transitionStyle { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalTransitionStyle=\(s, privacy: .public)") }
+        if let n = transitionSeed { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalTransitionSeed=\(n)") }
         if syncStrength != 1 { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalSyncStrength=\(syncStrength, format: .fixed(precision: 2))") }
 #endif
     }()

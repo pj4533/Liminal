@@ -13,8 +13,8 @@ already running, they are picked without repetition, and they start from and set
 effects without a jump. Recognisability outside transitions, the 2048 x 2048 render and GPU cost do not
 change.
 
-Decisions and their reasons: `docs/decisions/transitions.md`. This document is the design; nothing in
-the app has changed yet (tooling only).
+Decisions and their reasons: `docs/decisions/transitions.md`. Status: implemented on both platforms
+(round 0); deviations from this design and the measured results are T15-T26 there.
 
 ## 1. Tooling added for this work
 

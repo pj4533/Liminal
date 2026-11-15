@@ -19,6 +19,9 @@ nonisolated struct EffectLook: Sendable, Equatable {
     var imageAge: Float? = nil
     /// Seconds between images (the "image interval" setting); scales the fresh-image windows when short.
     var imageInterval: Float = 30
+    /// Seconds the current crossfade lasts (docs/plans/transitions.md 4): the fresh-image hold is anchored
+    /// to its end, so a long transition still gets the same clear time after it. 1.5 = the classic timing.
+    var transitionDuration: Float = 1.5
 
     static let defaultIntensity: Float = 0.5
 
@@ -30,7 +33,8 @@ nonisolated struct EffectLook: Sendable, Equatable {
         static let macroPhase: (Float, Float, Float) = (-0.3, -1.2, -2.4)
         static let macroLo: Float = -0.45, macroHi: Float = 0.55
         static let macroBias: Float = 0.60               // (intensity - 0.5) * bias is added to the wave (E23)
-        // Fresh-image hold (plan 4.2), seconds since the crossfade started
+        // Fresh-image hold (plan 4.2), seconds since the crossfade started, for a 1.5 s crossfade.
+        // A crossfade of D seconds fades over max(1.5, 0.4 D), holds to D + 3 and is back by D + 9.5.
         static let freshFade: Float = 1.5, freshHoldEnd: Float = 4.5, freshEnd: Float = 11
         // Strain per unit amount (fx_model scan) and the recognisability budget (plan 4.3)
         static let kTurb: Float = 12.8, kLog: Float = 26, kNoise: Float = 28
@@ -103,8 +107,11 @@ nonisolated struct EffectLook: Sendable, Equatable {
     func fresh() -> Float {
         guard let age = imageAge else { return 1 }
         let k = min(max(imageInterval / 30, 0.33), 1)
-        return 1 - Self.smoothstep(0, Tuning.freshFade, age)
-            * (1 - Self.smoothstep(Tuning.freshHoldEnd * k, Tuning.freshEnd * k, age))
+        let extra = max(transitionDuration - 1.5, 0)
+        let fade = max(Tuning.freshFade, 0.4 * transitionDuration)
+        let holdEnd = max((Tuning.freshHoldEnd + extra) * k, transitionDuration)
+        let end = max((Tuning.freshEnd + extra) * k, holdEnd + 1)
+        return 1 - Self.smoothstep(0, fade, age) * (1 - Self.smoothstep(holdEnd, end, age))
     }
 
     /// The one drive every amount is mixed by: clarity cycle times fresh-image hold.

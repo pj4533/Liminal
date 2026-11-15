@@ -27,6 +27,9 @@ enum EffectsUniformsComputer {
     ///   - look: Effect intensity setting and the current image's age (docs/plans/effects-balance.md).
     ///     Every amount is mixed between a clear and a wild value by `look.drive(time:)`, and the three
     ///     warps are fitted into the recognisability budget after the music factors.
+    ///   - transition: The style of the running crossfade (docs/plans/transitions.md). Its boosts are
+    ///     added after the budget, times the style's envelope; `.classic` is the pre-family crossfade.
+    ///     With `transitionProgress` 0 every style gives the same uniforms as no transition at all.
     /// - Returns: Complete EffectsUniforms ready for the shader
     static func compute(
         time: Float,
@@ -35,7 +38,8 @@ enum EffectsUniformsComputer {
         ghostTapCount: Int = 0,
         vibrance: VibranceFactors = .neutral,
         music: MusicModulation = .neutral,
-        look: EffectLook = EffectLook()
+        look: EffectLook = EffectLook(),
+        transition: TransitionSpec = .classic
     ) -> EffectsUniforms {
         typealias T = EffectLook.Tuning
         let a = music.amount
@@ -47,13 +51,19 @@ enum EffectsUniformsComputer {
             let c = tri(cw.clear)
             return c + (tri(cw.wild) - c) * d
         }
-        let boost = sin(Float.pi * min(max(transitionProgress, 0), 1))
+        let tp = min(max(transitionProgress, 0), 1)
+        let inTransition = transitionProgress > 0
+        let env = inTransition ? transition.envelope(tp) : 0
+        // The slow onset follower may swell a style's envelope by up to 12 % (plan 7.3); the swap never moves.
+        let swell = transition.style == .classic ? 1 : 1 + 0.12 * min(max(a * music.pulseMotion, 0), 1)
+        let tb = inTransition ? TransitionBoost.make(transition, intensity: i, envelope: env * swell, tp: tp) : TransitionBoost()
 
         // Ken Burns: smooth continuous motion (music runs its clock 0.85x...1.35x via motionLead)
         // In wild stretches the zoom eases back so the whole silhouette stays in view (E27).
         let kb = computeKenBurns(time: time + music.motionLead)
         let relief = tri(T.kenBurnsRelief) * EffectLook.macroDrive(time: time, intensity: i)
-        let kenBurns = KenBurnsParams(scale: 1 + (kb.scale - 1) * (1 - relief), offsetX: kb.offsetX, offsetY: kb.offsetY)
+        let kenBurns = KenBurnsParams(scale: (1 + (kb.scale - 1) * (1 - relief)) * tb.kenBurnsMul,
+                                      offsetX: kb.offsetX, offsetY: kb.offsetY)
 
         // Warps (plan 4.3 and 5): water always present; radial and noise only in the wilder part of the cycle.
         let waterClear = tri(T.waterClear)
@@ -65,21 +75,33 @@ enum EffectsUniformsComputer {
         var noise = max(tri(T.noiseMax) * EffectLook.smoothstep(T.noiseWindow.0, T.noiseWindow.1, d)
             * (0.35 + 0.65 * fractalNoiseWave01(time: time)) * warpMusic, 0)
         fitStrainBudget(water: &water, logSphere: &logSphere, noise: &noise, budget: EffectLook.strainBudget(i))
-        water = min(water, Caps.distortionBase) + tri(T.boostWater) * boost
-        logSphere = min(logSphere, Caps.logSphereBase) + tri(T.boostLogSphere) * boost
-        noise = min(noise, Caps.fractalNoiseBase) + tri(T.boostNoise) * boost
+        water = min(water, Caps.distortionBase) + tb.water
+        logSphere = min(logSphere, Caps.logSphereBase) + tb.logSphere
+        noise = min(noise, Caps.fractalNoiseBase) + tb.noise
 
         // Autonomous color cycling - smooth oscillator produces organic, non-repeating patterns.
         // Few hue bands in clear stretches, more in wild ones; the blend never drops to a plain photo,
         // and stacked spatial rainbows are capped (E25).
         let colorCycle = SmoothOscillator.value(at: time)
-        let hueBlend = (T.hueBlendFloor + (1 - T.hueBlendFloor) * colorCycle) * mix(T.hueBlend)
-        let hueWave = min(colorCycle * mix(T.hueWave), T.hueWaveCap, T.rainbowCap / max(hueBlend, 1e-3))
+        var hueBlend = (T.hueBlendFloor + (1 - T.hueBlendFloor) * colorCycle) * mix(T.hueBlend)
+        var hueWave = min(colorCycle * mix(T.hueWave), T.hueWaveCap, T.rainbowCap / max(hueBlend, 1e-3))
+        if inTransition {
+            // Rainbow front pulls the hue stage above the usual rainbow cap, during its plateau only.
+            hueWave += max(tb.hueWaveTarget - hueWave, 0) * tb.huePull
+            hueBlend += max(tb.hueBlendTarget - hueBlend, 0) * tb.huePull
+            hueBlend = min(hueBlend + tb.hueBlendAdd, 1)
+        }
 
         let chromaticBase = min(max(chromaticRaw(time: time) * mix(T.chromatic) * (1 + a * (0.30 * e - 0.10))
             + a * 0.002 * music.pulseMotion, 0), Caps.chromaticBase)
         let fbBase = mix(T.feedbackMix)
         let bloomBase = tri(T.bloom)
+        var feedback = min(max(fbBase + a * (0.08 * e - 0.04), fbBase - Caps.feedbackMixRange),
+                           min(fbBase + Caps.feedbackMixRange, Caps.feedbackMixHigh))
+        if inTransition {
+            feedback = min(feedback + tb.feedbackAdd, Caps.feedbackMixTransition)
+            feedback += max(tb.feedbackTarget - feedback, 0) * tb.feedbackPull
+        }
 
         var uniforms = EffectsUniforms(
             time: time,
@@ -88,33 +110,40 @@ enum EffectsUniformsComputer {
             kenBurnsOffsetY: kenBurns.offsetY,
             distortionAmplitude: water,
             distortionSpeed: 0.08,
-            hueBaseShift: music.hueBaseShift,
+            hueBaseShift: music.hueBaseShift + tb.hueBase,
             hueWaveIntensity: hueWave,
             hueBlendAmount: hueBlend,
-            contrastBoost: 1.4,
+            contrastBoost: 1.4 + tb.contrastAdd,
             saturationBoost: 1.3,
             // Ghost taps travel 6% of image size - slow drift; swells to 8% after a music scene change
-            ghostTapMaxDistance: min(max(0.06 + a * 0.02 * music.ghostReach, 0.06), Caps.ghostTapMaxDistance),
+            ghostTapMaxDistance: min(max(0.06 + a * 0.02 * music.ghostReach, 0.06), Caps.ghostTapMaxDistance) * tb.ghostReachMul,
             saliencyInfluence: hasSaliencyMap ? 0.6 : 0,
             hasSaliencyMap: hasSaliencyMap ? 1.0 : 0.0,
             transitionProgress: transitionProgress,
             ghostTapCount: Float(ghostTapCount),
-            chromaticAmount: chromaticBase * (1 + 3 * boost),
-            feedbackWarpAmount: min(max(0.03 + a * 0.01 * music.air, 0.03), Caps.feedbackWarp),
-            feedbackMix: min(max(fbBase + a * (0.08 * e - 0.04), fbBase - Caps.feedbackMixRange),
-                             min(fbBase + Caps.feedbackMixRange, Caps.feedbackMixHigh)),
-            bloomRadius: 0.04,
+            chromaticAmount: chromaticBase * tb.chromaticMul + tb.chromaticAdd,
+            feedbackWarpAmount: min(max(0.03 + a * 0.01 * music.air, 0.03), Caps.feedbackWarp) * tb.feedbackWarpMul,
+            feedbackMix: feedback,
+            bloomRadius: 0.04 * tb.bloomRadiusMul,
             bloomAmount: min(max(bloomBase + a * (0.12 * music.pulseColor + 0.10 * music.shimmer), bloomBase),
-                             Caps.bloom * bloomBase / 0.5),
+                             Caps.bloom * bloomBase / 0.5) + tb.bloomAdd,
             stereoOffset: 0,
             logSphereAmount: logSphere,
             fractalNoiseAmount: noise,
-            fractalHueAmount: fractalHueRaw(time: time) * mix(T.fractalHue)
+            fractalHueAmount: fractalHueRaw(time: time) * mix(T.fractalHue) + tb.fractalHueAdd
         )
         let vib = computeVibrance(time: time, imageFactor: vibrance.amount)
             + a * 0.06 * music.pulseColor * vibrance.amount
         uniforms.vibranceAmount = min(max(vib, 0), Caps.vibrance * vibrance.amount)
         uniforms.blackPoint = baseBlackPoint * vibrance.dark
+        if inTransition {
+            uniforms.txStyle = Float(transition.style.rawValue)
+            uniforms.txMix = transition.swap(tp)
+            uniforms.txEnv = env
+            uniforms.txSeed = transition.seed
+            uniforms.txSoft = transition.shaderSoft
+            uniforms.txAmount = tb.shaderAmount
+        }
         return uniforms
     }
 
@@ -149,6 +178,7 @@ enum EffectsUniformsComputer {
         static let vibrance: Float = 0.50            // times the image factor
         static let feedbackMixRange: Float = 0.04    // music moves feedback mix at most this far from its base
         static let feedbackMixHigh: Float = 0.34
+        static let feedbackMixTransition: Float = 0.72  // additive transition trails stop here (Afterimage pulls past it)
         static let feedbackWarp: Float = 0.04
         static let ghostTapMaxDistance: Float = 0.08
     }
@@ -158,10 +188,11 @@ enum EffectsUniformsComputer {
     /// How busy the picture is, 0...1, sent to `GenerativeEngine.setVisualActivity` (plan 2.3).
     /// Computed without music on purpose (C12) so music cannot feed back into itself; follows the
     /// clarity drive so the music calms with the picture (effects-balance plan 5).
-    static func visualActivity(time: Float, transitionProgress: Float, look: EffectLook = EffectLook()) -> Float {
+    static func visualActivity(time: Float, transitionProgress: Float, look: EffectLook = EffectLook(),
+                               transition: TransitionSpec = .classic) -> Float {
         let d = look.drive(time: time)
         let v = 0.15 + 0.6 * d * (0.55 + 0.45 * distortionWave01(time: time))
-            + 0.5 * sin(Float.pi * min(max(transitionProgress, 0), 1))
+            + 0.5 * (transitionProgress > 0 ? transition.envelope(transitionProgress) : 0)
         return min(max(v, 0), 1)
     }
 

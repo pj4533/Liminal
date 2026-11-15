@@ -38,6 +38,13 @@ struct EffectsUniforms {
     // Defaults of 0 = stage is a no-op, so debug/dummy initialisers need not list them.
     var vibranceAmount: Float = 0  // Chroma gain for under-saturated pixels (0 = off)
     var blackPoint: Float = 0  // Black-point pull-down before the gain (0 = off)
+    // Image transition (docs/plans/transitions.md 9.1; appended last, defaults 0 = no transition).
+    var txStyle: Float = 0  // TransitionStyle raw value (0 = classic whole-frame dissolve)
+    var txMix: Float = 0  // swap progress M, 0...1
+    var txEnv: Float = 0  // envelope E, 0...1 (shader-side fold / swirl / tap gain)
+    var txSeed: Float = 0  // 0...1: direction, centre, wedge count, channel order
+    var txSoft: Float = 0  // swap mask edge softness; negative = reversed order
+    var txAmount: Float = 0  // style amount: Prism stagger, fold, swirl angle, Echo tap gain
 }
 
 /// Ghost tap data for shader. Must match Metal struct layout.

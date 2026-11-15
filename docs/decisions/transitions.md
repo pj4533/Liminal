@@ -4,7 +4,8 @@ Decision log for the transitions workstream. Plan with all numbers: `docs/plans/
 Request: the transition between images (distort, switch, come back) is liked but is the same every time;
 make a family of them that flows out of and back into the live effects.
 
-Status: design done (T1-T14). Nothing in the app has changed yet; tooling only.
+Status: implemented on both platforms (T15-T26), round 0 clips rendered; blind judging and the
+simulator / macOS run of plan 8.3 are next.
 
 ## Tooling and diagnosis
 
@@ -128,8 +129,95 @@ Shatter (geometric); Afterimage, Echo (temporal). Table in plan section 6.
   could you see the moment of the change, any jump or flicker, part of the motion or laid on top,
   how striking; then sort the clips of one pair into look-alike groups (distinctness).
 
-## Open points for implementation
-- The transition tracker on visionOS is in `ImmersiveDomeView.swift`, which the spatial workstream is
-  rebuilding. The hook is three call sites (spec at crossfade start, `spec.duration`, `transition:` into
-  `compute`); merge order should put the spatial rebuild first.
-- Depthwash is offered only when a depth map is bound (visionOS). macOS binds no depth texture.
+## Implementation (round 0)
+
+Code: `Liminal/Visual/ImageTransition.swift` (styles, spec, envelope, swap, boosts, director),
+`EffectsUniformsComputer.compute(transition:)`, `EffectLook.transitionDuration`, six uniforms appended
+to `EffectsUniforms` (`txStyle, txMix, txEnv, txSeed, txSoft, txAmount`), shader stage A (UV moves and
+swap fields) and `swapWeight` in stage B. Tests: `LiminalTests/ImageTransitionTests.swift`.
+
+### T15. `classic` stays as style 0 and is the default of `compute`
+- What: the pre-family crossfade (sin boost, whole-frame eased dissolve over 1.5 s) as
+  `TransitionStyle.classic`. The director never picks it.
+- Why: the golden test row with `tp` = 0.5 and every caller that passes no spec keep their exact
+  output, and the judge sets get today's transition as a hidden control from the same code.
+
+### T16. Swap progress is linear inside the window, not a smoothstep
+- What: `M = clamp((tp - s0) / (s1 - s0))`. The mask's own smoothstep makes each pixel's change C1.
+- Why: with a smoothstep sweep the first Tide render exchanged the whole calm pair in 0.15 s (step
+  0.052, pop 8.4); the linear sweep spreads it over the window (pop 2.9).
+
+### T17. The envelope plateau is the swap window
+- What: `E = smoothstep(0, s0, tp) * (1 - smoothstep(s1, 1, tp))`: the plan's `p` and `h` collapse to
+  the window, so the pixels change picture only while the distortion is at full strength.
+
+### T18. Fresh hold: fade over max(1.5, 0.4 D), not min
+- The plan's `min(1.5, 0.4 D)` gives 0.6 s at D = 1.5, contradicting its own "today's 1.5 / 4.5 / 11";
+  max keeps the judged timings at 1.5 s and lengthens the fade for long transitions. Hold to D + 3,
+  back by D + 9.5, both still scaled for short image intervals (and never before the transition ends).
+
+### T19. Mask fields are computed in stage A, one float crosses into stage B
+- What: Tide, Undertow, Prism (flow), Shatter (crystal), Rainbow (the strongest hue-wave terms),
+  Dive (radius), Depthwash (one depth sample), Kaleidoscope (petal), Whirlpool (radius) set
+  `WarpOut.field` inside a `transitionProgress > 0` branch of `distortedUV`; Echo and Embers finish it
+  with luma in stage B. `swapWeight` is a small half-precision function.
+- Why: GPU A/B. Carrying the flow vector and noise field into stage B, sampling depth there and
+  moving the hue waves before the blend each cost about 1 % on frames without a transition, even
+  behind a uniform branch (register pressure counts against every frame). Depth is now sampled once
+  for both eyes.
+- The hue waves stay where they were, so non-transition frames are bit-identical to main
+  (max difference 0 of 255 over 22 frames at intensity 0.25 / 0.5 / 1).
+
+### T20. The new picture is sampled only inside the transition branch
+- Outside a transition `previousTexture` is the source (both renderers' fallback) and `w` = 0, so
+  the three source samples moved into the branch. On a `tp` = 0 start frame (macOS) the old picture
+  is shown, as before.
+
+### T21. Bloom and taps use one texture handle chosen per pixel; Echo lives in the same tap loop
+- What: `shownTexture = showNew ? source : previous` for bloom and taps. Echo fades its taps out,
+  switches them to the new picture at zero alpha (E = 0.15), then brings them back up to
+  1 + `txAmount` times stronger.
+- Why: a second tap loop for Echo (old-to-new mix per tap) cost about 1.5 % on every frame; a
+  duplicated loop with a static handle for normal frames cost more, not less (1.03).
+
+### T22. Luma and depth orders are spread by the flow term
+- What: Embers, Echo: `0.55 (1 - sqrt(luma)) + 0.45 flow`; Depthwash: `0.7 depth + 0.3 flow`.
+- Why: on the dark flytrap (p2) nearly all luma was near 0, so Embers swapped the whole frame in one
+  frame (step 0.115, pop 11.6); a flat background did the same to Depthwash (step 0.080). After:
+  0.054 / 3.9 and 0.040 / 3.0.
+
+### T23. Prism and Tide get a loose flow order too, and wider windows
+- Whole-frame swaps (Prism 0.5 everywhere, Tide 0.5 +- 0.2) popped (pop 7.0 / 8.4). Flow +-0.35 / +-0.4
+  and windows 0.26-0.76 / 0.28-0.72 bring them to 2.3-2.9.
+
+### T24. Echo burst, Depthwash stereo boost, Afterimage fps conversion and the depth-upload deferral are not built
+- Echo: the normal taps (delay 0.5 gives several) are enough once their gain rises with E; a burst
+  request needs renderer plumbing in the file the spatial workstream rebuilds.
+- Depthwash: B's depth map is generated about 31 ms after B arrives, long before the swap window
+  (>= 0.78 s in), so the mask uses B's map without deferring the upload. Stereo boost left out.
+- Afterimage: both renderers run at 60 fps, where its feedback mix is specified.
+
+### T25. Measured, round 0 (default intensity, seed 0; `tx/round0` in the session scratchpad)
+| | p1 calm (romanesco -> hourglass, t = 113) | p2 (flytrap -> accordion, t = 600) |
+|---|---|---|
+| seam_in (gate <= 2.5) | 0.98 every style (control 11.7) | 0.95 every style (control 23.5) |
+| seam_out | 1.0-2.8; Tide 2.8 the only one above 2.5 (control 9.2) | 1.0-2.6 (control 9.3) |
+| step_max (<= 0.050) | 0.016-0.051; Kaleidoscope 0.063 | 0.021-0.058; Kaleidoscope 0.058, Embers 0.054 |
+| swap_vis / double exposure | Afterimage, Dive, Kaleidoscope, Shatter, Undertow, Whirlpool pass; Tide 0.23 / 0.16; Depthwash, Prism, Rainbow, Embers, Echo 0.24-0.34 / 0.21-0.30 (control 0.29 / 0.26) | all but Echo and Prism pass (control 0.16 / 0.14) |
+| resolve (>= 0.55) | 0.74 every style | 0.68-0.71 |
+- The seams that made the old transition feel bolted on are gone in every style. The calm pair is still
+  a partial double exposure for the colour and temporal styles: their carriers (hue, bloom, taps) do
+  not hide edges the way the warps do. Next round: judges first, then more water for those five if the
+  judges see the swap.
+- Effects-balance gates (`fx-judge-set.py --mode app`, 180 frames): PASS at 0.25 / 0.5 / 1.0
+  (hog loss mean 0.065 / 0.091 / 0.122).
+
+### T26. GPU (shader-bench interleaved A/B against main's shader, 2048^2 MRT stereo)
+- Frames without a transition: B/A 1.008-1.019 over five runs (mean about 1.015); A/A of main against
+  itself 0.990-0.998 in the same session. So about +1.5 %, just over the 1.01 target, with another
+  workstream's simulator sharing the GPU. Main's three source samples per eye are gone (T20); what is
+  left is the per-pixel texture handle for bloom and taps (T21) and the mask call's registers.
+- Transition frames: each style is 1.02-1.09 x the new classic transition frame (gate 1.05: Dive,
+  Echo, Embers, Kaleidoscope, Rainbow and Whirlpool are 1.05-1.09). Against main's transition frame
+  they are 1.12-1.22 x: main switched the ghost taps off during a transition, and taps now run through
+  it (T7). Worth a check on device: a transition lasts 2-4 s of every image interval.

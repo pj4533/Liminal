@@ -4,8 +4,8 @@
 # Built on scripts/shader-bench.sh --sequence and scripts/tx-check.py (docs/plans/transitions.md 8).
 #
 # Usage
-#   scripts/tx-clip.sh --a A.jpg --b B.jpg --out DIR [--style classic] [--seed 0] [--intensity 0.5]
-#                      [--start 113] [--duration 1.5] [--pre 1] [--post 3] [--fps 30] [--shader FILE.metal]
+#   scripts/tx-clip.sh --a A.jpg --b B.jpg --out DIR [--style classic|tide|undertow|...] [--seed 0] [--intensity 0.5]
+#                      [--start 113] [--duration S (default: 1.5 classic, else the style's mid range)] [--pre 1] [--post 3] [--fps 30] [--shader FILE.metal]
 #                      [--depth B-depth.png] [--no-score] [--no-clip]
 # Writes
 #   DIR/frames/f0000-L.png ... + sequence.json   the transition (left eye, 768x512, 30 fps)

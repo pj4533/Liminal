@@ -18,7 +18,7 @@ Liminal creates endless, evolving ambient soundscapes synchronized with AI-gener
 
 - **Generative Audio**: eight-layer synthesized ambient engine (drone, pad, lead, keys, drips, air, grains, pluck) with evolving scenes, key drift, rare events and four styles (Drift, Glass, Deep, Garden); no samples. See `docs/decisions/music.md`
 - **AI Visuals**: Gemini image generation (gemini-nano-banana-2.1, the latest model, 3:2 at 2K; hourly and daily spending cap) driven by a style/subject/transformation/palette prompt system for varied, photoreal-but-surreal imagery. See `docs/decisions/images.md`
-- **GPU Effects**: one Metal fragment shader with Ken Burns motion, turbulence distortion, chromatic aberration, crossfade, hue shifts, ghost taps, stochastic bloom, feedback warping and a final vibrance stage that keeps colors vivid; a slow clarity cycle and a strain budget keep the image recognisable, scaled by the Effect intensity setting
+- **GPU Effects**: one Metal fragment shader with Ken Burns motion, turbulence distortion, chromatic aberration, a family of 12 image transitions that hide the swap inside a surge of the live effects (picked without repeats, docs/decisions/transitions.md), hue shifts, ghost taps, stochastic bloom, feedback warping and a final vibrance stage that keeps colors vivid; a slow clarity cycle and a strain budget keep the image recognisable, scaled by the Effect intensity setting
 - **Audio-visual coupling**: the music drives the visuals (note glow, scene intensity, chord-tied hue, ghost-tap burst on scene change) and each new image sends a mood (brightness, warmth, saturation, energy, mood words) back to the music. A "Sync visuals to music" switch turns the music-to-visuals direction off. See `docs/decisions/av-coupling.md`
 - **macOS and visionOS**: a window with a control panel on macOS; on visionOS a control window plus an immersive curved dome (112.5 x 75 degrees, 2048x2048 per eye, stereo with ML depth) and a Spatial Diorama
 - **Indirect Control**: shape the experience through abstract sliders rather than direct manipulation
@@ -120,6 +120,8 @@ Pass as launch arguments, for example `-LiminalAutoPlay YES`. Defined in `Limina
 | `-LiminalSyncLog YES` | One SYNC log line per second (coupling state) |
 | `-LiminalSyncStrength <x>` | Exaggerate the music-to-visuals coupling for tuning |
 | `-LiminalEffectIntensity <0-1>` | Override the Effect intensity setting for this launch without changing it |
+| `-LiminalTransitionStyle <name>` | Use this transition style for every image change (tide, undertow, prism, rainbow, kaleidoscope, whirlpool, dive, afterimage, echo, depthwash, embers, shatter, classic) |
+| `-LiminalTransitionSeed <n>` | Pin the transition seed too (same spec as `scripts/tx-clip.sh --style/--seed`) |
 
 ## Scripts (`scripts/`)
 

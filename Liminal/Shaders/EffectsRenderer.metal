@@ -232,7 +232,29 @@ struct EffectsUniforms {
     float fractalHueAmount;     // fractal-driven hue cycling intensity
     float vibranceAmount;       // final vibrance stage chroma gain (0 = off)
     float blackPoint;           // final vibrance stage black-point pull-down (0 = off)
+    // Image transition (docs/plans/transitions.md 9.1). All 0 outside a transition.
+    float txStyle;              // TransitionStyle raw value (TX_* below; 0 = classic dissolve)
+    float txMix;                // swap progress M, 0...1
+    float txEnv;                // envelope E, 0...1
+    float txSeed;               // 0...1: direction, centre, wedge count, channel order
+    float txSoft;               // swap mask edge softness; negative = reversed order
+    float txAmount;             // style amount: Prism stagger, fold, swirl angle, Echo tap gain
 };
+
+// TransitionStyle raw values (ImageTransition.swift)
+constant int TX_CLASSIC = 0;
+constant int TX_TIDE = 1;
+constant int TX_UNDERTOW = 2;
+constant int TX_PRISM = 3;
+constant int TX_RAINBOW = 4;
+constant int TX_KALEIDOSCOPE = 5;
+constant int TX_WHIRLPOOL = 6;
+constant int TX_DIVE = 7;
+[[maybe_unused]] constant int TX_AFTERIMAGE = 8;   // whole-frame swap; its trails do the dissolving
+constant int TX_ECHO = 9;
+constant int TX_DEPTHWASH = 10;
+constant int TX_EMBERS = 11;
+constant int TX_SHATTER = 12;
 
 // Ghost tap data - passed in separate buffer as array of 8
 struct GhostTap {
@@ -286,9 +308,19 @@ vertex VertexOut effectsVertex(uint vertexID [[vertex_id]]) {
 // 1 = just source, 2 = +KenBurns, 3 = +fBM, 4 = +color, 5 = +feedback, 0 = all
 #define DEBUG_STAGE 0
 
-// Stage A: Ken Burns + turbulence + log-spherical + sinusoidal noise, through the UV clamp.
-// Depends only on texCoord and uniforms, so both stereo eyes share the result.
-static inline float2 distortedUV(float2 texCoord, constant EffectsUniforms &uniforms) {
+// Stage A output: the distorted UV plus the fields a transition's swap mask is ordered by.
+// Only one extra float crosses into Stage B (more live state there costs occupancy outside transitions).
+struct WarpOut {
+    float2 uv;
+    float field;     // swap order of the flow / crystal / UV-move styles; flow term for the others
+};
+
+// Stage A: Ken Burns + transition UV move + turbulence + log-spherical + sinusoidal noise, through
+// the UV clamp. Depends only on texCoord and uniforms, so both stereo eyes share the result.
+static inline WarpOut distortedUV(float2 texCoord, constant EffectsUniforms &uniforms, texture2d<half> depthTexture) {
+    WarpOut o;
+    o.field = 0.5;
+    float crystal = 0.0;
     float2 uv = texCoord;
 
     // === 1. KEN BURNS TRANSFORM ===
@@ -300,10 +332,42 @@ static inline float2 distortedUV(float2 texCoord, constant EffectsUniforms &unif
     centered -= float2(uniforms.kenBurnsOffsetX, uniforms.kenBurnsOffsetY) * 0.05;  // scale down offset
     uv = centered + center;
 
+    // === 1.5 TRANSITION UV MOVES (docs/plans/transitions.md 6) ===
+    // Only Kaleidoscope and Whirlpool move UVs here; txEnv is 0 outside a transition.
+    if (uniforms.txEnv > 0.0) {
+        int style = int(uniforms.txStyle + 0.5);
+        if (style == TX_KALEIDOSCOPE) {
+            // Mirror-fold into 6 or 8 wedges about the view centre; the UV is pulled toward its
+            // folded position (a position mix stays continuous where an angle mix would tear).
+            float2 c = uv - 0.5;
+            float r = length(c);
+            float wedge = 6.2831853 / (uniforms.txSeed < 0.5 ? 6.0 : 8.0);
+            float rot = uniforms.txSeed * 6.2831853;
+            float f = fract((atan2(c.y, c.x) + rot) / wedge);
+            float tri = 1.0 - abs(f - 0.5) * 2.0;            // 0 on the seams, 1 mid-wedge
+            float af = wedge * 0.5 * (1.0 - tri) - rot;       // mirrored angle, continuous
+            float cs;
+            float sn = sincos(af, cs);
+            float2 folded = 0.5 + r * float2(cs, sn);
+            uv = mix(uv, folded, uniforms.txEnv * uniforms.txAmount);
+            o.field = 0.65 * tri + 0.35 * saturate(r * 1.6);
+        } else if (style == TX_WHIRLPOOL) {
+            // Swirl about a seeded point, strongest at the centre (Gaussian falloff).
+            float2 c0 = 0.5 + 0.36 * (float2(fract(uniforms.txSeed * 7.13), fract(uniforms.txSeed * 3.71)) - 0.5);
+            float2 d = uv - c0;
+            float r = length(d);
+            float ang = uniforms.txAmount * uniforms.txEnv * exp(-r * r * 5.0);
+            float cs;
+            float sn = sincos(ang, cs);
+            uv = c0 + float2(d.x * cs - d.y * sn, d.x * sn + d.y * cs);
+            o.field = saturate(r / 0.65);
+        }
+    }
+
     // === 2. DREAMY DISTORTION (Turbulence) ===
     // XorDev's layered sine wave turbulence — organic fluid motion
-    float2 displacement = turbulence_distort(uv * 3.0, uniforms.time, uniforms.distortionSpeed)
-                        * uniforms.distortionAmplitude;
+    float2 flow = turbulence_distort(uv * 3.0, uniforms.time, uniforms.distortionSpeed);
+    float2 displacement = flow * uniforms.distortionAmplitude;
     uv += displacement;
 
     // === 2.5 LOG-SPHERICAL DISTORTION (Nishitsuji signature technique) ===
@@ -328,17 +392,72 @@ static inline float2 distortedUV(float2 texCoord, constant EffectsUniforms &unif
         float noiseY = float(flowOctaves(ns * kc + nc * ks, nc * kc - ns * ks, 5));
         float amount = uniforms.fractalNoiseAmount;
         uv += float2(noiseX, noiseY) * amount;
+        crystal = noiseX;
+    }
+
+    // Swap order fields that come from this stage (docs/plans/transitions.md 5).
+    if (uniforms.transitionProgress > 0.0) {
+        int style = int(uniforms.txStyle + 0.5);
+        float seedAng = uniforms.txSeed * 6.2831853;
+        float2 dir = float2(cos(seedAng), sin(seedAng));
+        float fd = clamp(dot(flow, dir), -1.0, 1.0);
+        if (style == TX_TIDE) {
+            o.field = 0.5 + 0.4 * fd;
+        } else if (style == TX_UNDERTOW) {
+            o.field = 0.5 + 0.8 * dot(texCoord - 0.5, dir) + 0.3 * dot(flow, dir);
+        } else if (style == TX_PRISM) {
+            o.field = 0.5 + 0.35 * fd;
+        } else if (style == TX_SHATTER) {
+            o.field = fract(floor(crystal * 3.0 + uniforms.txSeed * 7.0) * 0.618034 + uniforms.txSeed);
+        } else if (style == TX_DEPTHWASH) {
+            // Depth order (0 = far: the background changes first), sampled once for both eyes.
+            constexpr sampler ds(address::clamp_to_edge, filter::linear);
+            float depth = float(depthTexture.sample(ds, clamp(uv, float2(0.001), float2(0.999))).r);
+            o.field = 0.7 * depth + 0.3 * (0.5 + 0.5 * fd);
+        } else if (style == TX_RAINBOW) {
+            // A sweep across the frame, banded by the strongest terms of the hue-wave field.
+            float t = uniforms.time;
+            float bands = sin(uv.x * 2.0 + t * 0.2) + 0.6 * sin(uv.x * 5.0 - t * 0.15)
+                        + 0.8 * sin(uv.y * 3.0 + t * 0.18) + 0.7 * sin((uv.x + uv.y) * 4.0 + t * 0.12);
+            o.field = 0.55 * (0.5 + dot(texCoord - 0.5, dir)) + 0.45 * (0.5 + 0.5 * sin(bands * 1.7));
+        } else if (style == TX_DIVE) {
+            o.field = length(texCoord - 0.5) * 1.4;   // the centre first: out the far side of the tunnel
+        } else if (style != TX_KALEIDOSCOPE && style != TX_WHIRLPOOL) {
+            // Flow term that spreads orders whose values bunch up (a dark picture's luma), so the
+            // whole frame never swaps in one frame.
+            o.field = 0.5 + 0.5 * fd;
+        }
     }
 
     // Clamp UV to valid range
-    uv = clamp(uv, float2(0.001), float2(0.999));
+    o.uv = clamp(uv, float2(0.001), float2(0.999));
+    return o;
+}
 
-    return uv;
+// Swap weight per channel (docs/plans/transitions.md 5): 0 = previous picture, 1 = new picture.
+// m is the style's order field (which pixels go first; Stage A computes it, the luma styles finish it
+// here), swept by txMix with edge softness txSoft. Kept small and in half: the call sits in a uniform
+// branch, but its registers count against every frame.
+static inline half3 swapWeight(WarpOut warp, half3 prevRGB, half3 srcRGB, constant EffectsUniforms &uniforms) {
+    int style = int(uniforms.txStyle + 0.5);
+    if (style == TX_CLASSIC) return half3(half(uniforms.txMix));
+    half m = half(warp.field);
+    if (style == TX_ECHO) {
+        m = 0.55h * (1.0h - sqrt(dot(srcRGB, LUMA_W))) + 0.45h * m;    // the new picture's highlights first
+    } else if (style == TX_EMBERS) {
+        m = 0.55h * (1.0h - sqrt(dot(prevRGB, LUMA_W))) + 0.45h * m;   // the old picture's highlights burn first
+    }
+    m = saturate(m);
+    if (uniforms.txSoft < 0.0) m = 1.0h - m;
+    half s = half(max(abs(uniforms.txSoft), 0.02));
+    half c = style == TX_PRISM ? half(uniforms.txAmount) * (fract(uniforms.txSeed * 5.0) < 0.5 ? 1.0h : -1.0h) : 0.0h;
+    half th = mix(-s - abs(c), 1.0h + s + abs(c), half(uniforms.txMix));
+    return smoothstep(half3(m - s), half3(m + s), th + half3(c, 0.0h, -c));
 }
 
 // Stage B: stereo parallax through the final colour. Everything that differs per eye lives here.
 static inline half4 shadeEye(
-    float2 uv,
+    WarpOut warp,
     float2 texCoord,
     float2 fragPos,
     float stereoOffset,
@@ -351,6 +470,7 @@ static inline half4 shadeEye(
     constant GhostTap *ghostTaps
 ) {
     constexpr sampler texSampler(address::clamp_to_edge, filter::linear);
+    float2 uv = warp.uv;
 
     // === STEREO DEPTH PARALLAX ===
     // Per-eye shift scaled by depth so near subjects separate more than distant background.
@@ -369,12 +489,6 @@ static inline half4 shadeEye(
     // Sample RGB channels at slightly offset UVs for prismatic fringing.
     // Radial: stronger at edges, zero at center.
     float2 chromOffset = (uv - 0.5) * uniforms.chromaticAmount;
-    half4 sourceColor = half4(
-        sourceTexture.sample(texSampler, uv + chromOffset).r,
-        sourceTexture.sample(texSampler, uv).g,
-        sourceTexture.sample(texSampler, uv - chromOffset).b,
-        1.0h
-    );
     half4 prevColor = half4(
         previousTexture.sample(texSampler, uv + chromOffset).r,
         previousTexture.sample(texSampler, uv).g,
@@ -383,14 +497,25 @@ static inline half4 shadeEye(
     );
 
     // === GPU CROSSFADE BLENDING ===
-    // Always blend - when not transitioning, previousTexture == sourceTexture (fallback)
-    // This avoids the "jump to new image" on first frame of transition
-    float blendT = uniforms.transitionProgress;
-    float eased = blendT < 0.5 ? 4.0 * blendT * blendT * blendT : 1.0 - pow(-2.0 * blendT + 2.0, 3.0) / 2.0;
-
-    // Blend: previous -> current as progress goes 0 -> 1
-    // At t=0: show previous (old image), at t=1: show source (new image)
-    half4 color = mix(prevColor, sourceColor, half(eased));
+    // Outside a transition previousTexture == sourceTexture (the renderers' fallback) and w = 0, so the
+    // new picture is only sampled inside the transition branch (3 fewer samples on a normal frame).
+    // Per pixel and channel, ordered by the transition style's field (swapWeight).
+    half3 w = half3(0.0h);
+    half4 color = prevColor;
+    if (uniforms.transitionProgress > 0.0) {
+        half3 sourceRGB = half3(
+            sourceTexture.sample(texSampler, uv + chromOffset).r,
+            sourceTexture.sample(texSampler, uv).g,
+            sourceTexture.sample(texSampler, uv - chromOffset).b
+        );
+        w = swapWeight(warp, prevColor.rgb, sourceRGB, uniforms);
+        color = half4(mix(prevColor.rgb, sourceRGB, w), 1.0h);
+    }
+    // Bloom and ghost taps sample the picture this pixel is showing (transitions.md T7): no glow or
+    // echo of the new picture over the old one before the swap reaches it.
+    bool showNew = w.g >= 0.5h;
+    // One handle, one sample (a per-sample select made the compiler fetch both textures).
+    texture2d<half> shownTexture = showNew ? sourceTexture : previousTexture;
 
     // DEBUG STAGE 3: Ken Burns + fBM distortion
     #if DEBUG_STAGE == 3
@@ -526,34 +651,30 @@ static inline half4 shadeEye(
     // Each ghost tap spawns at the image, animates outward, and fades.
     // Multiple taps flow in similar directions, creating streaming trails.
     // Loop only over active taps (packed at front) to avoid branch divergence.
-    // IMPORTANT: Skip ghost taps during transitions - they sample sourceTexture (new image)
-    // which would bleed through before the crossfade completes.
-    int tapCount = (uniforms.transitionProgress > 0.001) ? 0 : int(uniforms.ghostTapCount);
+    // Taps sample the picture this pixel shows, so they need no gate during transitions.
+    int tapCount = int(uniforms.ghostTapCount);
     half preTapChroma = chromaOf(currentColor);
+    // Echo: the taps fade out, switch to the new picture at zero alpha (E = 0.15), and come back
+    // stronger (up to 1 + txAmount). All uniform, so a normal frame runs the plain single-sample loop.
+    bool echo = int(uniforms.txStyle + 0.5) == TX_ECHO && uniforms.txEnv > 0.0;
+    float ee = uniforms.txEnv;
+    half tapAlpha = echo ? half(min(0.15 * (ee < 0.15 ? 1.0 - ee / 0.15 : uniforms.txAmount * (ee - 0.15) / 0.85), 0.85))
+                         : 0.15h;
+    texture2d<half> tapTexture = (echo && ee >= 0.15) ? sourceTexture : shownTexture;
     for (int i = 0; i < tapCount; i++) {
         GhostTap tap = ghostTaps[i];
-
-        // Compute offset from progress and direction
         // Ghost starts at center (progress=0), moves outward (progress=1)
-        float2 offset = float2(tap.directionX, tap.directionY)
-                      * tap.progress * uniforms.ghostTapMaxDistance;
-        float2 ghostUV = uv + offset;
-        ghostUV = clamp(ghostUV, float2(0.001), float2(0.999));
-
-        // Sample source at ghost's offset position
-        half4 ghostSample = sourceTexture.sample(texSampler, ghostUV);
-
+        float2 ghostUV = clamp(uv + float2(tap.directionX, tap.directionY) * tap.progress * uniforms.ghostTapMaxDistance,
+                               float2(0.001), float2(0.999));
+        half4 ghostSample = tapTexture.sample(texSampler, ghostUV);
         // Alpha fade: stronger at start (progress=0), transparent at end (progress=1)
-        // Use ease-out curve for smoother fade
         half ghostAlpha = half(1.0 - tap.progress * tap.progress);
-
-        // Blend ghost with current color
         // Very subtle - ghosts should be background whispers, not dominant
-        currentColor = mix(currentColor, ghostSample.rgb, ghostAlpha * 0.15h);
+        currentColor = mix(currentColor, ghostSample.rgb, ghostAlpha * tapAlpha);
     }
 
     // Ghosts keep their shape (luma) and take on the processed colour's chroma.
-    if (tapCount > 0) {
+    if (int(uniforms.ghostTapCount) > 0) {
         currentColor = restoreChroma(currentColor, preTapChroma, 1.5h);
     }
 
@@ -568,7 +689,7 @@ static inline half4 shadeEye(
             dot(fc, float2(269.5, 183.3)) + uniforms.time * 71.3
         )) * 43758.5453) * 2.0 - 1.0;
         float2 bloomUV = clamp(uv + noise * uniforms.bloomRadius, float2(0.001), float2(0.999));
-        half3 bloomSample = sourceTexture.sample(texSampler, bloomUV).rgb;
+        half3 bloomSample = shownTexture.sample(texSampler, bloomUV).rgb;
         half brightness = dot(bloomSample, half3(0.299h, 0.587h, 0.114h));
         // Saturate the glow about its own luma and SCREEN it: highlights roll off with their
         // colour instead of the old clamped add flattening them to white.
@@ -635,8 +756,8 @@ fragment half4 effectsFragment(
     return sourceTexture.sample(texSampler, clamp(kb, float2(0.001), float2(0.999)));
     #endif
 
-    float2 uv = distortedUV(in.texCoord, uniforms);
-    return shadeEye(uv, in.texCoord, in.position.xy, uniforms.stereoOffset,
+    WarpOut warp = distortedUV(in.texCoord, uniforms, depthTexture);
+    return shadeEye(warp, in.texCoord, in.position.xy, uniforms.stereoOffset,
                     sourceTexture, saliencyTexture, previousTexture, feedbackTexture, depthTexture,
                     uniforms, ghostTaps);
 }
@@ -662,13 +783,13 @@ fragment StereoEyesOut effectsFragmentStereo(
     constant EffectsUniforms &uniforms [[buffer(0)]],
     constant GhostTap *ghostTaps [[buffer(1)]]
 ) {
-    float2 uv = distortedUV(in.texCoord, uniforms);
+    WarpOut warp = distortedUV(in.texCoord, uniforms, depthTexture);
     float mag = abs(uniforms.stereoOffset);
     StereoEyesOut out;
-    out.left = shadeEye(uv, in.texCoord, in.position.xy, -mag,
+    out.left = shadeEye(warp, in.texCoord, in.position.xy, -mag,
                         sourceTexture, saliencyTexture, previousTexture, feedbackTexture, depthTexture,
                         uniforms, ghostTaps);
-    out.right = shadeEye(uv, in.texCoord, in.position.xy, mag,
+    out.right = shadeEye(warp, in.texCoord, in.position.xy, mag,
                          sourceTexture, saliencyTexture, previousTexture, feedbackTextureRight, depthTexture,
                          uniforms, ghostTaps);
     return out;

@@ -273,6 +273,8 @@ final class MusicSyncBox {
     var lastLogSecond = -1
     /// Effect time at which the current image's crossfade began (nil before the first crossfade).
     var transitionStart: Float?
+    /// The current (or last) image transition; its duration also anchors the fresh-image hold.
+    var transition: TransitionSpec = .classic
     var intensity = EffectIntensitySmoother()
 
     /// The effect look for this frame (effects-balance plan 7.3).
@@ -280,7 +282,8 @@ final class MusicSyncBox {
         let target = DebugLaunchOptions.effectIntensity(setting: setting)
         let i = DebugLaunchOptions.freezeTime != nil ? target : intensity.next(target: target, time: effectTime)
         let age = transitionStart.map { effectTime - $0 }.flatMap { $0 >= 0 ? $0 : nil }
-        return EffectLook(intensity: i, imageAge: age, imageInterval: Float(imageInterval))
+        return EffectLook(intensity: i, imageAge: age, imageInterval: Float(imageInterval),
+                          transitionDuration: transition.duration)
     }
 }
 
@@ -319,7 +322,8 @@ struct VisualDisplayView: View {
             hasSaliencyMap: transitionManager.currentSaliencyMap != nil,
             vibrance: vibrance,
             music: modulation,
-            look: currentLook(effectTime: effectTime)
+            look: currentLook(effectTime: effectTime),
+            transition: sync.transition
         )
         // Debug toggle controls the effect currently being tested
         if !settings.debugEffectEnabled {
@@ -345,6 +349,17 @@ struct VisualDisplayView: View {
         return vibrance
     }
 
+    /// The transition for a crossfade that is starting (docs/plans/transitions.md 7). macOS binds no depth map.
+    private func pickTransition() -> TransitionSpec {
+        let effectTime = DebugLaunchOptions.effectTime(Float(effectController.time))
+        let modulation = frameParams().modulation
+        return visualEngine.nextTransition(
+            effectTime: effectTime,
+            intensity: DebugLaunchOptions.effectIntensity(setting: settings.effectIntensity),
+            energy: modulation.amount > 0 ? modulation.energy : nil,
+            hasDepth: false)
+    }
+
     /// Hue drift of the un-synced macOS look (turns per second).
     private static let baseHueRate: Float = 0.03
 
@@ -355,7 +370,8 @@ struct VisualDisplayView: View {
         let mood = VisualMoodBuilder.mood(metadata: metadata,
                                           image: image.cgImageRepresentation.map { ImageFraming.coverCrop($0) })
         music.setVisualMood(mood)
-        if imageChanged { music.imageDidChange(transitionDuration: VisualMoodBuilder.crossfadeDuration) }
+        // Twice the swap time: the conductor lands its chord change at half of it, i.e. on the swap.
+        if imageChanged { music.imageDidChange(transitionDuration: sync.transition.musicDuration) }
         sync.lastMood = mood
         LMLog.visual.info("🎼 setVisualMood b=\(String(format: "%.2f", mood.brightness), privacy: .public) w=\(String(format: "%.2f", mood.warmth), privacy: .public) s=\(String(format: "%.2f", mood.saturation), privacy: .public) e=\(String(format: "%.2f", mood.energy), privacy: .public) words=\(mood.moodWords.joined(separator: ","), privacy: .public) imageDidChange=\(imageChanged)")
     }
@@ -428,7 +444,10 @@ struct VisualDisplayView: View {
         .onChange(of: visualEngine.currentImage) { _, newImage in
             if let image = newImage {
                 let hadFrame = transitionManager.currentFrame != nil
-                let started = transitionManager.transitionTo(image)
+                let started = transitionManager.transitionTo(image, duration: {
+                    sync.transition = pickTransition()
+                    return Double(sync.transition.duration)
+                })
                 if started { sync.transitionStart = DebugLaunchOptions.effectTime(Float(effectController.time)) }
                 if started || !hadFrame { postMood(for: image, imageChanged: started) }
             } else {
@@ -461,7 +480,8 @@ struct VisualDisplayView: View {
             let tp = Float(transitionManager.transitionProgress)
             let activity = EffectsUniformsComputer.visualActivity(
                 time: Float(newTime), transitionProgress: tp,
-                look: currentLook(effectTime: DebugLaunchOptions.effectTime(Float(newTime))))
+                look: currentLook(effectTime: DebugLaunchOptions.effectTime(Float(newTime))),
+                transition: sync.transition)
             if let a = sync.activity.next(activity, at: newTime) { music.setVisualActivity(a) }
             if DebugLaunchOptions.syncLog, Int(newTime) != sync.lastLogSecond {
                 sync.lastLogSecond = Int(newTime)
@@ -489,7 +509,8 @@ struct VisualDisplayView: View {
             transitionProgress: Float(transitionManager.transitionProgress),
             hasSaliencyMap: transitionManager.currentSaliencyMap != nil,
             vibrance: currentVibrance(),
-            look: currentLook(effectTime: DebugLaunchOptions.effectTime(time)))
+            look: currentLook(effectTime: DebugLaunchOptions.effectTime(time)),
+            transition: sync.transition)
         let line = MusicSyncLog.line(reactor: sync.reactor, state: music.musicState.read(), uniforms: params.uniforms,
                                      neutral: neutral, mood: sync.lastMood, activity: sync.activity.lastSent)
         LMLog.visual.info("\(line, privacy: .public)")

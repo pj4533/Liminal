@@ -17,7 +17,8 @@ final class TimerDrivenCrossfade: ObservableObject {
     // MARK: - Configuration
 
     private let targetFPS: Double = 30
-    private let crossfadeDuration: Double = VisualMoodBuilder.crossfadeDuration  // seconds for crossfade
+    /// Seconds of the running crossfade: the transition spec's duration (docs/plans/transitions.md 7.2).
+    private var crossfadeDuration: Double = VisualMoodBuilder.crossfadeDuration
 
     // MARK: - Published State
 
@@ -68,7 +69,8 @@ final class TimerDrivenCrossfade: ObservableObject {
 
     /// - Returns: true when a crossfade started (false for the first image and for the same image).
     @discardableResult
-    func transitionTo(_ newImage: PlatformImage) -> Bool {
+    /// - Parameter duration: asked only when a crossfade actually starts (the caller picks the transition there).
+    func transitionTo(_ newImage: PlatformImage, duration: () -> Double = { VisualMoodBuilder.crossfadeDuration }) -> Bool {
         guard let current = currentFrame else {
             currentFrame = newImage
             addToHistory(newImage)
@@ -98,6 +100,7 @@ final class TimerDrivenCrossfade: ObservableObject {
         toImage = newImage
         addToHistory(newImage)
         poolSize = imageHistory.count
+        crossfadeDuration = max(duration(), 0.1)
         startCrossfade()
 
         Task {
