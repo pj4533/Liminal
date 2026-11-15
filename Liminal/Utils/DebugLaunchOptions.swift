@@ -46,7 +46,30 @@ nonisolated enum DebugLaunchOptions {
 
     /// -LiminalTestImage <path>: like -LiminalTestPattern, but show this image file (any path the
     /// app can read; the simulator can read host paths). For before/after colour comparisons.
+    /// If <path> is a directory, its images (jpg/jpeg/png, names without "-depth") are cycled in
+    /// name order on the normal image schedule instead, so real transitions can be recorded.
     static let testImagePath: String? = defaults.string(forKey: "LiminalTestImage")
+
+    /// Image files of -LiminalTestImage when it names a directory (sorted), else nil.
+    static let testImageDirectoryFiles: [URL]? = {
+        guard let path = testImagePath else { return nil }
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue else { return nil }
+        let urls = (try? FileManager.default.contentsOfDirectory(at: URL(fileURLWithPath: path),
+                                                                 includingPropertiesForKeys: nil)) ?? []
+        let files = urls.filter {
+            ["jpg", "jpeg", "png"].contains($0.pathExtension.lowercased())
+                && !$0.deletingPathExtension().lastPathComponent.hasSuffix("-depth")
+        }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+        return files.isEmpty ? nil : files
+    }()
+
+    /// -LiminalImageInterval <seconds>: use this image interval instead of the setting (not saved),
+    /// e.g. 10 to see many transitions in a short recording. Clamped to at least 4 s.
+    static let imageInterval: Double? = {
+        guard defaults.object(forKey: "LiminalImageInterval") != nil else { return nil }
+        return max(4, defaults.double(forKey: "LiminalImageInterval"))
+    }()
 
     /// -LiminalForceStereoFlatDepth YES (visionOS): always use the stereo ShaderGraph material and
     /// feed it a flat (constant mid-grey) depth map instead of the ML depth map, so the stereo path
@@ -100,6 +123,7 @@ nonisolated enum DebugLaunchOptions {
             || defaults.object(forKey: "LiminalPerfLogInterval") != nil || splitPasses
             || forceStereoFlatDepth || forceMonoMaterial || noEffects || syncLog
             || defaults.object(forKey: "LiminalSyncStrength") != nil || effectIntensity != nil
+            || imageInterval != nil
     }
 #else
     static let allowGeneration = false
@@ -111,6 +135,8 @@ nonisolated enum DebugLaunchOptions {
     static let splitPasses = false
     static let testPattern = false
     static let testImagePath: String? = nil
+    static let testImageDirectoryFiles: [URL]? = nil
+    static let imageInterval: Double? = nil
     static let forceStereoFlatDepth = false
     static let forceMonoMaterial = false
     static let noEffects = false
@@ -130,7 +156,14 @@ nonisolated enum DebugLaunchOptions {
             LMLog.general.info("🧪 DEBUG FLAG applied: LiminalPerfLogInterval=\(perfLogInterval, format: .fixed(precision: 2))s")
         }
         if splitPasses { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalPerfSplitPasses=YES (no-op: eyes render direct to drawable, no blit to split)") }
-        if let p = testImagePath { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalTestImage=\(p, privacy: .public) (fixed source image)") }
+        if let p = testImagePath {
+            if let files = testImageDirectoryFiles {
+                LMLog.general.info("🧪 DEBUG FLAG applied: LiminalTestImage=\(p, privacy: .public) (directory: cycling \(files.count) images)")
+            } else {
+                LMLog.general.info("🧪 DEBUG FLAG applied: LiminalTestImage=\(p, privacy: .public) (fixed source image)")
+            }
+        }
+        if let s = imageInterval { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalImageInterval=\(s, format: .fixed(precision: 1))s (overrides the Image interval setting, not saved)") }
         if testPattern { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalTestPattern=YES (orientation test card replaces source images)") }
         if forceStereoFlatDepth { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalForceStereoFlatDepth=YES (stereo material + flat depth)") }
         if forceMonoMaterial { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalForceMonoMaterial=YES (mono UnlitMaterial)") }

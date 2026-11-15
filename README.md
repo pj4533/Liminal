@@ -114,7 +114,8 @@ Pass as launch arguments, for example `-LiminalAutoPlay YES`. Defined in `Limina
 | `-LiminalFreezeTime <s>` | Pin the effect clock for deterministic screenshots (bypasses coupling) |
 | `-LiminalPerfLogInterval <s>` | Interval of the PERF log lines (default 1) |
 | `-LiminalPerfSplitPasses YES` | Legacy split-pass option (no-op since the direct-drawable render) |
-| `-LiminalTestPattern YES` / `-LiminalTestImage <path>` | Show a generated orientation test card / a given image |
+| `-LiminalTestPattern YES` / `-LiminalTestImage <path>` | Show a generated orientation test card / a given image. If `<path>` is a directory, its images are cycled on the image schedule (real transitions on known images; the macOS app is sandboxed, so use a path it can read) |
+| `-LiminalImageInterval <s>` | Seconds between images for this launch (at least 4), not saved; e.g. 15 to see many transitions |
 | `-LiminalForceStereoFlatDepth YES`, `-LiminalForceMonoMaterial YES` | Force flat depth / the mono dome material |
 | `-LiminalNoEffects YES` | Bypass all effects |
 | `-LiminalSyncLog YES` | One SYNC log line per second (coupling state) |

@@ -4,9 +4,9 @@ Decision log for the transitions workstream. Plan with all numbers: `docs/plans/
 Request: the transition between images (distort, switch, come back) is liked but is the same every time;
 make a family of them that flows out of and back into the live effects.
 
-Status: implemented on both platforms (T15-T26), round 0 judged blind, round 1 tuned and rendered
-(T27-T32; Echo and Embers replaced by Ripple and Melt). Round 1 judging and the simulator / macOS run
-of plan 8.3 are next.
+Status: implemented on both platforms (T15-T26), round 0 judged blind, round 1 tuned (T27-T32; Echo
+and Embers replaced by Ripple and Melt), round 2 tuned (T33-T37; Undertow and Depthwash replaced by
+Facets and Solarize), verified in the visionOS 27.2 Simulator and the macOS app (T38-T42).
 
 ## Tooling and diagnosis
 
@@ -422,3 +422,62 @@ style (axes as in T27); "< 3.5" marks what round 2 had to fix.
   sits in branches that are not taken outside a transition.
 - Against main: 1.023 (round 1: 1.020). Main A/A in the same session: 0.997. The other workstream's
   simulator was running.
+
+## Final verification
+
+### T38. Debug flags to watch real transitions: `-LiminalTestImage <directory>`, `-LiminalImageInterval <s>`
+- What: `-LiminalTestImage` now also takes a directory. Its jpg / jpeg / png files (names ending in
+  `-depth` skipped) are shown in name order on the normal image schedule, so the app runs real
+  transitions on known images without the cache and without Gemini. `-LiminalImageInterval <s>`
+  (at least 4 s) replaces the Image interval setting for that launch; it is assigned in
+  `SettingsService.init`, so it is never saved. Both count as automation flags: generation stays off.
+- Why: the cache store has sidecars and a format epoch, so copying fixtures into it is fragile; the
+  existing test-image hook was the smallest change. DEBUG only, compiled out of Release.
+- macOS note: the app is sandboxed, so it cannot read a scratch directory. The recording used a copy
+  built with `ENABLE_APP_SANDBOX=NO` (own derived data, nothing committed). Re-signing the sandboxed app
+  with the fixtures inside its bundle does not work: macOS asks the user to confirm the changed app.
+- Transition length follows the interval (`clampDuration`: at most 0.2 x interval). At 9 s every style
+  ran at 1.8 s; at 15 s at most 3.0 s; at 20 s the styles' own lengths (2.3-3.8 s) came back.
+
+### T39. visionOS 27.2 Simulator (dome open, intensity 0.5, 16 fixtures, sync on)
+- Two recordings (`xcrun simctl io recordVideo`): 90 s at a 9 s interval (10 transitions:
+  melt, prism, whirlpool, rainbow, dive, ripple, facets, afterimage, kaleidoscope, solarize) and 140 s at
+  a 20 s interval (7: afterimage, rainbow, melt, whirlpool, prism, tide, afterimage). In the logs of both
+  launches (43 transitions) no style came back sooner than 5 transitions later, and all 12 styles
+  appeared (classic, the control, never does). Contact sheets: `tx/final/sim-i20-sheet.jpg`, `tx/final/sim-i9-sheet.jpg`.
+- Looked at by eye: each style has its own movement in the dome (whirlpool spiral, melt drips, prism
+  fringe sweep, tide surge, afterimage trails), the swap happens inside the distortion and the new image
+  settles without a jump at the end.
+- Frame steps (20 fps samples, dome area outside the control window): the largest step in a
+  transition is 0.05-0.22, and the large ones sit in the first 0.3 s. The PERF log shows why: every
+  image change has one long render frame (62-261 ms) when the new image is picked up, cropped and
+  uploaded (and the depth model starts). That hitch exists on main (performance.md, "Not on the
+  per-frame path"); it lands at transition progress ~0, where Rainbow's hue sweep makes it most visible.
+  It is a Simulator CPU cost and in the dome presentation code (the spatial workstream's files), so it
+  is recorded here rather than fixed. Check on device.
+- GPU time of the eye pass in the Simulator stayed at 0.08-0.09 ms average during transitions.
+
+### T40. macOS app (intensity 0.5, 15 s interval)
+- 92 s recording of the image area (`screencapture -v -R`): 6 transitions (afterimage, rainbow,
+  whirlpool, prism, kaleidoscope, tide; 2.4-3.0 s each). Contact sheet `tx/final/mac-sheet.jpg`.
+- No hitch on macOS (60 fps throughout). Largest step per transition at 20 fps: 0.052-0.095, about
+  0.017-0.032 per 60 fps frame; outside transitions max 0.027. No pops.
+- A system dialog (from the re-sign attempt in T38) covers the top of the first 60 s of that recording.
+
+### T41. Outside transitions and GPU, final
+- Recognisability gates (`fx-judge-set.py --mode app`, all 16 fixtures, 480 frames): PASS at
+  0.25 / 0.5 / 1.0 with hog loss mean 0.063 / 0.092 / 0.124 and strain p90 max 0.50 / 0.80 / 1.18,
+  the same numbers as T36 (the shader did not change after round 2).
+- GPU against main (interleaved A/B, 2048^2 MRT stereo): non-transition scenarios t = 47 / 113 / 600 /
+  2000 at 1.013-1.028 (9 trials), 0.985-1.034 and reversed 0.979-0.993 (5 trials); main against itself
+  0.996-1.014. So about +2 % outside transitions, as in T32 / T37. A mid-transition frame (classic,
+  tp 0.5) is 1.15 x main's, as T26 found (main switched the ghost taps off during a transition).
+
+### T42. Checks and deliverables
+- Unit tests (LiminalTests, macOS): 59 passed. macOS and visionOS Simulator builds succeed.
+- `tx/highlights.mp4` (39 s, 768x512): the cleanest round 2 clip of each of the 12 styles by the T36
+  scores, labelled, in the order Kaleidoscope, Tide, Prism, Facets, Rainbow, Whirlpool, Melt, Dive,
+  Ripple, Afterimage, Shatter, Solarize.
+- Open: the round 2 clips have not been judged blind yet; the step limit is still exceeded by
+  Kaleidoscope, Tide, Solarize, Dive and Whirlpool by 0.001-0.009 (T36); the image-change hitch (T39)
+  should be checked on a Vision Pro.
