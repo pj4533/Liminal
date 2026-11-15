@@ -22,6 +22,7 @@ final class SettingsService: ObservableObject {
         static let imageInterval = "visual.imageInterval"
         static let cacheOnly = "visual.cacheOnly"
         static let syncVisualsToMusic = "visual.syncToMusic"
+        static let effectIntensity = "visual.effectIntensity"
     }
 
     // MARK: - Defaults
@@ -39,6 +40,7 @@ final class SettingsService: ObservableObject {
     static let defaultImageInterval: Double = 30.0
     static let defaultCacheOnly: Bool = false
     static let defaultSyncVisualsToMusic: Bool = true
+    static let defaultEffectIntensity: Float = EffectLook.defaultIntensity
 
     // MARK: - Published Settings
 
@@ -93,6 +95,12 @@ final class SettingsService: ObservableObject {
         didSet { defaults.set(syncVisualsToMusic, forKey: Keys.syncVisualsToMusic) }
     }
 
+    /// "Effect intensity", 0 (subtle) ... 1 (wild): how far the effects bend the picture and how much
+    /// of the slow clarity cycle is spent wild (docs/plans/effects-balance.md).
+    @Published var effectIntensity: Float {
+        didSet { defaults.set(effectIntensity, forKey: Keys.effectIntensity) }
+    }
+
     /// Spending cap: new Gemini images allowed per rolling hour / 24 h (GenerationBudget, D34).
     @Published var maxImagesPerHour: Int {
         didSet { defaults.set(maxImagesPerHour, forKey: GenerationBudget.Keys.perHour) }
@@ -123,6 +131,7 @@ final class SettingsService: ObservableObject {
         self.imageInterval = defaults.object(forKey: Keys.imageInterval) as? Double ?? Self.defaultImageInterval
         self.cacheOnly = defaults.object(forKey: Keys.cacheOnly) as? Bool ?? Self.defaultCacheOnly
         self.syncVisualsToMusic = defaults.object(forKey: Keys.syncVisualsToMusic) as? Bool ?? Self.defaultSyncVisualsToMusic
+        self.effectIntensity = min(max(defaults.object(forKey: Keys.effectIntensity) as? Float ?? Self.defaultEffectIntensity, 0), 1)
 
         self.maxImagesPerHour = defaults.object(forKey: GenerationBudget.Keys.perHour) as? Int ?? GenerationBudget.defaultPerHour
         self.maxImagesPerDay = defaults.object(forKey: GenerationBudget.Keys.perDay) as? Int ?? GenerationBudget.defaultPerDay
@@ -142,6 +151,7 @@ final class SettingsService: ObservableObject {
         imageInterval = Self.defaultImageInterval
         cacheOnly = Self.defaultCacheOnly
         syncVisualsToMusic = Self.defaultSyncVisualsToMusic
+        effectIntensity = Self.defaultEffectIntensity
         maxImagesPerHour = GenerationBudget.defaultPerHour
         maxImagesPerDay = GenerationBudget.defaultPerDay
         LMLog.state.info("Settings reset to defaults")

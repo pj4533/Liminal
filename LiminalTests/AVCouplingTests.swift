@@ -18,12 +18,13 @@ struct AVCouplingTests {
             let u = EffectsUniformsComputer.compute(time: t, music: m)
             #expect(u.bloomAmount <= 0.72 + 1e-6)
             #expect(u.vibranceAmount <= 0.50 + 1e-6)
-            #expect(u.feedbackMix >= 0.26 - 1e-6 && u.feedbackMix <= 0.34 + 1e-6)
+            // Feedback mix moves at most 0.04 from its look base (0.25...0.30 at the default intensity).
+            #expect(u.feedbackMix >= 0.21 - 1e-6 && u.feedbackMix <= 0.34 + 1e-6)
             #expect(u.feedbackWarpAmount <= 0.04 + 1e-6)
             #expect(u.ghostTapMaxDistance <= 0.08 + 1e-6)
             #expect(u.distortionAmplitude <= 0.10 + 1e-6)
             #expect(u.chromaticAmount <= 0.02 + 1e-6)
-            #expect(u.logSphereAmount <= 0.024 + 1e-6)
+            #expect(u.logSphereAmount <= 0.020 + 1e-6)
             #expect(u.fractalNoiseAmount <= 0.036 + 1e-6)
         }
     }
@@ -134,7 +135,7 @@ struct AVCouplingTests {
             let n = EffectsUniformsComputer.compute(time: Float(t), music: neutralM)
 
             // 1. caps
-            if u.bloomAmount > 0.72 + 1e-6 || u.vibranceAmount > 0.5 + 1e-6 || u.feedbackMix < 0.26 - 1e-6
+            if u.bloomAmount > 0.72 + 1e-6 || u.vibranceAmount > 0.5 + 1e-6 || u.feedbackMix < 0.16 - 1e-6
                 || u.feedbackMix > 0.34 + 1e-6 || u.feedbackWarpAmount > 0.04 + 1e-6 || u.ghostTapMaxDistance > 0.08 + 1e-6
                 || u.distortionAmplitude > 0.10 + 1e-6 || u.chromaticAmount > 0.02 + 1e-6 {
                 failures.append(String(format: "cap exceeded at t=%.2f", t))

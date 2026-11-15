@@ -9,6 +9,9 @@
 #   scripts/shader-bench.sh --out DIR                                # also write parity PNGs
 #   scripts/shader-bench.sh --compare DIR_A DIR_B                    # PSNR / max-abs-diff
 #   scripts/shader-bench.sh --gen-depth IMAGE OUT.png                # regenerate a depth fixture
+#   scripts/shader-bench.sh --image IMG --render-only --out DIR [--set k=v,...] [--scenarios F.json]
+#                           [--png-size 768x512] [--left-only]       # frames only, no timing
+#   (effect attribution and judge sets are built on this: scripts/fx-structure.py, scripts/fx-judge-set.sh)
 # Defaults: --shader Liminal/Shaders/EffectsRenderer.metal (working tree),
 #           --image tools/ShaderBench/fixtures/07.jpg, --depth tools/ShaderBench/fixtures/07-depth.png.
 # See the header of scripts/shader-bench.swift for all options (--frames, --trials, --times, --mono ...).
@@ -23,6 +26,7 @@ SRC="$SCRIPT_DIR/shader-bench.swift"
 APP_SRCS=(
   "$ROOT/Liminal/EffectsUniforms.swift"
   "$ROOT/Liminal/Visual/EffectsUniformsComputer.swift"
+  "$ROOT/Liminal/Visual/EffectLook.swift"
   "$ROOT/Liminal/Visual/MusicModulation.swift"
   "$ROOT/Liminal/Visual/SmoothOscillator.swift"
   "$ROOT/Liminal/Visual/GhostTapManager.swift"
@@ -81,8 +85,12 @@ compile() {  # $1 = .metal -> prints the cached metallib path
 LIB=$(compile "$SHADER")
 if [[ -n "$SHADER_B" ]]; then pass+=(--metallib-b "$(compile "$SHADER_B")"); fi
 
+# The depth fixture belongs to the default image: another --image gets a flat depth map unless
+# its own --depth is given (a mismatched map would shift parallax and fractal hue at random).
 defaults=()
-[[ " ${pass[*]} " == *" --image "* ]] || defaults+=(--image "$FIX/07.jpg")
-[[ " ${pass[*]} " == *" --depth "* || ! -f "$FIX/07-depth.png" ]] || defaults+=(--depth "$FIX/07-depth.png")
+if [[ " ${pass[*]} " != *" --image "* ]]; then
+  defaults+=(--image "$FIX/07.jpg")
+  [[ " ${pass[*]} " == *" --depth "* || ! -f "$FIX/07-depth.png" ]] || defaults+=(--depth "$FIX/07-depth.png")
+fi
 
 exec "$BIN" --metallib "$LIB" "${defaults[@]}" "${pass[@]}"

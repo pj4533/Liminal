@@ -162,7 +162,9 @@ float3 logSphericalTransform(float2 uv, float time, float intensity) {
     // UV displacement along radial direction (back to float for UV math).
     // centered / R == (cos(angle), sin(angle)); atan2(0,0) == 0, so (1,0) at the exact centre.
     float ef = float(e);
-    float displacement = ef * intensity;
+    // Periphery mask (docs/decisions/effects-balance.md): the centre of the source image, where a
+    // photo's subject usually is, is left alone; the kaleidoscope lives in the periphery.
+    float displacement = ef * intensity * smoothstep(0.10, 0.42, R);
     float2 offset = (R > 1.0e-6 ? centered / R : float2(1.0, 0.0)) * displacement;
 
     return float3(offset, ef);
@@ -306,7 +308,7 @@ static inline float2 distortedUV(float2 texCoord, constant EffectsUniforms &unif
 
     // === 2.5 LOG-SPHERICAL DISTORTION (Nishitsuji signature technique) ===
     // Kaleidoscopic warping through log-polar fractal space
-    if (uniforms.logSphereAmount > 0.001) {
+    if (uniforms.logSphereAmount > 0.00002) {  // amounts pass through 0 without a pop
         float3 fractalResult = logSphericalTransform(
             uv, uniforms.time, uniforms.logSphereAmount
         );
@@ -315,7 +317,7 @@ static inline float2 distortedUV(float2 texCoord, constant EffectsUniforms &unif
 
     // === 2.7 SINUSOIDAL INTERFERENCE NOISE (Nishitsuji crystalline distortion) ===
     // Refracting, prismatic texture — complements XorDev's smoky turbulence
-    if (uniforms.fractalNoiseAmount > 0.001) {
+    if (uniforms.fractalNoiseAmount > 0.00002) {  // amounts pass through 0 without a pop
         half3 noisePos = half3(half2(uv * 6.0), half(fmod(uniforms.time * 0.15, 6.2831853)));
         // One sin/cos of noisePos; octaves by double-angle recurrence (flowOctaves), and the second
         // field (noisePos + (17, 31, 7)) by angle addition with ks/kc = sin/cos(17, 31, 7).

@@ -11,6 +11,7 @@ Each workstream has a decision log with the reasons (what, why, alternatives, nu
 | [orientation.md](orientation.md) | One image orientation convention (row 0 = top), removed two cancelling flips, 3:2 crop, 112.5 x 75 degree dome, test-card debug flags |
 | [av-coupling.md](av-coupling.md) | Music drives clamped visual uniforms and ghost bursts; each image sends a mood to the music; "Sync visuals to music" toggle (C1-C14, I1-I12) |
 | [ui.md](ui.md) | Control UI redesign on both platforms: shared components, four sections, 1240x800 visionOS window, no truncation, new sim tap coordinates |
+| [effects-balance.md](effects-balance.md) | Effects made images unrecognisable: measured per-effect damage, slow clarity cycle, fresh-image hold, strain budget (water first, radial masked off the centre), "Effect intensity" setting (E1-E22; implemented: EffectLook, slider on both platforms; round-1 tuning E23-E26: more colour, rainbow cap; round 2 E27-E30: zoom eases out in wild stretches, more fringing and trails, calmer hue blend at full; final E31-E32: default 0.5 passes blind judging with 100 % recognised and 98.3 % orientation, verified in the visionOS 27.2 Simulator) |
 | [final-qa.md](final-qa.md) | End-to-end QA of the merged branch on a fresh visionOS install and macOS; sim-drag helper, public log values |
 
 ## Please review (top items per workstream)
@@ -47,6 +48,11 @@ Each workstream has a decision log with the reasons (what, why, alternatives, nu
 - U4/U5: macOS Stop stays blue, visionOS turns red; destructive buttons use a red icon with plain text for legibility on glass. Reset All Settings has no confirmation.
 - The visionOS settings sheet is gone (everything lives in the 1240x800 window); check the layout in a real headset.
 - Simulator tap coordinates changed (see ui.md and `scripts/sim-tap.sh`).
+
+### Effects balance
+- Default intensity 0.5: judges recognised 100 % of frames, orientation 98.3 %, trippiness 3.06 of 5. Intensity 1.0 rates 3.90, just under the 4.0 target (E31). Check the look on a real Vision Pro and adjust the slider.
+- At 0.25 the music-driven whole-image hue shift is not scaled by intensity, so colour still swings (see Final verification).
+- The radial (log-spherical) now appears only in wild stretches and is masked off the centre. The water warp leads at every level.
 
 ### Final QA
 - Remaining observations, not changed: older macOS debug lines still show as `<private>` in `log stream`; the Playback status can say "0 images cached" in test-pattern-only mode; a harmless "audio requested=0.100s granted=0.085s MISMATCH" line appears in the Simulator.

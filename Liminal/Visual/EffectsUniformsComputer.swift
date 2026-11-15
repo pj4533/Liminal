@@ -24,6 +24,9 @@ enum EffectsUniformsComputer {
     ///   - music: Music -> visuals coupling from MusicReactor (docs/plans/av-coupling.md 1.3).
     ///     `.neutral` gives the un-coupled output. This is the only place music becomes uniforms;
     ///     every modulated value is hard-clamped to the caps below whatever the inputs.
+    ///   - look: Effect intensity setting and the current image's age (docs/plans/effects-balance.md).
+    ///     Every amount is mixed between a clear and a wild value by `look.drive(time:)`, and the three
+    ///     warps are fitted into the recognisability budget after the music factors.
     /// - Returns: Complete EffectsUniforms ready for the shader
     static func compute(
         time: Float,
@@ -31,31 +34,60 @@ enum EffectsUniformsComputer {
         hasSaliencyMap: Bool = false,
         ghostTapCount: Int = 0,
         vibrance: VibranceFactors = .neutral,
-        music: MusicModulation = .neutral
+        music: MusicModulation = .neutral,
+        look: EffectLook = EffectLook()
     ) -> EffectsUniforms {
+        typealias T = EffectLook.Tuning
         let a = music.amount
         let e = music.energy
+        let i = min(max(look.intensity, 0), 1)
+        let d = look.drive(time: time)
+        func tri(_ t: (Float, Float, Float)) -> Float { EffectLook.tri(i, t) }
+        func mix(_ cw: (clear: (Float, Float, Float), wild: (Float, Float, Float))) -> Float {
+            let c = tri(cw.clear)
+            return c + (tri(cw.wild) - c) * d
+        }
+        let boost = sin(Float.pi * min(max(transitionProgress, 0), 1))
 
         // Ken Burns: smooth continuous motion (music runs its clock 0.85x...1.35x via motionLead)
-        let kenBurns = computeKenBurns(time: time + music.motionLead)
+        // In wild stretches the zoom eases back so the whole silhouette stays in view (E27).
+        let kb = computeKenBurns(time: time + music.motionLead)
+        let relief = tri(T.kenBurnsRelief) * EffectLook.macroDrive(time: time, intensity: i)
+        let kenBurns = KenBurnsParams(scale: 1 + (kb.scale - 1) * (1 - relief), offsetX: kb.offsetX, offsetY: kb.offsetY)
 
-        // Distortion with organic oscillation and optional transition boost
-        let distortion = computeDistortion(
-            time: time, transitionProgress: transitionProgress,
-            baseScale: 1 + a * (0.35 * e - 0.15), baseAdd: a * 0.004 * music.pulseMotion)
+        // Warps (plan 4.3 and 5): water always present; radial and noise only in the wilder part of the cycle.
+        let waterClear = tri(T.waterClear)
+        var water = waterClear + (tri(T.waterWild) - waterClear) * d * (0.55 + 0.45 * distortionWave01(time: time))
+        water = max(water * (1 + a * (0.35 * e - 0.15)) + a * 0.004 * music.pulseMotion, 0)
+        let warpMusic = 1 + a * (0.30 * e - 0.15)
+        var logSphere = max(tri(T.logSphereMax) * EffectLook.smoothstep(T.logSphereWindow.0, T.logSphereWindow.1, d)
+            * (0.35 + 0.65 * logSphereWave01(time: time)) * warpMusic, 0)
+        var noise = max(tri(T.noiseMax) * EffectLook.smoothstep(T.noiseWindow.0, T.noiseWindow.1, d)
+            * (0.35 + 0.65 * fractalNoiseWave01(time: time)) * warpMusic, 0)
+        fitStrainBudget(water: &water, logSphere: &logSphere, noise: &noise, budget: EffectLook.strainBudget(i))
+        water = min(water, Caps.distortionBase) + tri(T.boostWater) * boost
+        logSphere = min(logSphere, Caps.logSphereBase) + tri(T.boostLogSphere) * boost
+        noise = min(noise, Caps.fractalNoiseBase) + tri(T.boostNoise) * boost
 
-        // Autonomous color cycling - smooth oscillator produces organic, non-repeating patterns
+        // Autonomous color cycling - smooth oscillator produces organic, non-repeating patterns.
+        // Few hue bands in clear stretches, more in wild ones; the blend never drops to a plain photo,
+        // and stacked spatial rainbows are capped (E25).
         let colorCycle = SmoothOscillator.value(at: time)
-        let hueBlend = colorCycle * 0.8  // Max blend at 80% to preserve some original color
-        let hueWave = colorCycle * 0.6   // Spatial wave intensity also scales with color cycle
+        let hueBlend = (T.hueBlendFloor + (1 - T.hueBlendFloor) * colorCycle) * mix(T.hueBlend)
+        let hueWave = min(colorCycle * mix(T.hueWave), T.hueWaveCap, T.rainbowCap / max(hueBlend, 1e-3))
+
+        let chromaticBase = min(max(chromaticRaw(time: time) * mix(T.chromatic) * (1 + a * (0.30 * e - 0.10))
+            + a * 0.002 * music.pulseMotion, 0), Caps.chromaticBase)
+        let fbBase = mix(T.feedbackMix)
+        let bloomBase = tri(T.bloom)
 
         var uniforms = EffectsUniforms(
             time: time,
             kenBurnsScale: kenBurns.scale,
             kenBurnsOffsetX: kenBurns.offsetX,
             kenBurnsOffsetY: kenBurns.offsetY,
-            distortionAmplitude: distortion.amplitude,
-            distortionSpeed: distortion.speed,
+            distortionAmplitude: water,
+            distortionSpeed: 0.08,
             hueBaseShift: music.hueBaseShift,
             hueWaveIntensity: hueWave,
             hueBlendAmount: hueBlend,
@@ -67,19 +99,17 @@ enum EffectsUniformsComputer {
             hasSaliencyMap: hasSaliencyMap ? 1.0 : 0.0,
             transitionProgress: transitionProgress,
             ghostTapCount: Float(ghostTapCount),
-            chromaticAmount: computeChromatic(
-                time: time, transitionProgress: transitionProgress,
-                baseScale: 1 + a * (0.30 * e - 0.10), baseAdd: a * 0.002 * music.pulseMotion),
+            chromaticAmount: chromaticBase * (1 + 3 * boost),
             feedbackWarpAmount: min(max(0.03 + a * 0.01 * music.air, 0.03), Caps.feedbackWarp),
-            feedbackMix: min(max(0.3 + a * (0.08 * e - 0.04), Caps.feedbackMixLow), Caps.feedbackMixHigh),
+            feedbackMix: min(max(fbBase + a * (0.08 * e - 0.04), fbBase - Caps.feedbackMixRange),
+                             min(fbBase + Caps.feedbackMixRange, Caps.feedbackMixHigh)),
             bloomRadius: 0.04,
-            bloomAmount: min(max(0.5 + a * (0.12 * music.pulseColor + 0.10 * music.shimmer), 0.5), Caps.bloom),
+            bloomAmount: min(max(bloomBase + a * (0.12 * music.pulseColor + 0.10 * music.shimmer), bloomBase),
+                             Caps.bloom * bloomBase / 0.5),
             stereoOffset: 0,
-            logSphereAmount: computeLogSphere(time: time, transitionProgress: transitionProgress,
-                                              baseScale: 1 + a * (0.30 * e - 0.15)),
-            fractalNoiseAmount: computeFractalNoise(time: time, transitionProgress: transitionProgress,
-                                                    baseScale: 1 + a * (0.30 * e - 0.15)),
-            fractalHueAmount: computeFractalHue(time: time)
+            logSphereAmount: logSphere,
+            fractalNoiseAmount: noise,
+            fractalHueAmount: fractalHueRaw(time: time) * mix(T.fractalHue)
         )
         let vib = computeVibrance(time: time, imageFactor: vibrance.amount)
             + a * 0.06 * music.pulseColor * vibrance.amount
@@ -88,15 +118,36 @@ enum EffectsUniformsComputer {
         return uniforms
     }
 
-    /// Hard limits on every music-modulated uniform (plan 1.3 cap column).
+    /// Recognisability budget (plan 4.3): the combined warp strain may not exceed `budget`.
+    /// The radial and the crystalline noise give way first; the water is clamped only if it alone exceeds it.
+    static func fitStrainBudget(water: inout Float, logSphere: inout Float, noise: inout Float, budget: Float) {
+        typealias T = EffectLook.Tuning
+        let st = T.kTurb * water
+        if st > budget {
+            water = budget / T.kTurb
+            logSphere = 0
+            noise = 0
+            return
+        }
+        let l = T.kLog * logSphere, n = T.kNoise * noise
+        let rest = (l * l + n * n).squareRoot()
+        let room = max(budget * budget - st * st, 0).squareRoot()
+        if rest > room {
+            logSphere *= room / rest
+            noise *= room / rest
+        }
+    }
+
+    /// Hard limits (plan 1.3 cap column of av-coupling, tightened by effects-balance section 5).
+    /// Warp and chromatic caps apply before the transition boost.
     enum Caps {
-        static let distortionBase: Float = 0.10      // before the transition boost
-        static let chromaticBase: Float = 0.02       // before the transition boost
-        static let logSphereBase: Float = 0.02 * 1.2
-        static let fractalNoiseBase: Float = 0.03 * 1.2
-        static let bloom: Float = 0.72
+        static let distortionBase: Float = 0.10
+        static let chromaticBase: Float = 0.02
+        static let logSphereBase: Float = 0.020
+        static let fractalNoiseBase: Float = 0.036
+        static let bloom: Float = 0.72               // at bloom base 0.5; scales with the base
         static let vibrance: Float = 0.50            // times the image factor
-        static let feedbackMixLow: Float = 0.26
+        static let feedbackMixRange: Float = 0.04    // music moves feedback mix at most this far from its base
         static let feedbackMixHigh: Float = 0.34
         static let feedbackWarp: Float = 0.04
         static let ghostTapMaxDistance: Float = 0.08
@@ -105,9 +156,12 @@ enum EffectsUniformsComputer {
     // MARK: - Visual activity (visuals -> music)
 
     /// How busy the picture is, 0...1, sent to `GenerativeEngine.setVisualActivity` (plan 2.3).
-    /// Computed from the un-modulated oscillators on purpose (C12) so music cannot feed back into itself.
-    static func visualActivity(time: Float, transitionProgress: Float) -> Float {
-        let v = 0.25 + 0.5 * distortionWave01(time: time) + 0.5 * sin(Float.pi * min(max(transitionProgress, 0), 1))
+    /// Computed without music on purpose (C12) so music cannot feed back into itself; follows the
+    /// clarity drive so the music calms with the picture (effects-balance plan 5).
+    static func visualActivity(time: Float, transitionProgress: Float, look: EffectLook = EffectLook()) -> Float {
+        let d = look.drive(time: time)
+        let v = 0.15 + 0.6 * d * (0.55 + 0.45 * distortionWave01(time: time))
+            + 0.5 * sin(Float.pi * min(max(transitionProgress, 0), 1))
         return min(max(v, 0), 1)
     }
 
@@ -137,8 +191,8 @@ enum EffectsUniformsComputer {
     /// Compute Ken Burns pan/zoom from time.
     /// Uses multiple sine waves for organic, non-repetitive motion.
     static func computeKenBurns(time: Float) -> KenBurnsParams {
-        // Scale: gentle breathing between 1.05 and 1.4
-        let scale: Float = 1.2 + 0.15 * sin(time * 0.05) + 0.05 * sin(time * 0.03)
+        // Scale: gentle breathing between 1.04 and 1.32 (shows at least 57% of the picture)
+        let scale: Float = 1.18 + 0.10 * sin(time * 0.05) + 0.04 * sin(time * 0.03)
 
         // Offset: wandering pan (normalized to -0.8...0.8 range)
         let maxOffset: Float = 60
@@ -152,113 +206,40 @@ enum EffectsUniformsComputer {
         return KenBurnsParams(scale: scale, offsetX: offsetX, offsetY: offsetY)
     }
 
-    // MARK: - Distortion
 
-    struct DistortionParams {
-        let amplitude: Float
-        let speed: Float
-    }
+    // MARK: - Oscillators (0...1 or raw ranges; the look mixes and scales them)
 
-    // MARK: - Chromatic Aberration
-
-    /// Compute chromatic aberration amount.
-    /// Oscillates organically between low and high values, with extra boost during transitions.
-    static func computeChromatic(time: Float, transitionProgress: Float = 0,
-                                 baseScale: Float = 1, baseAdd: Float = 0) -> Float {
-        let low: Float = 0.003
-        let high: Float = 0.015
-
-        // Organic oscillation using golden ratio offset from color cycle
+    /// Chromatic aberration oscillation, 0.003...0.015 (golden-ratio offset from the colour cycle).
+    static func chromaticRaw(time: Float) -> Float {
         let phi: Float = 1.618034
         let wave = (sin(time * 0.07 * phi) + sin(time * 0.03) * 0.6) / 1.6  // -1..1
-        let t = (wave + 1) / 2  // 0..1
-        let base = min(max((low + (high - low) * t) * baseScale + baseAdd, 0), Caps.chromaticBase)
-
-        // Boost during transitions
-        let transitionBoost = sin(transitionProgress * .pi)
-        return base * (1.0 + 3.0 * transitionBoost)
+        return 0.003 + 0.012 * (wave + 1) / 2
     }
 
-    // MARK: - Log-Spherical Distortion
-
-    /// Compute log-spherical fractal distortion amount.
-    /// Oscillates organically with transition boost for kaleidoscopic warping.
-    static func computeLogSphere(time: Float, transitionProgress: Float = 0, baseScale: Float = 1) -> Float {
-        let low: Float = 0.003
-        let high: Float = 0.02
-
-        // Golden ratio offset decorrelated from existing oscillators
+    /// Log-spherical (radial) amount oscillation, 0...1, decorrelated from the other oscillators.
+    static func logSphereWave01(time: Float) -> Float {
         let phi: Float = 1.618034
         let wave = (sin(time * 0.035 * phi * phi) + sin(time * 0.022 / phi) * 0.7) / 1.7  // -1..1
-        let t = (wave + 1) / 2  // 0..1
-        let base = min(max((low + (high - low) * t) * baseScale, 0), Caps.logSphereBase)
-
-        // 3x boost during transitions
-        let transitionBoost = sin(transitionProgress * .pi)
-        return base * (1.0 + 2.0 * transitionBoost)
+        return (wave + 1) / 2
     }
 
-    // MARK: - Sinusoidal Interference Noise
-
-    /// Compute sinusoidal interference noise distortion amount.
-    /// Crystalline distortion that complements XorDev's smoky turbulence.
-    static func computeFractalNoise(time: Float, transitionProgress: Float = 0, baseScale: Float = 1) -> Float {
-        let low: Float = 0.005
-        let high: Float = 0.03
-
-        // Golden ratio offset decorrelated from log-sphere and existing oscillators
+    /// Sinusoidal interference (crystalline) noise amount oscillation, 0...1.
+    static func fractalNoiseWave01(time: Float) -> Float {
         let phi: Float = 1.618034
         let wave = (sin(time * 0.028 * phi) + sin(time * 0.045 / (phi * phi)) * 0.6) / 1.6  // -1..1
-        let t = (wave + 1) / 2  // 0..1
-        let base = min(max((low + (high - low) * t) * baseScale, 0), Caps.fractalNoiseBase)
-
-        // 5x boost during transitions
-        let transitionBoost = sin(transitionProgress * .pi)
-        return base * (1.0 + 4.0 * transitionBoost)
+        return (wave + 1) / 2
     }
 
-    // MARK: - Fractal Hue Cycling
-
-    /// Compute fractal hue cycling amount.
-    /// No transition boost — color surges during crossfade feel jarring.
-    static func computeFractalHue(time: Float) -> Float {
-        let low: Float = 0.05
-        let high: Float = 0.25
-
-        // Golden ratio offset decorrelated from all other oscillators
+    /// Fractal hue cycling oscillation, 0.05...0.25. No transition boost (colour surges during a
+    /// crossfade feel jarring).
+    static func fractalHueRaw(time: Float) -> Float {
         let phi: Float = 1.618034
         let wave = (sin(time * 0.032 / phi) + sin(time * 0.05 * phi * phi) * 0.5) / 1.5  // -1..1
-        let t = (wave + 1) / 2  // 0..1
-        return low + (high - low) * t
-    }
-
-    /// Compute turbulence distortion parameters.
-    /// Amplitude oscillates organically over time using layered sine waves with
-    /// golden-ratio-offset frequencies for non-repeating motion.
-    /// - Parameters:
-    ///   - time: Current animation time in seconds
-    ///   - transitionProgress: 0-1 progress through crossfade (0 = no transition)
-    /// - Returns: Distortion amplitude and speed
-    static func computeDistortion(time: Float, transitionProgress: Float = 0,
-                                  baseScale: Float = 1, baseAdd: Float = 0) -> DistortionParams {
-        let low: Float = 0.02
-        let high: Float = 0.08
-
-        let t = distortionWave01(time: time)
-        // Music scales the base (pre-boost) amplitude only; the tuned transition boost is unchanged (C7).
-        let baseAmplitude = min(max((low + (high - low) * t) * baseScale + baseAdd, 0), Caps.distortionBase)
-
-        let boostMultiplier: Float = 10.0
-
-        // Boost during transitions (sine curve peaks at 50% through)
-        let transitionBoost = sin(transitionProgress * .pi)
-        let amplitude = baseAmplitude * (1.0 + (boostMultiplier - 1.0) * transitionBoost)
-
-        return DistortionParams(amplitude: amplitude, speed: 0.08)
+        return 0.05 + 0.20 * (wave + 1) / 2
     }
 
     /// Organic oscillation of the turbulence amplitude, 0...1: layered sine waves at irrational
-    /// frequency ratios. Also the un-modulated input of `visualActivity`.
+    /// frequency ratios. Also an input of `visualActivity`.
     static func distortionWave01(time: Float) -> Float {
         let phi: Float = 1.618034
         let wave = (sin(time * 0.04 * phi) + sin(time * 0.025) * 0.7 + sin(time * 0.06 / phi) * 0.4) / 2.1  // -1..1
