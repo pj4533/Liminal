@@ -4,7 +4,7 @@ Decision log for the effects-balance workstream. Plan with all numbers: `docs/pl
 Request: the effects made the image unrecognisable on the Vision Pro; keep every effect, add limits, a slow
 change in how much they are used, and a setting.
 
-Status: diagnosis and design (E1 to E14). Implementation decisions are appended below as they are made.
+Status: done. Design E1-E14, implementation E15-E22, tuning rounds E23-E30, final state and verification E31-E32 (last section).
 
 ## Diagnosis
 
@@ -359,3 +359,53 @@ Kept: `macroBias` stays 0.60. At 0.8 the model gained only +0.04 at 1.0, but int
   - The default is clearly psychedelic in every column, with stronger fringing at the edges.
 - **Shader:** unchanged (no diff to `EffectsRenderer.metal`), so the GPU cost is the same code path. Only uniform values moved, and none of them gates a branch.
 - **Tests:** the unit tests pass. The golden values were regenerated from `fx_model.py golden`, and the random-input test now caps the hue blend at 0.68.
+
+## Round 2 judge results and final state
+
+Round 2 (blind judges on 180 frames, `pic-NNN`, seed 9277):
+
+| intensity | recognised | orientation correct | trippiness (1-5) | gate |
+|---|---|---|---|---|
+| 0.25 | 100 % | 96.7 % | 2.17 | PASS |
+| 0.5 (default) | 100 % | 98.3 % | 3.06 | PASS (target 3.0) |
+| 1.0 | 100 % | 96.7 % | 3.90 | trippiness just under the 4.0 target |
+
+- Objective gates pass at every level: mean HOG loss 0.065 / 0.091 / 0.122. Shipped `main` scored 0.149.
+- Judges recognised every frame. The only 5 orientation misses were on the near-symmetric hourglass and romanesco.
+- History at the default: round 0 had 100 % recognised, 78.3 % orientation and 2.59 trippiness. Round 1 had 98.3 %, 91.7 % and 3.06. Round 2 has 100 %, 98.3 % and 3.06.
+
+### E31. Ship round 2 as is; intensity 1.0 stays at 3.90 trippiness
+- **Why:** the user's priority is that the default keeps the image recognisable while still looking psychedelic, and round 2 meets both.
+  - At 1.0, the miss is 0.1 on a five-point scale.
+  - Raising 1.0 further costs orientation: the round-2 model links extra hue blend and zoom to the flipped-frame misses.
+  - If 1.0 should be wilder, raise the I = 1 anchors of `chromatic` and `feedback` first (they cost no orientation), then `macroBias`.
+
+### E32. The default stays 0.5
+- **Why:** it passed every gate with the best orientation score of any round, and it leaves equal room on both sides of the slider.
+
+### Final verification (visionOS 27.2 Simulator and macOS)
+- **Simulator runs:** each launch used `-LiminalAutoPlay YES -LiminalOpenDome YES -LiminalTestImage <fixture>`. Screenshots were taken at 15 / 60 / 120 / 240 s after the dome opened:
+  - tree, romanesco and hourglass at the default;
+  - the jellyfish at `-LiminalEffectIntensity 0.25` and at `1.0`.
+- **Contact sheets:** `scratchpad/fx/verify/sim-sheet.jpg`. `bench-sheet.jpg` shows the same times rendered full-frame by `shader-bench.sh`.
+- **What the screenshots show:**
+  - The romanesco, the hourglass (stags, antlers, sand) and the jellyfish over its pier are recognisable and upright in every simulator shot.
+  - The tree is the weak case in the simulator, for two reasons. The simulator's fixed camera frames only the centre of the 112.5-degree dome, which is the blossom canopy. The control window covers the trunk.
+  - Full-frame renders of the same moments show the trunk, the roots and the ground line every time.
+  - Every shot is clearly psychedelic: chromatic fringing, water ripples and shifting hues.
+  - At 0.25 the jellyfish still swings through strong whole-image hue shifts (magenta at 60 s). That is the music-driven `hueBaseShift`, which intensity does not scale. It changes colour, not shape, so it was left alone. Scale it with `look.intensity` if 0.25 should also be calmer in colour.
+- **Controls:** the Effect intensity slider shows untruncated, with Subtle/Wild labels and its caption:
+  - visionOS: `verify/visionos-controls.png`, the Visuals column of the 1240x800 window.
+  - macOS: `verify/macos-window.png`.
+- **Perf:** `scripts/perf-run.sh` ran 30 s live at the default:
+  - 78.3 fps, GPU mean 0.129 ms (p95 0.235 ms), 2.3 dropped frames per 5 s;
+  - the reference is about 80 fps and 0.17 ms, so the cost is flat or lower;
+  - the 1.0 run's PERF lines show 82-84 fps and 0.10-0.14 ms.
+- **Builds and tests:** both platforms build and `LiminalTests` passes. No launch generated an image: every log shows "Gemini image generation OFF".
+
+### How to tune
+- **User:** Visuals → Effect intensity. Subtle (0) keeps the photo clean apart from a gentle water ripple. Wild (1) adds the radial and crystalline noise in wild stretches. Every level breathes over minutes, and each new image stays clear for its first few seconds.
+- **Developer:** every constant is in `EffectLook.Tuning`, and each one has three anchors (I = 0 / 0.5 / 1).
+  - Keep `scripts/fx_model.py` in step: the golden test compares the two.
+  - Re-check a change with `scripts/fx-judge-set.py` and `scripts/fx-structure.py`.
+  - In the simulator, use `-LiminalEffectIntensity X`.

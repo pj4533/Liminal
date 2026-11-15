@@ -18,7 +18,7 @@ Liminal creates endless, evolving ambient soundscapes synchronized with AI-gener
 
 - **Generative Audio**: eight-layer synthesized ambient engine (drone, pad, lead, keys, drips, air, grains, pluck) with evolving scenes, key drift, rare events and four styles (Drift, Glass, Deep, Garden); no samples. See `docs/decisions/music.md`
 - **AI Visuals**: Gemini image generation (gemini-nano-banana-2.1, the latest model, 3:2 at 2K; hourly and daily spending cap) driven by a style/subject/transformation/palette prompt system for varied, photoreal-but-surreal imagery. See `docs/decisions/images.md`
-- **GPU Effects**: one Metal fragment shader with Ken Burns motion, turbulence distortion, chromatic aberration, crossfade, hue shifts, ghost taps, stochastic bloom, feedback warping and a final vibrance stage that keeps colors vivid
+- **GPU Effects**: one Metal fragment shader with Ken Burns motion, turbulence distortion, chromatic aberration, crossfade, hue shifts, ghost taps, stochastic bloom, feedback warping and a final vibrance stage that keeps colors vivid; a slow clarity cycle and a strain budget keep the image recognisable, scaled by the Effect intensity setting
 - **Audio-visual coupling**: the music drives the visuals (note glow, scene intensity, chord-tied hue, ghost-tap burst on scene change) and each new image sends a mood (brightness, warmth, saturation, energy, mood words) back to the music. A "Sync visuals to music" switch turns the music-to-visuals direction off. See `docs/decisions/av-coupling.md`
 - **macOS and visionOS**: a window with a control panel on macOS; on visionOS a control window plus an immersive curved dome (112.5 x 75 degrees, 2048x2048 per eye, stereo with ML depth) and a Spatial Diorama
 - **Indirect Control**: shape the experience through abstract sliders rather than direct manipulation
@@ -90,6 +90,7 @@ Shader pipeline order (`Liminal/Shaders/EffectsRenderer.metal`): Ken Burns, dist
 | **Space** | Reverb size and dark halo |
 | **Echo** | Audio delay and visual ghost-trail intensity |
 | **Scale** | "Auto (evolving)" lets key and mode drift; choosing a scale pins it |
+| **Effect intensity** | How far the effects bend the picture, Subtle to Wild (default 50%). The effects breathe between clear and wild stretches over minutes, and each new image starts clear. See `docs/decisions/effects-balance.md` |
 | **Sync visuals to music** | Music drives hue, motion, bloom and ghost bursts (on by default) |
 | **Debug effect** | Debug visualization of the effect (macOS panel) |
 | **Cache only** | Skip generation and recycle cached images |
@@ -118,6 +119,7 @@ Pass as launch arguments, for example `-LiminalAutoPlay YES`. Defined in `Limina
 | `-LiminalNoEffects YES` | Bypass all effects |
 | `-LiminalSyncLog YES` | One SYNC log line per second (coupling state) |
 | `-LiminalSyncStrength <x>` | Exaggerate the music-to-visuals coupling for tuning |
+| `-LiminalEffectIntensity <0-1>` | Override the Effect intensity setting for this launch without changing it |
 
 ## Scripts (`scripts/`)
 
