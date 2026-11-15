@@ -1,6 +1,6 @@
 # Verifying Liminal on the visionOS Simulator from Claude Code
 
-Synthesis of six research reports, 2026-11-14. Machine: Xcode 26.3 (17C519), macOS 27.2, visionOS 26.2 simulator "Apple Vision Pro" `19A53057-4A6A-47EE-A627-33A845C5E7FF`, physical Vision Pro paired (visionOS 27.2.1).
+Synthesis of six research reports, 2026-11-14. Machine: Xcode 26.3 (17C519), macOS 27.2, visionOS 26.2 simulator "Apple Vision Pro" `4F6C4C06-AAE6-44DF-8460-070ED1A546E1`, physical Vision Pro paired (visionOS 27.2.1).
 
 Status tags: **PROVEN** = already run on this machine. **FIELD** = others report it working, not yet run here. **UNVERIFIED** = plausible, nobody has confirmed it.
 
@@ -27,7 +27,7 @@ Simulator FPS reflects the Mac GPU going through a different render pipeline. Ap
 ### 2.1 Proven commands (nothing to install)
 
 ```sh
-UDID=19A53057-4A6A-47EE-A627-33A845C5E7FF
+UDID=4F6C4C06-AAE6-44DF-8460-070ED1A546E1
 xcodebuild -scheme Liminal -destination 'platform=visionOS Simulator,name=Apple Vision Pro' -derivedDataPath build/dd build
 xcrun simctl install $UDID build/dd/Build/Products/Debug-xrsimulator/Liminal.app
 xcrun simctl launch --terminate-running-process $UDID com.saygoodnight.Liminal

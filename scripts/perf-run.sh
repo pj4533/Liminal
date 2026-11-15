@@ -41,7 +41,7 @@ set -u
 SCRIPT_DIR=${0:A:h}
 SCRATCH=${SCRATCH:-/private/tmp/claude-501/-Users-pj4533-Developer-Liminal/7dc59965-0f73-427a-9142-59d4c00317b0/scratchpad}
 PERF_ROOT=${PERF_ROOT:-$SCRATCH/perf}
-UDID=19A53057-4A6A-47EE-A627-33A845C5E7FF
+UDID=${LIMINAL_SIM_UDID:-4F6C4C06-AAE6-44DF-8460-070ED1A546E1}  # Apple Vision Pro (27.2)
 BUNDLE=com.saygoodnight.Liminal
 LABEL="run-$(date +%Y%m%d-%H%M%S)"
 SECONDS_N=30

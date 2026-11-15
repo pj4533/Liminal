@@ -176,6 +176,13 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
 
     // MARK: - Public API
 
+    /// Shown when generation is off and the cache is empty.
+    static var noCachedImagesMessage: String {
+        DebugLaunchOptions.blocksImageGeneration
+            ? "Test launch: image generation is off, so only cached images (or the test card) are shown."
+            : "No cached images. Turn off Cache Only to generate new ones."
+    }
+
     /// Cache Only setting, or a DEBUG automation launch (which must never spend API budget).
     @MainActor
     private var generationDisabled: Bool {
@@ -253,7 +260,7 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
             self.queuedCount = 0
             self.totalCachedCount = 0
             self.isGenerating = false
-            self.statusMessage = cacheOnly ? "No cached images. Turn off Cache Only to generate new ones." : nil
+            self.statusMessage = cacheOnly ? Self.noCachedImagesMessage : nil
         }
 
         // 6. One notification for UI refreshes.
@@ -386,7 +393,7 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
                     let ok = await self.recycleOneFromCache()
                     if !ok {
                         await MainActor.run {
-                            self.statusMessage = "No cached images. Turn off Cache Only to generate new ones."
+                            self.statusMessage = Self.noCachedImagesMessage
                         }
                         try? await Task.sleep(nanoseconds: 3_000_000_000)
                         continue
