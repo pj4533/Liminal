@@ -39,7 +39,8 @@ final class OffscreenEffectsRenderer {
     private var saliencyTexture: MTLTexture?
     private(set) var depthTexture: MTLTexture?  // ML depth map (r8Unorm)
 
-    private let outputSize: Int = 2048  // Output texture resolution
+    private static let renderSize = 2048
+    private let outputSize: Int = OffscreenEffectsRenderer.renderSize  // Output texture resolution
 
     // MARK: - Output encoding + feedback (docs/decisions/vibrance.md V1, V2)
 
@@ -78,15 +79,12 @@ final class OffscreenEffectsRenderer {
     // Track renders for periodic logging
     private var renderCount: Int = 0
 
-    // Image caching - only update texture when source actually changes
-    private var lastImageIdentifier: ObjectIdentifier?
-    private var lastPreviousImageIdentifier: ObjectIdentifier?  // Track previous image too
-    private var textureUpdateSkipCount: Int = 0
-
-    // PERFORMANCE: Reusable staging buffer to avoid 16MB allocation per texture update
-    // Allocated once, reused for all texture uploads
-    private var stagingBuffer: UnsafeMutableRawPointer?
-    private var stagingBufferSize: Int = 0
+    /// One texture per image (current, previous, prepared next): textures are never overwritten in
+    /// place, so a command buffer still in flight keeps sampling its own (docs/decisions/performance.md).
+    private var imageTextures: [(image: CGImage, texture: MTLTexture)] = []
+    private var syncUploadCount: Int = 0
+    /// Builds image textures off the main actor (render loop prepares the next image with it).
+    nonisolated let textureUploader: SourceTextureUploader
 
     // Performance tracking
     private var totalTextureUpdateTime: Double = 0
@@ -241,21 +239,10 @@ final class OffscreenEffectsRenderer {
             self.saliencyTexture = defaultSaliency
         }
 
-        // PERFORMANCE: Pre-allocate reusable staging buffer for texture uploads
-        // This eliminates the 16MB allocation per texture update that was causing frame drops
-        let bytesPerPixel = 4
-        let requiredSize = outputSize * outputSize * bytesPerPixel
-        self.stagingBuffer = UnsafeMutableRawPointer.allocate(byteCount: requiredSize, alignment: 16)
-        self.stagingBufferSize = requiredSize
-        LMLog.visual.info("🔧 Pre-allocated \(requiredSize / 1024 / 1024)MB staging buffer for texture uploads")
+        self.textureUploader = SourceTextureUploader(device: device, commandQueue: queue, size: Self.renderSize)
 
         let size = outputSize
         LMLog.visual.info("✅ OffscreenEffectsRenderer initialized - \(size)x\(size)")
-    }
-
-    deinit {
-        // Free the staging buffer
-        stagingBuffer?.deallocate()
     }
 
     // MARK: - DrawableQueue Setup
@@ -566,7 +553,7 @@ final class OffscreenEffectsRenderer {
 
         // DEBUG: Use passthrough shader to test if shader pipeline works
         if bypassShaderForDebug {
-            updateSourceTexture(from: sourceImage)
+            bindImageTextures(source: sourceImage, previous: nil)
             guard let sourceTexture = sourceTexture else {
                 inFlightSemaphore.signal()
                 LMLog.visual.error("❌ PASSTHROUGH: sourceTexture nil!")
@@ -633,29 +620,8 @@ final class OffscreenEffectsRenderer {
         // TIMING: Texture update phase
         let textureUpdateStart = Date()
 
-        // Only update source texture if image actually changed
-        // CGImage doesn't conform to Identifiable, so use memory address comparison
-        let currentImageID = ObjectIdentifier(sourceImage)
-        let imageChanged = (currentImageID != lastImageIdentifier)
-
-        if imageChanged {
-            // Update source texture from CGImage (downsampled to outputSize)
-            updateSourceTexture(from: sourceImage)
-            lastImageIdentifier = currentImageID
-            textureUpdateSkipCount = 0
-        } else {
-            textureUpdateSkipCount += 1
-        }
-
-        // Update previous texture for GPU crossfade blending (only during transitions)
-        if let previousImage = previousImage {
-            _ = updatePreviousTexture(from: previousImage)
-        } else {
-            // Not transitioning - clear previous texture so fallback to sourceTexture kicks in
-            // This prevents stale old image from showing when transitionProgress resets to 0
-            previousTexture = nil
-            lastPreviousImageIdentifier = nil
-        }
+        // Swap texture references (prepared off the main actor; sync upload only as a fallback)
+        bindImageTextures(source: sourceImage, previous: previousImage)
 
         textureUpdateTime = Date().timeIntervalSince(textureUpdateStart) * 1000
         totalTextureUpdateTime += textureUpdateTime
@@ -756,7 +722,7 @@ final class OffscreenEffectsRenderer {
             let avgDrawableWait = totalDrawableWaitTime / Double(perfFrameCount)
             let totalAvg = avgTextureUpdate + avgGPURender + avgPresent
 
-            LMLog.visual.info("🔧 RENDERER TIMING: texture=\(String(format: "%.2f", avgTextureUpdate))ms | gpu=\(String(format: "%.2f", avgGPURender))ms | present=\(String(format: "%.2f", avgPresent))ms | TOTAL=\(String(format: "%.2f", totalAvg))ms/frame | skipped=\(self.textureUpdateSkipCount)")
+            LMLog.visual.info("🔧 RENDERER TIMING: texture=\(String(format: "%.2f", avgTextureUpdate))ms | gpu=\(String(format: "%.2f", avgGPURender))ms | present=\(String(format: "%.2f", avgPresent))ms | TOTAL=\(String(format: "%.2f", totalAvg))ms/frame | syncUploads=\(self.syncUploadCount)")
 
             // Log wait times separately - these are the stutter culprits
             LMLog.visual.info("⏱️ WAIT TIMES: semaphore avg=\(String(format: "%.2f", avgSemaphoreWait))ms max=\(String(format: "%.1f", self.maxSemaphoreWait))ms | drawable avg=\(String(format: "%.2f", avgDrawableWait))ms max=\(String(format: "%.1f", self.maxDrawableWait))ms")
@@ -806,17 +772,7 @@ final class OffscreenEffectsRenderer {
         perfFrameCount += 1
 
         // Update textures (shared between both eyes)
-        let currentImageID = ObjectIdentifier(sourceImage)
-        if currentImageID != lastImageIdentifier {
-            updateSourceTexture(from: sourceImage)
-            lastImageIdentifier = currentImageID
-        }
-        if let previousImage = previousImage {
-            _ = updatePreviousTexture(from: previousImage)
-        } else {
-            previousTexture = nil
-            lastPreviousImageIdentifier = nil
-        }
+        bindImageTextures(source: sourceImage, previous: previousImage)
 
         // Update ghost taps
         let ghostTapResult = ghostTapManager.updateWithCount(currentTime: uniforms.time, delay: delay)
@@ -1073,134 +1029,41 @@ final class OffscreenEffectsRenderer {
 
     // MARK: - Private
 
-    private func updateSourceTexture(from cgImage: CGImage) {
-        // OPTIMIZATION: Downsample to output size instead of using full source resolution
-        // 4096x4096 → 2048x2048 reduces memory from 67MB to 16MB per update
-        let targetSize = outputSize
-        let sourceWidth = cgImage.width
-        let sourceHeight = cgImage.height
-
-        // Create or recreate texture if needed (always at outputSize)
-        if sourceTexture == nil ||
-           sourceTexture?.width != targetSize ||
-           sourceTexture?.height != targetSize {
-
-            let descriptor = MTLTextureDescriptor.texture2DDescriptor(
-                pixelFormat: .bgra8Unorm,
-                width: targetSize,
-                height: targetSize,
-                mipmapped: false
-            )
-            descriptor.usage = .shaderRead
-            descriptor.storageMode = .shared
-
-            sourceTexture = device.makeTexture(descriptor: descriptor)
-
-            if sourceWidth != targetSize || sourceHeight != targetSize {
-                LMLog.visual.info("🔧 Downsampling source \(sourceWidth)x\(sourceHeight) → \(targetSize)x\(targetSize)")
-            }
-        }
-
-        guard let texture = sourceTexture,
-              let stagingBuffer = stagingBuffer else { return }
-
-        // PERFORMANCE: Use pre-allocated staging buffer instead of allocating new array
-        // This eliminates the 16MB allocation per texture update
-        let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
-        let bytesPerPixel = 4
-        let bytesPerRow = bytesPerPixel * targetSize
-
-        guard let context = CGContext(
-            data: stagingBuffer,
-            width: targetSize,
-            height: targetSize,
-            bitsPerComponent: 8,
-            bytesPerRow: bytesPerRow,
-            space: colorSpace,
-            bitmapInfo: CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.premultipliedFirst.rawValue  // BGRA
-        ) else { return }
-
-        // High quality downsampling
-        context.interpolationQuality = .high
-
-        // NO flip: a CGBitmapContext stores the image top row first in memory (its user-space
-        // origin is bottom-left, but that only affects drawing coordinates), so the buffer is
-        // already in Metal order: texture row 0 = image top. (The former translate/scale(-1)
-        // stored it upside down.) Convention: docs/decisions/orientation.md.
-        // The image is pre-cropped to ImageFraming.displayAspect (3:2) and stretched to the
-        // square target; the 3:2 dome stretches it back (anisotropic texels, no distortion).
-        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: targetSize, height: targetSize))
-
-        texture.replace(
-            region: MTLRegionMake2D(0, 0, targetSize, targetSize),
-            mipmapLevel: 0,
-            withBytes: stagingBuffer,
-            bytesPerRow: bytesPerRow
-        )
-        optimizeForGPUAccess(texture, label: "Optimize source texture")
+    /// Register a texture built off the main actor (`textureUploader`) for `image`, so the frame
+    /// that first shows it only swaps references.
+    func registerPreparedTexture(_ texture: MTLTexture, for image: CGImage) {
+        imageTextures.removeAll { $0.image === image }
+        imageTextures.append((image, texture))
+        trimImageTextures(keeping: [image])
     }
 
-    /// Update the previous texture for GPU crossfade blending.
-    /// Called during transitions to provide the "from" image.
-    /// Returns true if texture was actually updated (image changed).
-    private func updatePreviousTexture(from cgImage: CGImage) -> Bool {
-        // Skip if previous image hasn't changed
-        let currentPreviousID = ObjectIdentifier(cgImage)
-        if currentPreviousID == lastPreviousImageIdentifier {
-            return false  // Already have this texture loaded
+    /// Point `sourceTexture` / `previousTexture` at the textures of these images. Nil previous
+    /// (not transitioning) clears it so the shader falls back to the source.
+    private func bindImageTextures(source: CGImage, previous: CGImage?) {
+        sourceTexture = texture(for: source, label: "source")
+        previousTexture = previous.flatMap { texture(for: $0, label: "previous") }
+        // Entries are pinned by the CGImage they hold, so identity can never be reused by a new image.
+        if imageTextures.count > 3 { trimImageTextures(keeping: [source] + (previous.map { [$0] } ?? [])) }
+    }
+
+    private func texture(for image: CGImage, label: String) -> MTLTexture? {
+        if let hit = imageTextures.first(where: { $0.image === image }) { return hit.texture }
+        // Fallback: image was not prepared (first frame / a caller that skips preparation). Still a
+        // NEW texture, never an overwrite of one the GPU may be reading.
+        let start = Date()
+        guard let texture = textureUploader.makeTexture(from: image, label: label) else { return nil }
+        syncUploadCount += 1
+        LMLog.visual.info("🔧 Sync \(label, privacy: .public) texture upload \(image.width)x\(image.height) -> \(self.outputSize)² in \(String(format: "%.1f", Date().timeIntervalSince(start) * 1000), privacy: .public)ms")
+        imageTextures.append((image, texture))
+        return texture
+    }
+
+    /// Drop the oldest textures beyond three (current + previous + one prepared), never the kept ones.
+    private func trimImageTextures(keeping kept: [CGImage]) {
+        while imageTextures.count > 3,
+              let i = imageTextures.firstIndex(where: { entry in !kept.contains { $0 === entry.image } }) {
+            imageTextures.remove(at: i)
         }
-
-        let targetSize = outputSize
-
-        // Create or recreate texture if needed
-        if previousTexture == nil ||
-           previousTexture?.width != targetSize ||
-           previousTexture?.height != targetSize {
-
-            let descriptor = MTLTextureDescriptor.texture2DDescriptor(
-                pixelFormat: .bgra8Unorm,
-                width: targetSize,
-                height: targetSize,
-                mipmapped: false
-            )
-            descriptor.usage = .shaderRead
-            descriptor.storageMode = .shared
-
-            previousTexture = device.makeTexture(descriptor: descriptor)
-        }
-
-        guard let texture = previousTexture,
-              let stagingBuffer = stagingBuffer else { return false }
-
-        // PERFORMANCE: Use pre-allocated staging buffer
-        let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
-        let bytesPerPixel = 4
-        let bytesPerRow = bytesPerPixel * targetSize
-
-        guard let context = CGContext(
-            data: stagingBuffer,
-            width: targetSize,
-            height: targetSize,
-            bitsPerComponent: 8,
-            bytesPerRow: bytesPerRow,
-            space: colorSpace,
-            bitmapInfo: CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.premultipliedFirst.rawValue
-        ) else { return false }
-
-        context.interpolationQuality = .high
-        // No flip: bitmap memory is top row first (same convention as updateSourceTexture).
-        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: targetSize, height: targetSize))
-
-        texture.replace(
-            region: MTLRegionMake2D(0, 0, targetSize, targetSize),
-            mipmapLevel: 0,
-            withBytes: stagingBuffer,
-            bytesPerRow: bytesPerRow
-        )
-        optimizeForGPUAccess(texture, label: "Optimize previous texture")
-
-        lastPreviousImageIdentifier = currentPreviousID
-        return true
     }
 
     /// Update the saliency texture for effects that use it.

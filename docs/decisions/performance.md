@@ -868,3 +868,30 @@ Full tables and the ranked plan are in `docs/plans/performance.md` ("Round 2b").
   three texture fetches that are cache-hot (previous = source) and a never-taken saliency branch
   buys almost nothing. The macOS crossfade first-frame fix went with the revert since it only
   existed to support the skip.
+
+---
+
+## 2026-11-15: Image-change hitch: prepare the new image off the main actor (KEPT)
+
+- **Problem**: at every image change one visionOS render-loop frame took 50-95 ms (Simulator:
+  "render max" 49-82 ms, SLOW FRAME interval 70-95 ms right after "New image detected"), a visible
+  stutter at the start of each transition. Cause: decoding + downsampling the JPEG into the 2048²
+  source texture in `renderAndPresent` (CGContext draw + replace, on the @MainActor loop), then the
+  same again for the previous texture (the old source), plus the 32x32 vibrance measurement.
+- **Fix (visionOS)**: `SourceTextureUploader` builds a NEW 2048² bgra8Unorm texture per image on a
+  detached task (cover crop, vibrance cache priming and the upload/optimize blit included; 40-115 ms
+  off-main). The render loop starts the transition when the prepared image arrives (a few frames
+  later) and the renderer only swaps references: it keeps one texture per image (current, previous,
+  next), so the previous texture is the old source's texture (no second upload) and no texture an
+  in-flight command buffer samples is ever overwritten (the old code rewrote shared textures in place).
+  A missing texture still falls back to a synchronous upload into a new texture (logged "Sync ...").
+  No flip, same sRGB bytes, same 2048 size; transitions, relief, ghost taps and feedback unchanged.
+- **Fix (macOS)**: `EffectsMetalView` loads the source with MTKTextureLoader's async API and keeps
+  drawing the old source until it lands; the previous texture reuses the old source texture instead
+  of a second decode. ContentView's vibrance measurement (one 32x32 pass) is still on the main thread.
+- **Measured (Simulator, -LiminalTestImage fx-fixtures, interval 12 s)**: before, max render at the
+  changes 73.5, 81.6, 77.5, 49.2, 60.3, 58.7, 63.5, 62.8 ms (one dropped frame each). After, max render
+  0.2, 0.3, 0.3, 0.2, 0.3 ms at gen 2-6 changes, no SLOW FRAME at any change. macOS: 1-2 frames lost
+  per change at 60 fps with 1264x843 fixtures (macOS before-numbers not measured).
+- **Cost**: up to three 16 MB textures alive briefly (was two), one 16 MB transient CPU buffer per
+  image on the background task.

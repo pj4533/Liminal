@@ -22,6 +22,8 @@ import SwiftUI
 import RealityKit
 import OSLog
 import ImageIO
+import Metal
+import Synchronization
 
 // MARK: - Simple CGImage Transition State (Value Type, No @Published)
 
@@ -73,6 +75,27 @@ struct CGImageTransitionState {
     var renderImage: CGImage? {
         currentImage
     }
+}
+
+// MARK: - Off-main image preparation (docs/decisions/performance.md, image-change hitch)
+
+/// A new image made ready for the render loop off the main actor: framed (3:2 cover crop), its
+/// vibrance factors cached, and its 2048² source texture built. The render loop only swaps
+/// references and starts the transition when this arrives (a few frames after the image does).
+nonisolated struct PreparedImage: @unchecked Sendable {
+    let generation: UInt64
+    let framed: CGImage
+    let metadata: ImageMetadata?
+    let depthOverride: CGImage?
+    let texture: MTLTexture?
+    let milliseconds: Double
+}
+
+/// Hand-off from the preparation task to the render loop (latest result wins).
+nonisolated final class PreparedImageSlot: Sendable {
+    private let value = Mutex<PreparedImage?>(nil)
+    func store(_ prepared: PreparedImage) { value.withLock { $0 = prepared } }
+    func take() -> PreparedImage? { value.withLock { v in defer { v = nil }; return v } }
 }
 
 // MARK: - Immersive Dome View
@@ -245,7 +268,13 @@ struct ImmersiveDomeView: View {
         // Set initial image directly from CGImage - NO UIImage conversion!
         let initial = visualEngine.imageBuffer.loadCurrentWithMetadata()
         if let rawImage = initial.image {
-            let cgImage = ImageFraming.coverCrop(rawImage)
+            let uploader = renderer.textureUploader
+            let generation = initial.generation
+            let prepared = await Task.detached(priority: .userInitiated) {
+                Self.prepareImage(rawImage, metadata: nil, generation: generation, uploader: uploader)
+            }.value
+            let cgImage = prepared.framed
+            if let texture = prepared.texture { renderer.registerPreparedTexture(texture, for: cgImage) }
             transitionState.setInitialImage(cgImage)
             transitionState.lastGeneration = initial.generation
             relief.imageChanged(generation: initial.generation)
@@ -392,6 +421,9 @@ struct ImmersiveDomeView: View {
             var recentre = ShellRecentre(centre: (shellRoot?.position ?? Self.shellCentre) + DebugLaunchOptions.shellHeadOffset)
             var lastPoseTime = Date()
             var lastBreathing: Float = 0
+            // Image change: prepared off the main actor, applied when ready (no long frame).
+            var preparingGeneration: UInt64 = 0
+            let preparedSlot = PreparedImageSlot()
 
             while !Task.isCancelled {
                 frameCount += 1
@@ -435,11 +467,25 @@ struct ImmersiveDomeView: View {
                     visualEngine.imageBuffer.storeCurrent(Self.debugCycle[cycleIndex].image, metadata: nil)
                     LMLog.visual.info("🧪 DEBUG: shell cycle -> image \(cycleIndex)")
                 }
-                let (rawImage, metadata, generation) = visualEngine.imageBuffer.loadCurrentWithMetadata()
-                if let rawImage = rawImage, generation != transitionState.lastGeneration {
-                    // Centre-crop to the dome's 3:2 once; colour AND depth use the framed image.
-                    let framedImage = ImageFraming.coverCrop(rawImage)
-                    let depthOverride = Self.debugDepth(for: rawImage)
+                let (rawImage, metadata, newGeneration) = visualEngine.imageBuffer.loadCurrentWithMetadata()
+                if let rawImage = rawImage, newGeneration != transitionState.lastGeneration, newGeneration != preparingGeneration {
+                    // Crop, colour stats and the 2048² texture upload (40-90 ms) run off the main actor.
+                    preparingGeneration = newGeneration
+                    let uploader = effectsRenderer?.textureUploader
+                    let slot = preparedSlot
+                    Task.detached(priority: .userInitiated) {
+                        slot.store(Self.prepareImage(rawImage, metadata: metadata, generation: newGeneration, uploader: uploader))
+                    }
+                }
+                // A result for an older generation (superseded while preparing) is dropped.
+                if let prepared = preparedSlot.take(), prepared.generation == preparingGeneration,
+                   prepared.generation != transitionState.lastGeneration {
+                    // Centre-cropped to the dome's 3:2 once; colour AND depth use the framed image.
+                    let framedImage = prepared.framed
+                    let generation = prepared.generation
+                    let metadata = prepared.metadata
+                    let depthOverride = prepared.depthOverride
+                    if let texture = prepared.texture { effectsRenderer?.registerPreparedTexture(texture, for: framedImage) }
                     let wasFirst = transitionState.currentImage == nil
                     transitionState.lastGeneration = generation
                     if !wasFirst {
@@ -452,7 +498,7 @@ struct ImmersiveDomeView: View {
                     transitionState.transitionTo(framedImage)
                     relief.imageChanged(generation: generation)
                     if !wasFirst { transitionStartEffectTime = effectTime }
-                    LMLog.visual.info("🎬 New image detected (gen \(generation)), triggering transition")
+                    LMLog.visual.info("🎬 New image detected (gen \(generation)), triggering transition (prepared off-main in \(String(format: "%.1f", prepared.milliseconds), privacy: .public)ms)")
                     // Visuals -> music at the crossfade start.
                     postVisualMood(metadata: metadata, image: framedImage, imageChanged: !wasFirst,
                                    musicDuration: transitionState.spec.musicDuration)
@@ -746,6 +792,18 @@ struct ImmersiveDomeView: View {
             load(item.image).map { ($0, item.depth.flatMap(load)) }
         }
     }()
+
+    /// Off the main actor: frame the image, cache its vibrance factors, build its source texture.
+    nonisolated private static func prepareImage(_ raw: CGImage, metadata: ImageMetadata?, generation: UInt64,
+                                                 uploader: SourceTextureUploader?) -> PreparedImage {
+        let start = Date()
+        let framed = ImageFraming.coverCrop(raw)
+        _ = ImageColorStats.cachedFactors(key: framed) { framed }
+        let texture = uploader?.makeTexture(from: framed, label: "source")
+        return PreparedImage(generation: generation, framed: framed, metadata: metadata,
+                             depthOverride: debugDepth(for: raw), texture: texture,
+                             milliseconds: Date().timeIntervalSince(start) * 1000)
+    }
 
     /// DEBUG depth override for a source image: its -LiminalShellCycle depth map, else -LiminalDepthImage.
     nonisolated private static func debugDepth(for image: CGImage) -> CGImage? {

@@ -22,6 +22,11 @@ final class EffectsMetalView: MTKView {
     private var sourceTexture: MTLTexture?
     private var textureLoader: MTKTextureLoader?
     private var lastSourceImageHash: Int = 0  // Track image changes
+    /// Hash of the image whose texture MTKTextureLoader is decoding off the main thread (0 = none).
+    private var pendingSourceHash: Int = 0
+    /// The texture the source had before the latest swap: it becomes the crossfade's previous
+    /// texture without a second decode (docs/decisions/performance.md, image-change hitch).
+    private var retiredSource: (hash: Int, texture: MTLTexture)?
 
     // Previous texture (for GPU crossfade blending during transitions)
     private var previousTexture: MTLTexture?
@@ -177,25 +182,29 @@ final class EffectsMetalView: MTKView {
 
     // MARK: - Texture Management
 
-    /// Update the source image from morphPlayer - ONLY if image changed
+    /// Update the source image from morphPlayer - ONLY if image changed.
+    /// The decode + upload runs on MTKTextureLoader's background queue; the old source keeps
+    /// drawing until the new texture lands (a frame or a few into the transition, which then
+    /// shows previous = source = old image), so the main thread never stalls on it.
     func updateSourceImage(_ image: NSImage?) {
         guard let image = image else {
             if hasValidSource {
                 LMLog.visual.debug("⚠️ Source image became nil")
             }
             hasValidSource = false
+            pendingSourceHash = 0
             return
         }
 
         // Check if image actually changed using hash
         let newHash = image.hash
+        if newHash == pendingSourceHash { return }  // already loading
         if newHash == lastSourceImageHash && hasValidSource {
             // Same image, skip expensive texture creation
             return
         }
 
-        guard let device = self.device,
-              let textureLoader = self.textureLoader else {
+        guard let textureLoader = self.textureLoader else {
             hasValidSource = false
             return
         }
@@ -209,28 +218,39 @@ final class EffectsMetalView: MTKView {
             return
         }
 
-        // Load as Metal texture
         let startTime = Date()
-        do {
-            let options: [MTKTextureLoader.Option: Any] = [
-                .SRGB: false,
-                .generateMipmaps: false
-            ]
-            sourceCrop = ImageFraming.coverCropRect(width: rawImage.width, height: rawImage.height)
-            sourceTexture = try textureLoader.newTexture(cgImage: ImageFraming.crop(rawImage, normalized: sourceCrop), options: options)
-            hasValidSource = true
-            lastSourceImageHash = newHash
-            textureUpdateCount += 1
-
-            let loadTime = Date().timeIntervalSince(startTime) * 1000
-            if let src = sourceTexture {
-                let updateNum = textureUpdateCount
-                LMLog.visual.debug("🖼️ Source texture updated: \(src.width)x\(src.height) in \(String(format: "%.1f", loadTime))ms (update #\(updateNum))")
+        let options: [MTKTextureLoader.Option: Any] = [
+            .SRGB: false,
+            .generateMipmaps: false
+        ]
+        sourceCrop = ImageFraming.coverCropRect(width: rawImage.width, height: rawImage.height)
+        pendingSourceHash = newHash
+        textureLoader.newTexture(cgImage: ImageFraming.crop(rawImage, normalized: sourceCrop), options: options) { @Sendable [weak self] texture, error in
+            let message = error?.localizedDescription
+            nonisolated(unsafe) let texture = texture
+            Task { @MainActor in
+                self?.sourceTextureLoaded(texture, hash: newHash, error: message, startTime: startTime)
             }
-        } catch {
-            LMLog.visual.error("❌ Failed to create texture: \(error.localizedDescription)")
-            hasValidSource = false
         }
+    }
+
+    /// Main thread: swap in a texture loaded by `updateSourceImage` (a new texture object, so a
+    /// command buffer still sampling the old one is unaffected). Stale loads are dropped.
+    private func sourceTextureLoaded(_ texture: MTLTexture?, hash: Int, error: String?, startTime: Date) {
+        guard hash == pendingSourceHash else { return }
+        pendingSourceHash = 0
+        guard let texture = texture else {
+            LMLog.visual.error("❌ Failed to create texture: \(error ?? "unknown")")
+            return
+        }
+        if hasValidSource, let old = sourceTexture { retiredSource = (lastSourceImageHash, old) }
+        sourceTexture = texture
+        hasValidSource = true
+        lastSourceImageHash = hash
+        textureUpdateCount += 1
+        let loadTime = Date().timeIntervalSince(startTime) * 1000
+        let updateNum = textureUpdateCount
+        LMLog.visual.debug("🖼️ Source texture updated: \(texture.width)x\(texture.height) in \(String(format: "%.1f", loadTime))ms off-main (update #\(updateNum))")
     }
 
     /// Update the saliency map texture - ONLY if image changed
@@ -285,6 +305,18 @@ final class EffectsMetalView: MTKView {
         // Check if previous image actually changed
         let newHash = image.hash
         if newHash == lastPreviousImageHash && previousTexture != nil {
+            return
+        }
+
+        // The previous image is (almost always) the old source: reuse its texture, no decode.
+        if hasValidSource, newHash == lastSourceImageHash, let current = sourceTexture {
+            previousTexture = current
+            lastPreviousImageHash = newHash
+            return
+        }
+        if let retired = retiredSource, retired.hash == newHash {
+            previousTexture = retired.texture
+            lastPreviousImageHash = newHash
             return
         }
 
