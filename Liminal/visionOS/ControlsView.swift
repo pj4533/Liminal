@@ -17,6 +17,7 @@ struct ControlsView: View {
 
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
+    @Environment(\.dismissWindow) private var dismissWindow
 
     @State private var isImmersed = false
     @State private var isDioramaActive = false
@@ -259,6 +260,11 @@ extension ControlsView {
                 if case .opened = result {
                     isImmersed = true
                     LMLog.general.info("🧪 DEBUG: auto-opened liminalDome immersive space")
+                    if DebugLaunchOptions.hideControls {
+                        try? await Task.sleep(nanoseconds: 500_000_000)
+                        dismissWindow()
+                        LMLog.general.info("🧪 DEBUG: controls window closed (-LiminalHideControls)")
+                    }
                 } else {
                     LMLog.general.error("🧪 DEBUG: auto-open of liminalDome failed: \(String(describing: result), privacy: .public)")
                 }

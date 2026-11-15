@@ -119,6 +119,14 @@ struct ImmersiveDomeView: View {
     private static let breathingAmplitude: Float = 0.04
     private static let breathingSpeed: Float = 0.4
 
+    /// DEBUG harness (-LiminalShellYaw / -LiminalShellPitch): rotating the scene by this brings the
+    /// content at (yaw, pitch) in front of the fixed simulator camera. Identity in Release.
+    static var debugViewRotation: simd_quatf {
+        let yaw = DebugLaunchOptions.shellYaw * .pi / 180
+        let pitch = DebugLaunchOptions.shellPitch * .pi / 180
+        return simd_quatf(angle: -pitch, axis: [1, 0, 0]) * simd_quatf(angle: yaw, axis: [0, 1, 0])
+    }
+
     var body: some View {
         ZStack {
             RealityView { content in
@@ -131,7 +139,8 @@ struct ImmersiveDomeView: View {
                 material.color = .init(tint: .red)
 
                 let entity = ModelEntity(mesh: placeholderMesh, materials: [material])
-                entity.position = SIMD3<Float>(0, 1.5, 0)
+                entity.position = SIMD3<Float>(0, 1.5, 0) - DebugLaunchOptions.shellHeadOffset
+                entity.orientation = Self.debugViewRotation
                 entity.isEnabled = false  // Hidden until first frame is ready to render
 
                 content.add(entity)
