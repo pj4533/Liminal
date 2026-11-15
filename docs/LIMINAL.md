@@ -37,7 +37,7 @@ AUDIO: GenerativeEngine (facade)    VISUAL: VisualEngine
   / setVisualActivity
                                       macOS: EffectsMetalView (MTKView)
                                       visionOS: OffscreenEffectsRenderer (one MRT pass, both eyes)
-                                                -> DrawableQueue -> RealityKit dome
+                                                -> DrawableQueue -> RealityKit depth-relief shell
 ```
 
 ## File Structure
@@ -57,7 +57,8 @@ Liminal/
   Services/     SettingsService, EnvironmentService
   Utils/        Logger (LMLog), DebugLaunchOptions, GPUTimingStats, TestPatternGenerator
   visionOS/     LiminalVisionApp, ControlsView, ImmersiveDomeView, OffscreenEffectsRenderer,
-                LowLevelDomeMesh, StereoMaterialBuilder, SpatialDioramaView
+                SpatialShellMesh, ShellMaterialBuilder, HeadPoseProvider, StereoMaterialBuilder (A/B)
+  Visual/Spatial/ ShellLayout, DepthReliefField, ShellPlacement (pure, unit tested)
 LiminalTests/   AVCouplingTests, ImagePipelineTests, MusicRenderTests, PromptBuilderTests, ...
 scripts/, tools/ (ShaderBench, VibranceHarness), docs/
 ```

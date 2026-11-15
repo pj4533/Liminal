@@ -21,6 +21,7 @@
 import SwiftUI
 import RealityKit
 import OSLog
+import ImageIO
 
 // MARK: - Simple CGImage Transition State (Value Type, No @Published)
 
@@ -82,7 +83,8 @@ struct ImmersiveDomeView: View {
     /// Plain reference, not observed: only its nonisolated bus and visual-input methods are used (C13).
     let music: GenerativeEngine
 
-    @State private var panelEntity: ModelEntity?
+    /// Shell centre (viewer's head at entry); parent of the three tile entities.
+    @State private var shellRoot: Entity?
     @State private var effectsRenderer: OffscreenEffectsRenderer?
     @State private var isSetupComplete = false
     @State private var renderTask: Task<Void, Never>?
@@ -94,58 +96,62 @@ struct ImmersiveDomeView: View {
     // Simple CGImage transition tracking (no @Observable overhead)
     @State private var transitionState = CGImageTransitionState()
 
-    // GPU-driven breathing mesh (LowLevelMesh + compute shader)
-    @State private var domeMesh: LowLevelDomeMesh?
+    // Spatial shell tile mesh (LowLevelMesh, CPU-written relief + breathing), shared by all tiles
+    @State private var shellMesh: SpatialShellMesh?
+    /// Depth relief fields (previous / current image) for the shell.
+    @State private var relief = ReliefBlend()
 
     // Depth map generation
     @State private var depthGenerator: DepthMapGenerator?
     @State private var lastDepthGeneration: UInt64 = 0
 
-    // Stereoscopic per-eye rendering
+    /// ARKit head pose: entry placement and slow re-centre (fallback centre when unavailable).
+    @State private var headPose: HeadPoseProvider?
+    /// Entry yaw of the shell (radians), applied under the DEBUG view rotation.
+    @State private var shellYaw: Float = 0
+
+    // DEBUG A/B only (-LiminalShellTextureStereo): old per-eye texture parallax on the hero tile
     @State private var stereoMaterialBuilder: StereoMaterialBuilder?
 
     // DEBUG: Test with solid color first to verify pipeline
     private let debugSolidColorTest = false
 
-    // Curved panel parameters
-    private static let panelRadius: Float = 2.0
-    // 112.5° x 75° = 3:2 in view angle, matching ImageFraming.displayAspect so the 3:2 image is
-    // shown undistorted (docs/decisions/orientation.md). Was 110° (1.467, a 2% horizontal squeeze).
-    private static let verticalArc: Float = 75.0
-    private static let horizontalArc: Float = verticalArc * Float(ImageFraming.displayAspect)
-    private static let horizontalSegments: Int = 48
-    private static let verticalSegments: Int = 36
+    // Shell geometry, fades and relief constants: ShellLayout (docs/plans/spatial.md).
 
-    // Panel breathing parameters
-    private static let breathingAmplitude: Float = 0.04
-    private static let breathingSpeed: Float = 0.4
+    /// Posted when the immersive space goes away by any route (button, Digital Crown, Home), so the
+    /// controls window's Enter/Exit label stays in sync.
+    static let didCloseNotification = Notification.Name("LiminalImmersiveSpaceDidClose")
+
+    /// Shell centre until HeadPoseProvider places it: standing eye height.
+    private static let shellCentre = ShellPlacement.fallbackCentre
+
+    /// DEBUG harness (-LiminalShellYaw / -LiminalShellPitch): rotating the scene by this brings the
+    /// content at (yaw, pitch) in front of the fixed simulator camera. Identity in Release.
+    static var debugViewRotation: simd_quatf {
+        ShellLayout.viewRotation(yawDeg: DebugLaunchOptions.shellYaw, pitchDeg: DebugLaunchOptions.shellPitch)
+    }
 
     var body: some View {
         ZStack {
             RealityView { content in
-                LMLog.visual.info("🎬 CURVED PANEL: Creating placeholder entity...")
-
-                // Create placeholder mesh (will be replaced with LowLevelMesh in setup)
-                let placeholderMesh = MeshResource.generatePlane(width: 0.01, height: 0.01)
-
-                var material = UnlitMaterial(applyPostProcessToneMap: false)
-                material.color = .init(tint: .red)
-
-                let entity = ModelEntity(mesh: placeholderMesh, materials: [material])
-                entity.position = SIMD3<Float>(0, 1.5, 0)
-                entity.isEnabled = false  // Hidden until first frame is ready to render
-
-                content.add(entity)
-                panelEntity = entity
-
-                LMLog.visual.info("🎬 CURVED PANEL: Placeholder entity added, setup will create real mesh...")
+                // Shell root at the viewer's head; the tiles are added in setup.
+                let root = Entity()
+                root.name = "LiminalShell"
+                root.position = Self.shellCentre - DebugLaunchOptions.shellHeadOffset
+                root.orientation = Self.debugViewRotation
+                root.isEnabled = false  // Hidden until the first frame is ready to render
+                content.add(root)
+                shellRoot = root
+                LMLog.visual.info("🎬 SHELL: root entity added, setup will create the tiles...")
             }
             .task {
                 await setupEffectsRendererWithBreathingMesh()
             }
             .onDisappear {
                 renderTask?.cancel()
-                LMLog.visual.info("🎬 CURVED PANEL: Render loop cancelled")
+                headPose?.stop()
+                NotificationCenter.default.post(name: Self.didCloseNotification, object: nil)
+                LMLog.visual.info("🎬 SHELL: Render loop cancelled")
             }
 
             // Loading indicator overlay
@@ -182,19 +188,13 @@ struct ImmersiveDomeView: View {
         }
         effectsRenderer = renderer
 
-        // Create LowLevelDomeMesh (breathing is computed on the CPU)
-        guard let mesh = LowLevelDomeMesh(
-            horizontalSegments: Self.horizontalSegments,
-            verticalSegments: Self.verticalSegments,
-            panelRadius: Self.panelRadius,
-            horizontalArc: Self.horizontalArc,
-            verticalArc: Self.verticalArc
-        ) else {
+        // One shell tile mesh shared by the three tiles (relief + breathing written on the CPU)
+        guard let mesh = SpatialShellMesh() else {
             loadingState = "❌ Mesh creation failed!"
-            LMLog.visual.error("❌ Failed to create LowLevelDomeMesh!")
+            LMLog.visual.error("❌ Failed to create SpatialShellMesh!")
             return
         }
-        domeMesh = mesh
+        shellMesh = mesh
 
         loadingState = "Setting up DrawableQueue..."
         do {
@@ -206,38 +206,14 @@ struct ImmersiveDomeView: View {
             return
         }
 
-        guard let textureResource = renderer.textureResource,
-              let entity = panelEntity else {
+        guard let monoTexture = renderer.textureResource, let root = shellRoot else {
             loadingState = "❌ No texture/entity!"
-            LMLog.visual.error("❌ No texture resource or panel entity!")
+            LMLog.visual.error("❌ No texture resource or shell root!")
             return
         }
 
-        // Build stereo material for per-eye rendering
-        let stereoBuilder = StereoMaterialBuilder(outputSize: 2048)
-        do {
-            if DebugLaunchOptions.forceMonoMaterial {
-                throw CocoaError(.featureUnsupported)  // DEBUG: inspect the mono fallback path
-            }
-            try await stereoBuilder.build()
-            self.stereoMaterialBuilder = stereoBuilder
-            if let stereoMat = stereoBuilder.material {
-                entity.model = ModelComponent(mesh: mesh.meshResource, materials: [stereoMat])
-                LMLog.visual.info("🎨 ✅ Applied stereo ShaderGraphMaterial to panel!")
-            } else {
-                // Fallback to mono UnlitMaterial
-                var material = UnlitMaterial(applyPostProcessToneMap: false)
-                material.color = .init(texture: .init(textureResource))
-                entity.model = ModelComponent(mesh: mesh.meshResource, materials: [material])
-                LMLog.visual.info("🎨 ✅ Applied mono UnlitMaterial (stereo build returned nil)")
-            }
-        } catch {
-            // Fallback to mono UnlitMaterial if stereo fails
-            LMLog.visual.warning("⚠️ Stereo material failed: \(error.localizedDescription), falling back to mono")
-            var material = UnlitMaterial(applyPostProcessToneMap: false)
-            material.color = .init(texture: .init(textureResource))
-            entity.model = ModelComponent(mesh: mesh.meshResource, materials: [material])
-        }
+        await buildTiles(mesh: mesh, monoTexture: monoTexture, root: root)
+        await placeShellAtHead(root)
 
         // Ensure depth model is ready before first render so the first image has depth.
         _ = await ensureDepthGeneratorReady()
@@ -251,6 +227,7 @@ struct ImmersiveDomeView: View {
             LMLog.visual.info("🎨 Waiting for first image...")
             var waitCount = 0
             while visualEngine.imageBuffer.loadCurrent() == nil {
+                if Task.isCancelled { return }
                 waitCount += 1
                 loadingState = "Waiting for image... \(waitCount)s"
                 if waitCount % 10 == 0 {
@@ -271,6 +248,7 @@ struct ImmersiveDomeView: View {
             let cgImage = ImageFraming.coverCrop(rawImage)
             transitionState.setInitialImage(cgImage)
             transitionState.lastGeneration = initial.generation
+            relief.imageChanged(generation: initial.generation)
             LMLog.visual.info("🎬 Initial image set directly from CGImage (gen \(transitionState.lastGeneration))")
             // Visuals -> music: first image sets the mood, no imageDidChange (no crossfade).
             postVisualMood(metadata: initial.metadata, image: cgImage, imageChanged: false)
@@ -279,14 +257,90 @@ struct ImmersiveDomeView: View {
             await generateAndApplyDepth(for: cgImage, logLabel: "initial")
         }
 
-        // Everything is ready — show the dome and start rendering
-        panelEntity?.isEnabled = true
+        // Left the space while setting up (the .task is cancelled on disappear, after onDisappear
+        // already ran): starting the loop now would leave it running with nothing to cancel it.
+        guard !Task.isCancelled else {
+            headPose?.stop()
+            LMLog.visual.info("🎬 SHELL: setup cancelled (space closed), render loop not started")
+            return
+        }
+
+        // Everything is ready — show the shell and start rendering
+        shellRoot?.isEnabled = true
         loadingState = "Rendering!"
         LMLog.visual.info("🎨 ✅ Starting render loop (detached from MainActor)...")
         isSetupComplete = true
 
         // Start the continuous effects render loop - DETACHED from MainActor!
         startRenderLoop()
+    }
+
+    /// Three tiles (hero, right, left) sharing `mesh`, each with its own faded material.
+    /// Default: every tile samples the one mono effects texture. DEBUG -LiminalShellTextureStereo:
+    /// the hero uses the old per-eye stereo material and the sides its left-eye texture.
+    /// Fallback if ShaderGraph fails: mono UnlitMaterial on the hero only.
+    @MainActor
+    private func buildTiles(mesh: SpatialShellMesh, monoTexture: TextureResource, root: Entity) async {
+        var sideTexture = monoTexture
+        var heroOverride: ShaderGraphMaterial?
+        if DebugLaunchOptions.shellTextureStereo {
+            let stereoBuilder = StereoMaterialBuilder(outputSize: 2048)
+            do {
+                try await stereoBuilder.build()
+                if let mat = stereoBuilder.material, let left = stereoBuilder.leftTextureResource {
+                    stereoMaterialBuilder = stereoBuilder
+                    heroOverride = mat
+                    sideTexture = left
+                }
+            } catch {
+                LMLog.visual.warning("⚠️ Texture-stereo A/B material failed: \(error.localizedDescription); using mono")
+            }
+        }
+
+        for tile in ShellLayout.Tile.allCases {
+            let material: any RealityKit.Material
+            do {
+                if tile == .hero, let heroOverride {
+                    var m = heroOverride
+                    m.faceCulling = .none
+                    material = m
+                } else {
+                    if DebugLaunchOptions.forceMonoMaterial { throw CocoaError(.featureUnsupported) }
+                    material = try await ShellMaterialBuilder.build(texture: sideTexture, tile: tile)
+                }
+            } catch {
+                guard tile == .hero else {
+                    LMLog.visual.warning("⚠️ Shell material failed for \(String(describing: tile)): \(error.localizedDescription); tile hidden")
+                    continue
+                }
+                LMLog.visual.warning("⚠️ Shell material failed: \(error.localizedDescription), mono UnlitMaterial on the hero only")
+                var unlit = UnlitMaterial(applyPostProcessToneMap: false)
+                unlit.color = .init(texture: .init(monoTexture))
+                unlit.faceCulling = .none
+                material = unlit
+            }
+            let entity = ModelEntity(mesh: mesh.meshResource, materials: [material])
+            entity.name = "ShellTile-\(tile)"
+            entity.transform = Transform(scale: [tile.isMirrored ? -1 : 1, 1, 1],
+                                         rotation: simd_quatf(angle: tile.yaw, axis: [0, 1, 0]))
+            root.addChild(entity)
+        }
+        LMLog.visual.info("🎨 ✅ Shell tiles built (\(root.children.count)) texture=\(DebugLaunchOptions.shellTextureStereo && stereoMaterialBuilder != nil ? "stereo A/B" : "mono", privacy: .public)")
+    }
+
+    /// Entry placement: centre the shell on the head and face the entry yaw (ARKit), else the
+    /// fallback centre facing forward. The DEBUG head offset / view rotation apply on top.
+    @MainActor
+    private func placeShellAtHead(_ root: Entity) async {
+        let provider = HeadPoseProvider()
+        headPose = provider
+        await provider.start()
+        let pose = await provider.entryPose()
+        let centre = pose?.position ?? Self.shellCentre
+        shellYaw = pose?.yaw ?? 0
+        root.position = centre - DebugLaunchOptions.shellHeadOffset
+        root.orientation = simd_quatf(angle: shellYaw, axis: [0, 1, 0]) * Self.debugViewRotation
+        LMLog.visual.info("🧭 SHELL placed at (\(String(format: "%.2f, %.2f, %.2f", centre.x, centre.y, centre.z), privacy: .public)) yaw=\(String(format: "%.1f", shellYaw * 180 / .pi), privacy: .public)° source=\(pose == nil ? "fallback" : "ARKit", privacy: .public)")
     }
 
     // MARK: - Render Loop
@@ -306,6 +360,11 @@ struct ImmersiveDomeView: View {
             // Performance tracking
             var lastFrameTime = Date()
             var totalRenderTime: Double = 0
+            var totalMeshTime: Double = 0
+            var lastReliefK: Float = 0
+            var lastCycleSwitch = Date()
+            var cycleIndex = 0
+            var lastReliefW: Float = 0
             var maxRenderTime: Double = 0
             var droppedFrames = 0
             var lastStatsTime = Date()
@@ -328,6 +387,11 @@ struct ImmersiveDomeView: View {
             var intensitySmoother = EffectIntensitySmoother()
             var transitionStartEffectTime: Float?
             var lastEnergy: Float?   // music energy of the last frame (nil when the visuals do not follow the music)
+            // Spatial comfort: Depth setting eased, slow re-centre on the head (docs/plans/spatial.md 5).
+            var depthSmoother = DepthSettingSmoother()
+            var recentre = ShellRecentre(centre: (shellRoot?.position ?? Self.shellCentre) + DebugLaunchOptions.shellHeadOffset)
+            var lastPoseTime = Date()
+            var lastBreathing: Float = 0
 
             while !Task.isCancelled {
                 frameCount += 1
@@ -362,19 +426,20 @@ struct ImmersiveDomeView: View {
                 // Tag this frame's command buffers (eyes) for GPU timing
                 effectsRenderer?.gpuStats.beginFrame()
 
-                // Update panel mesh with CPU-computed breathing
-                domeMesh?.updateBreathing(
-                    time: effectTime,
-                    amplitude: Self.breathingAmplitude,
-                    speed: Self.breathingSpeed
-                )
-
                 // Check for new images from AtomicImageBuffer (thread-safe)
                 // One atomic read of image, metadata and generation (C10).
+                // DEBUG -LiminalShellCycle: switch to the next fixture image every N seconds.
+                if !Self.debugCycle.isEmpty, frameStartTime.timeIntervalSince(lastCycleSwitch) >= DebugLaunchOptions.shellCycleSeconds {
+                    lastCycleSwitch = frameStartTime
+                    cycleIndex = (cycleIndex + 1) % Self.debugCycle.count
+                    visualEngine.imageBuffer.storeCurrent(Self.debugCycle[cycleIndex].image, metadata: nil)
+                    LMLog.visual.info("🧪 DEBUG: shell cycle -> image \(cycleIndex)")
+                }
                 let (rawImage, metadata, generation) = visualEngine.imageBuffer.loadCurrentWithMetadata()
                 if let rawImage = rawImage, generation != transitionState.lastGeneration {
                     // Centre-crop to the dome's 3:2 once; colour AND depth use the framed image.
                     let framedImage = ImageFraming.coverCrop(rawImage)
+                    let depthOverride = Self.debugDepth(for: rawImage)
                     let wasFirst = transitionState.currentImage == nil
                     transitionState.lastGeneration = generation
                     if !wasFirst {
@@ -385,6 +450,7 @@ struct ImmersiveDomeView: View {
                             hasDepth: lastDepthGeneration > 0 && !DebugLaunchOptions.forceStereoFlatDepth)
                     }
                     transitionState.transitionTo(framedImage)
+                    relief.imageChanged(generation: generation)
                     if !wasFirst { transitionStartEffectTime = effectTime }
                     LMLog.visual.info("🎬 New image detected (gen \(generation)), triggering transition")
                     // Visuals -> music at the crossfade start.
@@ -396,11 +462,14 @@ struct ImmersiveDomeView: View {
                         let imageBuffer = visualEngine.imageBuffer
                         Task.detached {
                             do {
-                                let depth = try await depthGen.generateDepth(from: framedImage)
+                                let depth: CGImage
+                                if let d = depthOverride { depth = d } else { depth = try await depthGen.generateDepth(from: framedImage) }
+                                let field = Self.buildRelief(depth, generation: generation)
                                 await MainActor.run {
                                     imageBuffer.storeDepth(depth)
                                     self.effectsRenderer?.updateDepthTexture(from: depth)
                                     self.lastDepthGeneration = imageBuffer.loadDepthWithGeneration().generation
+                                    self.relief.depthArrived(field.q, generation: generation, now: Date().timeIntervalSince1970)
                                 }
                             } catch {
                                 await MainActor.run {
@@ -485,14 +554,48 @@ struct ImmersiveDomeView: View {
                     LMLog.visual.info("\(line, privacy: .public)")
                 }
 
-                // Render frame - use stereo path if available, otherwise mono
+                // Shell vertices: relief + breathing (vDSP, ~11k vertices). Relief strength follows the
+                // Depth amount, the clarity cycle and the transition (ShellLayout.reliefStrength).
+                let meshStart = Date()
+                let depthSetting = depthSmoother.next(target: DebugLaunchOptions.shellDepth ?? settings.depthStrength,
+                                                      dt: Float(frameInterval / 1000))
+                let reliefK = ShellLayout.reliefStrength(
+                    depth: depthSetting,
+                    drive: look.drive(time: effectTime), transitionProgress: transitionProgress)
+                let reliefW = relief.weight(transitionProgress: transitionState.isTransitioning ? transitionState.transitionProgress : nil,
+                                            now: frameStartTime.timeIntervalSince1970)
+                // Music -> geometry: breathing swells 2 -> 3 cm with the music's energy and slow pulse.
+                let breathing = ShellLayout.breathingAmplitude(amount: modulation.amount, energy: modulation.energy,
+                                                               pulseMotion: modulation.pulseMotion)
+                shellMesh?.update(previous: relief.previous, current: relief.current, weight: reliefW, k: reliefK, time: effectTime,
+                                  breathingAmplitude: breathing)
+                lastBreathing = breathing
+                // Slow re-centre, about 10 Hz (no-op without ARKit tracking).
+                let poseDt = frameStartTime.timeIntervalSince(lastPoseTime)
+                if poseDt >= 0.1, let head = headPose?.headTransform() {
+                    lastPoseTime = frameStartTime
+                    let wasRecentring = recentre.isRecentring
+                    let centre = recentre.update(head: ShellPlacement.position(of: head), dt: Float(poseDt))
+                    shellRoot?.position = centre - DebugLaunchOptions.shellHeadOffset
+                    if recentre.isRecentring != wasRecentring {
+                        LMLog.visual.info("🧭 SHELL re-centre \(recentre.isRecentring ? "started" : "settled", privacy: .public)")
+                    }
+                } else if poseDt >= 0.1 {
+                    lastPoseTime = frameStartTime
+                }
+                totalMeshTime += Date().timeIntervalSince(meshStart) * 1000
+                lastReliefK = reliefK
+                lastReliefW = reliefW
+
+                // Render frame: one mono effects pass shown on every tile (decision S4); the per-eye
+                // stereo path only for the DEBUG texture-stereo A/B.
                 let renderStartTime = Date()
                 let previousImage = transitionState.isTransitioning ? transitionState.previousImage : nil
 
                 if let stereoBuilder = stereoMaterialBuilder,
                    let leftQueue = stereoBuilder.leftDrawableQueue,
                    let rightQueue = stereoBuilder.rightDrawableQueue {
-                    // Stereo: render to left/right drawable queues with depth-based parallax
+                    // DEBUG A/B: left/right drawable queues with texture-space depth parallax
                     let stereoOsc = SmoothOscillator.value(at: effectTime)
                     let stereoOffset = 0.003 + 0.007 * stereoOsc  // Subtle stereo separation
                     _ = renderer.renderStereoAndPresent(
@@ -505,7 +608,6 @@ struct ImmersiveDomeView: View {
                         stereoOffset: stereoOffset
                     )
                 } else {
-                    // Mono fallback
                     _ = renderer.renderAndPresent(sourceImage: cgImage, previousImage: previousImage, uniforms: uniforms, delay: settings.delay)
                 }
                 let renderTime = Date().timeIntervalSince(renderStartTime) * 1000
@@ -528,10 +630,11 @@ struct ImmersiveDomeView: View {
 
                     let perfLine = "📊 visionOS PERF: fps=\(String(format: "%.1f", actualFPS)) (\(String(format: "%.0f", fpsPercent))% of 60) | render avg=\(String(format: "%.1f", avgRenderTime))ms max=\(String(format: "%.1f", maxRenderTime))ms | dropped=\(droppedFrames) | transition=\(String(format: "%.0f", transitionState.transitionProgress * 100))% | interval p95=\(String(format: "%.2f", intervalP95))ms | \(gpuFragment)"
                     LMLog.visual.info("\(perfLine, privacy: .public)")
-                    LMLog.visual.info("🔮 3D STATUS: depth=\(hasDepth) stereo=\(hasStereo) gen=\(transitionState.lastGeneration)")
+                    LMLog.visual.info("🔮 3D STATUS: depth=\(hasDepth) textureStereo=\(hasStereo) gen=\(transitionState.lastGeneration) mesh avg=\(String(format: "%.3f", totalMeshTime / Double(max(frameCount, 1))), privacy: .public)ms relief k=\(String(format: "%.3f", lastReliefK), privacy: .public) breath=\(String(format: "%.3f", lastBreathing), privacy: .public)m w=\(String(format: "%.2f", lastReliefW), privacy: .public) fields=\(relief.previous != nil ? 1 : 0)+\(relief.current != nil ? 1 : 0)")
 
                     frameCount = 0
                     totalRenderTime = 0
+                    totalMeshTime = 0
                     maxRenderTime = 0
                     droppedFrames = 0
                     frameIntervals.removeAll(keepingCapacity: true)
@@ -603,6 +706,7 @@ struct ImmersiveDomeView: View {
             effectsRenderer?.updateDepthTexture(from: flat)
             lastDepthGeneration = visualEngine.imageBuffer.loadDepthWithGeneration().generation
             LMLog.visual.info("🗺️ \(logLabel): FLAT debug depth uploaded (\(flat.width)x\(flat.height))")
+            relief.depthArrived(DepthReliefField.flat.q, generation: transitionState.lastGeneration, now: Date().timeIntervalSince1970)
             return
         }
         guard let generator = await ensureDepthGeneratorReady() else {
@@ -611,14 +715,52 @@ struct ImmersiveDomeView: View {
         }
 
         do {
-            let depth = try await generator.generateDepth(from: image)
+            let depth: CGImage
+            if let d = Self.debugDepthImage { depth = d } else { depth = try await generator.generateDepth(from: image) }
             visualEngine.imageBuffer.storeDepth(depth)
             effectsRenderer?.updateDepthTexture(from: depth)
             lastDepthGeneration = visualEngine.imageBuffer.loadDepthWithGeneration().generation
             LMLog.visual.info("🗺️ \(logLabel): Depth generated + uploaded (\(depth.width)x\(depth.height))")
+            let generation = transitionState.lastGeneration
+            let field = await Task.detached(priority: .userInitiated) { Self.buildRelief(depth, generation: generation) }.value
+            relief.depthArrived(field.q, generation: generation, now: Date().timeIntervalSince1970)
         } catch {
             LMLog.visual.error("🗺️ \(logLabel): Depth generation failed: \(error.localizedDescription)")
         }
+    }
+
+    /// DEBUG -LiminalDepthImage: depth map loaded from a file (nil when the flag is not set).
+    nonisolated private static let debugDepthImage: CGImage? = {
+        guard let path = DebugLaunchOptions.depthImagePath,
+              let src = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil) else { return nil }
+        return CGImageSourceCreateImageAtIndex(src, 0, nil)
+    }()
+
+    /// DEBUG -LiminalShellCycle: (image, depth) pairs loaded from files.
+    nonisolated private static let debugCycle: [(image: CGImage, depth: CGImage?)] = {
+        func load(_ path: String) -> CGImage? {
+            guard let src = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil) else { return nil }
+            return CGImageSourceCreateImageAtIndex(src, 0, nil)
+        }
+        return DebugLaunchOptions.shellCycle.compactMap { item in
+            load(item.image).map { ($0, item.depth.flatMap(load)) }
+        }
+    }()
+
+    /// DEBUG depth override for a source image: its -LiminalShellCycle depth map, else -LiminalDepthImage.
+    nonisolated private static func debugDepth(for image: CGImage) -> CGImage? {
+        debugCycle.first { $0.image === image }?.depth ?? debugDepthImage
+    }
+
+    /// Relief field for a depth map (off the main actor; a few ms). Logs range, slope and time.
+    nonisolated private static func buildRelief(_ depth: CGImage, generation: UInt64) -> DepthReliefField {
+        let start = Date()
+        let field = DepthReliefField.build(depthImage: depth) ?? .flat
+        let ms = Date().timeIntervalSince(start) * 1000
+        let r = field.range
+        let step = DepthReliefField.maxNeighbourStep(field.q, cols: DepthReliefField.columns, rows: DepthReliefField.rows)
+        LMLog.visual.info("🏔️ Relief field gen=\(generation) q=[\(String(format: "%.3f", r.min), privacy: .public), \(String(format: "%.3f", r.max), privacy: .public)] maxStep=\(String(format: "%.4f", step), privacy: .public) built in \(String(format: "%.1f", ms), privacy: .public)ms")
+        return field
     }
 
     /// Constant 0.5 depth map (DEBUG -LiminalForceStereoFlatDepth), same size as DepthAnything output.
