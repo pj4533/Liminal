@@ -87,7 +87,7 @@ Shader pipeline order (`Liminal/Shaders/EffectsRenderer.metal`): Ken Burns, dist
 |--------|--------|
 | **Style** | Drift, Glass, Deep or Garden music palette |
 | **Density** | How many notes the pointed layers play |
-| **Space** | Reverb size and shimmer |
+| **Space** | Reverb size and dark halo |
 | **Echo** | Audio delay and visual ghost-trail intensity |
 | **Scale** | "Auto (evolving)" lets key and mode drift; choosing a scale pins it |
 | **Sync visuals to music** | Music drives hue, motion, bloom and ghost bursts (on by default) |

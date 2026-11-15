@@ -6,7 +6,7 @@ Each workstream has a decision log with the reasons (what, why, alternatives, nu
 |-----|---------|
 | [performance.md](performance.md) | visionOS render path cut from 3 command buffers to one MRT stereo pass, direct-to-drawable, CPU dome breathing, shader ALU savings; 2048x2048 kept |
 | [images.md](images.md) | New Gemini image pipeline: gemini-3.1-flash-image at 3:2 2K, style x subject x transformation x palette prompts, Clear All Images, cache epoch bump |
-| [music.md](music.md) | Three-voice engine replaced by an eight-layer generative engine with scenes, drifting key and mode, four styles, off-main conductor |
+| [music.md](music.md) | Three-voice engine replaced by an eight-layer generative engine with scenes, drifting key and mode, four styles, off-main conductor; then reworked to be calm and relaxing after listening feedback (D91-D106) |
 | [vibrance.md](vibrance.md) | Color-loss fix: correct visionOS sRGB encoding, real feedback on visionOS, chroma-preserving blends, final vibrance stage, per-image factor |
 | [orientation.md](orientation.md) | One image orientation convention (row 0 = top), removed two cancelling flips, 3:2 crop, 112.5 x 75 degree dome, test-card debug flags |
 | [av-coupling.md](av-coupling.md) | Music drives clamped visual uniforms and ghost bursts; each image sends a mood to the music; "Sync visuals to music" toggle (C1-C14, I1-I12) |
@@ -27,7 +27,8 @@ Each workstream has a decision log with the reasons (what, why, alternatives, nu
 
 ### Music
 - Key decisions: D3/D4 conductor off MainActor, D30/D31 "Auto" scale lets the key drift unless a scale is pinned, D64 four styles, D70/D72 session curve, D89 brightness soft knee.
-- Open watch items (D89/D90): L/R correlation 0.795 (gate 0.8), CPU 3.6-3.85x baseline wall time (gate 4x), seed-dependent narrow misses on a few seeds. Listen for taste, not just metrics.
+- Calm redesign (D91-D106), after feedback that the bells and tinks were abrasive: drone and pad kept; drips, keys, pluck, grains and air re-voiced as soft, slow, filtered and mostly reverb; dark 8 s reverb, shimmer replaced by a dark halo, 7 kHz master low-pass; longer scenes, fewer events. Gates in `scripts/music-criteria.json` now measure calm (old ones kept as `music-criteria-legacy.json`).
+- Watch items: the pad's 'bloom' scene is now the brightest moment; D106 lowered the dark-limit gate to 200 Hz for the Deep style. Listen for taste, not just metrics.
 
 ### Vibrance
 - No effect amount was reduced and nothing was removed; vibrance is a final stage (V4) plus a per-image factor (V5). Check that the saturation boost (+26.8% mean) suits your taste.
