@@ -57,6 +57,15 @@ struct EffectsUniforms {
     var videoShadeR: Float = 0  // shadow colour of the duotone looks
     var videoShadeG: Float = 0
     var videoShadeB: Float = 0
+    // Archive footage as a stream of crossfading pieces (docs/decisions/archive-video.md A27; appended last).
+    // Layer A above is slot 0 (texture 7), layer B below slot 1 (texture 8); videoMixB 0 = layer B skipped.
+    var videoWarp: Float = 0  // share of the picture's warp layer A rides (0...1)
+    var videoMixB: Float = 0
+    var videoLookB: Float = 0
+    var videoSeedB: Float = 0
+    var videoScaleB: Float = 0
+    var videoAspectB: Float = 0
+    var videoWarpB: Float = 0
 }
 
 /// Ghost tap data for shader. Must match Metal struct layout.

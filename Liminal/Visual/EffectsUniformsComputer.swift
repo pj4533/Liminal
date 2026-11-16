@@ -150,7 +150,7 @@ enum EffectsUniformsComputer {
         // nothing above changes.
         if !video.isOff {
             let settled = VideoComposite.settled(imageAge: look.imageAge, transitionDuration: look.transitionDuration,
-                                                 inTransition: inTransition)
+                                                 inTransition: inTransition, progress: tp)
             VideoComposite.apply(video, to: &uniforms, intensity: i, drive: d, settled: settled)
         }
         return uniforms

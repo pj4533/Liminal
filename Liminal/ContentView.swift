@@ -505,7 +505,7 @@ struct VisualDisplayView: View {
                 look: currentLook(effectTime: DebugLaunchOptions.effectTime(Float(newTime))),
                 transition: sync.transition)
             if let a = sync.activity.next(activity, at: newTime) { music.setVisualActivity(a) }
-            // Archive footage: what the moment director waits on (about 2 Hz).
+            // Archive footage: what the footage weaver listens to (about 2 Hz).
             if newTime - sync.lastFootageUpdate >= 0.5 || newTime < sync.lastFootageUpdate {
                 sync.lastFootageUpdate = newTime
                 let et = DebugLaunchOptions.effectTime(Float(newTime))

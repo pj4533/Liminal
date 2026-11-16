@@ -30,6 +30,9 @@ nonisolated final class VideoFrameSource: @unchecked Sendable {
         let rate: Float
         let black: Float
         let white: Float
+        /// Host uptime at which the picture is at `start` (nil: when decoding begins). A piece is prepared
+        /// ahead of its crossfade with an anchor in the near future or past, so picture and sound stay in step.
+        var anchorUptime: Double? = nil
     }
 
     let device: MTLDevice
@@ -126,7 +129,7 @@ nonisolated final class VideoFrameSource: @unchecked Sendable {
         loops = 0
         published.withLock { $0.ended = false }
         guard openReader(s) else { return }
-        playStart = Self.now()
+        playStart = s.anchorUptime ?? Self.now()
         lastFrameTime = playStart
         let t = DispatchSource.makeTimerSource(queue: queue)
         t.schedule(deadline: .now(), repeating: .milliseconds(33), leeway: .milliseconds(4))
@@ -192,14 +195,15 @@ nonisolated final class VideoFrameSource: @unchecked Sendable {
                 break
             }
             let pts = CMSampleBufferGetPresentationTimeStamp(sb).seconds
-            if pts > target { break }
+            // Before the anchor the first frame is shown (held) so a prepared piece has a picture at once.
+            if pts > target && (framesDecoded > 0 || newest != nil) { break }
             newest = sb
             pending = nil
         }
         guard let frame = newest, let pb = CMSampleBufferGetImageBuffer(frame) else { return }
         framesDecoded += 1
         // CVMetalTextureCache keeps recycled IOSurface-backed textures until flushed; flush every
-        // second or so so a long moment does not grow the cache.
+        // second or so so a long piece does not grow the cache.
         if framesDecoded % 30 == 0, let textureCache { CVMetalTextureCacheFlush(textureCache, 0) }
         let dt = max(now - lastFrameTime, 1.0 / 60)
         lastFrameTime = now

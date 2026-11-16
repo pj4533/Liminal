@@ -52,7 +52,9 @@
 //   --depth PATH       depth map PNG (grayscale; omit for a flat 0.5 map)
 //   --video FRAME.png  archive footage frame (docs/plans/archive-video.md 7): built into a 960x720 stage
 //                      texture like the app's pre-pass (r = g = luma, b = edge strength standing in for
-//                      motion) and bound at texture 7. Without it texture 7 is 1x1 black and videoMix 0.
+//                      motion) and bound at textures 7 and 8 (layer B of a piece crossfade, A27: turn it on
+//                      with --set videoMixB=0.3,videoLookB=3,videoScaleB=0.95,videoAspectB=0.89,videoWarpB=0.6).
+//                      Without it both are 1x1 black and the mixes 0.
 //   --video-look NAME  phantom | imprint | window | emerge (default phantom)
 //   --video-mix X      constant footage mix (VideoCompositeState.constantMix; default: the look's
 //                      ceiling at the intensity). Video uniforms can also be set with --set.
@@ -560,6 +562,8 @@ let uniformFields: [String: WritableKeyPath<EffectsUniforms, Float>] = [
     "videoMix": \.videoMix, "videoLook": \.videoLook, "videoSeed": \.videoSeed, "videoScale": \.videoScale,
     "videoAspect": \.videoAspect, "videoTintR": \.videoTintR, "videoTintG": \.videoTintG, "videoTintB": \.videoTintB,
     "videoShadeR": \.videoShadeR, "videoShadeG": \.videoShadeG, "videoShadeB": \.videoShadeB,
+    "videoWarp": \.videoWarp, "videoMixB": \.videoMixB, "videoLookB": \.videoLookB, "videoSeedB": \.videoSeedB,
+    "videoScaleB": \.videoScaleB, "videoAspectB": \.videoAspectB, "videoWarpB": \.videoWarpB,
 ]
 func uniformsDict(_ u: EffectsUniforms) -> [String: Double] {
     var d: [String: Double] = [:]
@@ -679,6 +683,7 @@ func encodeFrame(_ cb: MTLCommandBuffer, _ sc: Scenario, _ st: FrameState, varia
             enc.setFragmentTexture(sc.previous, index: 3)
             enc.setFragmentTexture(depthTex, index: 5)
         enc.setFragmentTexture(videoTex, index: 7)
+        enc.setFragmentTexture(videoTex, index: 8)
             enc.setFragmentSamplerState(sampler, index: 0)
             enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
             enc.endEncoding()
@@ -702,6 +707,7 @@ func encodeFrame(_ cb: MTLCommandBuffer, _ sc: Scenario, _ st: FrameState, varia
         enc.setFragmentTexture(sc.previous, index: 3)
         enc.setFragmentTexture(depthTex, index: 5)
         enc.setFragmentTexture(videoTex, index: 7)
+        enc.setFragmentTexture(videoTex, index: 8)
         enc.setFragmentSamplerState(sampler, index: 0)
         enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         enc.endEncoding()

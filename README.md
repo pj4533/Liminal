@@ -21,7 +21,7 @@ Liminal creates endless, evolving ambient soundscapes synchronized with AI-gener
 - **GPU Effects**: one Metal fragment shader with Ken Burns motion, turbulence distortion, chromatic aberration, a family of 12 image transitions that hide the swap inside a surge of the live effects (picked without repeats, docs/decisions/transitions.md), hue shifts, ghost taps, stochastic bloom, feedback warping and a final vibrance stage that keeps colors vivid; a slow clarity cycle and a strain budget keep the image recognisable, scaled by the Effect intensity setting
 - **Audio-visual coupling**: the music drives the visuals (note glow, scene intensity, chord-tied hue, ghost-tap burst on scene change) and each new image sends a mood (brightness, warmth, saturation, energy, mood words) back to the music. A "Sync visuals to music" switch turns the music-to-visuals direction off. See `docs/decisions/av-coupling.md`
 - **macOS and visionOS**: a window with a control panel on macOS; on visionOS a control window plus one immersive space: a 3D shell that wraps 337.5 x 120 degrees around you (the image straight ahead, mirrored continuations to the sides, above and below), pushed into real depth from the ML depth map, with every effect on it (one 2048x2048 effects render). See `docs/decisions/spatial.md`
-- **Archive footage**: now and then a few minutes of old film (Prelinger Archives on the Internet Archive, 1950-69, mostly black and white) fades into the picture under every effect, in one of four looks, slowed to 0.6-0.85x. Its own sound enters 4 s later, very low (about 17-19 dB under the music), band-limited to 220 Hz-2.4 kHz and heard mostly through the music's reverb and echo. Clips are fetched politely and cached (1 GB, 12 clips) and replayed with new segments. See `docs/decisions/archive-video.md`
+- **Archive footage**: while it is on, old film (Prelinger Archives on the Internet Archive, 1950-69, mostly black and white) is always woven subtly into the picture under every effect: a continuous stream of short pieces (8-30 s from random points of the cached films) that crossfade into each other, each with its own look, warp and level, some swelling slowly to more prominent, slowed to 0.6-0.85x. Some pieces bring the film's own sound, fading in and out slowly, very low (about 18-20 dB under the music), band-limited to 220 Hz-2.4 kHz and heard mostly through the music's reverb and echo; many stay silent. Clips are fetched politely and cached (1 GB, 12 clips) and replayed with new segments. See `docs/decisions/archive-video.md`
 - **Indirect Control**: shape the experience through abstract sliders rather than direct manipulation
 
 ## Requirements
@@ -97,10 +97,10 @@ Shader pipeline order (`Liminal/Shaders/EffectsRenderer.metal`): Ken Burns, dist
 | **Cache only** | Skip generation and recycle cached images |
 | **New images per hour / day** | Spending cap on Gemini image generation (default 20 / 50); past it, cached images are shown |
 | **Clear All Images** | Wipes every cached image after confirmation and restarts generation |
-| **Archive footage** | Old film fades into the scene now and then (on by default); turning it off fades a running moment out in 2 s |
-| **Footage amount** | Rare / Normal / Often: how often footage moments come |
-| **Footage audio** | Level of the film's own sound, 0 = silent, 50% = the tuned default, 100% = +6 dB |
-| **Clear Footage** | Deletes the cached films (keeps the one on screen) |
+| **Archive footage** | Old film always woven subtly into the scene (on by default); turning it off fades picture and sound out in 2 s |
+| **Change speed** | Slow / Medium / Fast: a new piece of film drifts in every 20-30 / 12-20 / 8-12 s (default Medium) |
+| **Footage audio** | Level of the film's own sound when a piece brings it, 0 = silent, 50% = the tuned default, 100% = +6 dB |
+| **Clear Footage** | Deletes the cached films (keeps the ones on screen) |
 | **Reset All Settings** | Restores defaults |
 
 On macOS the panel scrolls, and Cache only, Clear All Images and Reset live in a "Storage & Settings" sheet (Cmd-,). The Archive Footage card (both platforms) also shows what is on screen, the cache size and the Prelinger credit. On visionOS all controls are in the control window (Playback, Music, Archive Footage, Visuals, Images & Storage), plus Enter/Exit Liminal (the immersive space) and a Depth slider for how far the relief comes toward you.
@@ -132,9 +132,9 @@ Pass as launch arguments, for example `-LiminalAutoPlay YES`. Defined in `Limina
 | `-LiminalEffectIntensity <0-1>` | Override the Effect intensity setting for this launch without changing it |
 | `-LiminalTransitionStyle <name>` | Use this transition style for every image change (tide, facets, prism, rainbow, kaleidoscope, whirlpool, dive, afterimage, ripple, solarize, melt, shatter, classic) |
 | `-LiminalTransitionSeed <n>` | Pin the transition seed too (same spec as `scripts/tx-clip.sh --style/--seed`) |
-| `-LiminalVideoForce YES` | Archive footage moment at 5 s, then 10 s gaps |
-| `-LiminalVideoLook <name>`, `-LiminalVideoSeed <n>` | Every moment in this look (phantom, imprint, window, emerge) / pin the moment director's seed |
-| `-LiminalVideoFile <mp4>`, `-LiminalVideoMix <0-1>` | Play a local clip, no network / one long moment at a constant mix (stills) |
+| `-LiminalVideoForce YES` | Archive footage pieces at the Fast change speed whatever the setting |
+| `-LiminalVideoLook <name>`, `-LiminalVideoSeed <n>` | Every piece in this look (phantom, imprint, window, emerge) / pin the footage weaver's seed |
+| `-LiminalVideoFile <mp4>`, `-LiminalVideoMix <0-1>` | Play a local clip, no network / one hour-long piece at a constant mix (stills) |
 | `-LiminalVideoOffline YES`, `-LiminalVideoOff YES` | Cache only, no Internet Archive requests / no footage at all |
 | `-LiminalVideoOffAt <s>` | Turn the Archive footage setting off that many seconds after footage starts (fade-out check), not saved |
 | `-LiminalControlsScroll archive`, `-LiminalControlsWidth <pt>` | Scroll the control panel/window to the Archive Footage card / visionOS controls window width (layout screenshots) |
@@ -148,7 +148,7 @@ Pass as launch arguments, for example `-LiminalAutoPlay YES`. Defined in `Limina
 | `sim-tap.sh X Y` | Click the visionOS Simulator at 3840x2160 screenshot pixel coordinates via Peekaboo |
 | `sim-drag.sh` | Drag in the Simulator (needed for sliders) |
 | `vibrance-eval.sh IN OUT` | Offline vibrance evaluation of the effect pipeline over a folder of images (`vibrance-check.py` checks the result) |
-| `render-music.sh`, `check-music.py` | Offline render and analysis of the music engine; `ARCHIVE=<mp4>` mixes one footage moment's sound in |
+| `render-music.sh`, `check-music.py` | Offline render and analysis of the music engine; `ARCHIVE=<mp4>` mixes one footage piece's sound in |
 | `analyze-archive-audio.py` | Level, spectrum, fades and limiter check of the archive sound in a render |
 | `archive-curate.py`, `archive-fetch-fixture.sh` | Build the bundled Prelinger seed list / download one fixture clip to a scratch folder |
 | `av-coupling-check.sh` | Offline check of the audio-visual coupling |

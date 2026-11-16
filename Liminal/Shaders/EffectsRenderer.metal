@@ -247,6 +247,20 @@ struct EffectsUniforms {
     float videoAspect;          // (footage w/h) / display aspect
     float videoTintR, videoTintG, videoTintB;     // highlight colour
     float videoShadeR, videoShadeG, videoShadeB;  // shadow colour (duotone looks)
+    // Footage as crossfading pieces (docs/decisions/archive-video.md A27). Layer A = the fields above
+    // (texture 7), layer B = the *B fields (texture 8); videoMixB 0 = layer B skipped.
+    float videoWarp;            // share of the picture's warp layer A rides
+    float videoMixB;
+    float videoLookB;
+    float videoSeedB;
+    float videoScaleB;
+    float videoAspectB;
+    float videoWarpB;
+};
+
+// One footage layer of the composite (A or B).
+struct VideoLayerParams {
+    float mix, look, seed, scale, aspect, warp;
 };
 
 // VideoLook raw values (VideoMomentDirector.swift)
@@ -515,24 +529,24 @@ static inline half3 swapWeight(WarpOut warp, constant EffectsUniforms &uniforms)
 // g = slow average of r, b = motion. Every look feathers the footage (edges and a flow-ordered mask),
 // so no rectangle is ever visible.
 static inline half3 compositeVideo(half3 c, float2 uv, float2 texCoord, float field,
-                                                     texture2d<half> videoTexture, constant EffectsUniforms &u) {
+                                   texture2d<half> videoTexture, VideoLayerParams L, constant EffectsUniforms &u) {
     constexpr sampler vs(address::clamp_to_edge, filter::linear);
-    int look = int(u.videoLook + 0.5);
-    float seedA = u.videoSeed * 6.2831853;
+    int look = int(L.look + 0.5);
+    float seedA = L.seed * 6.2831853;
     float t = u.time;
-    // The footage rides 60 % of the picture's warp (it swims with the water but stays legible as film)
-    // and drifts slowly on its own (less for the full-frame looks).
-    float2 fuv = mix(texCoord, uv, 0.6);
+    // The footage rides part of the picture's warp (per piece, 0.35-0.85: it swims with the water but
+    // stays legible as film) and drifts slowly on its own (less for the full-frame looks).
+    float2 fuv = mix(texCoord, uv, L.warp);
     float driftAmt = (look == VIDEO_PHANTOM || look == VIDEO_WINDOW) ? 0.05 : 0.012;
     float2 drift = float2(sin(fmod(t * 0.031, 6.2831853) + seedA),
                           cos(fmod(t * 0.023, 6.2831853) + seedA * 1.7)) * driftAmt;
     // Cover fit of the footage's aspect on the 3:2 frame, then the look's size.
-    float2 k = u.videoAspect < 1.0 ? float2(1.0, u.videoAspect) : float2(1.0 / u.videoAspect, 1.0);
-    float2 vuv = 0.5 + (fuv - 0.5 - drift) * k / max(u.videoScale, 0.1);
+    float2 k = L.aspect < 1.0 ? float2(1.0, L.aspect) : float2(1.0 / L.aspect, 1.0);
+    float2 vuv = 0.5 + (fuv - 0.5 - drift) * k / max(L.scale, 0.1);
     half3 v = videoTexture.sample(vs, vuv).rgb;
     float2 e = smoothstep(float2(0.0), float2(0.14), vuv) * smoothstep(float2(0.0), float2(0.14), 1.0 - vuv);
     half edge = half(e.x * e.y);
-    half m = half(u.videoMix);
+    half m = half(L.mix);
     half luma = smoothstep(0.03h, 0.97h, v.r);   // a little film contrast
     half3 tint = half3(half(u.videoTintR), half(u.videoTintG), half(u.videoTintB));
     half3 shade = half3(half(u.videoShadeR), half(u.videoShadeG), half(u.videoShadeB));
@@ -580,6 +594,7 @@ static inline half4 shadeEye(
     texture2d<half> feedbackTexture,
     texture2d<half> depthTexture,
     texture2d<half> videoTexture,
+    texture2d<half> videoTextureB,
     constant EffectsUniforms &uniforms,
     constant GhostTap *ghostTaps
 ) {
@@ -647,8 +662,16 @@ static inline half4 shadeEye(
     texture2d<half> shownTexture = showNew ? sourceTexture : previousTexture;
 
     // === 2.9 ARCHIVE FOOTAGE (docs/plans/archive-video.md 2.2) ===
+    // Two layers: during a piece-to-piece crossfade both show (A27); each is skipped at mix 0.
     if (kVideo && uniforms.videoMix > 0.0) {
-        color.rgb = compositeVideo(color.rgb, uv, texCoord, warp.field, videoTexture, uniforms);
+        VideoLayerParams la = { uniforms.videoMix, uniforms.videoLook, uniforms.videoSeed, uniforms.videoScale,
+                                uniforms.videoAspect, uniforms.videoWarp };
+        color.rgb = compositeVideo(color.rgb, uv, texCoord, warp.field, videoTexture, la, uniforms);
+    }
+    if (kVideo && uniforms.videoMixB > 0.0) {
+        VideoLayerParams lb = { uniforms.videoMixB, uniforms.videoLookB, uniforms.videoSeedB, uniforms.videoScaleB,
+                                uniforms.videoAspectB, uniforms.videoWarpB };
+        color.rgb = compositeVideo(color.rgb, uv, texCoord, warp.field, videoTextureB, lb, uniforms);
     }
 
     // DEBUG STAGE 3: Ken Burns + fBM distortion
@@ -886,11 +909,11 @@ fragment half4 effectsFragment(
     WarpOut warp = distortedUV(in.texCoord, uniforms, depthTexture);
     return shadeEye<false>(warp, in.texCoord, in.position.xy, uniforms.stereoOffset,
                            sourceTexture, saliencyTexture, previousTexture, feedbackTexture, depthTexture,
-                           sourceTexture, uniforms, ghostTaps);
+                           sourceTexture, sourceTexture, uniforms, ghostTaps);
 }
 
 // Archive footage variant of effectsFragment (docs/plans/archive-video.md 2.3): bound only while
-// footage shows; texture 7 is the footage stage.
+// footage shows; textures 7 and 8 are the footage stages of layers A and B.
 fragment half4 effectsFragmentVideo(
     VertexOut in [[stage_in]],
     texture2d<half> sourceTexture [[texture(0)]],
@@ -899,13 +922,14 @@ fragment half4 effectsFragmentVideo(
     texture2d<half> feedbackTexture [[texture(4)]],
     texture2d<half> depthTexture [[texture(5)]],
     texture2d<half> videoTexture [[texture(7)]],
+    texture2d<half> videoTextureB [[texture(8)]],
     constant EffectsUniforms &uniforms [[buffer(0)]],
     constant GhostTap *ghostTaps [[buffer(1)]]
 ) {
     WarpOut warp = distortedUV(in.texCoord, uniforms, depthTexture);
     return shadeEye<true>(warp, in.texCoord, in.position.xy, uniforms.stereoOffset,
                           sourceTexture, saliencyTexture, previousTexture, feedbackTexture, depthTexture,
-                          videoTexture, uniforms, ghostTaps);
+                          videoTexture, videoTextureB, uniforms, ghostTaps);
 }
 
 // MARK: - Stereo MRT Fragment Shader (visionOS)
@@ -934,10 +958,10 @@ fragment StereoEyesOut effectsFragmentStereo(
     StereoEyesOut out;
     out.left = shadeEye<false>(warp, in.texCoord, in.position.xy, -mag,
                         sourceTexture, saliencyTexture, previousTexture, feedbackTexture, depthTexture,
-                        sourceTexture, uniforms, ghostTaps);
+                        sourceTexture, sourceTexture, uniforms, ghostTaps);
     out.right = shadeEye<false>(warp, in.texCoord, in.position.xy, mag,
                          sourceTexture, saliencyTexture, previousTexture, feedbackTextureRight, depthTexture,
-                         sourceTexture, uniforms, ghostTaps);
+                         sourceTexture, sourceTexture, uniforms, ghostTaps);
     return out;
 }
 
@@ -950,7 +974,8 @@ fragment StereoEyesOut effectsFragmentStereoVideo(
     texture2d<half> feedbackTexture [[texture(4)]],       // left eye's previous output
     texture2d<half> depthTexture [[texture(5)]],
     texture2d<half> feedbackTextureRight [[texture(6)]],  // right eye's previous output
-    texture2d<half> videoTexture [[texture(7)]],          // archive footage stage
+    texture2d<half> videoTexture [[texture(7)]],          // archive footage stage, layer A
+    texture2d<half> videoTextureB [[texture(8)]],         // layer B (crossfades)
     constant EffectsUniforms &uniforms [[buffer(0)]],
     constant GhostTap *ghostTaps [[buffer(1)]]
 ) {
@@ -959,10 +984,10 @@ fragment StereoEyesOut effectsFragmentStereoVideo(
     StereoEyesOut out;
     out.left = shadeEye<true>(warp, in.texCoord, in.position.xy, -mag,
                         sourceTexture, saliencyTexture, previousTexture, feedbackTexture, depthTexture,
-                        videoTexture, uniforms, ghostTaps);
+                        videoTexture, videoTextureB, uniforms, ghostTaps);
     out.right = shadeEye<true>(warp, in.texCoord, in.position.xy, mag,
                          sourceTexture, saliencyTexture, previousTexture, feedbackTextureRight, depthTexture,
-                         videoTexture, uniforms, ghostTaps);
+                         videoTexture, videoTextureB, uniforms, ghostTaps);
     return out;
 }
 

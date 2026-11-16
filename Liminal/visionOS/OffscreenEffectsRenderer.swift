@@ -66,6 +66,8 @@ final class OffscreenEffectsRenderer {
     /// Archive footage stage texture for this frame (texture 7; docs/plans/archive-video.md 2.3). Set by
     /// the render loop from ArchiveFootageService.frame; with nil (or videoMix 0) the plain pipeline runs.
     var videoTexture: MTLTexture?
+    /// Layer B (texture 8): the other piece of a footage crossfade (A27).
+    var videoTextureB: MTLTexture?
 
     // MARK: - Ghost Taps
 
@@ -705,6 +707,7 @@ final class OffscreenEffectsRenderer {
             encoder.setFragmentTexture(depthTex, index: 5)
         }
         if uniforms.videoMix > 0, let videoTexture { encoder.setFragmentTexture(videoTexture, index: 7) }
+        if uniforms.videoMixB > 0, let videoTextureB { encoder.setFragmentTexture(videoTextureB, index: 8) }
         encoder.setFragmentSamplerState(samplerState, index: 0)
 
         // Draw fullscreen quad (shader generates vertices from vertexID)
@@ -931,6 +934,7 @@ final class OffscreenEffectsRenderer {
             encoder.setFragmentTexture(depthTex, index: 5)
         }
         if uniforms.videoMix > 0, let videoTexture { encoder.setFragmentTexture(videoTexture, index: 7) }
+        if uniforms.videoMixB > 0, let videoTextureB { encoder.setFragmentTexture(videoTextureB, index: 8) }
         encoder.setFragmentSamplerState(samplerState, index: 0)
 
         encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
@@ -986,6 +990,7 @@ final class OffscreenEffectsRenderer {
             encoder.setFragmentTexture(depthTex, index: 5)
         }
         if uniforms.videoMix > 0, let videoTexture { encoder.setFragmentTexture(videoTexture, index: 7) }
+        if uniforms.videoMixB > 0, let videoTextureB { encoder.setFragmentTexture(videoTextureB, index: 8) }
         encoder.setFragmentSamplerState(samplerState, index: 0)
 
         encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
@@ -1000,7 +1005,7 @@ final class OffscreenEffectsRenderer {
 
     /// The footage variant when footage shows this frame (texture and mix), else nil (plain pipeline).
     private func footagePipeline(_ u: EffectsUniforms, stereo: Bool = false) -> MTLRenderPipelineState? {
-        guard u.videoMix > 0, videoTexture != nil else { return nil }
+        guard (u.videoMix > 0 && videoTexture != nil) || (u.videoMixB > 0 && videoTextureB != nil) else { return nil }
         return stereo ? stereoVideoPipelineState : videoPipelineState
     }
 

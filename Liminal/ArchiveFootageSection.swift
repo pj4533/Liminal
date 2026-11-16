@@ -3,7 +3,7 @@
 //  Liminal
 //
 //  "Archive Footage" settings section shared by the macOS control panel and the visionOS control
-//  window (docs/plans/archive-video.md 6): on/off, amount, the film's sound level, what is showing,
+//  window (docs/plans/archive-video.md 6, A27): on/off, change speed, the film's sound level, what is showing,
 //  the cache with a clear button, and the Prelinger credit. Plus the modifier that pushes the
 //  settings into ArchiveFootageService and attaches the music engine.
 //
@@ -32,24 +32,28 @@ struct ArchiveFootageSection: View {
     var body: some View {
         ControlSection(title: "Archive Footage", systemImage: "film") {
             ExplainedToggle(title: "Archive footage",
-                            explanation: "Old film from the Internet Archive fades into the scene now and then.",
+                            explanation: "Old film from the Internet Archive, always woven subtly into the scene.",
                             isOn: $settings.archiveEnabled)
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("Footage amount")
-                Picker("Footage amount", selection: $settings.archiveAmount) {
-                    ForEach(VideoAmount.allCases, id: \.self) { a in
-                        Text(a.title).tag(a)
+                Text("Change speed").wrapping()
+                Picker("Change speed", selection: $settings.archiveChangeSpeed) {
+                    ForEach(FootageChangeSpeed.allCases, id: \.self) { s in
+                        Text(s.title).tag(s)
                     }
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
+                Text(settings.archiveChangeSpeed.explanation)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .wrapping()
             }
             .disabled(!settings.archiveEnabled)
 
             ValueSlider(title: "Footage audio", value: $settings.archiveAudioLevel,
                         minimumLabel: "Off", maximumLabel: "Louder",
-                        explanation: "The film's own sound, slowed and deep in the reverb. 0% is silent.")
+                        explanation: "Some pieces bring the film's own sound, slowed and deep in the reverb. 0% is silent.")
                 .disabled(!settings.archiveEnabled)
 
             Label(status, systemImage: "info.circle")
@@ -117,12 +121,21 @@ struct ArchiveFootageSection: View {
     }
 }
 
-extension VideoAmount {
+extension FootageChangeSpeed {
     var title: String {
         switch self {
-        case .rare: return "Rare"
-        case .normal: return "Normal"
-        case .often: return "Often"
+        case .slow: return "Slow"
+        case .medium: return "Medium"
+        case .fast: return "Fast"
+        }
+    }
+
+    /// The piece lengths of FootageWeaver.Timing.speed, in words.
+    var explanation: String {
+        switch self {
+        case .slow: return "A new piece of film drifts in every 20-30 seconds."
+        case .medium: return "A new piece of film drifts in every 12-20 seconds."
+        case .fast: return "A new piece of film drifts in every 8-12 seconds."
         }
     }
 }
@@ -139,12 +152,12 @@ struct ArchiveFootageSettingsSync: ViewModifier {
                 apply()
             }
             .onChange(of: settings.archiveEnabled) { _, _ in apply() }
-            .onChange(of: settings.archiveAmount) { _, _ in apply() }
+            .onChange(of: settings.archiveChangeSpeed) { _, _ in apply() }
             .onChange(of: settings.archiveAudioLevel) { _, _ in apply() }
     }
 
     private func apply() {
-        ArchiveFootageService.shared.apply(enabled: settings.archiveEnabled, amount: settings.archiveAmount,
+        ArchiveFootageService.shared.apply(enabled: settings.archiveEnabled, speed: settings.archiveChangeSpeed,
                                            audioLevel: settings.archiveAudioLevel)
     }
 }

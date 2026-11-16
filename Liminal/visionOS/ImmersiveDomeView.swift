@@ -425,11 +425,12 @@ struct ImmersiveDomeView: View {
             // Image change: prepared off the main actor, applied when ready (no long frame).
             var preparingGeneration: UInt64 = 0
             let preparedSlot = PreparedImageSlot()
-            // Archive footage (docs/plans/archive-video.md): prefetch and moments run off the main actor;
-            // this loop only reads the current frame and reports what the director waits on.
+            // Archive footage (docs/plans/archive-video.md): prefetch and the footage pieces run off the main actor;
+            // this loop only reads the current frame and reports what the weaver listens to.
             let footage = ArchiveFootageService.shared
             footage.start()
             var lastVideoMix: Float = 0
+            var lastVideoMixes: (Float, Float) = (0, 0)
 
             while !Task.isCancelled {
                 frameCount += 1
@@ -589,7 +590,7 @@ struct ImmersiveDomeView: View {
                                          musicIntensity: modulation.amount > 0 ? modulation.energy : 0,
                                          effectIntensity: look.intensity))
                 }
-                let uniforms = EffectsUniformsComputer.compute(
+                var uniforms = EffectsUniformsComputer.compute(
                     time: effectTime,
                     transitionProgress: transitionProgress,
                     hasSaliencyMap: false,
@@ -599,8 +600,13 @@ struct ImmersiveDomeView: View {
                     transition: transitionState.spec,
                     video: footageFrame.state
                 )
+                // Two footage layers (A27): a layer without its stage texture is skipped.
+                if footageFrame.texture == nil { uniforms.videoMix = 0 }
+                if footageFrame.textureB == nil { uniforms.videoMixB = 0 }
                 renderer.videoTexture = uniforms.videoMix > 0 ? footageFrame.texture : nil
-                lastVideoMix = uniforms.videoMix
+                renderer.videoTextureB = uniforms.videoMixB > 0 ? footageFrame.textureB : nil
+                lastVideoMix = uniforms.videoMix + uniforms.videoMixB
+                lastVideoMixes = (uniforms.videoMix, uniforms.videoMixB)
 
                 // Visuals -> music activity (un-modulated oscillators, follows the clarity drive; at most 2 Hz)
                 let activity = EffectsUniformsComputer.visualActivity(time: effectTime, transitionProgress: transitionProgress,
@@ -693,7 +699,7 @@ struct ImmersiveDomeView: View {
                     let perfLine = "📊 visionOS PERF: fps=\(String(format: "%.1f", actualFPS)) (\(String(format: "%.0f", fpsPercent))% of 60) | render avg=\(String(format: "%.1f", avgRenderTime))ms max=\(String(format: "%.1f", maxRenderTime))ms | dropped=\(droppedFrames) | transition=\(String(format: "%.0f", transitionState.transitionProgress * 100))% | interval p95=\(String(format: "%.2f", intervalP95))ms | \(gpuFragment)"
                     LMLog.visual.info("\(perfLine, privacy: .public)")
                     if lastVideoMix > 0 {
-                        LMLog.visual.info("📼 FOOTAGE mix=\(String(format: "%.3f", lastVideoMix), privacy: .public) look=\(footageFrame.state.look.name, privacy: .public) env=\(String(format: "%.3f", footageFrame.state.envelope), privacy: .public)")
+                        LMLog.visual.info("📼 FOOTAGE mix=\(String(format: "%.3f", lastVideoMix), privacy: .public) A=\(String(format: "%.3f", lastVideoMixes.0), privacy: .public) \(footageFrame.state.a?.look.name ?? "-", privacy: .public) B=\(String(format: "%.3f", lastVideoMixes.1), privacy: .public) \(footageFrame.state.b?.look.name ?? "-", privacy: .public)")
                     }
                     LMLog.visual.info("🔮 3D STATUS: depth=\(hasDepth) textureStereo=\(hasStereo) gen=\(transitionState.lastGeneration) mesh avg=\(String(format: "%.3f", totalMeshTime / Double(max(frameCount, 1))), privacy: .public)ms relief k=\(String(format: "%.3f", lastReliefK), privacy: .public) breath=\(String(format: "%.3f", lastBreathing), privacy: .public)m w=\(String(format: "%.2f", lastReliefW), privacy: .public) fields=\(relief.previous != nil ? 1 : 0)+\(relief.current != nil ? 1 : 0)")
 
