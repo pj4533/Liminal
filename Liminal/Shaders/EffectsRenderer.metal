@@ -202,6 +202,11 @@ static inline half3 restoreChroma(half3 c, half target, half maxGain) {
     return scaleChromaFit(c, l, hi, lo, g);
 }
 
+// MARK: - Shader variants (template parameter of shadeEye; docs/decisions/footage-fx.md F11)
+constant int VARIANT_FOOTAGE = 1;   // archive footage blend looks (effectsFragment*Video)
+constant int VARIANT_KEYS = 2;      // + keys, Kaleido, Palette, Print (effectsFragment*VideoKeys)
+constant int VARIANT_DRIVES = 4;    // + the drives (effectsFragment*VideoDrives); 7 = everything (*VideoFX)
+
 // MARK: - Uniforms
 
 struct EffectsUniforms {
@@ -256,18 +261,51 @@ struct EffectsUniforms {
     float videoScaleB;
     float videoAspectB;
     float videoWarpB;
+    // Footage interaction modes (docs/plans/footage-fx.md 6; appended last). Per layer: which effect the
+    // film drives (FD_*) and how much (0...1, the piece's envelope included), and where it may show (FK_*;
+    // the sign of the key amount is the polarity / fold kind, its size the fold strength).
+    float videoDrive;
+    float videoDriveAmt;
+    float videoKey;
+    float videoKeyAmt;
+    float videoDriveB;
+    float videoDriveAmtB;
+    float videoKeyB;
+    float videoKeyAmtB;
 };
 
 // One footage layer of the composite (A or B).
 struct VideoLayerParams {
-    float mix, look, seed, scale, aspect, warp;
+    float mix, look, seed, scale, aspect, warp, drive, driveAmt, key, keyAmt;
 };
 
-// VideoLook raw values (VideoMomentDirector.swift)
+// VideoLook raw values (VideoComposite.swift). NONE: the layer has no carrier, only its drive.
+constant int VIDEO_NONE = 0;
 constant int VIDEO_PHANTOM = 1;
 constant int VIDEO_IMPRINT = 2;
 constant int VIDEO_WINDOW = 3;
 [[maybe_unused]] constant int VIDEO_EMERGE = 4;
+constant int VIDEO_PALETTE = 5;
+constant int VIDEO_PRINT = 6;
+
+// FootageDrive raw values (VideoComposite.swift): the effect the film steers.
+constant int FD_UNDERTOW = 1;   // the film's slow-average gradient displaces the picture's UVs
+constant int FD_FRINGE = 2;     // the film's edges split the picture's colours
+constant int FD_WAKE = 3;       // the film's motion feeds the trails and ghost taps
+constant int FD_AURORA = 4;     // the film's tones rotate the hue waves
+constant int FD_SOLAR = 5;      // the film's highlights fold the tone curve
+constant int FD_RELIEF = 6;     // the film embossed into the picture
+constant int FD_GLOW = 7;       // the film's highlights light the bloom
+constant int FD_GHOST = 8;      // Wake + Fringe at 0.7 each
+// FootageKey raw values: where the film may show.
+constant int FK_SHADOW = 1;     // the picture's shadows (key amount > 0) or highlights (< 0)
+constant int FK_BACKDROP = 2;   // far depth, behind the subject (visionOS: a depth map is bound)
+constant int FK_KALEIDO = 3;    // the film's own UVs folded into 6 (> 0) or 8 (< 0) wedges
+// Maxima at drive amount 1 (the CPU scales the amount by intensity and the clarity cycle).
+constant float FD_UNDERTOW_MAX = 0.028;   // UV (the water itself is 0.028-0.058 at the default intensity)
+constant float FD_FRINGE_MAX = 0.022;     // UV (today's radial fringing reaches about 0.01 at the frame edge)
+constant half FD_AURORA_MAX = 0.42h;      // hue turns per unit of film tone offset
+constant half FD_RELIEF_MAX = 0.70h;
 
 // TransitionStyle raw values (ImageTransition.swift)
 constant int TX_CLASSIC = 0;
@@ -521,38 +559,191 @@ static inline half3 swapWeight(WarpOut warp, constant EffectsUniforms &uniforms)
     return smoothstep(half3(m - s), half3(m + s), th + half3(c, 0.0h, -c));
 }
 
-// Archive footage composite (docs/plans/archive-video.md 2.2). Called only inside a uniform branch on
-// videoMix > 0, right after the crossfade: everything downstream (hue waves, contrast, taps' host
-// colour, feedback trails, vibrance) then acts on picture and footage together, and the footage is
-// sampled at the already warped, parallax-shifted uv, so it swims with the water and sits on the relief.
-// The video texture is the pre-pass stage (ArchiveVideo.metal): r = levelled luma (frame-blended),
-// g = slow average of r, b = motion. Every look feathers the footage (edges and a flow-ordered mask),
-// so no rectangle is ever visible.
-static inline half3 compositeVideo(half3 c, float2 uv, float2 texCoord, float field,
-                                   texture2d<half> videoTexture, VideoLayerParams L, constant EffectsUniforms &u) {
-    constexpr sampler vs(address::clamp_to_edge, filter::linear);
+// Archive footage tap (docs/plans/footage-fx.md 2.2): one stage sample per layer at the top of stage B,
+// read by every hook (drives, keys, the carrier composite). The video texture is the pre-pass stage
+// (ArchiveVideo.metal): r = levelled luma (frame-blended), g = slow average of r, b = motion, a = edge.
+struct FootageTap {
+    half4 v;
+    float2 vuv;      // footage uv
+    float2 d;        // aspect-correct offset from the footage centre (the looks' regions)
+    float rag;       // ragged, flow-ordered region edge
+    half feather;    // 14 % edge feather of the footage rectangle
+};
+
+// What the film steers this frame, summed over both layers (each term carries its layer's amount, which
+// contains the piece's envelope, so pieces with different drives crossfade without a special case).
+struct FootageDrive {
+    half hue, hueBlend, solar, relief, wake, glow;
+};
+
+// The footage rides part of the picture's warp (per piece, 0.35-0.85: it swims with the water but stays
+// legible as film) and drifts slowly on its own (less for the full-frame looks). uvA is the stage-A uv
+// (before the per-eye parallax; on the mono paths that is exactly where the footage was always sampled).
+template <bool kFX>
+static inline float2 footageUV(float2 uvA, float2 texCoord, VideoLayerParams L, constant EffectsUniforms &u,
+                               thread float2 &fuvOut, thread float2 &driftOut) {
     int look = int(L.look + 0.5);
     float seedA = L.seed * 6.2831853;
     float t = u.time;
-    // The footage rides part of the picture's warp (per piece, 0.35-0.85: it swims with the water but
-    // stays legible as film) and drifts slowly on its own (less for the full-frame looks).
-    float2 fuv = mix(texCoord, uv, L.warp);
-    float driftAmt = (look == VIDEO_PHANTOM || look == VIDEO_WINDOW) ? 0.05 : 0.012;
+    float2 fuv = mix(texCoord, uvA, L.warp);
+    float driftAmt = (look == VIDEO_PHANTOM || look == VIDEO_WINDOW || look == VIDEO_PALETTE) ? 0.05 : 0.012;
     float2 drift = float2(sin(fmod(t * 0.031, 6.2831853) + seedA),
                           cos(fmod(t * 0.023, 6.2831853) + seedA * 1.7)) * driftAmt;
     // Cover fit of the footage's aspect on the 3:2 frame, then the look's size.
     float2 k = L.aspect < 1.0 ? float2(1.0, L.aspect) : float2(1.0 / L.aspect, 1.0);
     float2 vuv = 0.5 + (fuv - 0.5 - drift) * k / max(L.scale, 0.1);
-    half3 v = videoTexture.sample(vs, vuv).rgb;
+    if (kFX && int(L.key + 0.5) == FK_KALEIDO) {
+        // Kaleido: the film's own UVs mirror-folded into wedges about its centre (the Kaleidoscope
+        // transition's fold), slowly turning; the picture is not folded. A partial fold keeps a hint
+        // of the film's scene.
+        float2 c = (vuv - 0.5) * float2(1.333, 1.0);
+        float r = length(c);
+        float wedge = 6.2831853 / (L.keyAmt < 0.0 ? 8.0 : 6.0);
+        float rot = seedA + fmod(t * 0.02, 6.2831853);
+        float f = fract((atan2(c.y, c.x) + rot) / wedge);
+        float tri = 1.0 - abs(f - 0.5) * 2.0;
+        float af = wedge * 0.5 * (1.0 - tri) - rot;
+        float cs;
+        float sn = sincos(af, cs);
+        float2 folded = 0.5 + r * float2(cs, sn) / float2(1.333, 1.0);
+        vuv = mix(vuv, folded, saturate(abs(L.keyAmt)));
+    }
+    fuvOut = fuv;
+    driftOut = drift;
+    return vuv;
+}
+
+static inline half featherOf(float2 vuv) {
     float2 e = smoothstep(float2(0.0), float2(0.14), vuv) * smoothstep(float2(0.0), float2(0.14), 1.0 - vuv);
-    half edge = half(e.x * e.y);
-    half m = half(L.mix);
+    return half(e.x * e.y);
+}
+
+template <bool kFX>
+static inline FootageTap tapFootage(float2 uvA, float2 texCoord, float field, texture2d<half> videoTexture,
+                                    VideoLayerParams L, constant EffectsUniforms &u) {
+    constexpr sampler vs(address::clamp_to_edge, filter::linear);
+    float seedA = L.seed * 6.2831853;
+    float t = u.time;
+    float2 fuv, drift;
+    float2 vuv = footageUV<kFX>(uvA, texCoord, L, u, fuv, drift);
+    FootageTap o;
+    o.v = videoTexture.sample(vs, vuv);
+    o.feather = featherOf(vuv);
+    o.vuv = vuv;
+    // Ragged, flow-ordered mask edges (the transition field is 0.5 outside a transition).
+    o.rag = 0.12 * (field - 0.5) + 0.03 * sin(fuv.x * 9.0 + fuv.y * 7.0 + seedA + fmod(t * 0.2, 6.2831853));
+    o.d = (fuv - 0.5 - drift) * float2(1.5, 1.0);
+    return o;
+}
+
+// The drives that move the picture's samples (Undertow, Fringe, the Fringe half of Ghost film) must be known
+// before the picture is sampled: a small tap of their own at the top of stage B. Only the two offsets stay
+// live across the picture samples (keeping the whole tap live there cost 14 % in occupancy).
+static inline bool isPreDrive(VideoLayerParams L) {
+    int drive = int(L.drive + 0.5);
+    return (drive == FD_UNDERTOW || drive == FD_FRINGE || drive == FD_GHOST) && L.driveAmt > 0.0;
+}
+
+static inline void addPreDrive(thread float2 &uvOffset, thread float2 &chroma, VideoLayerParams L,
+                               texture2d<half> videoTexture, float2 uvA, float2 texCoord, constant EffectsUniforms &u) {
+    constexpr sampler vs(address::clamp_to_edge, filter::linear);
+    int drive = int(L.drive + 0.5);
+    float2 fuv, drift;
+    float2 vuv = footageUV<false>(uvA, texCoord, L, u, fuv, drift);   // no recipe folds and drives at once
+    half4 v = videoTexture.sample(vs, vuv);
+    half a = half(L.driveAmt) * featherOf(vuv);
+    if (drive == FD_UNDERTOW) {
+        // The image bends around the film's shapes and ripples where the film moves (moving glass).
+        // A wide stencil (8 stage texels): the film's broad shapes bend the picture, not its texture.
+        float2 px = float2(8.0 / 960.0, 8.0 / 720.0);
+        float2 gr = float2(float(videoTexture.sample(vs, vuv + float2(px.x, 0.0)).g - v.g),
+                           float(videoTexture.sample(vs, vuv + float2(0.0, px.y)).g - v.g)) * 4.0;
+        float gl = length(gr);
+        gr *= min(gl, 1.0) / max(gl, 1.0e-3);
+        uvOffset += gr * (float(a) * FD_UNDERTOW_MAX * (0.35 + 0.65 * float(saturate(v.b * 5.0h))));
+    } else {
+        // Prismatic outlines in the picture's colours along the film's contours.
+        float2 r = uvA - 0.5;
+        float rl = length(r);
+        float2 dir = rl > 0.02 ? r / rl : float2(1.0, 0.0);
+        float cs;
+        float sn = sincos(L.seed * 6.2831853, cs);
+        dir = float2(dir.x * cs - dir.y * sn, dir.x * sn + dir.y * cs);
+        chroma += dir * float(v.a * (drive == FD_GHOST ? a * 0.7h : a)) * FD_FRINGE_MAX;
+    }
+}
+
+// Adds one layer's drive to fd (docs/plans/footage-fx.md 3). Reads only the temporally smooth channels
+// (slow average, motion, edge), never the raw frame, so film cuts and flashes cannot reach the picture.
+static inline void addDrive(thread FootageDrive &fd, FootageTap tp, VideoLayerParams L, texture2d<half> videoTexture,
+                            constant EffectsUniforms &u) {
+    int drive = int(L.drive + 0.5);
+    half a = half(L.driveAmt) * tp.feather;
+    if (drive == 0 || a <= 0.0h) return;
+    constexpr sampler vs(address::clamp_to_edge, filter::linear);
+    half g = tp.v.g;
+    half mot = saturate(tp.v.b * 5.0h);
+    float seedA = L.seed * 6.2831853;
+    if (drive == FD_GHOST) {
+        fd.wake += mot * a * 0.7h;   // its Fringe half is a pre-drive
+    } else if (drive == FD_WAKE) {
+        fd.wake += mot * a;
+    } else if (drive == FD_AURORA) {
+        // The film's tones as bands of rotated hue; luma is restored by the hue stage.
+        half off = g - 0.5h;
+        fd.hue += off * a * FD_AURORA_MAX;
+        fd.hueBlend += a * min(abs(off) * 2.0h, 1.0h) * 0.45h;
+    } else if (drive == FD_SOLAR) {
+        fd.solar += smoothstep(0.35h, 0.85h, g) * a;
+    } else if (drive == FD_RELIEF) {
+        // A height difference along a slowly turning light: the film pressed into the picture's surface.
+        float la = seedA + fmod(u.time * 0.03, 6.2831853);
+        float2 ld = float2(cos(la), sin(la)) * float2(4.0 / 960.0, 4.0 / 720.0);
+        half h = g - videoTexture.sample(vs, tp.vuv + ld).g;
+        fd.relief += clamp(h * 5.0h, -1.0h, 1.0h) * a * FD_RELIEF_MAX;
+    } else if (drive == FD_GLOW) {
+        fd.glow += smoothstep(0.45h, 0.95h, g) * (0.5h + 0.5h * mot) * a;
+    }
+}
+
+// Where a layer may show: 1 everywhere for the looks' own masks; a luminance key of the picture
+// (Shadowplay) or a depth key (Backdrop). Multiplies the carrier's mix.
+static inline half footageKey(VideoLayerParams L, half3 c, float2 uv, texture2d<half> depthTexture) {
+    int key = int(L.key + 0.5);
+    if (key == FK_SHADOW) {
+        half y = dot(c, LUMA_W);
+        half w = half(saturate(L.keyAmt * 0.5 + 0.5));
+        return mix(smoothstep(0.50h, 0.80h, y), 1.0h - smoothstep(0.08h, 0.32h, y), w);
+    }
+    if (key == FK_BACKDROP) {
+        constexpr sampler ds(address::clamp_to_edge, filter::linear);
+        return 1.0h - smoothstep(0.25h, 0.55h, depthTexture.sample(ds, uv).r);
+    }
+    return 1.0h;
+}
+
+// Archive footage carrier composite (docs/plans/archive-video.md 2.2, footage-fx.md 3.9 and 3.12). Called
+// only inside a uniform branch on the layer's mix, right after the crossfade: everything downstream (hue
+// waves, contrast, taps' host colour, feedback trails, vibrance) then acts on picture and footage together.
+// Every look feathers the footage (edges and a flow-ordered mask), so no rectangle is ever visible.
+// `key` multiplies the mix; a keyed layer (Shadowplay, Backdrop) drops the Window and Palette oval.
+template <int kVideo>
+static inline half3 compositeVideo(half3 c, FootageTap tp, VideoLayerParams L, half key, constant EffectsUniforms &u) {
+    constexpr bool kFX = (kVideo & VARIANT_KEYS) != 0;
+    int look = int(L.look + 0.5);
+    if ((kVideo & (VARIANT_KEYS | VARIANT_DRIVES)) != 0 && look == VIDEO_NONE) return c;
+    float seedA = L.seed * 6.2831853;
+    float t = u.time;
+    int keyId = int(L.key + 0.5);
+    bool keyed = kFX && (keyId == FK_SHADOW || keyId == FK_BACKDROP);
+    half3 v = tp.v.rgb;
+    half edge = tp.feather;
+    half m = kFX ? half(L.mix) * key : half(L.mix);
     half luma = smoothstep(0.03h, 0.97h, v.r);   // a little film contrast
     half3 tint = half3(half(u.videoTintR), half(u.videoTintG), half(u.videoTintB));
     half3 shade = half3(half(u.videoShadeR), half(u.videoShadeG), half(u.videoShadeB));
-    // Ragged, flow-ordered mask edges (the transition field is 0.5 outside a transition).
-    float rag = 0.12 * (field - 0.5) + 0.03 * sin(fuv.x * 9.0 + fuv.y * 7.0 + seedA + fmod(t * 0.2, 6.2831853));
-    float2 d = (fuv - 0.5 - drift) * float2(1.5, 1.0);   // aspect-correct offset from the footage centre
+    float rag = tp.rag;
+    float2 d = tp.d;
 
     if (look == VIDEO_PHANTOM) {
         // What glows and moves shows, screen-blended in the picture's highlight colour, inside a soft
@@ -567,11 +758,44 @@ static inline half3 compositeVideo(half3 c, float2 uv, float2 texCoord, float fi
         half b = saturate(0.5h + (mix(luma, v.g, 0.25h) - 0.5h) * 2.2h);
         half3 sl = (1.0h - 2.0h * b) * c * c + 2.0h * b * c;
         return mix(c, sl, m * edge);
-    } else if (look == VIDEO_WINDOW) {
-        // A breathing, flow-edged region near the centre showing the footage as a duotone.
+    } else if (look == VIDEO_WINDOW || (kFX && (look == VIDEO_PALETTE || look == VIDEO_PRINT))) {
+        // A breathing, flow-edged region near the centre (or the key's area alone).
         float r0 = 0.40 + 0.04 * sin(fmod(t * 0.21, 6.2831853) + seedA);
-        half wm = half(1.0 - smoothstep(r0 - 0.18, r0 + 0.05, length(d) + rag));
-        return mix(c, mix(shade, tint, luma), wm * edge * m);
+        half wm = keyed ? 1.0h : half(1.0 - smoothstep(r0 - 0.18, r0 + 0.05, length(d) + rag));
+        if (!kFX || look == VIDEO_WINDOW) return mix(c, mix(shade, tint, luma), wm * edge * m);
+        if (look == VIDEO_PALETTE) {
+            half3 cs = restoreChroma(c, min(chromaOf(c) * 1.4h + 0.03h, 1.0h), 2.0h);
+            half l2 = smoothstep(0.08h, 0.92h, luma);
+            if (keyId == FK_SHADOW) {
+                // Shadowplay: in the picture's shadows the film is light (its whites glow in the tint), in
+                // its highlights it is ink (its blacks sink to the shade); the polarity eases continuously.
+                half w = half(saturate(L.keyAmt * 0.5 + 0.5));
+                half3 lit = mix(cs, tint, l2);
+                half3 inked = mix(shade, cs, l2);
+                return mix(c, mix(inked, lit, w), edge * m);
+            }
+            // The film gradient-mapped through the picture: shade -> the picture's own colour (chroma
+            // raised) -> tint. At the film's mid-grey the picture shows through unchanged.
+            half3 ramp = l2 < 0.5h ? mix(shade, cs, l2 * 2.0h) : mix(cs, tint, l2 * 2.0h - 1.0h);
+            return mix(c, ramp, wm * edge * m);
+        }
+        // Print: the film's slow average as halftone ink (or soft posterised bands, by seed) in the
+        // picture's darkest colour. The grid lives in the footage's coordinates, so it swims with the film.
+        half ink;
+        half s = 1.0h - v.g;
+        if (L.seed < 0.5) {
+            float ca = 0.8660254, sa = 0.5;   // 30 degrees
+            float2 p = (tp.vuv - 0.5) * float2(1.333, 1.0) * 82.0;
+            p = float2(p.x * ca - p.y * sa, p.x * sa + p.y * ca);
+            float dist = length(fract(p) - 0.5);
+            float rad = 0.66 * sqrt(float(s));
+            float aa = max(fwidth(dist), 0.02);
+            ink = half(1.0 - smoothstep(rad - aa, rad + aa, dist));
+        } else {
+            half q = s * 3.0h;
+            ink = (floor(q) + smoothstep(0.35h, 0.65h, fract(q))) / 3.0h;
+        }
+        return c * mix(half3(1.0h), shade * 1.4h + 0.06h, ink * wm * edge * m);
     }
     // Emerge: the footage takes the frame as a duotone; the picture stays as a quarter of the colour.
     half3 duo = mix(shade, tint, luma);
@@ -579,10 +803,13 @@ static inline half3 compositeVideo(half3 c, float2 uv, float2 texCoord, float fi
 }
 
 // Stage B: stereo parallax through the final colour. Everything that differs per eye lives here.
-// kVideo: the archive-footage variant (effectsFragmentVideo / effectsFragmentStereoVideo). The renderers
-// use it only while footage shows; the plain fragments instantiate kVideo = false, which compiles to
-// exactly the shader without footage (bit-identical frames, no cost: docs/decisions/archive-video.md).
-template <bool kVideo>
+// kVideo: 0 = no footage (the plain fragments: exactly the shader without footage, bit-identical frames,
+// no cost: docs/decisions/archive-video.md); 1 = footage blend looks only (effectsFragmentVideo /
+// effectsFragmentStereoVideo: today's four looks at today's cost); 2 = footage interaction modes
+// (effectsFragmentVideoFX / effectsFragmentStereoVideoFX: drives, keys, Palette and Print). The renderers
+// bind 2 only while a layer has a drive, a key or a new carrier (VideoComposite.needsFX): every hook adds
+// registers that all footage frames would otherwise pay for (docs/decisions/footage-fx.md).
+template <int kVideo>
 static inline half4 shadeEye(
     WarpOut warp,
     float2 texCoord,
@@ -599,7 +826,35 @@ static inline half4 shadeEye(
     constant GhostTap *ghostTaps
 ) {
     constexpr sampler texSampler(address::clamp_to_edge, filter::linear);
+    constexpr bool kAny = (kVideo & VARIANT_FOOTAGE) != 0;
+    constexpr bool kKeys = (kVideo & VARIANT_KEYS) != 0;      // keys, Kaleido's fold, Palette and Print
+    constexpr bool kDrives = (kVideo & VARIANT_DRIVES) != 0;  // the drives' hooks
+    constexpr bool kFX = kKeys || kDrives;
     float2 uv = warp.uv;
+
+    // === 0. ARCHIVE FOOTAGE PRE-DRIVES (docs/plans/footage-fx.md 2.2) ===
+    // kVideo only: Undertow bends the picture and Fringe splits it before it is sampled.
+    VideoLayerParams la = {}, lb = {};
+    bool hasA = false, hasB = false;
+    float2 fdChroma = float2(0.0);
+    if (kAny) {
+        hasA = uniforms.videoMix > 0.0;
+        hasB = uniforms.videoMixB > 0.0;
+        la = { uniforms.videoMix, uniforms.videoLook, uniforms.videoSeed, uniforms.videoScale,
+               uniforms.videoAspect, uniforms.videoWarp, uniforms.videoDrive, uniforms.videoDriveAmt,
+               uniforms.videoKey, uniforms.videoKeyAmt };
+        lb = { uniforms.videoMixB, uniforms.videoLookB, uniforms.videoSeedB, uniforms.videoScaleB,
+               uniforms.videoAspectB, uniforms.videoWarpB, uniforms.videoDriveB, uniforms.videoDriveAmtB,
+               uniforms.videoKeyB, uniforms.videoKeyAmtB };
+    }
+    if (kDrives) {
+        float2 off = float2(0.0);
+        if (hasA && isPreDrive(la)) addPreDrive(off, fdChroma, la, videoTexture, warp.uv, texCoord, uniforms);
+        if (hasB && isPreDrive(lb)) addPreDrive(off, fdChroma, lb, videoTextureB, warp.uv, texCoord, uniforms);
+        // Both layers together at most one cap.
+        float ol = length(off);
+        if (ol > 1.0e-6) uv = clamp(uv + off * (min(ol, FD_UNDERTOW_MAX) / ol), float2(0.001), float2(0.999));
+    }
 
     // === STEREO DEPTH PARALLAX ===
     // Per-eye shift scaled by depth so near subjects separate more than distant background.
@@ -624,6 +879,11 @@ static inline half4 shadeEye(
         float a = uniforms.txSeed * 6.2831853;
         float k = uniforms.txAmount * uniforms.txEnv;
         chromOffset += float2(cos(a), sin(a)) * (0.35 * k) + float2(0.5 - uv.y, uv.x - 0.5) * (0.7 * k);
+    }
+    if (kDrives) {
+        // Fringe: the film's contours part the picture's red and blue (green, the luma detail, stays).
+        float cl = length(fdChroma);
+        if (cl > 1.0e-6) chromOffset += fdChroma * (min(cl, FD_FRINGE_MAX) / cl);
     }
     half4 prevColor = half4(
         previousTexture.sample(texSampler, uv + chromOffset).r,
@@ -661,17 +921,29 @@ static inline half4 shadeEye(
     // One handle, one sample (a per-sample select made the compiler fetch both textures).
     texture2d<half> shownTexture = showNew ? sourceTexture : previousTexture;
 
-    // === 2.9 ARCHIVE FOOTAGE (docs/plans/archive-video.md 2.2) ===
+    // === 2.9 ARCHIVE FOOTAGE (docs/plans/archive-video.md 2.2, footage-fx.md 2.2) ===
     // Two layers: during a piece-to-piece crossfade both show (A27); each is skipped at mix 0.
-    if (kVideo && uniforms.videoMix > 0.0) {
-        VideoLayerParams la = { uniforms.videoMix, uniforms.videoLook, uniforms.videoSeed, uniforms.videoScale,
-                                uniforms.videoAspect, uniforms.videoWarp };
-        color.rgb = compositeVideo(color.rgb, uv, texCoord, warp.field, videoTexture, la, uniforms);
+    // Each layer is tapped once here (at the stage-A uv: the film does not ride its own Undertow); the
+    // tap feeds the carrier and the drives that act later (hue, solar, relief, wake, glow).
+    FootageDrive fd = {};
+    if (kAny && hasA) {
+        FootageTap ta = tapFootage<kKeys>(kFX ? warp.uv : uv, texCoord, warp.field, videoTexture, la, uniforms);
+        if (kDrives) addDrive(fd, ta, la, videoTexture, uniforms);
+        half key = kKeys ? footageKey(la, color.rgb, uv, depthTexture) : 1.0h;
+        color.rgb = compositeVideo<kVideo>(color.rgb, ta, la, key, uniforms);
     }
-    if (kVideo && uniforms.videoMixB > 0.0) {
-        VideoLayerParams lb = { uniforms.videoMixB, uniforms.videoLookB, uniforms.videoSeedB, uniforms.videoScaleB,
-                                uniforms.videoAspectB, uniforms.videoWarpB };
-        color.rgb = compositeVideo(color.rgb, uv, texCoord, warp.field, videoTextureB, lb, uniforms);
+    if (kAny && hasB) {
+        FootageTap tb = tapFootage<kKeys>(kFX ? warp.uv : uv, texCoord, warp.field, videoTextureB, lb, uniforms);
+        if (kDrives) addDrive(fd, tb, lb, videoTextureB, uniforms);
+        half key = kKeys ? footageKey(lb, color.rgb, uv, depthTexture) : 1.0h;
+        color.rgb = compositeVideo<kVideo>(color.rgb, tb, lb, key, uniforms);
+    }
+    if (kDrives && fd.solar > 0.001h) {
+        // Solar: where the film is bright the picture's tone curve folds over (the Solarize transition's
+        // curve, channels a little out of phase); where it is dark the picture is plain.
+        half k = min(fd.solar, 1.0h);
+        half3 ph = color.rgb * (3.14159h * 2.0h + k * half3(0.0h, 1.0h, 2.0h));
+        color.rgb = mix(color.rgb, 0.5h - 0.5h * cos(ph), 0.75h * k);
     }
 
     // DEBUG STAGE 3: Ken Burns + fBM distortion
@@ -732,6 +1004,7 @@ static inline half4 shadeEye(
     }
 
     hsv.x = fract(hsv.x + half(uniforms.hueBaseShift + spatialOffset + saliencyOffset));
+    if (kDrives) hsv.x = fract(hsv.x + fd.hue);   // Aurora
 
     // Saturation boost - slightly more for salient regions
     float satBoost = 1.4 + float(saliencyValue) * 0.2;  // 1.4 to 1.6
@@ -761,7 +1034,7 @@ static inline half4 shadeEye(
 
     // Mix with original based on blend amount
     // The two colours often have opposite hues; compensate the chroma the RGB mix loses.
-    half hb = half(uniforms.hueBlendAmount);
+    half hb = kDrives ? min(half(uniforms.hueBlendAmount) + fd.hueBlend, 1.0h) : half(uniforms.hueBlendAmount);
     half3 currentColor = mix(color.rgb, saturated, hb);
     // d (from the RGB->HSV step above) is exactly max - min of color.rgb == chromaOf(color.rgb).
     currentColor = restoreChroma(currentColor, mix(d, chromaOf(saturated), hb), 2.0h);
@@ -804,6 +1077,11 @@ static inline half4 shadeEye(
         currentColor = half3(hsv2rgb(hue, sat, val));
     }
 
+    // Relief: the film's height field lights and shades the processed colour (hue and saturation stay).
+    if (kDrives && abs(fd.relief) > 0.001h) {
+        currentColor = clamp(currentColor * (1.0h + clamp(fd.relief, -0.6h, 0.6h)), 0.0h, 1.0h);
+    }
+
     // === 4. GHOST TAPS - Discrete Delay Echoes ===
     // Each ghost tap spawns at the image, animates outward, and fades.
     // Multiple taps flow in similar directions, creating streaming trails.
@@ -811,6 +1089,8 @@ static inline half4 shadeEye(
     // Taps sample the picture this pixel shows, so they need no gate during transitions.
     int tapCount = int(uniforms.ghostTapCount);
     half preTapChroma = chromaOf(currentColor);
+    // Wake: echoes are stronger where the film moves.
+    half tapGain = kDrives ? 0.15h * (1.0h + 1.2h * min(fd.wake, 1.0h)) : 0.15h;
     for (int i = 0; i < tapCount; i++) {
         GhostTap tap = ghostTaps[i];
         // Ghost starts at center (progress=0), moves outward (progress=1)
@@ -820,7 +1100,7 @@ static inline half4 shadeEye(
         // Alpha fade: stronger at start (progress=0), transparent at end (progress=1)
         half ghostAlpha = half(1.0 - tap.progress * tap.progress);
         // Very subtle - ghosts should be background whispers, not dominant
-        currentColor = mix(currentColor, ghostSample.rgb, ghostAlpha * 0.15h);
+        currentColor = mix(currentColor, ghostSample.rgb, ghostAlpha * tapGain);
     }
 
     // Ghosts keep their shape (luma) and take on the processed colour's chroma.
@@ -841,9 +1121,16 @@ static inline half4 shadeEye(
         float2 bloomUV = clamp(uv + noise * uniforms.bloomRadius, float2(0.001), float2(0.999));
         half3 bloomSample = shownTexture.sample(texSampler, bloomUV).rgb;
         half brightness = dot(bloomSample, half3(0.299h, 0.587h, 0.114h));
+        half bloomAmt = half(uniforms.bloomAmount);
+        if (kDrives) {
+            // Glow: where the film is bright the picture's own colours bloom (light breathing inside it).
+            half fg = min(fd.glow, 1.0h);
+            bloomAmt *= 1.0h + 3.5h * fg;
+            brightness = max(brightness, 0.7h * fg);
+        }
         // Saturate the glow about its own luma and SCREEN it: highlights roll off with their
         // colour instead of the old clamped add flattening them to white.
-        half3 glow = bloomSample * brightness * half(uniforms.bloomAmount);
+        half3 glow = bloomSample * brightness * bloomAmt;
         half glowL = dot(glow, LUMA_W);
         glow = clamp(glowL + (glow - glowL) * 1.5h, 0.0h, 1.0h);
         currentColor = 1.0h - (1.0h - currentColor) * (1.0h - glow);
@@ -853,11 +1140,15 @@ static inline half4 shadeEye(
     // Sample previous frame output with turbulence-warped UVs.
     // Each frame compounds the warp, creating evolving fractal trails.
     if (uniforms.feedbackMix > 0.001) {
-        float2 feedbackUV = uv + turbulence_distort(uv * 2.0, uniforms.time, 0.05)
-                          * uniforms.feedbackWarpAmount;
+        // Wake: where the film moves the picture lingers and smears (mix at most 0.5: a trail then
+        // halves every frame at worst; restoreChroma's target is convex, so it cannot run away).
+        half wk = kDrives ? min(fd.wake, 1.0h) : 0.0h;
+        float fbWarp = kDrives ? uniforms.feedbackWarpAmount * (1.0 + 3.0 * float(wk)) : uniforms.feedbackWarpAmount;
+        float2 feedbackUV = uv + turbulence_distort(uv * 2.0, uniforms.time, 0.05) * fbWarp;
         feedbackUV = clamp(feedbackUV, float2(0.001), float2(0.999));
         half3 feedbackColor = feedbackTexture.sample(texSampler, feedbackUV).rgb;
         half fm = half(uniforms.feedbackMix);
+        if (kDrives) fm = max(fm, min(fm + 0.24h * wk, 0.5h));
         half fbTarget = mix(chromaOf(currentColor), chromaOf(feedbackColor), fm);
         currentColor = restoreChroma(mix(currentColor, feedbackColor, fm), fbTarget, 1.5h);
     }
@@ -907,7 +1198,7 @@ fragment half4 effectsFragment(
     #endif
 
     WarpOut warp = distortedUV(in.texCoord, uniforms, depthTexture);
-    return shadeEye<false>(warp, in.texCoord, in.position.xy, uniforms.stereoOffset,
+    return shadeEye<0>(warp, in.texCoord, in.position.xy, uniforms.stereoOffset,
                            sourceTexture, saliencyTexture, previousTexture, feedbackTexture, depthTexture,
                            sourceTexture, sourceTexture, uniforms, ghostTaps);
 }
@@ -927,10 +1218,35 @@ fragment half4 effectsFragmentVideo(
     constant GhostTap *ghostTaps [[buffer(1)]]
 ) {
     WarpOut warp = distortedUV(in.texCoord, uniforms, depthTexture);
-    return shadeEye<true>(warp, in.texCoord, in.position.xy, uniforms.stereoOffset,
+    return shadeEye<1>(warp, in.texCoord, in.position.xy, uniforms.stereoOffset,
                           sourceTexture, saliencyTexture, previousTexture, feedbackTexture, depthTexture,
                           videoTexture, videoTextureB, uniforms, ghostTaps);
 }
+
+// Footage interaction-mode variants of effectsFragmentVideo (docs/plans/footage-fx.md): bound only while a
+// footage layer needs them (VideoComposite.footageVariant): Keys (keys, Kaleido, Palette, Print), Drives
+// (the drives over the blend looks or none), FX (both, during a crossfade between the two kinds).
+#define FOOTAGE_FRAGMENT(NAME, V) \
+fragment half4 NAME( \
+    VertexOut in [[stage_in]], \
+    texture2d<half> sourceTexture [[texture(0)]], \
+    texture2d<half> saliencyTexture [[texture(2)]], \
+    texture2d<half> previousTexture [[texture(3)]], \
+    texture2d<half> feedbackTexture [[texture(4)]], \
+    texture2d<half> depthTexture [[texture(5)]], \
+    texture2d<half> videoTexture [[texture(7)]], \
+    texture2d<half> videoTextureB [[texture(8)]], \
+    constant EffectsUniforms &uniforms [[buffer(0)]], \
+    constant GhostTap *ghostTaps [[buffer(1)]] \
+) { \
+    WarpOut warp = distortedUV(in.texCoord, uniforms, depthTexture); \
+    return shadeEye<V>(warp, in.texCoord, in.position.xy, uniforms.stereoOffset, \
+                       sourceTexture, saliencyTexture, previousTexture, feedbackTexture, depthTexture, \
+                       videoTexture, videoTextureB, uniforms, ghostTaps); \
+}
+FOOTAGE_FRAGMENT(effectsFragmentVideoKeys, 3)
+FOOTAGE_FRAGMENT(effectsFragmentVideoDrives, 5)
+FOOTAGE_FRAGMENT(effectsFragmentVideoFX, 7)
 
 // MARK: - Stereo MRT Fragment Shader (visionOS)
 // Both eyes in one pass: the distortion field (about 125 of about 175 trig per eye-pixel)
@@ -956,10 +1272,10 @@ fragment StereoEyesOut effectsFragmentStereo(
     WarpOut warp = distortedUV(in.texCoord, uniforms, depthTexture);
     float mag = abs(uniforms.stereoOffset);
     StereoEyesOut out;
-    out.left = shadeEye<false>(warp, in.texCoord, in.position.xy, -mag,
+    out.left = shadeEye<0>(warp, in.texCoord, in.position.xy, -mag,
                         sourceTexture, saliencyTexture, previousTexture, feedbackTexture, depthTexture,
                         sourceTexture, sourceTexture, uniforms, ghostTaps);
-    out.right = shadeEye<false>(warp, in.texCoord, in.position.xy, mag,
+    out.right = shadeEye<0>(warp, in.texCoord, in.position.xy, mag,
                          sourceTexture, saliencyTexture, previousTexture, feedbackTextureRight, depthTexture,
                          sourceTexture, sourceTexture, uniforms, ghostTaps);
     return out;
@@ -982,12 +1298,41 @@ fragment StereoEyesOut effectsFragmentStereoVideo(
     WarpOut warp = distortedUV(in.texCoord, uniforms, depthTexture);
     float mag = abs(uniforms.stereoOffset);
     StereoEyesOut out;
-    out.left = shadeEye<true>(warp, in.texCoord, in.position.xy, -mag,
+    out.left = shadeEye<1>(warp, in.texCoord, in.position.xy, -mag,
                         sourceTexture, saliencyTexture, previousTexture, feedbackTexture, depthTexture,
                         videoTexture, videoTextureB, uniforms, ghostTaps);
-    out.right = shadeEye<true>(warp, in.texCoord, in.position.xy, mag,
+    out.right = shadeEye<1>(warp, in.texCoord, in.position.xy, mag,
                          sourceTexture, saliencyTexture, previousTexture, feedbackTextureRight, depthTexture,
                          videoTexture, videoTextureB, uniforms, ghostTaps);
     return out;
 }
 
+// Footage interaction-mode variants of effectsFragmentStereoVideo.
+#define FOOTAGE_STEREO_FRAGMENT(NAME, V) \
+fragment StereoEyesOut NAME( \
+    VertexOut in [[stage_in]], \
+    texture2d<half> sourceTexture [[texture(0)]], \
+    texture2d<half> saliencyTexture [[texture(2)]], \
+    texture2d<half> previousTexture [[texture(3)]], \
+    texture2d<half> feedbackTexture [[texture(4)]], \
+    texture2d<half> depthTexture [[texture(5)]], \
+    texture2d<half> feedbackTextureRight [[texture(6)]], \
+    texture2d<half> videoTexture [[texture(7)]], \
+    texture2d<half> videoTextureB [[texture(8)]], \
+    constant EffectsUniforms &uniforms [[buffer(0)]], \
+    constant GhostTap *ghostTaps [[buffer(1)]] \
+) { \
+    WarpOut warp = distortedUV(in.texCoord, uniforms, depthTexture); \
+    float mag = abs(uniforms.stereoOffset); \
+    StereoEyesOut out; \
+    out.left = shadeEye<V>(warp, in.texCoord, in.position.xy, -mag, \
+                        sourceTexture, saliencyTexture, previousTexture, feedbackTexture, depthTexture, \
+                        videoTexture, videoTextureB, uniforms, ghostTaps); \
+    out.right = shadeEye<V>(warp, in.texCoord, in.position.xy, mag, \
+                         sourceTexture, saliencyTexture, previousTexture, feedbackTextureRight, depthTexture, \
+                         videoTexture, videoTextureB, uniforms, ghostTaps); \
+    return out; \
+}
+FOOTAGE_STEREO_FRAGMENT(effectsFragmentStereoVideoKeys, 3)
+FOOTAGE_STEREO_FRAGMENT(effectsFragmentStereoVideoDrives, 5)
+FOOTAGE_STEREO_FRAGMENT(effectsFragmentStereoVideoFX, 7)

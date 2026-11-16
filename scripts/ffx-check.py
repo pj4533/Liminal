@@ -151,7 +151,7 @@ def cmd_score(a):
     fm, ad = col("film_motion"), col("added_step")
     s["motion_corr"] = corr(fm[1:], ad) if len(fm) == len(ad) + 1 and len(ad) > 8 else None
     gates = gates_of(s)
-    result = {"dir": d, "look": seq.get("look", ""), "look_b": seq.get("look_b", ""), "image": os.path.basename(seq["image"]),
+    result = {"dir": d, "look": seq.get("look", ""), "look_b": seq.get("look_b", ""), "mode": seq.get("mode", ""), "image": os.path.basename(seq["image"]),
               "footage": os.path.basename(seq.get("footage", "")), "intensity": seq["intensity"],
               "frames": len(rows), "summary": {k: (round(v, 4) if isinstance(v, float) else v) for k, v in s.items()},
               "gates": gates, "pass": all(g["pass"] for g in gates.values())}
@@ -184,7 +184,7 @@ def cmd_sheet(a):
 def cmd_table(a):
     keys = ["keep_hog", "keep_hog_p10", "keep_edge", "delta", "area", "film_corr", "motion_corr",
             "step_p95_on", "step_ratio", "jerk_ratio", "flash", "videoMix"]
-    print("| clip | look | " + " | ".join(keys) + " | pass |")
+    print("| clip | look / mode | " + " | ".join(keys) + " | pass |")
     print("|---|---|" + "---|" * (len(keys) + 1))
     for d in a.dirs:
         p = d if d.endswith(".json") else os.path.join(d, "check.json")
@@ -193,7 +193,7 @@ def cmd_table(a):
         cells = ["-" if s.get(k) is None else (f"{s[k]:.4f}" if k == "step_p95_on" else f"{s[k]:.3f}") for k in keys]
         ok = all(g["pass"] for g in gates_of(s).values())   # with the current gates, not the stored ones
         name = os.path.basename(os.path.dirname(os.path.abspath(p)))
-        print(f"| {name} | {r['look']} | " + " | ".join(cells) + f" | {'yes' if ok else 'NO'} |")
+        print(f"| {name} | {r.get('mode') or r['look']} | " + " | ".join(cells) + f" | {'yes' if ok else 'NO'} |")
 
 
 def main():

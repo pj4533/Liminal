@@ -55,7 +55,11 @@
 //                      motion) and bound at textures 7 and 8 (layer B of a piece crossfade, A27: turn it on
 //                      with --set videoMixB=0.3,videoLookB=3,videoScaleB=0.95,videoAspectB=0.89,videoWarpB=0.6).
 //                      Without it both are 1x1 black and the mixes 0.
-//   --video-look NAME  phantom | imprint | window | emerge (default phantom)
+//   --video-look NAME  phantom | imprint | window | emerge | palette | print (default phantom)
+//   --video-mode NAME  footage recipe (docs/plans/footage-fx.md 5: a blend look or an interaction mode, e.g.
+//                      undertow, fringe, wake, aurora, solar, palette, shadowplay, backdrop, kaleido, relief,
+//                      glow, print, ghostfilm) through VideoComposite, as the app pins it with -LiminalVideoMode;
+//                      overrides --video-look. --video-mode-b NAME: layer B of --footage-b (default: the same).
 //   --video-mix X      constant footage mix (VideoCompositeState.constantMix; default: the look's
 //                      ceiling at the intensity). Video uniforms can also be set with --set.
 //   --video-seed X     0...1 placement seed (default 0.3)
@@ -330,6 +334,14 @@ let footageXfade: (at: Double, len: Double)? = takeValue("--footage-xfade").map 
     return (p[0], p[1])
 }
 let videoLookArgB = takeValue("--video-look-b")
+let videoModeArg = takeValue("--video-mode").map { v -> FootageRecipe in
+    guard let r = FootageRecipe(name: v) else { fail("--video-mode: \(FootageRecipe.allCases.map(\.name).joined(separator: ", "))") }
+    return r
+}
+let videoModeArgB = takeValue("--video-mode-b").map { v -> FootageRecipe in
+    guard let r = FootageRecipe(name: v) else { fail("--video-mode-b: \(FootageRecipe.allCases.map(\.name).joined(separator: ", "))") }
+    return r
+}
 let videoSeedArgB = Float(takeValue("--video-seed-b") ?? "0.7") ?? 0.7
 let videoLevelArg = Float(takeValue("--video-level") ?? "0.5") ?? 0.5
 let videoWarpArg = Float(takeValue("--video-warp") ?? "0.6") ?? 0.6
@@ -429,6 +441,16 @@ struct Variant {
     let path: String
     let stereo: MTLRenderPipelineState?
     let mono: MTLRenderPipelineState
+    /// The footage interaction-mode variants (effectsFragment*Video{Keys,Drives,FX}) by variant id, when the
+    /// library has them: used for frames whose uniforms need them (VideoComposite.footageVariant), as the
+    /// renderers do.
+    let stereoFX: [Int: MTLRenderPipelineState]
+    let monoFX: [Int: MTLRenderPipelineState]
+    func pipeline(mono m: Bool, _ u: EffectsUniforms) -> MTLRenderPipelineState {
+        let v = VideoComposite.footageVariant(u)
+        if m { return monoFX[v] ?? mono }
+        return stereoFX[v] ?? stereo!
+    }
 }
 let variantPaths: [(String, String)] = [("A", metallibPath)] + (metallibPathB.map { [("B", $0)] } ?? [])
 /// With --video, a library that has the footage variants (effectsFragmentVideo / effectsFragmentStereoVideo,
@@ -439,9 +461,19 @@ func fragmentName(_ lib: MTLLibrary, _ base: String) -> String {
 }
 let variants: [Variant] = variantPaths.map { name, path in
         let lib = loadLibrary(path)
+        let fx = (videoPath != nil || footagePath != nil) && lib.functionNames.contains("effectsFragmentVideoFX")
+        var sfx: [Int: MTLRenderPipelineState] = [:], mfx: [Int: MTLRenderPipelineState] = [:]
+        if fx {
+            for v in [3, 5, 7] {
+                let suffix = VideoComposite.variantSuffix(v)
+                mfx[v] = makePipeline(lib, "effectsFragment" + suffix, attachments: 1)
+                if !mono { sfx[v] = makePipeline(lib, "effectsFragmentStereo" + suffix, attachments: 2) }
+            }
+        }
         return Variant(name: name, path: path,
                        stereo: mono ? nil : makePipeline(lib, fragmentName(lib, "effectsFragmentStereo"), attachments: 2),
-                       mono: makePipeline(lib, fragmentName(lib, "effectsFragment"), attachments: 1))
+                       mono: makePipeline(lib, fragmentName(lib, "effectsFragment"), attachments: 1),
+                       stereoFX: sfx, monoFX: mfx)
     }
 
 let sampler: MTLSamplerState = {
@@ -537,6 +569,7 @@ func videoStage(_ img: CGImage) -> MTLTexture {
             let gy = Float(g[min(y + 1, h - 1) * w + x]) - Float(g[max(y - 1, 0) * w + x])
             let e = min((gx * gx + gy * gy).squareRoot() / 255 * 4, 1)
             px[i * 4] = UInt8(l * 255); px[i * 4 + 1] = UInt8(l * 255); px[i * 4 + 2] = UInt8(e * 255)
+            px[i * 4 + 3] = UInt8(e * 255)   // edge (the pre-pass's alpha, footage-fx.md 6)
         }
     }
     return px.withUnsafeBytes { uploadTexture(.rgba8Unorm, w, h, bytesPerRow: w * 4, $0.baseAddress!) }
@@ -547,10 +580,13 @@ let videoState: VideoCompositeState = {
     guard let path = videoPath else { return .off }
     guard let look = VideoLook(name: videoLookArg) else { fail("--video-look: phantom, imprint, window or emerge") }
     let img = loadCGImage(path)
-    let t = VideoComposite.tint(of: framed)
+    let t = VideoComposite.stats(of: framed)
     var st = VideoCompositeState(envelope: 1, look: look, seed: videoSeedArg,
                                  aspect: Float(img.width) / Float(img.height), tint: t.tint, shade: t.shade)
+    st.a?.recipe = videoModeArg
     st.constantMix = videoMixArg
+    st.keyPolarity = t.polarity
+    st.keyCoverage = t.coverage
     return st
 }()
 
@@ -610,6 +646,9 @@ let uniformFields: [String: WritableKeyPath<EffectsUniforms, Float>] = [
     "videoShadeR": \.videoShadeR, "videoShadeG": \.videoShadeG, "videoShadeB": \.videoShadeB,
     "videoWarp": \.videoWarp, "videoMixB": \.videoMixB, "videoLookB": \.videoLookB, "videoSeedB": \.videoSeedB,
     "videoScaleB": \.videoScaleB, "videoAspectB": \.videoAspectB, "videoWarpB": \.videoWarpB,
+    "videoDrive": \.videoDrive, "videoDriveAmt": \.videoDriveAmt, "videoKey": \.videoKey, "videoKeyAmt": \.videoKeyAmt,
+    "videoDriveB": \.videoDriveB, "videoDriveAmtB": \.videoDriveAmtB, "videoKeyB": \.videoKeyB,
+    "videoKeyAmtB": \.videoKeyAmtB,
 ]
 func uniformsDict(_ u: EffectsUniforms) -> [String: Double] {
     var d: [String: Double] = [:]
@@ -717,7 +756,7 @@ func encodeFrame(_ cb: MTLCommandBuffer, _ sc: Scenario, _ st: FrameState, varia
             rpd.colorAttachments[0].loadAction = .dontCare
             rpd.colorAttachments[0].storeAction = .store
             let enc = cb.makeRenderCommandEncoder(descriptor: rpd)!
-            enc.setRenderPipelineState(variants[variant].mono)
+            enc.setRenderPipelineState(variants[variant].pipeline(mono: true, u))
             var ue = u
             ue.stereoOffset = eye == 0 ? -abs(u.stereoOffset) : abs(u.stereoOffset)
             if st.last[eye] == nil { ue.feedbackMix = 0 }
@@ -742,7 +781,7 @@ func encodeFrame(_ cb: MTLCommandBuffer, _ sc: Scenario, _ st: FrameState, varia
             rpd.colorAttachments[a].storeAction = .store
         }
         let enc = cb.makeRenderCommandEncoder(descriptor: rpd)!
-        enc.setRenderPipelineState(variants[variant].stereo!)
+        enc.setRenderPipelineState(variants[variant].pipeline(mono: false, u))
         if st.last[0] == nil || st.last[1] == nil { u.feedbackMix = 0 }
         enc.setFragmentTexture(st.last[0] ?? blackTex, index: 4)
         enc.setFragmentTexture(st.last[1] ?? blackTex, index: 6)
@@ -938,7 +977,7 @@ if footageSeq, let outDir = outDir {
     }
     guard let lookA = VideoLook(name: videoLookArg) else { fail("--video-look: phantom, imprint, window or emerge") }
     guard let lookB = VideoLook(name: videoLookArgB ?? videoLookArg) else { fail("--video-look-b: phantom, imprint, window or emerge") }
-    let tint = VideoComposite.tint(of: framed)
+    let tint = VideoComposite.stats(of: framed)
     let stride = seqSimFps / seqFps
     let total = Int((seqLen * Double(seqSimFps)).rounded())
     let decodeEvery = max(1, seqSimFps / 30)   // VideoFrameSource ticks every 33 ms
@@ -958,16 +997,23 @@ if footageSeq, let outDir = outDir {
         if envA > 0 || envB > 0 {
             state = VideoCompositeState(
                 a: envA > 0 ? VideoLayer(weight: Float(envA) * videoLevelArg, look: lookA, seed: videoSeedArg,
-                                         aspect: feedA!.aspect, warp: videoWarpArg) : nil,
+                                         aspect: feedA!.aspect, warp: videoWarpArg, recipe: videoModeArg,
+                                         envelope: Float(envA)) : nil,
                 b: envB > 0 ? VideoLayer(weight: Float(envB) * videoLevelArg, look: lookB, seed: videoSeedArgB,
-                                         aspect: feedB!.aspect, warp: videoWarpArg) : nil,
+                                         aspect: feedB!.aspect, warp: videoWarpArg, recipe: videoModeArgB ?? videoModeArg,
+                                         envelope: Float(envB)) : nil,
                 tint: tint.tint, shade: tint.shade)
             state.constantMix = videoMixArg
+            state.keyPolarity = tint.polarity
+            state.keyCoverage = tint.coverage
         }
         var u = EffectsUniformsComputer.compute(time: t, transitionProgress: 0, hasSaliencyMap: false, vibrance: vibrance,
             look: EffectLook(intensity: intensity, imageAge: age, transitionDuration: txSpec.duration),
             transition: txSpec, video: state)
-        if videoMixArg != nil { u.videoMix *= Float(envA); u.videoMixB *= Float(envB) }   // a pinned mix still crossfades
+        if videoMixArg != nil {   // a pinned mix (and its drive) still crossfades
+            u.videoMix *= Float(envA); u.videoMixB *= Float(envB)
+            u.videoDriveAmt *= Float(envA); u.videoDriveAmtB *= Float(envB)
+        }
         let (buf, count) = ghostTaps(at: t)
         u.ghostTapCount = Float(count)
         if seqRef != nil {
@@ -1030,6 +1076,7 @@ if footageSeq, let outDir = outDir {
         "footage_start": footageStart, "footage_rate": footageRate,
         "levels": feedA.map { ["black": Double($0.black), "white": Double($0.white)] } ?? [:],
         "look": seqRef == nil && feedA != nil ? lookA.name : "", "look_b": feedB != nil ? lookB.name : "",
+        "mode": videoModeArg?.name ?? "", "mode_b": (videoModeArgB ?? videoModeArg)?.name ?? "",
         "level": Double(videoLevelArg), "mix": videoMixArg.map { Double($0) } ?? -1, "warp": Double(videoWarpArg),
         "ref": seqRef ?? "", "intensity": Double(intensity), "start": Double(seqStart), "len": seqLen,
         "fps": seqFps, "sim_fps": seqSimFps, "frames": frameList,

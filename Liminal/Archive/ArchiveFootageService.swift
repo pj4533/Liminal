@@ -41,6 +41,11 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
         var shade = SIMD3<Float>(0.06, 0.05, 0.05)
         var tintTarget = SIMD3<Float>(0.9, 0.85, 0.75)
         var shadeTarget = SIMD3<Float>(0.06, 0.05, 0.05)
+        /// Shadowplay key polarity (VideoCompositeState.keyPolarity), eased like the tint.
+        var polarity: Float = 1
+        var polarityTarget: Float = 1
+        var coverage: Float = 0.35
+        var coverageTarget: Float = 0.35
         var tintKey: ObjectIdentifier?
         var lastFrameUptime: Double = 0
         /// Loud music pulls the footage back a little (eased, 0.7...1).
@@ -171,7 +176,7 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
             return true
         }
         guard go else { return }
-        LMLog.visual.info("📼 footage start (force=\(DebugLaunchOptions.videoForce) offline=\(DebugLaunchOptions.videoOffline) file=\(DebugLaunchOptions.videoFile ?? "-", privacy: .public) look=\(DebugLaunchOptions.videoLook ?? "-", privacy: .public) mix=\(DebugLaunchOptions.videoMix.map { String($0) } ?? "-", privacy: .public))")
+        LMLog.visual.info("📼 footage start (force=\(DebugLaunchOptions.videoForce) offline=\(DebugLaunchOptions.videoOffline) file=\(DebugLaunchOptions.videoFile ?? "-", privacy: .public) look=\(DebugLaunchOptions.videoLook ?? "-", privacy: .public) mode=\(DebugLaunchOptions.videoMode ?? "-", privacy: .public) mix=\(DebugLaunchOptions.videoMix.map { String($0) } ?? "-", privacy: .public))")
         let prefetch = Task.detached(priority: .utility) { [weak self] () -> Void in await self?.prefetchLoop() }
         let weaver = Task.detached(priority: .userInitiated) { [weak self] () -> Void in await self?.weaverLoop() }
         tasks.withLock { $0 = [prefetch, weaver] }
@@ -286,7 +291,8 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
         let now = Self.uptime()
         let newKey = key.map(ObjectIdentifier.init)
         let snap = shared.withLock { s -> (pieces: [FootagePiece], elapsed: Double, aspects: [Float],
-                                          tint: SIMD3<Float>, shade: SIMD3<Float>, gain: Float, measure: Bool) in
+                                          tint: SIMD3<Float>, shade: SIMD3<Float>, polarity: Float, coverage: Float,
+                                          gain: Float, measure: Bool) in
             var measure = false
             if let newKey, s.tintKey != newKey {
                 s.tintKey = newKey
@@ -297,6 +303,8 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
             let k = Float(1 - exp(-dt / 1.0))   // about 3 s to settle (plan 2.2)
             s.tint += (s.tintTarget - s.tint) * k
             s.shade += (s.shadeTarget - s.shade) * k
+            s.polarity += (s.polarityTarget - s.polarity) * k
+            s.coverage += (s.coverageTarget - s.coverage) * k
             // Loud music pulls the footage back to 70 % (eased over about 3 s); it never vanishes.
             let calmTarget = 1 - 0.3 * Self.smooth01((s.conditions.musicIntensity - 0.7) / 0.25)
             s.calm += (calmTarget - s.calm) * k
@@ -305,28 +313,33 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
             let step = Float(dt) / 2
             s.master = masterTarget < s.master ? max(s.master - step, 0) : min(s.master + step, 1)
             let gain = s.calm * Self.smooth01(s.master)
-            return (s.running ? s.pieces : [], now - s.startUptime, s.aspects, s.tint, s.shade, gain, measure)
+            return (s.running ? s.pieces : [], now - s.startUptime, s.aspects, s.tint, s.shade, s.polarity, s.coverage, gain, measure)
         }
         let measure = snap.measure ? image() : nil
         if let img = measure {
             let key = ObjectIdentifier(img)
             Task.detached(priority: .utility) { [weak self] in
-                let t = VideoComposite.tint(of: img)
+                let t = VideoComposite.stats(of: img)
                 self?.shared.withLock { s in
                     guard s.tintKey == key else { return }
                     s.tintTarget = t.tint
                     s.shadeTarget = t.shade
+                    s.polarityTarget = t.polarity
+                    s.coverageTarget = t.coverage
                 }
             }
         }
         guard !snap.pieces.isEmpty, !sources.isEmpty else { return .off }
         var state = VideoCompositeState(a: nil, tint: snap.tint, shade: snap.shade)
         state.constantMix = DebugLaunchOptions.videoMix
+        state.keyPolarity = snap.polarity
+        state.keyCoverage = snap.coverage
         var texA: MTLTexture?, texB: MTLTexture?
         for p in snap.pieces {
             let w = p.weight(at: snap.elapsed) * snap.gain
             guard w > 0, let tex = sources[p.slot].latest() else { continue }
-            let layer = VideoLayer(weight: w, look: p.look, seed: p.seed, aspect: snap.aspects[p.slot], warp: p.warp)
+            let layer = VideoLayer(weight: w, look: p.look, seed: p.seed, aspect: snap.aspects[p.slot], warp: p.warp,
+                                   recipe: p.recipe, envelope: p.driveEnvelope(at: snap.elapsed) * snap.gain)
             if p.slot == 0 { state.a = layer; texA = tex } else { state.b = layer; texB = tex }
         }
         guard !state.isOff else { return .off }
@@ -355,7 +368,8 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
         let speed = shared.withLock { $0.speed }
         let seed = DebugLaunchOptions.videoSeed.map { UInt64($0) } ?? UInt64.random(in: 0...UInt64.max)
         var weaver = FootageWeaver(seed: seed, timing: Self.timing(speed),
-                                   pinnedLook: DebugLaunchOptions.videoLook.flatMap(VideoLook.init(name:)))
+                                   pinnedLook: DebugLaunchOptions.videoLook.flatMap(VideoLook.init(name:)),
+                                   pinnedRecipe: DebugLaunchOptions.videoMode.flatMap(FootageRecipe.init(name:)))
         var rng = MusicRNG(seed: seed ^ 0xA5C1_17E5)
         var piecesSinceReplace = 0
         var lastLog = -10.0
@@ -423,7 +437,7 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
             if elapsed - lastLog >= 10 {
                 lastLog = elapsed
                 let parts = pieces.map { p in
-                    "#\(p.index)/s\(p.slot) \(p.look.name) env=\(String(format: "%.2f", p.envelope(at: elapsed))) lvl=\(String(format: "%.2f", p.level(at: elapsed)))"
+                    "#\(p.index)/s\(p.slot) \(p.recipe.name) env=\(String(format: "%.2f", p.envelope(at: elapsed))) lvl=\(String(format: "%.2f", p.level(at: elapsed)))"
                 }
                 LMLog.visual.info("📼 weave t=\(String(format: "%.1f", elapsed), privacy: .public)s presence=\(String(format: "%.3f", weaver.presence(at: elapsed)), privacy: .public) \(parts.joined(separator: " "), privacy: .public)")
             }
@@ -469,7 +483,7 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
             $0.aspects[r.slot] = aspect
             $0.status = "Showing: \(clip.title)\(clip.year.map { " (\($0))" } ?? "")"
         }
-        LMLog.visual.info("📼 piece #\(r.index) slot=\(r.slot) look=\(r.look.name, privacy: .public) id=\(clip.id, privacy: .public) title=\"\(clip.title, privacy: .public)\" segment=\(String(format: "%.1f", segStart), privacy: .public)s rate=\(String(format: "%.2f", r.rate), privacy: .public) warp=\(String(format: "%.2f", r.warp), privacy: .public) level=\(String(format: "%.2f", r.level), privacy: .public)+\(String(format: "%.2f", r.swell), privacy: .public) length=\(String(format: "%.1f", length), privacy: .public)s fade=\(String(format: "%.1f", r.fadeIn), privacy: .public)s sound=\(piece.sound) (wanted \(r.sound), audio=\(clip.hasAudio)) starts \(String(format: "%.1f", r.start), privacy: .public)s at \(String(format: "%.1f", elapsed), privacy: .public)s")
+        LMLog.visual.info("📼 piece #\(r.index) slot=\(r.slot) recipe=\(r.recipe.name, privacy: .public) id=\(clip.id, privacy: .public) title=\"\(clip.title, privacy: .public)\" segment=\(String(format: "%.1f", segStart), privacy: .public)s rate=\(String(format: "%.2f", r.rate), privacy: .public) warp=\(String(format: "%.2f", r.warp), privacy: .public) level=\(String(format: "%.2f", r.level), privacy: .public)+\(String(format: "%.2f", r.swell), privacy: .public) length=\(String(format: "%.1f", length), privacy: .public)s fade=\(String(format: "%.1f", r.fadeIn), privacy: .public)s sound=\(piece.sound) (wanted \(r.sound), audio=\(clip.hasAudio)) starts \(String(format: "%.1f", r.start), privacy: .public)s at \(String(format: "%.1f", elapsed), privacy: .public)s")
         return piece
     }
 

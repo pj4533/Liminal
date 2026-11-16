@@ -187,6 +187,10 @@ nonisolated enum DebugLaunchOptions {
     static let videoForce: Bool = defaults.bool(forKey: "LiminalVideoForce") || defaults.bool(forKey: "LiminalVideoNow")
     /// -LiminalVideoLook phantom|imprint|window|emerge: every piece uses this look.
     static let videoLook: String? = defaults.string(forKey: "LiminalVideoLook")
+    /// -LiminalVideoMode <recipe> (alias -LiminalFootageMode): every piece uses this recipe (docs/plans/footage-fx.md 5:
+    /// phantom imprint window emerge undertow wake ghostfilm fringe aurora solar palette shadowplay backdrop
+    /// kaleido relief glow print).
+    static let videoMode: String? = defaults.string(forKey: "LiminalVideoMode") ?? defaults.string(forKey: "LiminalFootageMode")
     /// -LiminalVideoFile <mp4> (alias -LiminalVideoClip): play this local file instead of the cache; no network.
     static let videoFile: String? = defaults.string(forKey: "LiminalVideoFile") ?? defaults.string(forKey: "LiminalVideoClip")
     /// -LiminalVideoMix <0...1>: one hour-long piece at a constant footage mix (frozen-time stills).
@@ -233,7 +237,7 @@ nonisolated enum DebugLaunchOptions {
             || defaults.object(forKey: "LiminalSyncStrength") != nil || effectIntensity != nil
             || imageInterval != nil
             || anyShellFlag
-            || videoForce || videoLook != nil || videoFile != nil || videoMix != nil || videoSeed != nil
+            || videoForce || videoLook != nil || videoMode != nil || videoFile != nil || videoMix != nil || videoSeed != nil
             || videoOffline || videoOff || controlsScroll != nil || controlsWidth != nil || videoOffAt != nil
     }
 #else
@@ -268,6 +272,7 @@ nonisolated enum DebugLaunchOptions {
     static let shellCycleSeconds: Double = 12
     static let videoForce = false
     static let videoLook: String? = nil
+    static let videoMode: String? = nil
     static let videoFile: String? = nil
     static let videoMix: Float? = nil
     static let videoSeed: Int? = nil
@@ -315,6 +320,10 @@ nonisolated enum DebugLaunchOptions {
         if shellTextureStereo { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalShellTextureStereo=YES (per-eye texture parallax, hero tile)") }
         if videoForce { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalVideoForce=YES (footage pieces at the Fast change speed)") }
         if let l = videoLook { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalVideoLook=\(l, privacy: .public)") }
+        if let m = videoMode {
+            let ok = FootageRecipe(name: m) != nil
+            LMLog.general.info("🧪 DEBUG FLAG applied: LiminalVideoMode=\(m, privacy: .public)\(ok ? "" : " (unknown recipe, ignored)", privacy: .public)")
+        }
         if let f = videoFile { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalVideoFile=\(f, privacy: .public) (local clip, no network)") }
         if let m = videoMix { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalVideoMix=\(m, format: .fixed(precision: 2)) (constant footage mix)") }
         if let n = videoSeed { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalVideoSeed=\(n)") }

@@ -588,7 +588,8 @@ struct ImmersiveDomeView: View {
                     footage.update(.init(transitionRunning: transitionState.isTransitioning,
                                          imageAge: transitionStartEffectTime.map { Double(effectTime - $0) },
                                          musicIntensity: modulation.amount > 0 ? modulation.energy : 0,
-                                         effectIntensity: look.intensity))
+                                         effectIntensity: look.intensity,
+                                         hasDepth: renderer.depthTexture != nil))
                 }
                 var uniforms = EffectsUniformsComputer.compute(
                     time: effectTime,
@@ -699,7 +700,7 @@ struct ImmersiveDomeView: View {
                     let perfLine = "📊 visionOS PERF: fps=\(String(format: "%.1f", actualFPS)) (\(String(format: "%.0f", fpsPercent))% of 60) | render avg=\(String(format: "%.1f", avgRenderTime))ms max=\(String(format: "%.1f", maxRenderTime))ms | dropped=\(droppedFrames) | transition=\(String(format: "%.0f", transitionState.transitionProgress * 100))% | interval p95=\(String(format: "%.2f", intervalP95))ms | \(gpuFragment)"
                     LMLog.visual.info("\(perfLine, privacy: .public)")
                     if lastVideoMix > 0 {
-                        LMLog.visual.info("📼 FOOTAGE mix=\(String(format: "%.3f", lastVideoMix), privacy: .public) A=\(String(format: "%.3f", lastVideoMixes.0), privacy: .public) \(footageFrame.state.a?.look.name ?? "-", privacy: .public) B=\(String(format: "%.3f", lastVideoMixes.1), privacy: .public) \(footageFrame.state.b?.look.name ?? "-", privacy: .public)")
+                        LMLog.visual.info("📼 FOOTAGE mix=\(String(format: "%.3f", lastVideoMix), privacy: .public) A=\(String(format: "%.3f", lastVideoMixes.0), privacy: .public) \(footageFrame.state.a?.resolvedRecipe.name ?? "-", privacy: .public) B=\(String(format: "%.3f", lastVideoMixes.1), privacy: .public) \(footageFrame.state.b?.resolvedRecipe.name ?? "-", privacy: .public)")
                     }
                     LMLog.visual.info("🔮 3D STATUS: depth=\(hasDepth) textureStereo=\(hasStereo) gen=\(transitionState.lastGeneration) mesh avg=\(String(format: "%.3f", totalMeshTime / Double(max(frameCount, 1))), privacy: .public)ms relief k=\(String(format: "%.3f", lastReliefK), privacy: .public) breath=\(String(format: "%.3f", lastBreathing), privacy: .public)m w=\(String(format: "%.2f", lastReliefW), privacy: .public) fields=\(relief.previous != nil ? 1 : 0)+\(relief.current != nil ? 1 : 0)")
 

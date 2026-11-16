@@ -7,6 +7,11 @@ steers the hue waves, lights the bloom, hides in the picture's shadows. Branch `
 Request: "Can you composite the video footage in different ways other than just blending it in? Can you use
 different effects to bring it in along side the regular effects? Maybe interact them somehow."
 
+Status: phases 1-4 built (round 0). What changed against this plan while building is in the decision log:
+the film is tapped at the composite and only the pre-drives tap early (F10), the shader has blend / keys /
+drives / full variants and the weaver never needs the full one (F11), amounts raised (F12), Shadowplay and
+Kaleido carriers (F13, F14). Phases 5 and 6 (judges, app runs) are open.
+
 Decisions taken while building go in `docs/decisions/footage-fx.md` (prefix `F`). Numbers marked *(tune)*
 are starting points. This document changes no behaviour; it comes with the tooling of section 9.
 

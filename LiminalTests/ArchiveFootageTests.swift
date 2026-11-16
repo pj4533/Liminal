@@ -297,14 +297,15 @@ struct FootageWeaverTests {
                 for (a, b) in zip(r.pieces, r.pieces.dropFirst()) {
                     // Calm conditions: no holds, so a piece lasts its planned length.
                     let shown = b.start - a.start
-                    if a.look == .emerge {
-                        #expect(shown <= FootageWeaver.emergeMaxLength + 0.5)
+                    if let cap = a.recipe.maxLength {
+                        #expect(shown <= cap + 0.5)
                     } else {
                         #expect(shown >= timing.pieceLength.lowerBound - 1e-9)
                         #expect(shown <= timing.pieceLength.upperBound + 0.5)
                     }
                     #expect(timing.crossfade.contains(b.fadeIn))
-                    #expect(a.look != b.look)
+                    #expect(a.recipe != b.recipe)
+                    #expect(a.recipe.family != b.recipe.family)
                     #expect(a.slot != b.slot)
                 }
             }
@@ -401,13 +402,63 @@ struct FootageWeaverTests {
         #expect(w.current.map { $0.plannedChange <= 13 + 1e-9 } == true)
     }
 
-    @Test func emergeOnlyAtHigherIntensityAndNeverTwice() {
+    @Test func recipeEligibilityByIntensityAndDepth() {
         var rng = MusicRNG(seed: 9)
-        for _ in 0..<500 {
-            #expect(FootageWeaver.chooseLook(last: nil, intensity: 0.3, rng: &rng) != .emerge)
-            let l = FootageWeaver.chooseLook(last: .imprint, intensity: 0.9, rng: &rng)
-            #expect(l != .imprint)
+        for _ in 0..<800 {
+            let low = FootageWeaver.chooseRecipe(last: nil, recent: [], intensity: 0.15, hasDepth: false, rng: &rng)
+            #expect(low.minIntensity <= 0.15)
+            #expect(![.emerge, .solar, .print, .kaleido, .undertow, .ghostfilm, .backdrop].contains(low))
+            let mac = FootageWeaver.chooseRecipe(last: .imprint, recent: [], intensity: 0.9, hasDepth: false, rng: &rng)
+            #expect(mac != .backdrop)
+            #expect(mac.family != .plain)
         }
+        #expect(FootageWeaver.eligible(intensity: 1, hasDepth: true).count == FootageRecipe.allCases.count)
+        #expect(!FootageWeaver.eligible(intensity: 1, hasDepth: false).contains(.backdrop))
+        // With a depth map, Backdrop does come up.
+        var seen = false
+        for _ in 0..<400 where FootageWeaver.chooseRecipe(last: .phantom, recent: [], intensity: 0.5, hasDepth: true, rng: &rng) == .backdrop {
+            seen = true
+        }
+        #expect(seen)
+    }
+
+    @Test func recipeSequenceHasVarietyAndKeepsThePlainLooks() {
+        for intensity: Float in [0.1, 0.5, 1.0] {
+            for seed in UInt64(0)..<150 {
+                var rng = MusicRNG(seed: seed)
+                var last: FootageRecipe?
+                var recent: [FootageRecipe] = []
+                var plain = 0
+                var kinds = Set<FootageRecipe>()
+                let n = 200
+                for _ in 0..<n {
+                    let r = FootageWeaver.chooseRecipe(last: last, recent: recent, intensity: intensity, hasDepth: seed % 2 == 0,
+                                                       rng: &rng)
+                    #expect(r != last)
+                    #expect(r.family != last?.family)
+                    #expect((last?.shaderGroup ?? 1) | r.shaderGroup != 7)
+                    #expect(intensity >= r.minIntensity)
+                    if r.family == .plain { plain += 1 }
+                    kinds.insert(r)
+                    last = r
+                    recent.append(r)
+                    if recent.count > FootageWeaver.recentCount { recent.removeFirst() }
+                }
+                // About 30 % of the pieces are today's blend looks.
+                #expect(Float(plain) / Float(n) >= 0.22 && Float(plain) / Float(n) <= 0.42)
+                #expect(kinds.count >= 8)
+            }
+        }
+    }
+
+    @Test func pinnedRecipe() {
+        var w = FootageWeaver(seed: 5, timing: .speed(.fast), pinnedRecipe: .undertow)
+        guard case .prepare(let r) = w.tick(elapsed: 0, conditions: Self.calm, hasClip: true, ready: { _ in true }) else {
+            Issue.record("no first piece"); return
+        }
+        #expect(r.recipe == .undertow)
+        #expect(FootageRecipe(name: "Ghost-Film") == .ghostfilm)
+        #expect(FootageRecipe(name: "nope") == nil)
     }
 
     @Test func pinnedLook() {
@@ -416,10 +467,11 @@ struct FootageWeaverTests {
             Issue.record("no first piece"); return
         }
         #expect(r.look == .window)
+        #expect(r.recipe == .window)
     }
 
     @Test func pieceEnvelopeAndSwell() {
-        var p = FootagePiece(index: 0, slot: 0, clipID: "c", segmentStart: 0, rate: 0.7, look: .phantom, seed: 0,
+        var p = FootagePiece(index: 0, slot: 0, clipID: "c", segmentStart: 0, rate: 0.7, recipe: .phantom, seed: 0,
                              warp: 0.5, level: 0.5, swell: 0.3, start: 10, origin: 10, fadeIn: 4, length: 20,
                              fadeOutStart: nil, fadeOut: nil, sound: false)
         #expect(p.envelope(at: 9) == 0)
@@ -432,6 +484,9 @@ struct FootageWeaverTests {
         #expect(p.level(at: 10) == 0.5)
         #expect(abs(p.level(at: 20) - 0.8) < 1e-6)  // the swell peaks mid-piece
         #expect(p.level(at: 30) - 0.5 < 1e-6)
+        // The drive follows the envelope and the swell, not the level.
+        #expect(abs(p.driveEnvelope(at: 20) - 1.6) < 1e-5)
+        #expect(abs(p.driveEnvelope(at: 32) - 0.5 * p.level(at: 32) / 0.5) < 1e-5)
     }
 
     @Test func clipChoiceAvoidsClipsOnScreen() {
@@ -465,10 +520,12 @@ struct VideoCompositeTests {
     }
 
     @Test func uniformStrideMatchesTheShaderStruct() {
-        // 25 original + 2 vibrance + 6 transition + 11 footage + 7 footage layer B floats, no padding
-        // (EffectsRenderer.metal).
-        #expect(MemoryLayout<EffectsUniforms>.size == 51 * 4)
-        #expect(MemoryLayout<EffectsUniforms>.stride == 51 * 4)
+        // 25 original + 2 vibrance + 6 transition + 11 footage + 7 footage layer B + 8 interaction floats,
+        // no padding (EffectsRenderer.metal).
+        #expect(MemoryLayout<EffectsUniforms>.size == 59 * 4)
+        #expect(MemoryLayout<EffectsUniforms>.stride == 59 * 4)
+        #expect(MemoryLayout<EffectsUniforms>.offset(of: \.videoDrive) == 51 * 4)
+        #expect(MemoryLayout<EffectsUniforms>.offset(of: \.videoKeyAmtB) == 58 * 4)
         #expect(MemoryLayout<EffectsUniforms>.offset(of: \.videoMix) == 33 * 4)
         #expect(MemoryLayout<EffectsUniforms>.offset(of: \.videoShadeB) == 43 * 4)
         #expect(MemoryLayout<EffectsUniforms>.offset(of: \.videoWarp) == 44 * 4)
@@ -526,6 +583,7 @@ struct VideoCompositeTests {
         #expect(abs(u.videoAspect - (4.0 / 3.0) / 1.5) < 1e-6)
         #expect(u.videoTintR == 0.9 && u.videoShadeB == 0.02)
         #expect(u.videoMixB == 0)
+        #expect(u.videoDrive == 0 && u.videoDriveAmt == 0 && u.videoKey == 0 && u.videoKeyAmt == 0)
         // Everything else matches the no-footage uniforms.
         var v = u
         v.videoMix = 0; v.videoLook = 0; v.videoSeed = 0; v.videoScale = 0; v.videoAspect = 0; v.videoWarp = 0
@@ -550,6 +608,77 @@ struct VideoCompositeTests {
         let ub = EffectsUniformsComputer.compute(time: 300, transitionProgress: 0, look: EffectLook(intensity: 0.5),
                                                  video: s)
         #expect(ub.videoMix == 0 && ub.videoLook == 0 && ub.videoMixB > 0)
+    }
+
+    @Test func recipesWriteDriveAndKeyUniforms() {
+        for r in FootageRecipe.allCases {
+            var s = Self.state
+            s.a?.recipe = r
+            s.a?.weight = 0.5
+            s.a?.envelope = 1
+            let u = EffectsUniformsComputer.compute(time: 300, transitionProgress: 0, look: EffectLook(intensity: 1), video: s)
+            #expect(u.videoMix > 0)   // the layer gate is open for every recipe, carrier or not
+            #expect(u.videoLook == Float(r.carrier?.rawValue ?? 0))
+            #expect(u.videoDrive == Float(r.drive.rawValue))
+            #expect(u.videoKey == Float(r.key.rawValue))
+            #expect((u.videoDriveAmt > 0) == (r.drive != .none))
+            #expect(u.videoDriveAmt <= 1)
+            #expect((u.videoKeyAmt != 0) == (r.key != .own))
+            #expect(u.videoMix <= 0.95)
+            // The frame binds the recipe's shader variant; plain looks keep the blend variant.
+            #expect(VideoComposite.footageVariant(u) == r.shaderGroup)
+            #expect((r.shaderGroup == 1) == (r.family == .plain))
+        }
+        #expect(VideoComposite.footageVariant(EffectsUniformsComputer.compute(time: 300, transitionProgress: 0)) == 0)
+        // A carrier runs at its share of the plain look's mix.
+        var plain = Self.state, fringe = Self.state
+        plain.a?.recipe = .phantom
+        fringe.a?.recipe = .fringe
+        let mp = VideoComposite.mix(plain.a, intensity: 0.5, drive: 1, settled: 1)
+        let mf = VideoComposite.mix(fringe.a, intensity: 0.5, drive: 1, settled: 1)
+        #expect(abs(mf - mp * FootageRecipe.fringe.carrierShare) < 1e-6)
+    }
+
+    @Test func driveAmountsScaleWithIntensityClarityAndHold() {
+        for r in FootageRecipe.allCases where r.drive != .none {
+            let l = VideoLayer(weight: 0.5, look: .window, seed: 0.2, aspect: 1.33, recipe: r, envelope: 1)
+            let a = [0, 0.25, 0.5, 0.75, 1].map {
+                VideoComposite.driveAmount(l, intensity: Float($0), drive: 1, settled: 1, fresh: 1)
+            }
+            #expect(a == a.sorted())
+            // The clarity cycle: wild stretches drive harder than clear ones.
+            let clear = VideoComposite.driveAmount(l, intensity: 0.5, drive: 0, settled: 1, fresh: 1)
+            #expect(clear < a[2] && clear > 0)
+            // A new picture: the geometric drives stop, the others dip.
+            let held = VideoComposite.driveAmount(l, intensity: 0.5, drive: 1, settled: 0, fresh: 0)
+            if r.drive.isGeometric { #expect(held == 0) } else { #expect(held > 0 && held < a[2]) }
+            // The envelope fades the drive with the piece (continuity through a crossfade).
+            var half = l
+            half.envelope = 0.5
+            #expect(abs(VideoComposite.driveAmount(half, intensity: 0.5, drive: 1, settled: 1, fresh: 1) - a[2] * 0.5) < 1e-6)
+        }
+        // Solar is absent at intensity 0.
+        let solar = VideoLayer(weight: 0.5, look: .window, seed: 0, aspect: 1, recipe: .solar, envelope: 1)
+        #expect(VideoComposite.driveAmount(solar, intensity: 0, drive: 1, settled: 1, fresh: 1) == 0)
+        #expect(VideoComposite.driveAmount(nil, intensity: 0.5, drive: 1, settled: 1, fresh: 1) == 0)
+    }
+
+    @Test func shadowplayPolarityFollowsThePicture() {
+        #expect(VideoComposite.polarity(shadowShare: 0.6) == 1)
+        #expect(VideoComposite.polarity(shadowShare: 0.05) == -1)
+        var s = Self.state
+        s.a?.recipe = .shadowplay
+        s.keyPolarity = -0.4
+        let u = EffectsUniformsComputer.compute(time: 300, transitionProgress: 0, video: s)
+        #expect(u.videoKey == 1 && u.videoKeyAmt == -0.4)
+        // A picture that is mostly shadow: the key covers nearly the frame, so the mix comes down.
+        #expect(VideoComposite.keyGain(coverage: 0.2) == 1)
+        #expect(abs(VideoComposite.keyGain(coverage: 0.7) - 0.5) < 1e-6)
+        #expect(VideoComposite.keyGain(coverage: 1) == 0.4)
+        var dark = s
+        dark.keyCoverage = 0.7
+        let ud = EffectsUniformsComputer.compute(time: 300, transitionProgress: 0, video: dark)
+        #expect(abs(ud.videoMix - u.videoMix * 0.5) < 1e-5)
     }
 
     @Test func tintComesFromThePicture() throws {

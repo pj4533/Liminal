@@ -5,7 +5,7 @@
 //  Archive footage as a continuous stream of short pieces (docs/decisions/archive-video.md A27). While
 //  footage is on, some film is always woven into the picture: pieces of 8-30 s from random points of
 //  cached clips, each crossfading into the next over a few seconds (never a cut, never a gap to zero).
-//  Per piece: clip, start point, look, warp, a level inside a subtle band (some pieces swell slowly to
+//  Per piece: clip, start point, recipe (blend look or interaction mode, docs/plans/footage-fx.md 5), warp, a level inside a subtle band (some pieces swell slowly to
 //  more prominent) and whether the film's sound comes in. Pure and seeded: ticked twice a second by
 //  ArchiveFootageService off the main actor; the render loops evaluate `FootagePiece.weight(at:)` only.
 //  Times are seconds since footage started (`elapsed`).
@@ -28,7 +28,8 @@ nonisolated struct FootagePiece: Sendable, Equatable {
     let segmentStart: Double
     /// Playback rate of the footage (and its sound), 0.6...0.85: slow motion reads as dreamlike.
     let rate: Float
-    let look: VideoLook
+    /// How the film is woven in: a blend look or an interaction mode (docs/plans/footage-fx.md 5).
+    let recipe: FootageRecipe
     let seed: Float
     /// How much of the picture's warp the footage rides (0 = none, 1 = all of it).
     let warp: Float
@@ -50,6 +51,8 @@ nonisolated struct FootagePiece: Sendable, Equatable {
     /// The film's sound plays with this piece.
     var sound: Bool
 
+    /// The carrier look (Window for the carrier-less recipes: their size and drift).
+    var look: VideoLook { recipe.carrier ?? .window }
     var plannedChange: Double { start + length }
     /// Elapsed seconds at which this piece has fully faded out (nil while it is the newest piece).
     var end: Double? { fadeOutStart.map { $0 + (fadeOut ?? 0) } }
@@ -74,6 +77,9 @@ nonisolated struct FootagePiece: Sendable, Equatable {
 
     /// envelope x level: what the composite scales by the look's ceiling.
     func weight(at t: Double) -> Float { envelope(at: t) * level(at: t) }
+
+    /// envelope x the swell's factor (no level): what the drive amount scales by.
+    func driveEnvelope(at t: Double) -> Float { envelope(at: t) * level(at: t) / max(level, 0.01) }
 
     static func smooth(_ x: Double) -> Double { let c = min(max(x, 0), 1); return c * c * (3 - 2 * c) }
 }
@@ -115,7 +121,7 @@ nonisolated struct FootageWeaver {
     static let swellRange: ClosedRange<Float> = 0.15...0.38
     static let swellMinLength: Double = 14
     /// Emerge takes the whole frame: its pieces are capped.
-    static let emergeMaxLength: Double = 16
+    static let emergeMaxLength: Double = FootageRecipe.cappedLength
     /// The first piece fades in this soon after a clip is available.
     static let firstLead: Double = 1
     /// Sound: starts this long after the piece's fade in begins; ends this long after its planned change.
@@ -134,6 +140,8 @@ nonisolated struct FootageWeaver {
         var musicIntensity: Float = 0
         /// Effect intensity setting 0...1.
         var effectIntensity: Float = 0.5
+        /// A depth map is bound (visionOS): Backdrop may be picked.
+        var hasDepth = false
     }
 
     /// What to prepare: the service supplies the clip and the segment and calls `didPrepare`.
@@ -143,7 +151,7 @@ nonisolated struct FootageWeaver {
         let start: Double
         let fadeIn: Double
         let length: Double
-        let look: VideoLook
+        let recipe: FootageRecipe
         let seed: Float
         let rate: Float
         let warp: Float
@@ -151,8 +159,10 @@ nonisolated struct FootageWeaver {
         let swell: Float
         let sound: Bool
 
+        var look: VideoLook { recipe.carrier ?? .window }
+
         func piece(clipID: String, segmentStart: Double, length: Double? = nil, sound: Bool? = nil) -> FootagePiece {
-            FootagePiece(index: index, slot: slot, clipID: clipID, segmentStart: segmentStart, rate: rate, look: look,
+            FootagePiece(index: index, slot: slot, clipID: clipID, segmentStart: segmentStart, rate: rate, recipe: recipe,
                          seed: seed, warp: warp, level: level, swell: swell, start: start, origin: start, fadeIn: fadeIn,
                          length: length ?? self.length, fadeOutStart: nil, fadeOut: nil, sound: sound ?? self.sound)
         }
@@ -174,17 +184,19 @@ nonisolated struct FootageWeaver {
     /// At most two: the current piece and, from its preparation until the old one has faded, the next.
     private(set) var pieces: [FootagePiece] = []
     private(set) var pieceCount = 0
-    private(set) var lastLook: VideoLook?
+    private(set) var lastRecipe: FootageRecipe?
+    /// The recipes of the last `recentCount` pieces, newest last (down-weighted in the choice).
+    private(set) var recent: [FootageRecipe] = []
     private(set) var soundFreeAt: Double = 0
     private var holdSince: Double?
     /// A `.prepare` was issued and not yet answered.
     private var awaiting = false
-    /// -LiminalVideoLook: every piece uses this look.
-    let pinnedLook: VideoLook?
+    /// -LiminalVideoLook / -LiminalVideoMode: every piece uses this recipe.
+    let pinnedRecipe: FootageRecipe?
 
-    init(seed: UInt64, timing: Timing, pinnedLook: VideoLook? = nil) {
+    init(seed: UInt64, timing: Timing, pinnedLook: VideoLook? = nil, pinnedRecipe: FootageRecipe? = nil) {
         self.timing = timing
-        self.pinnedLook = pinnedLook
+        self.pinnedRecipe = pinnedRecipe ?? pinnedLook.map(FootageRecipe.plain)
         rng = MusicRNG(seed: seed)
     }
 
@@ -204,7 +216,9 @@ nonisolated struct FootageWeaver {
             pieces[pieces.count - 1] = last
         }
         pieces.append(piece)
-        lastLook = piece.look
+        lastRecipe = piece.recipe
+        recent.append(piece.recipe)
+        if recent.count > Self.recentCount { recent.removeFirst(recent.count - Self.recentCount) }
         pieceCount += 1
         holdSince = nil
         if piece.sound { soundFreeAt = piece.plannedChange + Self.soundTail + Self.soundGap }
@@ -233,7 +247,7 @@ nonisolated struct FootageWeaver {
             guard hasClip else { return .none }
             awaiting = true
             return .prepare(makeRequest(slot: 0, start: t + Self.firstLead, fadeIn: timing.firstFade,
-                                        intensity: c.effectIntensity))
+                                        conditions: c))
         }
         // 3. A piece close to its fade in: hold it (and the outgoing piece) while its decoder has no frame
         //    yet or an image transition runs; give up on a decoder that never delivers.
@@ -267,7 +281,7 @@ nonisolated struct FootageWeaver {
         let fade = rng.range(timing.crossfade)
         // The next crossfade may not begin before this piece has fully faded in.
         let start = max(last.plannedChange, t + 1, last.start + last.fadeIn + 0.5)
-        return .prepare(makeRequest(slot: 1 - last.slot, start: start, fadeIn: fade, intensity: c.effectIntensity))
+        return .prepare(makeRequest(slot: 1 - last.slot, start: start, fadeIn: fade, conditions: c))
     }
 
     /// Moves the newest piece's fade in (and the outgoing piece's fade out) later.
@@ -280,28 +294,66 @@ nonisolated struct FootageWeaver {
         }
     }
 
-    private mutating func makeRequest(slot: Int, start: Double, fadeIn: Double, intensity: Float) -> Request {
-        let look = pinnedLook ?? Self.chooseLook(last: lastLook, intensity: intensity, rng: &rng)
+    private mutating func makeRequest(slot: Int, start: Double, fadeIn: Double, conditions c: Conditions) -> Request {
+        let recipe = pinnedRecipe ?? Self.chooseRecipe(last: lastRecipe, recent: recent, intensity: c.effectIntensity,
+                                                       hasDepth: c.hasDepth, rng: &rng)
         var length = rng.range(timing.pieceLength)
-        if look == .emerge { length = min(length, Self.emergeMaxLength) }
+        if let cap = recipe.maxLength { length = min(length, cap) }
         length = max(length, fadeIn + 4)
         let level = rng.rangeF(Self.floor...Self.bandTop)
-        // Swells are slow: only on pieces of 14 s or more (and never on Emerge, which takes the frame).
+        // Swells are slow: only on pieces of 14 s or more (and never on the capped recipes, which take the
+        // frame or its tones).
         let swells = rng.chance(Self.swellChance)
-        let swell = swells && look != .emerge && length >= Self.swellMinLength ? rng.rangeF(Self.swellRange) : 0
+        let swell = swells && recipe.maxLength == nil && length >= Self.swellMinLength ? rng.rangeF(Self.swellRange) : 0
         let soundSpan = length + Self.soundTail - Self.soundDelay
         let sound = start + Self.soundDelay >= soundFreeAt && soundSpan >= Self.soundMinSpan
             && rng.chance(timing.soundChance)
         let index = pieceCount
-        return Request(index: index, slot: slot, start: start, fadeIn: fadeIn, length: length, look: look,
+        return Request(index: index, slot: slot, start: start, fadeIn: fadeIn, length: length, recipe: recipe,
                        seed: rng.unit(), rate: rng.rangeF(timing.rate), warp: rng.rangeF(timing.warp),
                        level: level, swell: swell, sound: sound)
     }
 
-    /// Weighted look choice, never the same look twice in a row; Emerge only at intensity >= 0.4.
-    static func chooseLook(last: VideoLook?, intensity: Float, rng: inout MusicRNG) -> VideoLook {
-        let options = VideoLook.allCases.filter { $0 != last && ($0 != .emerge || intensity >= 0.4) }
-        return options[rng.weighted(options.map(\.weight))]
+    /// Pieces remembered for the recent-use down-weighting.
+    static let recentCount = 4
+    /// After an interaction mode, today's plain looks keep at least this share of the choice (so about
+    /// 30 % of all pieces are plain: a plain piece is never followed by another).
+    static let plainShareAfterMode: Float = 0.45
+
+    /// Recipes the weaver may pick at this intensity and depth (plan footage-fx.md 5, step 1).
+    static func eligible(intensity: Float, hasDepth: Bool) -> [FootageRecipe] {
+        FootageRecipe.allCases.filter { intensity >= $0.minIntensity && (!$0.needsDepth || hasDepth) }
+    }
+
+    /// Two recipes may crossfade into each other when the frame can use a slim shader variant: a key-group and
+    /// a drive-group recipe meet only through a plain look (decision F11).
+    static func compatible(_ a: FootageRecipe?, _ b: FootageRecipe) -> Bool {
+        guard let a else { return true }
+        return a.shaderGroup | b.shaderGroup != 7
+    }
+
+    /// Weighted recipe choice (plan footage-fx.md 5): never the previous recipe or its family, never a
+    /// key-group recipe next to a drive-group one, recently used
+    /// recipes at half weight, the water family halved at low intensity, and the plain looks at least
+    /// `plainShareAfterMode` of the weight after a mode.
+    static func chooseRecipe(last: FootageRecipe?, recent: [FootageRecipe], intensity: Float, hasDepth: Bool,
+                             rng: inout MusicRNG) -> FootageRecipe {
+        var options = eligible(intensity: intensity, hasDepth: hasDepth)
+            .filter { $0 != last && $0.family != last?.family && compatible(last, $0) }
+        if options.isEmpty { options = [last == .window ? .phantom : .window] }
+        var weights = options.map { r -> Float in
+            var w = r.weight
+            if recent.contains(r) { w *= 0.5 }
+            if r.family == .water && intensity < 0.25 { w *= 0.5 }
+            return w
+        }
+        let plain = zip(options, weights).filter { $0.0.family == .plain }.reduce(Float(0)) { $0 + $1.1 }
+        let total = weights.reduce(0, +)
+        if plain > 0, plain < total, plain / total < plainShareAfterMode {
+            let k = plainShareAfterMode / (1 - plainShareAfterMode) * (total - plain) / plain
+            for i in options.indices where options[i].family == .plain { weights[i] *= k }
+        }
+        return options[rng.weighted(weights)]
     }
 
     /// Which cached clip a piece comes from: least recently used clips are likelier, never one of the

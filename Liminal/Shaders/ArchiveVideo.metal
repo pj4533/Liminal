@@ -7,6 +7,8 @@ using namespace metal;
 //       film-like smear; photosensitivity)
 //   g = slow temporal average of r (glows, the Window look)
 //   b = motion |luma - previous r|, smoothed (the Phantom look)
+//   a = soft edge magnitude of the previous stage's g (one frame late; footage interaction modes,
+//       docs/plans/footage-fx.md 6: the film's contours drive the colour fringes)
 // The effects shader samples only the stage (texture 7), never the decoded frame.
 
 struct VideoPrepassParams {
@@ -36,5 +38,13 @@ kernel void videoPrepass(texture2d<half, access::sample> frame [[texture(0)]],
     half r = mix(l, q.r, half(p.blend));
     half g = mix(q.g, r, half(p.slowK));
     half mo = mix(q.b, saturate(abs(l - q.r) * 4.0h), half(p.motionK));
-    out.write(half4(r, g, mo, 1.0h), gid);
+    // Edge of the slow average, 2 texels each way, eased like the motion (no flicker on cuts).
+    half ed = 0.0h;
+    if (p.hasPrev > 0.5) {
+        uint2 hi = uint2(out.get_width() - 1, out.get_height() - 1);
+        half gx = prev.read(uint2(min(gid.x + 2, hi.x), gid.y)).g - prev.read(uint2(gid.x >= 2 ? gid.x - 2 : 0, gid.y)).g;
+        half gy = prev.read(uint2(gid.x, min(gid.y + 2, hi.y))).g - prev.read(uint2(gid.x, gid.y >= 2 ? gid.y - 2 : 0)).g;
+        ed = mix(q.a, saturate(length(half2(gx, gy)) * 6.0h), half(p.motionK));
+    }
+    out.write(half4(r, g, mo, ed), gid);
 }

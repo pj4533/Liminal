@@ -7,9 +7,12 @@
 #   scripts/ffx-clip.sh --image IMG.jpg --footage CLIP.mp4 --out DIR [--look phantom|imprint|window|emerge]
 #        [--footage-start 20] [--rate 0.72] [--len 8] [--start 113] [--intensity 0.5] [--level 0.5 | --mix X]
 #        [--warp 0.6] [--seed 0.3] [--footage-b CLIP2.mp4 --footage-b-start S --look-b NAME --xfade AT,LEN]
+#        [--mode RECIPE] [--mode-b RECIPE] [--depth DEPTH.png] [--reuse DIR]
 #        [--set k=v,...] [--shader FILE.metal] [--prepass FILE.metal] [--fps 30] [--no-score] [--keep-frames]
-#   --set pins uniforms after the app computed them: an interaction mode once its uniforms exist
-#   (e.g. --set videoMode=3,videoModeAmt=0.6), or a fixed effect amount.
+#   --mode pins a footage recipe (docs/plans/footage-fx.md 5) through the app's VideoComposite, as
+#   -LiminalVideoMode does; --set pins uniforms after the app computed them (e.g. --set videoDriveAmt=0.6).
+#   --reuse DIR renders the footage-off and effect-free twins once into DIR/off and DIR/ref (same image,
+#   timeline and options) and links them, so a batch over many modes renders them once per image.
 # Writes
 #   DIR/clip.mp4                 real-time clip (768x512, left eye)
 #   DIR/filmstrip.png            12 labelled frames across the clip
@@ -21,7 +24,7 @@ set -euo pipefail
 
 SCRIPT_DIR="${0:A:h}"
 FFMPEG="${FFMPEG:-/opt/homebrew/bin/ffmpeg}"
-IMG="" CLIP="" OUT="" LOOK="window" FPS=30 SCORE=1 KEEP=0
+IMG="" CLIP="" OUT="" LOOK="window" FPS=30 SCORE=1 KEEP=0 REUSE=
 common=() on=()
 while (( $# )); do
   case "$1" in
@@ -29,6 +32,9 @@ while (( $# )); do
     --footage) CLIP="$2"; shift 2 ;;
     --out) OUT="$2"; shift 2 ;;
     --look) LOOK="$2"; shift 2 ;;
+    --mode) on+=(--video-mode "$2"); shift 2 ;;
+    --mode-b) on+=(--video-mode-b "$2"); shift 2 ;;
+    --reuse) REUSE="$2"; shift 2 ;;
     --fps) FPS="$2"; shift 2 ;;
     --len) common+=(--seq-len "$2"); shift 2 ;;
     --start) common+=(--seq-start "$2"); shift 2 ;;
@@ -59,12 +65,23 @@ base=(--image "$IMG" --footage-seq --left-only --png-size 768x512 --seq-fps "$FP
 "$SCRIPT_DIR/shader-bench.sh" "${base[@]}" --footage "$CLIP" --video-look "$LOOK" --footage-dump "${on[@]}" \
   --out "$OUT/frames" > /dev/null
 if (( SCORE )); then
-  "$SCRIPT_DIR/shader-bench.sh" "${base[@]}" --out "$OUT/off" > /dev/null
-  "$SCRIPT_DIR/shader-bench.sh" "${base[@]}" --seq-ref b --out "$OUT/ref" > /dev/null
+  if [[ -n "$REUSE" ]]; then
+    mkdir -p "$REUSE"
+    [[ -f "$REUSE/off/sequence.json" ]] || "$SCRIPT_DIR/shader-bench.sh" "${base[@]}" --out "$REUSE/off" > /dev/null
+    [[ -f "$REUSE/ref/sequence.json" ]] || "$SCRIPT_DIR/shader-bench.sh" "${base[@]}" --seq-ref b --out "$REUSE/ref" > /dev/null
+    rm -rf "$OUT/off" "$OUT/ref"
+    ln -s "${REUSE:A}/off" "$OUT/off"; ln -s "${REUSE:A}/ref" "$OUT/ref"
+  else
+    "$SCRIPT_DIR/shader-bench.sh" "${base[@]}" --out "$OUT/off" > /dev/null
+    "$SCRIPT_DIR/shader-bench.sh" "${base[@]}" --seq-ref b --out "$OUT/ref" > /dev/null
+  fi
 fi
 
 "$FFMPEG" -y -loglevel error -framerate "$FPS" -i "$OUT/frames/f%04d-L.png" \
   -c:v libx264 -pix_fmt yuv420p -crf 18 -movflags +faststart "$OUT/clip.mp4"
 python3 "$SCRIPT_DIR/ffx-check.py" sheet "$OUT" "$OUT/filmstrip.png" > /dev/null
 if (( SCORE )); then python3 "$SCRIPT_DIR/ffx-check.py" score "$OUT"; fi
-if (( ! KEEP )); then rm -rf "$OUT/frames"/*.png "$OUT/off" "$OUT/ref"; fi
+if (( ! KEEP )); then
+  rm -rf "$OUT/frames"/*.png
+  if [[ -n "$REUSE" ]]; then rm -f "$OUT/off" "$OUT/ref"; else rm -rf "$OUT/off" "$OUT/ref"; fi
+fi
