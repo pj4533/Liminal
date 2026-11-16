@@ -276,6 +276,8 @@ final class MusicSyncBox {
     /// The current (or last) image transition; its duration also anchors the fresh-image hold.
     var transition: TransitionSpec = .classic
     var intensity = EffectIntensitySmoother()
+    /// Effect-controller time of the last footage-conditions update.
+    var lastFootageUpdate: Double = 0
 
     /// The effect look for this frame (effects-balance plan 7.3).
     func look(effectTime: Float, setting: Float, imageInterval: Double) -> EffectLook {
@@ -316,6 +318,11 @@ struct VisualDisplayView: View {
             modulation = sync.reactor.update(state: bus.read(), now: bus.now(), effectTime: effectTime,
                                              enabled: settings.syncVisualsToMusic, baseHueRate: Self.baseHueRate)
         }
+        // Archive footage (docs/plans/archive-video.md): one lock read; the tint is measured once per picture.
+        let frame = transitionManager.currentFrame
+        let footage = ArchiveFootageService.shared.frame(key: frame) {
+            frame?.cgImageRepresentation.map { ImageFraming.coverCrop($0) }
+        }
         var uniforms = EffectsUniformsComputer.compute(
             time: effectTime,
             transitionProgress: Float(transitionManager.transitionProgress),
@@ -323,7 +330,8 @@ struct VisualDisplayView: View {
             vibrance: vibrance,
             music: modulation,
             look: currentLook(effectTime: effectTime),
-            transition: sync.transition
+            transition: sync.transition,
+            video: footage.state
         )
         // Debug toggle controls the effect currently being tested
         if !settings.debugEffectEnabled {
@@ -470,8 +478,10 @@ struct VisualDisplayView: View {
                 lastLoggedSecond = -1  // Reset so first log happens immediately
                 sync.transitionStart = nil  // the effect clock restarts at 0
                 effectController.start()
+                ArchiveFootageService.shared.start()
             } else {
                 effectController.stop()
+                ArchiveFootageService.shared.stop()
             }
         }
         // Log Ken Burns values periodically for debugging
@@ -483,6 +493,17 @@ struct VisualDisplayView: View {
                 look: currentLook(effectTime: DebugLaunchOptions.effectTime(Float(newTime))),
                 transition: sync.transition)
             if let a = sync.activity.next(activity, at: newTime) { music.setVisualActivity(a) }
+            // Archive footage: what the moment director waits on (about 2 Hz).
+            if newTime - sync.lastFootageUpdate >= 0.5 || newTime < sync.lastFootageUpdate {
+                sync.lastFootageUpdate = newTime
+                let et = DebugLaunchOptions.effectTime(Float(newTime))
+                let modulation = sync.reactor.modulation
+                ArchiveFootageService.shared.update(.init(
+                    transitionRunning: tp > 0,
+                    imageAge: sync.transitionStart.map { Double(et - $0) },
+                    musicIntensity: modulation.amount > 0 ? modulation.energy : 0,
+                    effectIntensity: DebugLaunchOptions.effectIntensity(setting: settings.effectIntensity)))
+            }
             if DebugLaunchOptions.syncLog, Int(newTime) != sync.lastLogSecond {
                 sync.lastLogSecond = Int(newTime)
                 logSync(time: Float(newTime))

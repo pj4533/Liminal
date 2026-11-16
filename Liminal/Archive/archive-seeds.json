@@ -1,0 +1,1154 @@
+{
+ "source": "scripts/archive-curate.py",
+ "collection": "prelinger",
+ "seeds": [
+  {
+   "id": "NewsMaga1957",
+   "title": "News Magazine of the Screen, The (1957)",
+   "year": 1957,
+   "query": "newsreel",
+   "color": false
+  },
+  {
+   "id": "PatheNew1950",
+   "title": "Pathe News Christmas with Their Cameramen and Crews 'Round the World",
+   "year": 1950,
+   "query": "newsreel",
+   "color": false
+  },
+  {
+   "id": "Babieson1950",
+   "title": "[Babies on Parade]",
+   "year": 1950,
+   "query": "newsreel",
+   "color": false
+  },
+  {
+   "id": "OaklandW1950",
+   "title": "[Oakland Womens Rowing Club]",
+   "year": 1950,
+   "query": "newsreel",
+   "color": false
+  },
+  {
+   "id": "ManhattanLan",
+   "title": "Manhattan Landmarks",
+   "year": 1950,
+   "query": "newsreel",
+   "color": false
+  },
+  {
+   "id": "UnionSqu1950",
+   "title": "[Union Square, San Francisco Fashion Show]",
+   "year": 1950,
+   "query": "newsreel",
+   "color": false
+  },
+  {
+   "id": "Internat1950",
+   "title": "[International Frog Jump at Angels Camp, California]",
+   "year": 1950,
+   "query": "newsreel",
+   "color": false
+  },
+  {
+   "id": "RenoRode1950",
+   "title": "[Reno Rodeo]",
+   "year": 1950,
+   "query": "newsreel",
+   "color": false
+  },
+  {
+   "id": "AmateurS1950",
+   "title": "[Amateur Skating Champs]",
+   "year": 1950,
+   "query": "newsreel",
+   "color": false
+  },
+  {
+   "id": "GuideDog1950",
+   "title": "[Guide Dogs for the Blind]",
+   "year": 1950,
+   "query": "newsreel",
+   "color": false
+  },
+  {
+   "id": "AmericaOnWhe",
+   "title": "America on Wheels",
+   "year": 1950,
+   "query": "newsreel",
+   "color": false
+  },
+  {
+   "id": "NewsMaga1950_6",
+   "title": "[News Magazine of the Screen, October 1950]",
+   "year": 1950,
+   "query": "newsreel",
+   "color": false
+  },
+  {
+   "id": "NewsMaga1957_2",
+   "title": "News Magazine of the Screen, The (Vol. 7, Issue 5)",
+   "year": 1957,
+   "query": "newsreel",
+   "color": false
+  },
+  {
+   "id": "living_past",
+   "title": "Living Past (Part 3)",
+   "year": 1953,
+   "query": "newsreel",
+   "color": false
+  },
+  {
+   "id": "NewsMaga1950_4",
+   "title": "[News Magazine of the Screen, December 1950] (Part II)",
+   "year": 1950,
+   "query": "newsreel",
+   "color": false
+  },
+  {
+   "id": "WillieSh1950",
+   "title": "[Willie Shoemaker at Golden Gate Fields]",
+   "year": 1950,
+   "query": "newsreel",
+   "color": false
+  },
+  {
+   "id": "AmosAlon1950",
+   "title": "[Amos Alonzo Stagg Honored on 95th Birthday]",
+   "year": 1950,
+   "query": "newsreel",
+   "color": false
+  },
+  {
+   "id": "0081NewsMagazineOfTheScreenTheVol7Issue5",
+   "title": "News Magazine of the Screen, The (Vol. 7, Issue 5)",
+   "year": 1957,
+   "query": "newsreel",
+   "color": false
+  },
+  {
+   "id": "Looktoth1953",
+   "title": "Look to the Land",
+   "year": 1953,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "Countdow1960",
+   "title": "[Countdown Leader: Technicolor Corporation]",
+   "year": 1960,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "styling_and_the_experimental_car",
+   "title": "Styling and the Experimental Car",
+   "year": 1964,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "Wordtoth1955",
+   "title": "Word to the Wives, A",
+   "year": 1955,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "0767_Incredible_Machine_The_20_26_47_00",
+   "title": "Incredible Machine, The",
+   "year": 1968,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "Wonderfu1958",
+   "title": "Wonderful World of Wash 'n' Wear, The",
+   "year": 1958,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "2306_Design_for_Dreaming_21_26_14_00",
+   "title": "Design for Dreaming",
+   "year": 1956,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "WhatMake1952",
+   "title": "What Makes Us Tick",
+   "year": 1952,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "TowersTh1957",
+   "title": "Towers, The",
+   "year": 1957,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "0122_Living_Stereo_M04234_12_00_41_00",
+   "title": "Living Stereo",
+   "year": 1958,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "Frigidai1957",
+   "title": "Frigidaire Finale 1957",
+   "year": 1957,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "SchoolRules",
+   "title": "School Rules: How They Help Us",
+   "year": 1953,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "0122_Revolutionary_New_Triumph_in_Tape_A_M04235_12_08_22_01",
+   "title": "Revolutionary New Triumph in Tape!, A",
+   "year": 1958,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "BeeCity1951",
+   "title": "Bee City",
+   "year": 1951,
+   "query": "trippy",
+   "color": false
+  },
+  {
+   "id": "0701_Sinclair_at_the_Worlds_Fair",
+   "title": "Sinclair at the World's Fair",
+   "year": 1965,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "HelpingJ1956",
+   "title": "Helping Johnny Remember",
+   "year": 1956,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "Holidayf1959",
+   "title": "Holiday from Rules?",
+   "year": 1959,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "OfficeCo1952",
+   "title": "Office Courtesy: Meeting the Public",
+   "year": 1952,
+   "query": "trippy",
+   "color": false
+  },
+  {
+   "id": "Aluminum1956",
+   "title": "Aluminum on the March (Part I)",
+   "year": 1956,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "ColorKey1950",
+   "title": "Color Keying in Art and Living",
+   "year": 1950,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "SnapOuto1951",
+   "title": "Snap Out of It! (Emotional Balance)",
+   "year": 1951,
+   "query": "trippy",
+   "color": false
+  },
+  {
+   "id": "0548_American_Maker",
+   "title": "American Maker",
+   "year": 1960,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "Frigidai1956",
+   "title": "[Frigidaire Imperial Line]",
+   "year": 1956,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "WhatsItt1955",
+   "title": "What's It to You? (Part I)",
+   "year": 1955,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "0105_To_the_Fair_17_31_23_00",
+   "title": "To the Fair",
+   "year": 1964,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "American1960",
+   "title": "American Maker",
+   "year": 1960,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "Heritage1963",
+   "title": "Heritage of Splendor",
+   "year": 1963,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "CitiesHowThe",
+   "title": "Cities How They Grow",
+   "year": 1952,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "LetsShar1950",
+   "title": "Let's Share With Others",
+   "year": 1950,
+   "query": "trippy",
+   "color": false
+  },
+  {
+   "id": "WhatsItt1955_2",
+   "title": "What's It to You? (Part II)",
+   "year": 1955,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "along_the_way",
+   "title": "Along the Way",
+   "year": 1968,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "0505_To_the_Fair_10_31_38_16",
+   "title": "To the Fair",
+   "year": 1964,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "lets_talk_turkey",
+   "title": "Let's Talk Turkey",
+   "year": 1951,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "0425_Incredible_Machine_The_00_01_07_00",
+   "title": "Incredible Machine, The",
+   "year": 1968,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "200443_Sounds_Familiar",
+   "title": "Sounds Familiar",
+   "year": 1957,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "0829_Story_of_Television_The_11_00_55_00",
+   "title": "Story of Television, The",
+   "year": 1956,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "0710_Someones_In_the_Kitchen_12_49_00_00",
+   "title": "Someone's In the Kitchen",
+   "year": 1960,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "GoodLose1953",
+   "title": "Good Loser, The",
+   "year": 1953,
+   "query": "trippy",
+   "color": false
+  },
+  {
+   "id": "0769_Consuming_Women_Women_as_Consumers_18_00_58_00",
+   "title": "Consuming Women (Women as Consumers)",
+   "year": 1967,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "quality_control_2",
+   "title": "Quality Control in Modern Merchandising (Part II)",
+   "year": 1952,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "0707_Someones_In_the_Kitchen_00_47_45_00",
+   "title": "Someone's In the Kitchen",
+   "year": 1960,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "0207_Consuming_Women_Women_as_Consumers_02_50_49_00",
+   "title": "Consuming Women (Women as Consumers)",
+   "year": 1967,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "0242_Sleep_for_Health_E01299_13_00_43_00",
+   "title": "Sleep for Health",
+   "year": 1950,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "6335StopMotionTrainFilm01154900",
+   "title": "[Stop-Motion Train Film]",
+   "year": 1950,
+   "query": "trippy",
+   "color": false
+  },
+  {
+   "id": "0210_Miracle_on_the_Delaware_05_18_25_00",
+   "title": "Miracle on the Delaware",
+   "year": 1953,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "0902_HM_San_Francisco_and_Pacific_Coast_Highway_1962_02_11_16_15",
+   "title": "[Home Movies: San Francisco and Pacific Coast Highway, 1962]",
+   "year": 1962,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "0807_Miracle_on_the_Delaware_07_10_55_00",
+   "title": "Miracle on the Delaware",
+   "year": 1953,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "0722_Education_for_Excellence_16_01_06_00",
+   "title": "Education for Excellence",
+   "year": 1964,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "0625_School_Rules_How_They_Help_Us_20_50_28_00",
+   "title": "School Rules: How They Help Us",
+   "year": 1953,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "200446_Decorating_Unlimited",
+   "title": "Decorating Unlimited",
+   "year": 1961,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "2327A_American_Look_M04199_12_17_27_00",
+   "title": "American Look",
+   "year": 1958,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "0316AgriculturalAviation",
+   "title": "Agricultural Aviation",
+   "year": 1955,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "0724_Styling_and_the_Experimental_Car_20_22_24_27",
+   "title": "Styling and the Experimental Car",
+   "year": 1964,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "0330_Robbers_Under_Water_E01201_08_45_30_00",
+   "title": "Robbers Under Water",
+   "year": 1950,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "202889_A_Visit_to_Santa",
+   "title": "A Visit to Santa",
+   "year": 1963,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "202274_Golden_Horizons",
+   "title": "Golden Horizons",
+   "year": 1955,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "0244_Greenwich_Village_Sunday_15_39_53_00",
+   "title": "Greenwich Village Sunday",
+   "year": 1960,
+   "query": "trippy",
+   "color": true
+  },
+  {
+   "id": "MovieTra1950_3",
+   "title": "Movie Trailers: \"Marathon of Fright\"",
+   "year": 1950,
+   "query": "educational",
+   "color": false
+  },
+  {
+   "id": "Outsider1951",
+   "title": "Outsider, The",
+   "year": 1951,
+   "query": "educational",
+   "color": false
+  },
+  {
+   "id": "Sciencei1956_11",
+   "title": "Science in Action: The Flow of Heat (Part I)",
+   "year": 1956,
+   "query": "educational",
+   "color": false
+  },
+  {
+   "id": "OtherFel1951",
+   "title": "Other Fellow's Feelings, The",
+   "year": 1951,
+   "query": "educational",
+   "color": false
+  },
+  {
+   "id": "MoralLea1963",
+   "title": "Moral Leadership: The Whole Man",
+   "year": 1963,
+   "query": "educational",
+   "color": false
+  },
+  {
+   "id": "Sciencei1956_12",
+   "title": "Science in Action: The Flow of Heat (Part II)",
+   "year": 1956,
+   "query": "educational",
+   "color": false
+  },
+  {
+   "id": "1407SiblingRivalriesAndParents",
+   "title": "Sibling Rivalries And Parents",
+   "year": 1956,
+   "query": "educational",
+   "color": false
+  },
+  {
+   "id": "200497_The_Suns_Family",
+   "title": "The Sun's Family",
+   "year": 1950,
+   "query": "educational",
+   "color": false
+  },
+  {
+   "id": "HowtoGoP1954",
+   "title": "How to Go Places",
+   "year": 1954,
+   "query": "spaceage",
+   "color": false
+  },
+  {
+   "id": "YoungMan1952",
+   "title": "Young Man's Fancy (Part I)",
+   "year": 1952,
+   "query": "spaceage",
+   "color": true
+  },
+  {
+   "id": "GreatNew1952",
+   "title": "Great New Star, A",
+   "year": 1952,
+   "query": "spaceage",
+   "color": false
+  },
+  {
+   "id": "AllAboutPolymorphics",
+   "title": "All About Polymorphics",
+   "year": 1959,
+   "query": "spaceage",
+   "color": true
+  },
+  {
+   "id": "YoungMan1952_2",
+   "title": "Young Man's Fancy (Part II)",
+   "year": 1952,
+   "query": "spaceage",
+   "color": true
+  },
+  {
+   "id": "Revoluti1958",
+   "title": "Revolutionary New Triumph in Tape, A",
+   "year": 1958,
+   "query": "spaceage",
+   "color": true
+  },
+  {
+   "id": "OfficeEt1950",
+   "title": "Office Etiquette",
+   "year": 1950,
+   "query": "spaceage",
+   "color": false
+  },
+  {
+   "id": "PlaneTal1965",
+   "title": "Plane Talk",
+   "year": 1965,
+   "query": "spaceage",
+   "color": true
+  },
+  {
+   "id": "highlights_1965_1",
+   "title": "Highlights 1965: A Progress Report (Part I)",
+   "year": 1965,
+   "query": "spaceage",
+   "color": true
+  },
+  {
+   "id": "ManofAct1955",
+   "title": "Man of Action",
+   "year": 1955,
+   "query": "spaceage",
+   "color": true
+  },
+  {
+   "id": "highlights_1965_2",
+   "title": "Highlights 1965: A Progress Report (Part II)",
+   "year": 1965,
+   "query": "spaceage",
+   "color": true
+  },
+  {
+   "id": "ror_rocket_on_rotor",
+   "title": "ROR - Rocket on Rotor",
+   "year": 1955,
+   "query": "spaceage",
+   "color": true
+  },
+  {
+   "id": "abcs_of_walking_wisely",
+   "title": "ABCs of Walking Wisely",
+   "year": 1959,
+   "query": "spaceage",
+   "color": true
+  },
+  {
+   "id": "AtThisMo1954",
+   "title": "At This Moment (Part I)",
+   "year": 1954,
+   "query": "spaceage",
+   "color": true
+  },
+  {
+   "id": "0767_ESS_20_00_58_00",
+   "title": "ESS",
+   "year": 1965,
+   "query": "spaceage",
+   "color": true
+  },
+  {
+   "id": "Magicint1955",
+   "title": "Magic in the Air (1955)",
+   "year": 1955,
+   "query": "spaceage",
+   "color": false
+  },
+  {
+   "id": "Hillsbor1959",
+   "title": "Hillsborough with New Hideaway Styling, The",
+   "year": 1959,
+   "query": "spaceage",
+   "color": true
+  },
+  {
+   "id": "NewSeven1959",
+   "title": "New Seven-Function Remote Control for Color",
+   "year": 1959,
+   "query": "spaceage",
+   "color": true
+  },
+  {
+   "id": "6317_Visit_to_Santa_A_01_32_14_19",
+   "title": "Visit to Santa, A",
+   "year": 1963,
+   "query": "spaceage",
+   "color": true
+  },
+  {
+   "id": "Water1953",
+   "title": "Water",
+   "year": 1953,
+   "query": "spaceage",
+   "color": false
+  },
+  {
+   "id": "NewspaperSto",
+   "title": "Newspaper Story",
+   "year": 1950,
+   "query": "spaceage",
+   "color": false
+  },
+  {
+   "id": "way_you_want_it",
+   "title": "Way You Want It, The",
+   "year": 1950,
+   "query": "spaceage",
+   "color": false
+  },
+  {
+   "id": "Learning1959",
+   "title": "Learning to Set Type",
+   "year": 1959,
+   "query": "spaceage",
+   "color": false
+  },
+  {
+   "id": "AtThisMo1954_2",
+   "title": "At This Moment (Part II)",
+   "year": 1954,
+   "query": "spaceage",
+   "color": true
+  },
+  {
+   "id": "KeytoOur1952",
+   "title": "Key to Our Horizons",
+   "year": 1952,
+   "query": "spaceage",
+   "color": false
+  },
+  {
+   "id": "0180_Man_and_His_Culture_E00684_23_11_38_00",
+   "title": "Man and His Culture",
+   "year": 1954,
+   "query": "spaceage",
+   "color": true
+  },
+  {
+   "id": "reasons_why_1",
+   "title": "Reasons Why, The (Part I)",
+   "year": 1959,
+   "query": "spaceage",
+   "color": true
+  },
+  {
+   "id": "inside_story",
+   "title": "Inside Story, The",
+   "year": 1950,
+   "query": "spaceage",
+   "color": false
+  },
+  {
+   "id": "Consumer1960",
+   "title": "Consumers Want to Know (Part I)",
+   "year": 1960,
+   "query": "spaceage",
+   "color": false
+  },
+  {
+   "id": "0807_Two-Ford_Freedom_07_20_49_00",
+   "title": "Two-Ford Freedom",
+   "year": 1956,
+   "query": "spaceage",
+   "color": true
+  },
+  {
+   "id": "WhatAbou1958",
+   "title": "What About School Spirit?",
+   "year": 1958,
+   "query": "spaceage",
+   "color": false
+  },
+  {
+   "id": "FlyingBu1953",
+   "title": "Flying Businessman",
+   "year": 1953,
+   "query": "spaceage",
+   "color": true
+  },
+  {
+   "id": "KitCarsonCoc",
+   "title": "Kit Carson Coca-Cola Spots",
+   "year": 1950,
+   "query": "spaceage",
+   "color": false
+  },
+  {
+   "id": "6240_System_Technology_01_29_28_19",
+   "title": "System Technology",
+   "year": 1960,
+   "query": "spaceage",
+   "color": true
+  },
+  {
+   "id": "Programm1959",
+   "title": "Programmer with Magic Memory: Another Newsmaker",
+   "year": 1959,
+   "query": "spaceage",
+   "color": true
+  },
+  {
+   "id": "1965Para1965",
+   "title": "1965 Parade of Homes, The (Part I)",
+   "year": 1965,
+   "query": "spaceage",
+   "color": false
+  },
+  {
+   "id": "Sciencei1956_3",
+   "title": "Science in Action: Drilling for Oil (Part I)",
+   "year": 1956,
+   "query": "spaceage",
+   "color": true
+  },
+  {
+   "id": "SpeechFu1950",
+   "title": "Speech: Function of Gestures, The",
+   "year": 1950,
+   "query": "spaceage",
+   "color": false
+  },
+  {
+   "id": "reasons_why_2",
+   "title": "Reasons Why, The (Part II)",
+   "year": 1959,
+   "query": "spaceage",
+   "color": true
+  },
+  {
+   "id": "Logic_by_Machine",
+   "title": "Logic by Machine",
+   "year": 1962,
+   "query": "spaceage",
+   "color": true
+  },
+  {
+   "id": "0774_New_Stars_in_Stereo_Newsmakers_in_Sound_for_1960_M04451_12_25_37_00",
+   "title": "New Stars in Stereo: Newsmakers in Sound for 1960",
+   "year": 1959,
+   "query": "spaceage",
+   "color": true
+  },
+  {
+   "id": "6270HMTexasTravelsAndTelevisedMoonWalk01181613",
+   "title": "[Home Movies: Texas Travels and Televised Moon Walk]",
+   "year": 1969,
+   "query": "spaceage",
+   "color": false
+  },
+  {
+   "id": "0194_Magic_in_the_Air_1955_M03558_13_50_33_16",
+   "title": "Magic in the Air (1955)",
+   "year": 1955,
+   "query": "spaceage",
+   "color": true
+  },
+  {
+   "id": "0426_Industrial_Breakthrough_00_10_25_00",
+   "title": "Industrial Breakthrough",
+   "year": 1958,
+   "query": "spaceage",
+   "color": true
+  },
+  {
+   "id": "0764_Chunky_Television_Commercials_with_Arnold_Stang_01_37_16_00",
+   "title": "[Chunky Television Commercials with Arnold Stang]",
+   "year": 1950,
+   "query": "spaceage",
+   "color": false
+  },
+  {
+   "id": "Consumer1960_2",
+   "title": "Consumers Want to Know (Part II)",
+   "year": 1960,
+   "query": "spaceage",
+   "color": false
+  },
+  {
+   "id": "GoodEati1951",
+   "title": "Good Eating Habits",
+   "year": 1951,
+   "query": "bw",
+   "color": false
+  },
+  {
+   "id": "GoodTabl1951",
+   "title": "Good Table Manners",
+   "year": 1951,
+   "query": "bw",
+   "color": false
+  },
+  {
+   "id": "WhattoDo1950",
+   "title": "What to Do on a Date",
+   "year": 1950,
+   "query": "bw",
+   "color": false
+  },
+  {
+   "id": "FolgersCoffe",
+   "title": "Folgers Coffee Commercial",
+   "year": 1960,
+   "query": "bw",
+   "color": false
+  },
+  {
+   "id": "FolgersCoffe_2",
+   "title": "Folgers Coffee Commercial 2",
+   "year": 1960,
+   "query": "bw",
+   "color": false
+  },
+  {
+   "id": "Beginnin1953",
+   "title": "Beginning to Date",
+   "year": 1953,
+   "query": "bw",
+   "color": false
+  },
+  {
+   "id": "GoingSte1951",
+   "title": "Going Steady?",
+   "year": 1951,
+   "query": "bw",
+   "color": false
+  },
+  {
+   "id": "Marriage1951",
+   "title": "Marriage Is a Partnership",
+   "year": 1951,
+   "query": "bw",
+   "color": false
+  },
+  {
+   "id": "Choosing1950",
+   "title": "Choosing for Happiness",
+   "year": 1950,
+   "query": "bw",
+   "color": false
+  },
+  {
+   "id": "Typesett1960",
+   "title": "Typesetting: Linotype (Part I)",
+   "year": 1960,
+   "query": "bw",
+   "color": false
+  },
+  {
+   "id": "Bookbind1961",
+   "title": "Bookbinders",
+   "year": 1961,
+   "query": "bw",
+   "color": false
+  },
+  {
+   "id": "HowtoSay1951",
+   "title": "How to Say No: Moral Maturity",
+   "year": 1951,
+   "query": "bw",
+   "color": false
+  },
+  {
+   "id": "HairDres1950",
+   "title": "Hair Dress Through the Ages",
+   "year": 1950,
+   "query": "bw",
+   "color": false
+  },
+  {
+   "id": "Beech-NutBab",
+   "title": "Beech-Nut Baby Food Commercial",
+   "year": 1960,
+   "query": "bw",
+   "color": false
+  },
+  {
+   "id": "Typesett1960_2",
+   "title": "Typesetting: Linotype (Part II)",
+   "year": 1960,
+   "query": "bw",
+   "color": false
+  },
+  {
+   "id": "LetsBeGo1953",
+   "title": "Let's Be Good Citizens at School",
+   "year": 1953,
+   "query": "bw",
+   "color": false
+  },
+  {
+   "id": "16mmMoti1961_2",
+   "title": "16mm Motion Picture Projector: Operating Techniques, The",
+   "year": 1961,
+   "query": "bw",
+   "color": false
+  },
+  {
+   "id": "FolgersCoffe_3",
+   "title": "Folgers Coffee Commercial 3",
+   "year": 1960,
+   "query": "bw",
+   "color": false
+  },
+  {
+   "id": "SelfCons1951",
+   "title": "Self-Conscious Guy",
+   "year": 1951,
+   "query": "bw",
+   "color": false
+  },
+  {
+   "id": "FunofBei1950",
+   "title": "Fun of Being Thoughtful, The",
+   "year": 1950,
+   "query": "bw",
+   "color": false
+  },
+  {
+   "id": "OurHomeT1954_2",
+   "title": "Our Home Town: Levittown, Pa.",
+   "year": 1954,
+   "query": "bw",
+   "color": false
+  },
+  {
+   "id": "Mullinai1953",
+   "title": "Mullinaires, The",
+   "year": 1953,
+   "query": "bw",
+   "color": false
+  },
+  {
+   "id": "1964NewY1961",
+   "title": "1964 New York World's Fair Report",
+   "year": 1961,
+   "query": "bw",
+   "color": false
+  },
+  {
+   "id": "Developi1951",
+   "title": "Developing Self-Reliance",
+   "year": 1951,
+   "query": "bw",
+   "color": false
+  },
+  {
+   "id": "YouandYo1950",
+   "title": "You and Your Parents",
+   "year": 1950,
+   "query": "bw",
+   "color": false
+  },
+  {
+   "id": "WhosRigh1954",
+   "title": "Who's Right?",
+   "year": 1954,
+   "query": "bw",
+   "color": false
+  },
+  {
+   "id": "Lewisand1950",
+   "title": "Lewis and Clark",
+   "year": 1950,
+   "query": "bw",
+   "color": false
+  },
+  {
+   "id": "Passenge1955",
+   "title": "Passenger Train, The (Second Edition)",
+   "year": 1955,
+   "query": "bw",
+   "color": false
+  },
+  {
+   "id": "Barbers1959",
+   "title": "Barbers",
+   "year": 1959,
+   "query": "bw",
+   "color": false
+  },
+  {
+   "id": "Somethin1958",
+   "title": "Something New From Something Old",
+   "year": 1958,
+   "query": "bw",
+   "color": false
+  },
+  {
+   "id": "MakingFi1954",
+   "title": "Making Films That Teach",
+   "year": 1954,
+   "query": "bw",
+   "color": false
+  },
+  {
+   "id": "MennenBabyMa",
+   "title": "Mennen Baby Magic Commercial",
+   "year": 1960,
+   "query": "bw",
+   "color": false
+  },
+  {
+   "id": "TroubleM1959",
+   "title": "Trouble Maker, The",
+   "year": 1959,
+   "query": "bw",
+   "color": false
+  },
+  {
+   "id": "GossipTh1955",
+   "title": "Gossip, The",
+   "year": 1955,
+   "query": "bw",
+   "color": false
+  },
+  {
+   "id": "Understandin_2",
+   "title": "Understanding The Dollar",
+   "year": 1953,
+   "query": "bw",
+   "color": false
+  }
+ ]
+}

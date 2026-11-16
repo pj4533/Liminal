@@ -34,6 +34,7 @@ APP_SRCS=(
   "$ROOT/Liminal/Visual/ImageFraming.swift"
   "$ROOT/Liminal/Visual/ImageColorStats.swift"
   "$ROOT/Liminal/Visual/DepthMapGenerator.swift"
+  "$ROOT/Liminal/Archive/VideoComposite.swift"
 )
 BIN_DIR="${SCRATCH:-${TMPDIR:-/tmp}/liminal-shader-bench}"
 BIN="$BIN_DIR/shader-bench"

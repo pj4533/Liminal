@@ -45,6 +45,18 @@ struct EffectsUniforms {
     var txSeed: Float = 0  // 0...1: direction, centre, wedge count, channel order
     var txSoft: Float = 0  // swap mask edge softness; negative = reversed order
     var txAmount: Float = 0  // style amount: Prism stagger, fold, swirl angle, wave, lens, tone fold
+    // Archive footage (docs/plans/archive-video.md 2.2; appended last, defaults 0 = no footage).
+    var videoMix: Float = 0  // envelope x look ceiling; 0 = the whole footage stage is skipped
+    var videoLook: Float = 0  // VideoLook raw value (1 phantom, 2 imprint, 3 window, 4 emerge)
+    var videoSeed: Float = 0  // 0...1: drift direction, region shape
+    var videoScale: Float = 0  // footage size relative to the frame (1 = cover fit)
+    var videoAspect: Float = 0  // (footage width / height) / display aspect: the cover-fit factor
+    var videoTintR: Float = 0  // highlight colour (from the picture)
+    var videoTintG: Float = 0
+    var videoTintB: Float = 0
+    var videoShadeR: Float = 0  // shadow colour of the duotone looks
+    var videoShadeG: Float = 0
+    var videoShadeB: Float = 0
 }
 
 /// Ghost tap data for shader. Must match Metal struct layout.

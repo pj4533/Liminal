@@ -50,6 +50,13 @@
 //                      This cancels host drift; prefer it for any candidate-vs-reference decision.
 //   --image PATH       source image (required; the wrapper passes the fixture)
 //   --depth PATH       depth map PNG (grayscale; omit for a flat 0.5 map)
+//   --video FRAME.png  archive footage frame (docs/plans/archive-video.md 7): built into a 960x720 stage
+//                      texture like the app's pre-pass (r = g = luma, b = edge strength standing in for
+//                      motion) and bound at texture 7. Without it texture 7 is 1x1 black and videoMix 0.
+//   --video-look NAME  phantom | imprint | window | emerge (default phantom)
+//   --video-mix X      constant footage mix (VideoCompositeState.constantMix; default: the look's
+//                      ceiling at the intensity). Video uniforms can also be set with --set.
+//   --video-seed X     0...1 placement seed (default 0.3)
 //   --times a,b,...    fixed effect times (default 37,113,260,611)
 //   --no-transition    skip the trans113 scenario
 //   --frames N         timed frames per trial (default 300)
@@ -283,6 +290,10 @@ guard let metallibPath = takeValue("--metallib") else { fail("--metallib is requ
 let metallibPathB = takeValue("--metallib-b")
 guard let imagePath = takeValue("--image") else { fail("--image is required") }
 let depthPath = takeValue("--depth")
+let videoPath = takeValue("--video")
+let videoLookArg = takeValue("--video-look") ?? "phantom"
+let videoMixArg = takeValue("--video-mix").map { v -> Float in guard let f = Float(v) else { fail("bad --video-mix") }; return f }
+let videoSeedArg = Float(takeValue("--video-seed") ?? "0.3") ?? 0.3
 let times: [Float] = (takeValue("--times") ?? "37,113,260,611").split(separator: ",").map {
     guard let t = Float($0) else { fail("bad --times") }; return t
 }
@@ -373,11 +384,17 @@ struct Variant {
     let mono: MTLRenderPipelineState
 }
 let variantPaths: [(String, String)] = [("A", metallibPath)] + (metallibPathB.map { [("B", $0)] } ?? [])
+/// With --video, a library that has the footage variants (effectsFragmentVideo / effectsFragmentStereoVideo,
+/// docs/plans/archive-video.md 2.3) renders with them, as the renderers do while footage shows; a library
+/// without them (main) renders its plain fragments.
+func fragmentName(_ lib: MTLLibrary, _ base: String) -> String {
+    videoPath != nil && lib.functionNames.contains(base + "Video") ? base + "Video" : base
+}
 let variants: [Variant] = variantPaths.map { name, path in
         let lib = loadLibrary(path)
         return Variant(name: name, path: path,
-                       stereo: mono ? nil : makePipeline(lib, "effectsFragmentStereo", attachments: 2),
-                       mono: makePipeline(lib, "effectsFragment", attachments: 1))
+                       stereo: mono ? nil : makePipeline(lib, fragmentName(lib, "effectsFragmentStereo"), attachments: 2),
+                       mono: makePipeline(lib, fragmentName(lib, "effectsFragment"), attachments: 1))
     }
 
 let sampler: MTLSamplerState = {
@@ -448,6 +465,47 @@ let depthTex: MTLTexture = depthPath.map { uploadGray(loadCGImage($0)) } ?? oneP
 let saliencyTex = onePixel(.r8Unorm, [128])       // default 1x1 neutral saliency
 let blackTex = onePixel(renderFormat, [0, 0, 0, 255])  // feedback placeholder (first frame)
 
+/// Footage stage texture (--video): the app's pre-pass layout at 960x720, rgba8Unorm.
+func videoStage(_ img: CGImage) -> MTLTexture {
+    let w = 960, h = 720
+    var g = [UInt8](repeating: 0, count: w * h)
+    let ctx = CGContext(data: &g, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w,
+                        space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue)!
+    ctx.interpolationQuality = .high
+    // 6 % inset crop of film borders, as the pre-pass.
+    let cw = CGFloat(w) / 0.88, ch = CGFloat(h) / 0.88
+    ctx.draw(img, in: CGRect(x: -(cw - CGFloat(w)) / 2, y: -(ch - CGFloat(h)) / 2, width: cw, height: ch))
+    var lo = 255, hi = 0
+    var hist = [Int](repeating: 0, count: 256)
+    for v in g { hist[Int(v)] += 1 }
+    var acc = 0
+    for i in 0..<256 { acc += hist[i]; if lo == 255 && acc >= g.count / 20 { lo = i }; if acc >= g.count * 19 / 20 { hi = i; break } }
+    let span = Float(max(hi - lo, 12))
+    var px = [UInt8](repeating: 255, count: w * h * 4)
+    for y in 0..<h {
+        for x in 0..<w {
+            let i = y * w + x
+            let l = min(max((Float(g[i]) - Float(lo)) / span, 0), 1)
+            let gx = Float(g[y * w + min(x + 1, w - 1)]) - Float(g[y * w + max(x - 1, 0)])
+            let gy = Float(g[min(y + 1, h - 1) * w + x]) - Float(g[max(y - 1, 0) * w + x])
+            let e = min((gx * gx + gy * gy).squareRoot() / 255 * 4, 1)
+            px[i * 4] = UInt8(l * 255); px[i * 4 + 1] = UInt8(l * 255); px[i * 4 + 2] = UInt8(e * 255)
+        }
+    }
+    return px.withUnsafeBytes { uploadTexture(.rgba8Unorm, w, h, bytesPerRow: w * 4, $0.baseAddress!) }
+}
+let videoTex: MTLTexture = videoPath.map { videoStage(loadCGImage($0)) } ?? onePixel(.rgba8Unorm, [0, 0, 0, 255])
+let videoState: VideoCompositeState = {
+    guard let path = videoPath else { return .off }
+    guard let look = VideoLook(name: videoLookArg) else { fail("--video-look: phantom, imprint, window or emerge") }
+    let img = loadCGImage(path)
+    let t = VideoComposite.tint(of: framed)
+    var st = VideoCompositeState(envelope: 1, look: look, seed: videoSeedArg,
+                                 aspect: Float(img.width) / Float(img.height), tint: t.tint, shade: t.shade)
+    st.constantMix = videoMixArg
+    return st
+}()
+
 // MARK: - Scenarios
 
 struct Scenario {
@@ -499,6 +557,9 @@ let uniformFields: [String: WritableKeyPath<EffectsUniforms, Float>] = [
     "fractalHueAmount": \.fractalHueAmount, "vibranceAmount": \.vibranceAmount, "blackPoint": \.blackPoint,
     "txStyle": \.txStyle, "txMix": \.txMix, "txEnv": \.txEnv, "txSeed": \.txSeed, "txSoft": \.txSoft,
     "txAmount": \.txAmount,
+    "videoMix": \.videoMix, "videoLook": \.videoLook, "videoSeed": \.videoSeed, "videoScale": \.videoScale,
+    "videoAspect": \.videoAspect, "videoTintR": \.videoTintR, "videoTintG": \.videoTintG, "videoTintB": \.videoTintB,
+    "videoShadeR": \.videoShadeR, "videoShadeG": \.videoShadeG, "videoShadeB": \.videoShadeB,
 ]
 func uniformsDict(_ u: EffectsUniforms) -> [String: Double] {
     var d: [String: Double] = [:]
@@ -529,7 +590,7 @@ func computeUniforms(t: Float, tp: Float, intensity: Float?, age: Float?, spec: 
     EffectsUniformsComputer.compute(time: t, transitionProgress: tp, hasSaliencyMap: false, vibrance: vibrance,
         look: EffectLook(intensity: intensity ?? EffectLook.defaultIntensity, imageAge: age,
                          transitionDuration: spec.duration),
-        transition: spec)
+        transition: spec, video: videoState)
 }
 
 func makeScenario(_ name: String, t: Float, tp: Float, over: [String: Float] = [:],
@@ -617,6 +678,7 @@ func encodeFrame(_ cb: MTLCommandBuffer, _ sc: Scenario, _ st: FrameState, varia
             enc.setFragmentTexture(saliencyTex, index: 2)
             enc.setFragmentTexture(sc.previous, index: 3)
             enc.setFragmentTexture(depthTex, index: 5)
+        enc.setFragmentTexture(videoTex, index: 7)
             enc.setFragmentSamplerState(sampler, index: 0)
             enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
             enc.endEncoding()
@@ -639,6 +701,7 @@ func encodeFrame(_ cb: MTLCommandBuffer, _ sc: Scenario, _ st: FrameState, varia
         enc.setFragmentTexture(saliencyTex, index: 2)
         enc.setFragmentTexture(sc.previous, index: 3)
         enc.setFragmentTexture(depthTex, index: 5)
+        enc.setFragmentTexture(videoTex, index: 7)
         enc.setFragmentSamplerState(sampler, index: 0)
         enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         enc.endEncoding()
