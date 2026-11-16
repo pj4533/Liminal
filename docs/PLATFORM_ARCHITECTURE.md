@@ -284,3 +284,7 @@ measurements and the DEBUG test-card flags: `docs/decisions/orientation.md`.
 ## Control UI
 
 Both platforms share the same four sections (Playback, Music, Visuals, Images & Storage) built from `ControlComponents.swift`. visionOS opens a 1240x800 window with no settings sheet; macOS has a 320 pt scrolling panel and a "Storage & Settings" sheet. Decisions: `decisions/ui.md`.
+
+## Archive footage (both platforms)
+
+`Liminal/Archive/` fetches 1950-69 Prelinger films from the Internet Archive (`ArchiveClient`, polite, no key), caches them (`ArchiveClipStore`), and `VideoFrameSource` decodes with `AVAssetReader` on its own queue into a 960x720 stage texture via a pre-pass compute kernel; the render loops only do a lock read. `VideoMomentDirector` schedules moments. Both renderers (`EffectsMetalView` on macOS, `OffscreenEffectsRenderer` on visionOS) bind a separate footage fragment variant only while `videoMix > 0`, so footage-off frames are identical to before; on visionOS the footage rides the one 2048x2048 render and so appears on the depth-relief shell. The film's sound goes through `ArchiveVoice`, one more strip in the music graph that shares the existing reverb and delay. Platform differences: none beyond the settings card placement. See `docs/decisions/archive-video.md`.

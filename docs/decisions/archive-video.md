@@ -4,9 +4,42 @@ Decision log for the archive footage workstream. Plan with all numbers: `docs/pl
 Request: old (1950s-60s, mostly black and white, newsreel / trippy / odd) Internet Archive film fades into
 the scene now and then, under the same effects as the picture; its sound enters later, very gently.
 
-Status: phases 1-5 built: fetch and cache, footage in the shader on both platforms, moments, the film's
+Status: built and reviewed (A24-A25). Phases 1-5 built: fetch and cache, footage in the shader on both platforms, moments, the film's
 sound (A14-A19) and the "Archive Footage" settings card (A20-A22). Phase 6 (floating screen) is not built
 (A23).
+
+## Summary (what was built)
+
+- Queries (all `collection:prelinger`, 1950-1969, `mediatype:movies`, weighted): newsreel / news magazine /
+  telenews / screen magazine; abstract / experimental / kaleidoscope / optical / hypnosis / dream / surreal;
+  subjects animation / cartoon / visual effects / psychology / science / future; rocket / satellite / outer
+  space / computer / electronic / television; and a plain `color:"B&W"` query. Colour films are allowed at 20 %.
+- Content filters: exclusion terms in the query and again client-side on year, title (whole word), colour field
+  and `/metadata` title + description + subject (A2); bad items persist in a list. Not filtered: "medical" (A25).
+- Cache: 1 GB cap, up to 12 clips, 3 fast then one per 90 s, turnover every third moment, LRU, never the clip on
+  screen (A4); a cold cache skips candidates over 40 MB (A24).
+- Scheduling: seeded director, first moment 90-150 s after Play, 30-80 s long, gaps 2.5-6 min, waits for a
+  transition, an image 8+ s old and calm music (A12).
+- Audio chain: slowed 0.6-0.85x, mono, normalised to -26 dBFS, HPF 220 Hz, 2 x LPF 2.4 kHz, strip at -12 dB dry
+  with full reverb send and 0.6 delay send, 4 s after the picture, 12 s fade in; about -42 dBFS, 19 dB under the
+  music, limiter idle (A14-A18).
+- Settings: Archive footage on/off, Footage amount (Rare / Normal / Often), Footage audio (0-100 %, default 50 %),
+  Clear Footage (A20-A21).
+
+## What to check on the headset
+
+- Footage looks right in the depth-relief shell: the film rides the effects, stays readable, no stereo discomfort.
+- 90 Hz pacing and heat with a moment on screen, plus decode cost.
+- The sound level in the real speakers (default 50 %) and that it blends with the ambient and never startles.
+- Look strength: Imprint is faint on busy pictures; cold-start 320x240 files look soft.
+- Whether to exclude "medical" films, and whether the floating screen (A23) is wanted.
+
+## Open risks
+
+- Archive items and servers vary: slow servers, removed items, odd metadata (handled with bad list, backoff, size
+  skip) but not eliminated; Prelinger licence is public domain but other collections are unverified.
+- Nothing measured on a real Vision Pro; all numbers are from the Simulator and Mac GPU.
+- A film's content cannot be fully screened by keywords.
 
 ## Fetch and cache
 
