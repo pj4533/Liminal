@@ -230,7 +230,7 @@ sound (A14-A19) and the "Archive Footage" settings card (A20-A22). Phase 6 (floa
 
 - Unit tests: `LiminalTests/ArchiveFootageTests.swift` (queries, URL encoding, loose decoding, filters,
   file pick, durations, segments, shuffle bag, cache policy and store round trip, director schedule over
-  1000 seeds, envelope, look and clip choice, mix formula, uniform stride, tint). 114 tests pass.
+  1000 seeds, envelope, look and clip choice, mix formula, uniform stride, tint). 114 tests pass (122 after phases 4-5).
 - Simulator: real fetch (ids, titles and years in the log), offline relaunch from the cache, a 65 s
   recording across a Window moment's fade in, hold and fade out, constant-mix stills of all four looks.
 - `scripts/perf-run.sh`, 30 s windows: footage off 79.1 fps, interval p95 13.32 ms, 0.17 dropped per 5 s;
@@ -240,6 +240,40 @@ sound (A14-A19) and the "Archive Footage" settings card (A20-A22). Phase 6 (floa
 - Recognisability with footage off: `scripts/fx-judge-set.py` (app mode, 180 frames) passes its
   objective gate at intensity 0.25, 0.5 and 1.0 (as it must: the plain fragments render bit-identical
   frames).
+
+## Review (independent pass)
+
+### A24. Fixes from the review
+- Texture cache flushed: `VideoFrameSource` never called `CVMetalTextureCacheFlush`, so the cache could
+  keep recycled IOSurface textures for the whole session. It now flushes every 30 decoded frames and on
+  teardown (in-flight pre-passes keep their own `CVMetalTexture` until their completion handler).
+- Eviction protects the clip on screen at add time: the protected id was read before the download started,
+  which can take minutes; a moment that began meanwhile on another clip could have had its file evicted.
+  `fetchOne` now reads it right before `store.add`.
+- A skipped candidate is not a download: colour odds, exclusion, no playable file or a failed validation
+  used to set `lastDownload` too, so the pool waited 90 s for nothing. `fetchOne` returns whether a clip
+  was added.
+- Stop/start race: `halt` took the task list after clearing `running`, so a `launch` in between (footage
+  turned back on as the director halted) could have had its new tasks cancelled. `halt` now takes the old
+  tasks first; `prefetchLoop` also stops when `running` is false.
+- Cold start prefers a short first film: in the review's simulator run (empty cache) the first candidate's
+  smallest file was 77 MB and that server delivered 0.34 MB/s, so the first moment came 3 min 45 s after
+  Play. With an empty cache a candidate whose chosen file is over 40 MB is passed over (not marked bad), at
+  most 6 times. Re-run: first clip (37.8 MB) cached 9 s after Play, first moment at 20 s.
+
+### A25. Review evidence
+- Footage off vs `main`: shader-bench parity identical (max abs diff 0 on every frame); mono GPU B/A
+  1.002, 1.010, 1.004 (3 trials). So the recognisability gates are unchanged by construction.
+- Simulator, 7.5 min, real fetch from an empty cache, forced moments: 4 moments (phantom, imprint, window,
+  imprint), sound 4.0 s after the picture each time, decode 440-885 ms, a clip without audio handled
+  ("no sound: clip has no audio track"), transitions (ripple, solarize, facets ...) every 15 s throughout.
+  `perf-run.sh` 200 s window: 79.6 fps, interval p95 13.32 ms, 0 dropped per 5 s.
+- macOS (sandboxed, `com.apple.security.network.client` present): downloads and moments run, 60 fps,
+  GPU 3.4-4.2 ms with a Window moment at mix 0.6.
+- Seen in the stills: the Window and Phantom looks read; Imprint is hard to see on busy pictures and the
+  320x240 cold-start files look soft. The still picture stays recognisable in every frame.
+- Not changed, for the user to judge: `medical_quacks_2` ("Confidential File: Medical Quacks") passed the
+  filters (no excluded word); add `medical` to the exclusions if that kind of film is unwanted.
 
 ## Open
 

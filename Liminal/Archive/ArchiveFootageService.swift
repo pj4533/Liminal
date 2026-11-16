@@ -159,12 +159,15 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
 
     private func halt() {
         endAudio(fade: 2)
+        // Take this run's tasks before clearing `running`: a launch that follows at once (footage turned
+        // back on, Play again) then stores its own tasks, which this halt never cancels.
+        let old = tasks.withLock { t -> [Task<Void, Never>] in defer { t = [] }; return t }
         let wasRunning = shared.withLock { s -> Bool in
             defer { s.running = false; s.plan = nil; s.disabling = false; s.audio = nil }
             return s.running
         }
+        old.forEach { $0.cancel() }
         guard wasRunning else { return }
-        tasks.withLock { t in t.forEach { $0.cancel() }; t = [] }
         source?.stop()
         shared.withLock { s in if !s.enabled { s.status = "Archive footage off" } }
         LMLog.visual.info("📼 footage stop")
@@ -443,7 +446,7 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
         var picker = CandidatePicker(seed: UInt64.random(in: 0...UInt64.max))
         var failures = 0
         var lastDownload = Date.distantPast
-        while !Task.isCancelled {
+        while !Task.isCancelled, shared.withLock({ $0.running }) {
             let clips = await store.clips
             let replace = shared.withLock { $0.replaceRequested }
             let full = clips.count >= ArchiveCachePolicy.poolTarget
@@ -464,9 +467,11 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
                     LMLog.visual.info("📼 replacing most-used clip \(victim, privacy: .public)")
                 }
                 shared.withLock { $0.replaceRequested = false }
-                try await fetchOne(picker: &picker, preferSmallest: clips.count < 2, protected: protected)
+                let downloaded = try await fetchOne(picker: &picker, preferSmallest: clips.count < 2)
                 failures = 0
-                lastDownload = Date()
+                // A skipped candidate (colour odds, excluded, no file) is not a download: try the next one
+                // now (the client still paces requests 2 s apart) instead of waiting out the 90 s.
+                if downloaded { lastDownload = Date() }
                 let n = await store.clips.count
                 shared.withLock { s in if s.plan == nil { s.status = "\(n) clips ready" } }
             } catch is CancellationError {
@@ -496,13 +501,20 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
         var byID: [String: (doc: ArchiveSearchDoc?, seed: ArchiveSeedList.Seed?, query: ArchiveCatalog.Query)] = [:]
         var skipped: Set<String> = []
         var usedSeeds = false
+        /// Candidates passed over on a cold start because even their smallest file is large.
+        var coldSkips = 0
         init(seed: UInt64) { rng = MusicRNG(seed: seed) }
     }
 
     private static let rows = 50
+    /// Largest first download on an empty cache (skipped up to `coldStartMaxSkips` times).
+    static let coldStartMaxBytes: Int64 = 40_000_000
+    static let coldStartMaxSkips = 6
 
     /// One search (or the seed list), one metadata request, one download, validation, into the store.
-    private func fetchOne(picker: inout CandidatePicker, preferSmallest: Bool, protected: Set<String>) async throws {
+    /// Returns true when a clip was added to the store.
+    @discardableResult
+    private func fetchOne(picker: inout CandidatePicker, preferSmallest: Bool) async throws -> Bool {
         let cachedIDs = Set(await store.clips.map(\.id))
         let bad = await store.badIDs
         let exclude = cachedIDs.union(bad).union(picker.skipped)
@@ -515,7 +527,7 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
         let tone = ArchiveCatalog.tone(entry.doc?.color?.value ?? (entry.seed?.color == true ? "color" : nil))
         if tone == .colour && !picker.rng.chance(ArchiveCatalog.colourOdds) {
             picker.skipped.insert(id)   // colour items only at low odds (plan 1.2)
-            return
+            return false
         }
         let title = entry.doc?.titleText ?? entry.seed?.title ?? id
         LMLog.visual.info("📼 candidate id=\(id, privacy: .public) \"\(title, privacy: .public)\" (\(entry.doc?.yearValue ?? entry.seed?.year ?? 0)) query=\(entry.query.name, privacy: .public)")
@@ -526,12 +538,21 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
         guard ArchiveCatalog.accept(meta.metadata) else {
             await store.markBad(id)
             LMLog.visual.info("📼 excluded by metadata: \(id, privacy: .public)")
-            return
+            return false
         }
         guard let file = ArchiveCatalog.pickFile(meta.files, preferSmallest: preferSmallest) else {
             await store.markBad(id)
             LMLog.visual.info("📼 no playable file in \(id, privacy: .public)")
-            return
+            return false
+        }
+        // Cold start (empty cache): the first moment waits for this download, and Archive servers vary a lot
+        // (0.3-6 MB/s measured), so a film whose smallest file is large is passed over (not marked bad) for
+        // a few candidates in favour of a short one. One metadata request each, still paced 2 s apart.
+        if cachedIDs.isEmpty, (file.bytes ?? 0) > Self.coldStartMaxBytes, picker.coldSkips < Self.coldStartMaxSkips {
+            picker.coldSkips += 1
+            picker.skipped.insert(id)
+            LMLog.visual.info("📼 cold start: skipping \(id, privacy: .public) (\(String(format: "%.1f", Double(file.bytes ?? 0) / 1e6), privacy: .public) MB)")
+            return false
         }
         let safe = id.replacingOccurrences(of: "/", with: "_")
         let tmp = await store.tmpDirectory.appendingPathComponent("\(safe).mp4")
@@ -544,7 +565,7 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
             try? FileManager.default.removeItem(at: tmp)
             await store.markBad(id)
             LMLog.visual.warning("📼 invalid clip \(id, privacy: .public): \(String(describing: error), privacy: .public)")
-            return
+            return false
         }
         let year = meta.metadata?.year.flatMap { Int($0.value.prefix(4)) } ?? entry.doc?.yearValue ?? entry.seed?.year
         let attrs = try? FileManager.default.attributesOfItem(atPath: tmp.path)
@@ -556,9 +577,12 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
                                isColour: ArchiveCatalog.tone(meta.metadata?.color?.value) == .colour,
                                licence: meta.metadata?.licenseurl?.value, added: Date(), lastUsed: nil, useCount: 0,
                                shownStarts: [])
+        // The clip on screen now, not when the download started (a moment may have begun meanwhile).
+        let protected = Set(shared.withLock { $0.plan.map { [$0.clipID] } ?? [] })
         let evicted = try await store.add(clip, from: tmp, protected: protected)
         let pool = await store.clips.count
         LMLog.visual.info("📼 cached id=\(id, privacy: .public) \"\(clip.title, privacy: .public)\" (\(year ?? 0)) \(v.width)x\(v.height) \(String(format: "%.0f", v.duration), privacy: .public)s audio=\(v.hasAudio) levels=\(String(format: "%.2f", v.black), privacy: .public)-\(String(format: "%.2f", v.white), privacy: .public) evicted=\(evicted.joined(separator: ","), privacy: .public) pool=\(pool)")
+        return true
     }
 
     /// New candidates: the bundled seeds on a first launch or when search fails, else one search of a

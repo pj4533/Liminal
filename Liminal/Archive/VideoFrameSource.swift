@@ -168,6 +168,8 @@ nonisolated final class VideoFrameSource: @unchecked Sendable {
         output = nil
         pending = nil
         segment = nil
+        // Release the cache's hold on the segment's pixel buffers (in-flight pre-passes keep theirs).
+        if let textureCache { CVMetalTextureCacheFlush(textureCache, 0) }
     }
 
     private static func now() -> Double { Double(DispatchTime.now().uptimeNanoseconds) / 1e9 }
@@ -196,6 +198,9 @@ nonisolated final class VideoFrameSource: @unchecked Sendable {
         }
         guard let frame = newest, let pb = CMSampleBufferGetImageBuffer(frame) else { return }
         framesDecoded += 1
+        // CVMetalTextureCache keeps recycled IOSurface-backed textures until flushed; flush every
+        // second or so so a long moment does not grow the cache.
+        if framesDecoded % 30 == 0, let textureCache { CVMetalTextureCacheFlush(textureCache, 0) }
         let dt = max(now - lastFrameTime, 1.0 / 60)
         lastFrameTime = now
         encodePrepass(pb, segment: s, dt: dt, mediaTime: CMSampleBufferGetPresentationTimeStamp(frame).seconds)
