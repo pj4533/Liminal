@@ -163,10 +163,10 @@ actor ArchiveClipStore {
         save()
     }
 
-    /// Deletes every cached clip (the bad list is kept).
-    func clear() {
-        for c in index.clips { try? FileManager.default.removeItem(at: url(for: c)) }
-        index.clips = []
+    /// Deletes every cached clip (the bad list is kept), except `keeping` (the clip on screen).
+    func clear(keeping: String? = nil) {
+        for c in index.clips where c.id != keeping { try? FileManager.default.removeItem(at: url(for: c)) }
+        index.clips.removeAll { $0.id != keeping }
         save()
     }
 }

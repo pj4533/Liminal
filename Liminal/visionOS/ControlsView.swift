@@ -30,6 +30,7 @@ struct ControlsView: View {
     }
 
     var body: some View {
+        ScrollViewReader { proxy in
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 header
@@ -39,15 +40,15 @@ struct ControlsView: View {
                 ViewThatFits(in: .horizontal) {
                     HStack(alignment: .top, spacing: 24) {
                         column { playbackSection; imagesSection }
-                        column { musicSection }
+                        column { musicSection; archiveSection }
                         column { visualsSection }
                     }
                     HStack(alignment: .top, spacing: 24) {
                         column { playbackSection; visualsSection }
-                        column { musicSection; imagesSection }
+                        column { musicSection; archiveSection; imagesSection }
                     }
                     VStack(spacing: 24) {
-                        playbackSection; musicSection; visualsSection; imagesSection
+                        playbackSection; musicSection; visualsSection; archiveSection; imagesSection
                     }
                 }
             }
@@ -56,6 +57,10 @@ struct ControlsView: View {
         .onAppear {
             audioEngine.apply(settings)
             applyDebugLaunchOptions()
+            if let id = DebugLaunchOptions.controlsScroll {
+                Task { try? await Task.sleep(nanoseconds: 800_000_000); proxy.scrollTo(id, anchor: .top) }
+            }
+        }
         }
         // The space can also close without the button (Digital Crown, Home): keep the label in sync.
         .onReceive(NotificationCenter.default.publisher(for: ImmersiveDomeView.didCloseNotification)) { _ in
@@ -66,6 +71,7 @@ struct ControlsView: View {
         .onChange(of: settings.notes) { _, newValue in audioEngine.density = newValue }
         .onChange(of: settings.style) { _, newValue in audioEngine.style = newValue }
         .onChange(of: settings.pinnedScale) { _, newValue in audioEngine.pinnedScale = newValue }
+        .archiveFootageSettings(settings, audioEngine: audioEngine)
     }
 
     // MARK: Header
@@ -164,6 +170,13 @@ struct ControlsView: View {
         }
     }
 
+    // MARK: Archive footage
+
+    private var archiveSection: some View {
+        ArchiveFootageSection(settings: settings)
+            .id("archive")
+    }
+
     // MARK: Images & storage
 
     private var imagesSection: some View {
@@ -181,7 +194,7 @@ struct ControlsView: View {
             }
             .buttonStyle(.bordered)
             .buttonBorderShape(.roundedRectangle(radius: 20))
-            Text("Restores style, density, space, echo, scale and visual settings to their defaults.")
+            Text("Restores style, density, space, echo, scale, visual and footage settings to their defaults.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .wrapping()

@@ -112,6 +112,7 @@ struct ContentView: View {
         .onChange(of: settings.notes) { _, newValue in audioEngine.density = newValue }
         .onChange(of: settings.style) { _, newValue in audioEngine.style = newValue }
         .onChange(of: settings.pinnedScale) { _, newValue in audioEngine.pinnedScale = newValue }
+        .archiveFootageSettings(settings, audioEngine: audioEngine)
         .sheet(isPresented: $showingSettings) {
             SettingsSheetView(audioEngine: audioEngine, visualEngine: visualEngine)
         }
@@ -123,6 +124,7 @@ struct ContentView: View {
 
 extension ContentView {
     var controlPanel: some View {
+        ScrollViewReader { proxy in
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 8) {
@@ -174,6 +176,9 @@ extension ContentView {
                                     isOn: $settings.debugEffectEnabled)
                 }
 
+                ArchiveFootageSection(settings: settings)
+                    .id("archive")
+
                 ControlSection(title: "Images & Storage", systemImage: "photo.stack") {
                     APIStatusRow()
                     Button {
@@ -189,6 +194,13 @@ extension ContentView {
             .padding(16)
         }
         .scrollIndicators(.automatic)
+        .onAppear {
+            // DEBUG: -LiminalControlsScroll archive (settings screenshots).
+            if let id = DebugLaunchOptions.controlsScroll {
+                Task { try? await Task.sleep(nanoseconds: 800_000_000); proxy.scrollTo(id, anchor: .top) }
+            }
+        }
+        }
     }
 
     private func togglePlayback() {
@@ -248,7 +260,7 @@ struct SettingsSheetView: View {
                             settings.resetToDefaults()
                             audioEngine.apply(settings)
                         }
-                        Text("Restores style, density, space, echo, scale and visual settings to their defaults.")
+                        Text("Restores style, density, space, echo, scale, visual and footage settings to their defaults.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .wrapping()

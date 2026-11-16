@@ -203,6 +203,20 @@ nonisolated enum DebugLaunchOptions {
     static let videoOffline: Bool = defaults.bool(forKey: "LiminalVideoOffline")
     /// -LiminalVideoOff YES: no footage at all (A/B and perf runs with the feature absent).
     static let videoOff: Bool = defaults.bool(forKey: "LiminalVideoOff")
+    /// -LiminalControlsScroll archive: scroll the control panel / window to that section on appear
+    /// (settings screenshots; taps do not work in the Xcode 27 simulator).
+    static let controlsScroll: String? = defaults.string(forKey: "LiminalControlsScroll")
+    /// -LiminalVideoOffAt <s>: turn the "Archive footage" setting off this many seconds after footage starts
+    /// (checks the 2 s fade out of a running moment and its sound; not saved).
+    static let videoOffAt: Double? = {
+        guard defaults.object(forKey: "LiminalVideoOffAt") != nil else { return nil }
+        return defaults.double(forKey: "LiminalVideoOffAt")
+    }()
+    /// -LiminalControlsWidth <pt>: visionOS controls window width at launch (layout checks at 3 / 2 / 1 columns).
+    static let controlsWidth: Double? = {
+        guard defaults.object(forKey: "LiminalControlsWidth") != nil else { return nil }
+        return defaults.double(forKey: "LiminalControlsWidth")
+    }()
 
     /// True when any shell harness flag is set (they also block generation).
     static var anyShellFlag: Bool {
@@ -220,7 +234,7 @@ nonisolated enum DebugLaunchOptions {
             || imageInterval != nil
             || anyShellFlag
             || videoForce || videoLook != nil || videoFile != nil || videoMix != nil || videoSeed != nil
-            || videoOffline || videoOff
+            || videoOffline || videoOff || controlsScroll != nil || controlsWidth != nil || videoOffAt != nil
     }
 #else
     static let allowGeneration = false
@@ -259,6 +273,9 @@ nonisolated enum DebugLaunchOptions {
     static let videoSeed: Int? = nil
     static let videoOffline = false
     static let videoOff = false
+    static let controlsScroll: String? = nil
+    static let controlsWidth: Double? = nil
+    static let videoOffAt: Double? = nil
 #endif
 
     private static let logOnce: Void = {

@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 import Combine
+import AVFoundation
 @testable import Liminal
 
 /// Offline render harness. Not run by default (slow); enable with env LIMINAL_RENDER=1.
@@ -9,7 +10,7 @@ import Combine
 @MainActor
 struct MusicRenderTests {
 
-    @Test func renderOffline() throws {
+    @Test func renderOffline() async throws {
         // xcodebuild strips env vars unless prefixed TEST_RUNNER_; the script also writes a config file.
         let cfg = Self.loadConfig()
         guard cfg["enabled"] == "1" else { return }
@@ -50,7 +51,17 @@ struct MusicRenderTests {
         // `mute=a,b` zeroes the named layers' trims; the names reverb, delay and shimmer mute those returns.
         let only = cfg["only"]
         let mute = Set((cfg["mute"] ?? "").split(separator: ",").map(String.init))
-        try engine.renderOffline(seconds: seconds, to: url, limiterBypassed: bypass) { e in
+        // Archive footage sound (docs/plans/archive-video.md 4): `archive=<mp4>` mixes one moment's sound in,
+        // timed and decoded exactly as the app does. `only=archive` renders its stem, `mute=archive` leaves it out.
+        let archive = mute.contains("archive") || (only != nil && only != "archive")
+            ? nil : try await Self.archiveCue(cfg, engine: engine, dir: dir, label: label)
+        var archiveBegun = false, archiveEnded = false
+        let onStep: (Double) -> Void = { t in
+            guard let a = archive else { return }
+            if !archiveBegun, t >= a.plan.beginAt { archiveBegun = true; engine.post(.archiveBegin(a.cue)) }
+            if !archiveEnded, t >= a.plan.fadeOutAt { archiveEnded = true; engine.post(.archiveEnd(fade: a.plan.fadeOut)) }
+        }
+        try engine.renderOffline(seconds: seconds, to: url, limiterBypassed: bypass, configure: { e in
             for l in e.layers where (only != nil && "\(l.id)" != only) || mute.contains("\(l.id)") {
                 l.allStrips.forEach { $0.trim = 0 }
             }
@@ -58,10 +69,43 @@ struct MusicRenderTests {
             guard let solo else { return }
             for l in e.layers where "\(l.id)" != solo { l.allStrips.forEach { $0.trim = 0 } }
             if let id = e.layers.first(where: { "\($0.id)" == solo })?.id { e.conductor.post(.forceLayers([id])) }
-        }
+        }, onStep: onStep)
         let wall = Date().timeIntervalSince(t0)
         print("RENDERED \(url.path) \(seconds)s in \(String(format: "%.1f", wall))s wall")
         #expect(FileManager.default.fileExists(atPath: url.path))
+    }
+
+    /// The archive moment of a render: a plan like the app's (picture fade in 11 s, out 13 s), its sound cue and
+    /// the decoded buffer. Writes `<label>.archive.json` with the timings for scripts/analyze-archive-audio.py.
+    private static func archiveCue(_ cfg: [String: String], engine: GenerativeEngine, dir: String,
+                                   label: String) async throws -> (plan: ArchiveAudioCuePlan, cue: ArchiveVoice.Cue)? {
+        guard let path = cfg["archive"], !path.isEmpty else { return nil }
+        let at = Double(cfg["archive_at"] ?? "") ?? 60
+        let length = Double(cfg["archive_len"] ?? "") ?? 70
+        let rate = Float(cfg["archive_rate"] ?? "") ?? 0.72
+        let segment = Double(cfg["archive_start"] ?? "") ?? 120
+        let level = Float(cfg["archive_level"] ?? "") ?? 0.5
+        let fadeIn = 11.0, fadeOut = 13.0
+        let moment = MomentPlan(clipID: "render", segmentStart: segment, rate: rate, look: .window, seed: 0.5,
+                                start: at, fadeIn: fadeIn, hold: max(length - fadeIn - fadeOut, 4), fadeOut: fadeOut)
+        let url = URL(fileURLWithPath: path)
+        let duration = try await AVURLAsset(url: url).load(.duration).seconds
+        guard let plan = ArchiveAudioCuePlan(plan: moment, clipDuration: duration),
+              let gain = ArchiveAudioCuePlan.gain(level: level) else { return nil }
+        let buffer = try await ArchiveAudioDecoder.decode(url: url, sourceStart: plan.sourceStart,
+                                                          sourceLength: plan.sourceLength, rate: rate,
+                                                          format: engine.archiveFormat)
+        let info: [String: Any] = ["clip": url.lastPathComponent, "pictureStart": moment.start,
+                                   "pictureFadeIn": fadeIn, "pictureFadeOutStart": moment.fadeOutStart,
+                                   "pictureEnd": moment.end, "beginAt": plan.beginAt, "fadeIn": plan.fadeIn,
+                                   "fadeOutAt": plan.fadeOutAt, "fadeOut": plan.fadeOut, "rate": rate,
+                                   "sourceStart": plan.sourceStart, "sourceLength": plan.sourceLength,
+                                   "level": level, "gain": gain,
+                                   "bufferSeconds": Double(buffer.frameLength) / buffer.format.sampleRate]
+        let data = try JSONSerialization.data(withJSONObject: info, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: URL(fileURLWithPath: dir).appendingPathComponent("\(label).archive.json"))
+        print("RENDERED archive cue \(url.lastPathComponent) begin=\(plan.beginAt)s fadeOut=\(plan.fadeOutAt)s")
+        return (plan, ArchiveVoice.Cue(buffer: buffer, gain: gain, fadeIn: plan.fadeIn, label: url.lastPathComponent))
     }
 
     /// Realtime conductor path (DispatchSourceTimer on the music queue) against an engine in offline

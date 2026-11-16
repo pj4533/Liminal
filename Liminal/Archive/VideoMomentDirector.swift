@@ -106,7 +106,8 @@ nonisolated struct VideoMomentDirector {
 
     enum Decision: Sendable, Equatable { case none, begin(Begin), end }
 
-    let timing: Timing
+    /// Settable: the "Footage amount" setting applies from the next gap on.
+    var timing: Timing
     private var rng: MusicRNG
     private(set) var nextDue: Double
     private(set) var waitingSince: Double?

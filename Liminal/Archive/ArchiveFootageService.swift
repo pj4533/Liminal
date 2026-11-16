@@ -6,8 +6,11 @@
 //  the clip cache and its prefetch, the moment director (ticked at 2 Hz off the main actor) and the
 //  video frame source. The render loops call only `frame(image:)` and `update(_:)`, each a lock
 //  access plus a little arithmetic: no scheduling, I/O or decoding on the main actor.
+//  Phase 4-5: the moment's sound (decoded off the main actor, posted to the music conductor) and the
+//  "Archive Footage" settings (on/off, amount, audio level).
 //
 
+import AVFoundation
 import CoreGraphics
 import Foundation
 import Metal
@@ -36,7 +39,33 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
         var tintKey: ObjectIdentifier?
         var lastTintUptime: Double = 0
         var replaceRequested = false
-        var status = "Archive footage idle"
+        var status = "Footage starts with playback"
+        // Settings (phase 5) and lifecycle: footage runs while playback wants it AND the setting is on.
+        var wantsRun = false
+        var enabled = true
+        var amount: VideoAmount = .normal
+        var audioLevel: Float = 0.5
+        /// The setting was turned off during a moment: fade it out, then stop.
+        var disabling = false
+        var audio: AudioState?
+    }
+
+    /// The current moment's sound (plan 4).
+    private struct AudioState {
+        let cue: ArchiveAudioCuePlan
+        let token: Int
+        var begun = false
+        var ended = false
+    }
+
+    /// Where the sound goes: the music engine's conductor (attached by the app; nil in harnesses).
+    final class MusicSink: @unchecked Sendable {
+        let post: @Sendable (MusicControl) -> Void
+        let format: AVAudioFormat
+        init(format: AVAudioFormat, post: @escaping @Sendable (MusicControl) -> Void) {
+            self.format = format
+            self.post = post
+        }
     }
 
     private let shared = OSAllocatedUnfairLock(initialState: Shared())
@@ -46,9 +75,11 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
     private let tasks = OSAllocatedUnfairLock<[Task<Void, Never>]>(initialState: [])
     /// -LiminalVideoFile: a local clip used instead of the cache (no network).
     private let localClip = OSAllocatedUnfairLock<(clip: ArchiveClip, url: URL)?>(initialState: nil)
+    private let music = OSAllocatedUnfairLock<MusicSink?>(initialState: nil)
+    private var audioTokenSeed = OSAllocatedUnfairLock(initialState: 0)
 
-    /// Footage is on unless -LiminalVideoOff (the setting arrives with phase 5).
-    static var isEnabled: Bool { !DebugLaunchOptions.videoOff }
+    /// -LiminalVideoOff removes the feature whatever the setting says.
+    static var isAvailable: Bool { !DebugLaunchOptions.videoOff }
 
     private init() {
         source = MTLCreateSystemDefaultDevice().flatMap { VideoFrameSource(device: $0) }
@@ -60,20 +91,61 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
 
     // MARK: - Lifecycle
 
-    /// Starts prefetching and the moment clock (Play / the immersive space opening). Idempotent.
+    /// The music engine that plays the moments' sound (called once by each app on appear).
+    func attachMusic(_ engine: GenerativeEngine) {
+        let sink = MusicSink(format: engine.archiveFormat) { [weak engine] c in engine?.post(c) }
+        music.withLock { $0 = sink }
+    }
+
+    /// "Archive Footage" settings. Turning footage off fades a running moment out over 2 s and stops
+    /// prefetching (the cache stays); turning it on while playing starts it again.
+    func apply(enabled: Bool, amount: VideoAmount, audioLevel: Float) {
+        let level = min(max(audioLevel, 0), 1)
+        let (wasEnabled, running, levelChanged) = shared.withLock { s -> (Bool, Bool, Bool) in
+            let was = s.enabled, changed = s.audioLevel != level
+            s.enabled = enabled
+            s.amount = amount
+            s.audioLevel = level
+            if enabled { s.disabling = false } else if s.running { s.disabling = true }
+            return (was, s.running, changed)
+        }
+        if enabled != wasEnabled {
+            LMLog.visual.info("📼 setting: footage \(enabled ? "on" : "off", privacy: .public)")
+        }
+        if enabled && !running { launch() }
+        if !enabled && !running { shared.withLock { $0.status = "Archive footage off" } }
+        if levelChanged {
+            if let g = ArchiveAudioCuePlan.gain(level: level) {
+                let playing = shared.withLock { $0.audio.map { $0.begun && !$0.ended } ?? false }
+                if playing { music.withLock { $0 }?.post(.archiveGain(g)) }
+            } else {
+                endAudio(fade: 2)
+            }
+        }
+    }
+
+    /// Playback started (Play / the immersive space opening). Idempotent.
     func start() {
-        guard Self.isEnabled, source != nil else {
+        shared.withLock { $0.wantsRun = true }
+        launch()
+    }
+
+    /// Starts prefetching and the moment clock when playback wants footage and the setting is on.
+    private func launch() {
+        guard Self.isAvailable, source != nil else {
             if source == nil { LMLog.visual.error("📼 footage unavailable (no Metal pre-pass)") }
             return
         }
-        let already = shared.withLock { s -> Bool in
-            if s.running { return true }
+        let go = shared.withLock { s -> Bool in
+            guard s.wantsRun, s.enabled, !s.running else { return false }
             s.running = true
+            s.disabling = false
             s.startUptime = Self.uptime()
             s.plan = nil
-            return false
+            s.audio = nil
+            return true
         }
-        guard !already else { return }
+        guard go else { return }
         LMLog.visual.info("📼 footage start (force=\(DebugLaunchOptions.videoForce) offline=\(DebugLaunchOptions.videoOffline) file=\(DebugLaunchOptions.videoFile ?? "-", privacy: .public) look=\(DebugLaunchOptions.videoLook ?? "-", privacy: .public) mix=\(DebugLaunchOptions.videoMix.map { String($0) } ?? "-", privacy: .public))")
         let prefetch = Task.detached(priority: .utility) { [weak self] () -> Void in await self?.prefetchLoop() }
         let director = Task.detached(priority: .userInitiated) { [weak self] () -> Void in await self?.directorLoop() }
@@ -81,14 +153,104 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
     }
 
     func stop() {
+        shared.withLock { $0.wantsRun = false }
+        halt()
+    }
+
+    private func halt() {
+        endAudio(fade: 2)
         let wasRunning = shared.withLock { s -> Bool in
-            defer { s.running = false; s.plan = nil }
+            defer { s.running = false; s.plan = nil; s.disabling = false; s.audio = nil }
             return s.running
         }
         guard wasRunning else { return }
         tasks.withLock { t in t.forEach { $0.cancel() }; t = [] }
         source?.stop()
+        shared.withLock { s in if !s.enabled { s.status = "Archive footage off" } }
         LMLog.visual.info("📼 footage stop")
+    }
+
+    // MARK: - Cache (settings section)
+
+    /// Clips and bytes in the cache.
+    func cacheSummary() async -> (count: Int, bytes: Int64) {
+        await store.load()
+        return (await store.clips.count, await store.totalBytes)
+    }
+
+    /// Deletes every cached clip except the one on screen.
+    func clearCache() async {
+        let keep = shared.withLock { $0.plan?.clipID }
+        await store.clear(keeping: keep)
+        let n = await store.clips.count
+        LMLog.visual.info("📼 cache cleared (kept \(n))")
+        shared.withLock { s in if s.plan == nil && s.enabled { s.status = n == 0 ? "Fetching footage" : "\(n) clips ready" } }
+    }
+
+    // MARK: - Sound (plan 4)
+
+    /// Decodes the moment's sound off the main actor and posts it to the music at the cue's start.
+    private func scheduleAudio(plan: MomentPlan, clip: ArchiveClip, url: URL) {
+        let (level, start) = shared.withLock { ($0.audioLevel, $0.startUptime) }
+        guard let sink = music.withLock({ $0 }) else { return }
+        guard clip.hasAudio else {
+            LMLog.audio.info("📼🔊 no sound: clip has no audio track")
+            return
+        }
+        guard let gain = ArchiveAudioCuePlan.gain(level: level) else {
+            LMLog.audio.info("📼🔊 no sound: Footage audio is 0")
+            return
+        }
+        guard let cue = ArchiveAudioCuePlan(plan: plan, clipDuration: clip.duration) else {
+            LMLog.audio.info("📼🔊 no sound: moment too short")
+            return
+        }
+        let token = audioTokenSeed.withLock { $0 += 1; return $0 }
+        shared.withLock { $0.audio = AudioState(cue: cue, token: token) }
+        let title = clip.title
+        LMLog.audio.info("📼🔊 sound cue at \(String(format: "%.1f", cue.beginAt), privacy: .public)s fade \(String(format: "%.1f", cue.fadeIn), privacy: .public)s, out at \(String(format: "%.1f", cue.fadeOutAt), privacy: .public)s over \(String(format: "%.1f", cue.fadeOut), privacy: .public)s, source \(String(format: "%.1f", cue.sourceStart), privacy: .public)s+\(String(format: "%.1f", cue.sourceLength), privacy: .public)s rate \(String(format: "%.2f", cue.rate), privacy: .public) gain \(String(format: "%.2f", gain), privacy: .public)")
+        Task.detached(priority: .utility) { [weak self] in
+            let t0 = Self.uptime()
+            let buffer: AVAudioPCMBuffer
+            do {
+                buffer = try await ArchiveAudioDecoder.decode(url: url, sourceStart: cue.sourceStart,
+                                                              sourceLength: cue.sourceLength, rate: cue.rate,
+                                                              format: sink.format)
+            } catch {
+                LMLog.audio.warning("📼🔊 no sound: decode failed (\(String(describing: error), privacy: .public))")
+                return
+            }
+            let seconds = Double(buffer.frameLength) / buffer.format.sampleRate
+            LMLog.audio.info("📼🔊 decoded \(String(format: "%.1f", seconds), privacy: .public)s in \(String(format: "%.0f", (Self.uptime() - t0) * 1000), privacy: .public) ms")
+            let due = start + cue.beginAt
+            let wait = due - Self.uptime()
+            if wait > 0 { try? await Task.sleep(nanoseconds: UInt64(wait * 1e9)) }
+            guard let self else { return }
+            let late = Self.uptime() - due
+            let g = self.shared.withLock { s -> Float? in
+                guard s.running, !s.disabling, var a = s.audio, a.token == token, !a.ended,
+                      let g = ArchiveAudioCuePlan.gain(level: s.audioLevel) else { return nil }
+                a.begun = true
+                s.audio = a
+                return g
+            }
+            guard let g else { return }
+            sink.post(.archiveBegin(ArchiveVoice.Cue(buffer: buffer, gain: g, fadeIn: max(1, cue.fadeIn - max(late, 0)),
+                                                     label: title)))
+            if late > 0.1 { LMLog.audio.warning("📼🔊 sound started \(String(format: "%.2f", late), privacy: .public)s late") }
+        }
+        _ = gain
+    }
+
+    /// Fades the current moment's sound out (once).
+    private func endAudio(fade: Double) {
+        let post = shared.withLock { s -> Bool in
+            guard var a = s.audio, !a.ended else { return false }
+            a.ended = true
+            s.audio = a
+            return a.begun
+        }
+        if post { music.withLock { $0 }?.post(.archiveEnd(fade: fade)) }
     }
 
     // MARK: - Render loop API
@@ -154,8 +316,9 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
                 t.first = 2...2; t.length = 3600...3600; t.fadeIn = 1...1; t.fadeOut = 2...2
                 return t
             }
-            return DebugLaunchOptions.videoForce ? .forced : .amount(.normal)
+            return DebugLaunchOptions.videoForce ? .forced : .amount(shared.withLock { $0.amount })
         }()
+        let timingFollowsSetting = DebugLaunchOptions.videoMix == nil && !DebugLaunchOptions.videoForce
         let seed = DebugLaunchOptions.videoSeed.map { UInt64($0) } ?? UInt64.random(in: 0...UInt64.max)
         var director = VideoMomentDirector(seed: seed, timing: timing,
                                            pinnedLook: DebugLaunchOptions.videoLook.flatMap(VideoLook.init(name:)))
@@ -166,19 +329,48 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
         while !Task.isCancelled {
             try? await Task.sleep(nanoseconds: 500_000_000)
             guard !Task.isCancelled else { break }
-            let (running, start, cond) = shared.withLock { ($0.running, $0.startUptime, $0.conditions) }
+            let (running, start, cond, amount, disabling) = shared.withLock {
+                ($0.running, $0.startUptime, $0.conditions, $0.amount, $0.disabling)
+            }
             guard running else { break }
             let elapsed = Self.uptime() - start
+            if timingFollowsSetting, director.timing != .amount(amount) { director.timing = .amount(amount) }
+            if let off = DebugLaunchOptions.videoOffAt, elapsed >= off, !disabling {
+                LMLog.visual.info("📼 DEBUG: footage setting off at \(String(format: "%.1f", elapsed), privacy: .public)s (-LiminalVideoOffAt)")
+                let level = shared.withLock { $0.audioLevel }
+                apply(enabled: false, amount: amount, audioLevel: level)
+                continue
+            }
+            if disabling {
+                // Footage turned off: fade the moment out over 2 s, then stop (the cache stays).
+                if let p = director.current, p.end > elapsed + 2.1 {
+                    director.fadeOut(at: elapsed, duration: 2)
+                    let np = director.current
+                    shared.withLock { $0.plan = np }
+                    endAudio(fade: 2)
+                }
+                if director.current == nil || elapsed >= (director.current?.end ?? 0) {
+                    halt()
+                    break
+                }
+                continue
+            }
             let clips = await availableClips()
             if director.current != nil, source?.ended == true {
                 director.fadeOut(at: elapsed, duration: 4)
                 let p = director.current
                 shared.withLock { $0.plan = p }
+                endAudio(fade: 4)
+            }
+            // The sound fades out with the picture's fade out (plan 4).
+            if let a = shared.withLock({ $0.audio }), !a.ended, elapsed >= a.cue.fadeOutAt {
+                endAudio(fade: a.cue.fadeOut)
             }
             switch director.tick(elapsed: elapsed, conditions: cond, hasClip: !clips.isEmpty) {
             case .none:
                 break
             case .end:
+                endAudio(fade: 1)
                 source?.stop()
                 shared.withLock { $0.plan = nil; $0.status = "\(clips.count) clips ready" }
                 LMLog.visual.info("📼 moment end at \(String(format: "%.1f", elapsed), privacy: .public)s; next at \(String(format: "%.0f", director.nextDue), privacy: .public)s")
@@ -199,6 +391,7 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
                 let plan = MomentPlan(clipID: clip.id, segmentStart: segStart, rate: b.rate, look: b.look,
                                       seed: b.seed, start: elapsed, fadeIn: fadeIn, hold: hold, fadeOut: fadeOut)
                 director.didBegin(plan)
+                scheduleAudio(plan: plan, clip: clip, url: url(for: clip))
                 source?.play(.init(url: url(for: clip), start: segStart, length: min(sourceLength + 2, clip.duration - segStart),
                                    rate: b.rate, black: clip.black, white: clip.white))
                 let aspect = Float(clip.width) / Float(max(clip.height, 1))

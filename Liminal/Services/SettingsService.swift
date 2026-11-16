@@ -24,6 +24,9 @@ final class SettingsService: ObservableObject {
         static let syncVisualsToMusic = "visual.syncToMusic"
         static let effectIntensity = "visual.effectIntensity"
         static let depthStrength = "visual.depthStrength"
+        static let archiveEnabled = "archive.enabled"
+        static let archiveAmount = "archive.amount"
+        static let archiveAudioLevel = "archive.audioLevel"
     }
 
     // MARK: - Defaults
@@ -43,6 +46,9 @@ final class SettingsService: ObservableObject {
     static let defaultSyncVisualsToMusic: Bool = true
     static let defaultEffectIntensity: Float = EffectLook.defaultIntensity
     static let defaultDepthStrength: Float = ShellLayout.defaultDepth
+    static let defaultArchiveEnabled: Bool = true
+    static let defaultArchiveAmount: VideoAmount = .normal
+    static let defaultArchiveAudioLevel: Float = 0.5
 
     // MARK: - Published Settings
 
@@ -109,6 +115,22 @@ final class SettingsService: ObservableObject {
         didSet { defaults.set(depthStrength, forKey: Keys.depthStrength) }
     }
 
+    /// "Archive footage": old Internet Archive film fades into the scene now and then
+    /// (docs/plans/archive-video.md 6).
+    @Published var archiveEnabled: Bool {
+        didSet { defaults.set(archiveEnabled, forKey: Keys.archiveEnabled) }
+    }
+
+    /// "Footage amount": how often a footage moment comes (Rare / Normal / Often).
+    @Published var archiveAmount: VideoAmount {
+        didSet { defaults.set(archiveAmount.rawValue, forKey: Keys.archiveAmount) }
+    }
+
+    /// "Footage audio", 0 (silent) ... 1: level of the film's sound, deep in the reverb. 0.5 is the tuned default.
+    @Published var archiveAudioLevel: Float {
+        didSet { defaults.set(archiveAudioLevel, forKey: Keys.archiveAudioLevel) }
+    }
+
     /// Spending cap: new Gemini images allowed per rolling hour / 24 h (GenerationBudget, D34).
     @Published var maxImagesPerHour: Int {
         didSet { defaults.set(maxImagesPerHour, forKey: GenerationBudget.Keys.perHour) }
@@ -145,6 +167,10 @@ final class SettingsService: ObservableObject {
 
         self.depthStrength = min(max(defaults.object(forKey: Keys.depthStrength) as? Float ?? Self.defaultDepthStrength, 0), 1)
 
+        self.archiveEnabled = defaults.object(forKey: Keys.archiveEnabled) as? Bool ?? Self.defaultArchiveEnabled
+        self.archiveAmount = VideoAmount(rawValue: defaults.string(forKey: Keys.archiveAmount) ?? "") ?? Self.defaultArchiveAmount
+        self.archiveAudioLevel = min(max(defaults.object(forKey: Keys.archiveAudioLevel) as? Float ?? Self.defaultArchiveAudioLevel, 0), 1)
+
         self.maxImagesPerHour = defaults.object(forKey: GenerationBudget.Keys.perHour) as? Int ?? GenerationBudget.defaultPerHour
         self.maxImagesPerDay = defaults.object(forKey: GenerationBudget.Keys.perDay) as? Int ?? GenerationBudget.defaultPerDay
 
@@ -165,6 +191,9 @@ final class SettingsService: ObservableObject {
         syncVisualsToMusic = Self.defaultSyncVisualsToMusic
         effectIntensity = Self.defaultEffectIntensity
         depthStrength = Self.defaultDepthStrength
+        archiveEnabled = Self.defaultArchiveEnabled
+        archiveAmount = Self.defaultArchiveAmount
+        archiveAudioLevel = Self.defaultArchiveAudioLevel
         maxImagesPerHour = GenerationBudget.defaultPerHour
         maxImagesPerDay = GenerationBudget.defaultPerDay
         LMLog.state.info("Settings reset to defaults")

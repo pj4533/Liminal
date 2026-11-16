@@ -19,6 +19,12 @@ printf 'enabled=1\nmode=%s\nlabel=%s\nseconds=%s\nseed=%s\nbypass=%s\noutdir=%s\
 # MUTE=a,b zeroes layers' trims; reverb, delay and shimmer mute those returns. Diagnosis only.
 [ -n "${ONLY:-}" ] && echo "only=$ONLY" >> /private/tmp/liminal-render-config.txt
 [ -n "${MUTE:-}" ] && echo "mute=$MUTE" >> /private/tmp/liminal-render-config.txt
+# Archive footage sound (docs/plans/archive-video.md 4): ARCHIVE=<mp4> mixes one moment's sound in, timed and
+# decoded as in the app. ARCHIVE_AT=<s> picture start (60), ARCHIVE_LEN=<s> moment length (70),
+# ARCHIVE_RATE (0.72), ARCHIVE_START=<s> source segment start (120), ARCHIVE_LEVEL ("Footage audio", 0.5).
+# ONLY=archive renders its stem; MUTE=archive leaves it out. Analysis: scripts/analyze-archive-audio.py.
+[ -n "${ARCHIVE:-}" ] && echo "archive=$ARCHIVE" >> /private/tmp/liminal-render-config.txt
+for k in AT LEN RATE START LEVEL; do v="ARCHIVE_$k"; [ -n "${!v:-}" ] && echo "archive_$(echo $k | tr A-Z a-z)=${!v}" >> /private/tmp/liminal-render-config.txt; done
 cd "$ROOT"
 # CONFIG=Release renders with optimized DSP (realistic CPU numbers); default Debug.
 CONFIG=${CONFIG:-Debug}

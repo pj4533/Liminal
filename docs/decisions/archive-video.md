@@ -4,9 +4,9 @@ Decision log for the archive footage workstream. Plan with all numbers: `docs/pl
 Request: old (1950s-60s, mostly black and white, newsreel / trippy / odd) Internet Archive film fades into
 the scene now and then, under the same effects as the picture; its sound enters later, very gently.
 
-Status: phases 1-3 built (fetch and cache, footage in the shader on both platforms, moments). Audio
-(phase 4) and the settings section (phase 5) are not built yet; until then footage is on by default and
-`-LiminalVideoOff YES` turns it off.
+Status: phases 1-5 built: fetch and cache, footage in the shader on both platforms, moments, the film's
+sound (A14-A19) and the "Archive Footage" settings card (A20-A22). Phase 6 (floating screen) is not built
+(A23).
 
 ## Fetch and cache
 
@@ -127,6 +127,105 @@ Status: phases 1-3 built (fetch and cache, footage in the shader on both platfor
   block the archive.
 - `scripts/perf-run.sh --extra "<args>"` passes extra launch arguments.
 
+## Sound
+
+### A14. One more static strip in the music graph, no new reverb
+- What: `Liminal/Audio/ArchiveVoice.swift`: an `AVAudioPlayerNode` (wrapped as an AudioKit `Node`) ->
+  HPF 220 Hz -> LPF 2.4 kHz -> LPF 2.4 kHz -> `LayerStrip` (dry -12 dB, reverb send 1.0, delay send 0.6, pan
+  walk +-0.4 on a 53 s channel). Built in `GenerativeEngine.init`, added to `MixBus` with the layers' strips,
+  ticked by the conductor at 10 Hz. The three filters are bypassed while nothing plays.
+- Why: what is heard is the existing Zita tail and dark tape delay, so the film sits in the music's room;
+  nothing is rewired at run time and nothing is ducked (music.md calm rules). AudioKit's `AudioPlayer` was
+  not used: it adds a mixer and file handling for a node that only ever plays one buffer.
+- Control: `MusicControl.archiveBegin(cue)`, `.archiveEnd(fade:)`, `.archiveGain(_)`, applied on the
+  conductor queue like every other control; the fades are the strip's smoothstep `SoftEnv`. A cue that
+  arrives while another is audible fades that one out over 0.4 s first. Engine stop fades it with the rest.
+
+### A15. Timing: 4 s after the picture, out with the picture's fade out
+- `ArchiveAudioCuePlan` (pure): begin = picture start + 4 s, fade in 12 s (shorter if the moment is), fade out
+  starts with the picture's fade out and lasts min(10 s, picture fade out), so the sound is gone first. An early
+  fade out (clip ran out: 4 s; footage turned off or Stop: 2 s) moves it too. Under 6 s of sound: no cue.
+- Sync: the sound starts at source `segment + 4 s x rate`, where the slowed picture is at that moment. The
+  service decodes it right when the moment begins (0.6-1.7 s in the logs) and sleeps until the cue time, so
+  it starts on time rather than on the 2 Hz director tick.
+
+### A16. Pre-slowed, normalised buffer instead of a VariSpeed node
+- What: `ArchiveAudioDecoder` reads the segment with `AVAssetReader` as mono float at the engine rate, then
+  `ArchiveAudioMath.prepare`: linear-interpolation resample by the moment's rate (0.6-0.85, so 3-9 semitones
+  down like slowed tape), normalise to -26 dBFS RMS (at most +12 dB; under -60 dBFS = silent, no cue), soft
+  clip at -9 dBFS, 80 ms raised-cosine edges, copied to both channels in the engine's format. Off the main
+  actor; at most about 70 s (27 MB).
+- Why not the plan's `VariSpeed`: one more AU in the graph running all the time, and the rate never changes
+  during a moment. The plan's +-0.3 % tape wobble was dropped with it; the delay already has wow, and the
+  reverb blurs the rest.
+- Trim: `baseTrim` -11 dB, found with the offline render (first try gave -42.3 dBFS over the hold).
+
+### A17. Level: "Footage audio" is proportional in amplitude
+- 0 = no cue at all; 0.5 (default) = gain 1 (stem about -42 dBFS over the hold); 1 = gain 2 (+6 dB, -36 dBFS);
+  0.25 = -6 dB. A change during a moment is applied at once (`archiveGain`), 0 fades it out over 2 s.
+
+### A18. Verified offline (build 2)
+- `render-music.sh` gained `ARCHIVE=<mp4>` (+ `ARCHIVE_AT/LEN/RATE/START/LEVEL`), `ONLY=archive`,
+  `MUTE=archive`; `MusicRenderTests` builds a moment like the app's (picture fade 11 s in, 13 s out), decodes
+  with the app's decoder and posts the cue at render time (`renderOffline(onStep:)`), writing
+  `<label>.archive.json`. `scripts/analyze-archive-audio.py` reads the mix, the stem, the bypassed twin, the
+  base render without the archive and the pad stem.
+- Render: 300 s, seed 1, `NewsMaga1957` (a 1957 newsreel with narration and music), picture 90-165 s, sound
+  94-162 s, rate 0.72. Results:
+  - stem over the hold -42.0 dBFS RMS (loudest second -41.4), true peak -26.5 dBFS; pad stem -23.3 dBFS and
+    whole mix -22.6 dBFS over the same window: the film is 18.7 dB under the pad, 19.4 dB under the mix.
+    The mix RMS over the moment rises 0.04 dB.
+  - spectrum: centroid 502 Hz, 95 % roll-off 1.1 kHz, share above 2 kHz -25 dB, above 3 kHz -44 dB, above
+    5 kHz -96 dB; the loudest 50 ms above 3 kHz is -70.9 dBFS (gate -60). The mix's power above 3 kHz
+    over the moment rises 0.8 dB, above 5 kHz 0.0 dB.
+  - fades: 50 % at 7.5 s, 90 % at 11.8 s after the start (smoothstep of 12 s, mean deviation 0.14); out:
+    -20 dB 9.2 s and -40 dB 13.8 s after the fade starts (picture fade out 13 s).
+  - limiter: the bypassed twin peaks at -8.3 dBFS, and equals the limited mix within 2.6e-4 once aligned (the
+    bypass removes the limiter's 480-sample look-ahead delay): idle. Mix true peak -8.3 dBFS with and without
+    the archive.
+  - `check-music.py --pass 2`: the same gates pass with and without the archive (55); the one failure,
+    `chroma_novelty` 0.465 (max 0.45), is in both (seed 1 at 300 s). Calm metrics move by at most 0.6 dB or
+    2 attacks per minute; offline render speed 7.2x -> 7.0x real time.
+  - top of the slider (`ARCHIVE_LEVEL=1`): -36.0 dBFS over the hold, true peak -20.4 dBFS.
+- Demo: `audio-demo.m4a`, 90 s (84-174 s of the render): music alone, the film's sound coming in from 10 s,
+  holding, fading out from 68 s, tail to 78 s.
+
+### A19. Verified in the apps
+- visionOS simulator (forced, offline cache): decode 67.6 s of sound in 1650 ms (with offline renders running
+  on the host) and 567 ms; "archive audio begin" 4.0 s after "moment begin"; "archive audio end fade=10.0s"
+  at the picture's fade-out start. A run without host load had no slow frame across decode, sound start,
+  sound end and turning footage off (36 PERF windows, 79.5 fps, 0 dropped).
+- macOS: same sequence (decode 923 ms, begin 4.0 s after the picture).
+- Not checkable here: how it sits in the Vision Pro's speakers; the user's ear is the final check.
+
+## Settings
+
+### A20. One "Archive Footage" card, the same on both platforms
+- `ArchiveFootageSection` (shared): "Archive footage" toggle (on), "Footage amount" Rare / Normal / Often,
+  "Footage audio" slider (Off ... Louder, 50 %), a status line ("Showing: [Reno Rodeo] (1950)", "3 clips ready",
+  "Footage starts with playback", "Archive footage off"), "Clear Footage" with a confirmation (keeps the clip on
+  screen), the cache line ("5 films cached, 232.5 MB") and the credit "Films: Prelinger Archives via the
+  Internet Archive, public domain." Status and cache are polled every 2 s while the card is visible.
+- Placement: Mac sidebar after Visuals. visionOS: under Music in the three-column layout (the Visuals column
+  is already the longest), between Music and Images & Storage in two columns, after Visuals in one.
+- Persisted keys `archive.enabled`, `archive.amount`, `archive.audioLevel`; "Reset All Settings" resets them.
+
+### A21. Off means fade out, then stop
+- Footage runs while playback wants it and the setting is on. Turning it off during a moment fades picture and
+  sound over 2 s, then stops prefetching and decoding (the cache stays); turning it on while playing starts
+  again (a new moment clock, so the first moment is 90-150 s away at Normal). The amount applies from the next
+  gap. Verified with `-LiminalVideoOffAt 30`: setting off at 30.2 s, sound end fade 2.0 s, envelope 1.0 -> 0.13
+  in 2 s, "footage stop" 2.5 s after the setting.
+
+### A22. Layout checked by screenshot
+- `-LiminalControlsScroll archive` scrolls to the card, `-LiminalControlsWidth <pt>` sets the visionOS window
+  width (taps do not work in the Xcode 27 simulator). No truncation at 1240 (three columns), 880 (two) and 560
+  (one) pt, nor in the 320 pt Mac sidebar.
+
+### A23. Floating screen: not built
+- The plan recommends building it only after the user has lived with phases 1-5 (phase 6, off by default).
+  This build does not include it.
+
 ## Verification (build 1)
 
 - Unit tests: `LiminalTests/ArchiveFootageTests.swift` (queries, URL encoding, loose decoding, filters,
@@ -144,6 +243,6 @@ Status: phases 1-3 built (fetch and cache, footage in the shader on both platfor
 
 ## Open
 
-- Audio (phase 4) and the settings section, status line and credit (phase 5).
 - Open questions 1-3 of the plan (collections, colour odds, floating screen).
+- The user's ear on the sound level (default -42 dBFS, about 19 dB under the music) and the look strengths.
 - Device: 90 Hz pacing with footage on, and the decode cost on the Vision Pro.
