@@ -59,6 +59,26 @@
 //   --video-mix X      constant footage mix (VideoCompositeState.constantMix; default: the look's
 //                      ceiling at the intensity). Video uniforms can also be set with --set.
 //   --video-seed X     0...1 placement seed (default 0.3)
+//   --footage-seq      render the still image with moving archive footage as a frame sequence (no GPU
+//                      timing; needs --out; docs/plans/footage-fx.md 9). The image is fixed and settled,
+//                      the effect clock runs from --seq-start for --seq-len seconds, and the footage is
+//                      decoded from an mp4 with AVAssetReader at the app's pace and run through the app's
+//                      own pre-pass kernel (--prepass-metallib, built by the wrapper from ArchiveVideo.metal)
+//                      into three rotating 960x720 stage textures, as VideoFrameSource does. Without
+//                      --footage the same timeline is rendered with footage off (the reference).
+//   --footage CLIP.mp4 layer A (texture 7).  --footage-start S (default 20)  --footage-rate R (0.72)
+//   --footage-b CLIP.mp4  layer B (texture 8), --footage-b-start S, --video-look-b NAME, --video-seed-b X:
+//                      a second piece; --footage-xfade AT,LEN crossfades A -> B (complementary smoothsteps,
+//                      as FootagePiece.envelope) starting AT seconds into the sequence.
+//   --video-level X    piece level as a fraction of the look's ceiling (default 0.5, the weaver's band is
+//                      0.42-0.58); the app's mix formula applies. --video-mix X pins the mix instead.
+//   --video-warp X     share of the picture's warp the footage rides (default 0.6)
+//   --footage-dump     also write each layer's stage texture per frame (s0000-A.png, 240x180, RGB = luma /
+//                      slow average / motion): what scripts/ffx-check.py correlates the picture against
+//   --seq-len S        length of --footage-seq in seconds (default 8)
+//   --seq-ref b        with --footage-seq: the image alone, every effect off, same timeline
+//   Interaction modes (docs/plans/footage-fx.md) are pinned with --set once their uniforms exist
+//   (every Float of EffectsUniforms listed in `uniformFields` can be set).
 //   --times a,b,...    fixed effect times (default 37,113,260,611)
 //   --no-transition    skip the trans113 scenario
 //   --frames N         timed frames per trial (default 300)
@@ -112,6 +132,8 @@
 // Output: one JSON object on stdout. Progress goes to stderr.
 
 import Foundation
+import AVFoundation
+import CoreVideo
 import Metal
 import CoreGraphics
 import ImageIO
@@ -296,6 +318,24 @@ let videoPath = takeValue("--video")
 let videoLookArg = takeValue("--video-look") ?? "phantom"
 let videoMixArg = takeValue("--video-mix").map { v -> Float in guard let f = Float(v) else { fail("bad --video-mix") }; return f }
 let videoSeedArg = Float(takeValue("--video-seed") ?? "0.3") ?? 0.3
+let footageSeq = takeFlag("--footage-seq")
+let footagePath = takeValue("--footage")
+let footagePathB = takeValue("--footage-b")
+let footageStart = Double(takeValue("--footage-start") ?? "20") ?? 20
+let footageStartB = Double(takeValue("--footage-b-start") ?? "20") ?? 20
+let footageRate = Double(takeValue("--footage-rate") ?? "0.72") ?? 0.72
+let footageXfade: (at: Double, len: Double)? = takeValue("--footage-xfade").map { v in
+    let p = v.split(separator: ",").compactMap { Double($0) }
+    guard p.count == 2, p[1] > 0 else { fail("bad --footage-xfade (want AT,LEN)") }
+    return (p[0], p[1])
+}
+let videoLookArgB = takeValue("--video-look-b")
+let videoSeedArgB = Float(takeValue("--video-seed-b") ?? "0.7") ?? 0.7
+let videoLevelArg = Float(takeValue("--video-level") ?? "0.5") ?? 0.5
+let videoWarpArg = Float(takeValue("--video-warp") ?? "0.6") ?? 0.6
+let prepassMetallibPath = takeValue("--prepass-metallib")
+let footageDump = takeFlag("--footage-dump")
+let seqLen = Double(takeValue("--seq-len") ?? "8") ?? 8
 let times: [Float] = (takeValue("--times") ?? "37,113,260,611").split(separator: ",").map {
     guard let t = Float($0) else { fail("bad --times") }; return t
 }
@@ -344,7 +384,12 @@ if sequenceMode {
     if seqDuration <= 0 { fail("--seq-duration must be > 0") }
     if let r = seqRef, r != "a", r != "b" { fail("--seq-ref is a or b") }
 }
-let renderOnly = takeFlag("--render-only") || sequenceMode
+if footageSeq {
+    if footagePath != nil && prepassMetallibPath == nil { fail("--footage needs --prepass-metallib (the wrapper passes it)") }
+    if footagePathB != nil && (footagePath == nil || footageXfade == nil) { fail("--footage-b needs --footage and --footage-xfade") }
+    if seqFps < 1 || seqSimFps % seqFps != 0 { fail("--seq-sim-fps must be a multiple of --seq-fps") }
+} else if footagePath != nil || footagePathB != nil { fail("--footage needs --footage-seq") }
+let renderOnly = takeFlag("--render-only") || sequenceMode || footageSeq
 let leftOnly = takeFlag("--left-only")
 let pngSize: (w: Int, h: Int)? = takeValue("--png-size").map { v in
     let p = v.lowercased().split(separator: "x").compactMap { Int($0) }
@@ -390,7 +435,7 @@ let variantPaths: [(String, String)] = [("A", metallibPath)] + (metallibPathB.ma
 /// docs/plans/archive-video.md 2.3) renders with them, as the renderers do while footage shows; a library
 /// without them (main) renders its plain fragments.
 func fragmentName(_ lib: MTLLibrary, _ base: String) -> String {
-    videoPath != nil && lib.functionNames.contains(base + "Video") ? base + "Video" : base
+    (videoPath != nil || footagePath != nil) && lib.functionNames.contains(base + "Video") ? base + "Video" : base
 }
 let variants: [Variant] = variantPaths.map { name, path in
         let lib = loadLibrary(path)
@@ -496,7 +541,8 @@ func videoStage(_ img: CGImage) -> MTLTexture {
     }
     return px.withUnsafeBytes { uploadTexture(.rgba8Unorm, w, h, bytesPerRow: w * 4, $0.baseAddress!) }
 }
-let videoTex: MTLTexture = videoPath.map { videoStage(loadCGImage($0)) } ?? onePixel(.rgba8Unorm, [0, 0, 0, 255])
+var videoTex: MTLTexture = videoPath.map { videoStage(loadCGImage($0)) } ?? onePixel(.rgba8Unorm, [0, 0, 0, 255])
+var videoTexB: MTLTexture = videoTex   // layer B (texture 8): the same stage unless --footage-b
 let videoState: VideoCompositeState = {
     guard let path = videoPath else { return .off }
     guard let look = VideoLook(name: videoLookArg) else { fail("--video-look: phantom, imprint, window or emerge") }
@@ -683,7 +729,7 @@ func encodeFrame(_ cb: MTLCommandBuffer, _ sc: Scenario, _ st: FrameState, varia
             enc.setFragmentTexture(sc.previous, index: 3)
             enc.setFragmentTexture(depthTex, index: 5)
         enc.setFragmentTexture(videoTex, index: 7)
-        enc.setFragmentTexture(videoTex, index: 8)
+        enc.setFragmentTexture(videoTexB, index: 8)
             enc.setFragmentSamplerState(sampler, index: 0)
             enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
             enc.endEncoding()
@@ -707,7 +753,7 @@ func encodeFrame(_ cb: MTLCommandBuffer, _ sc: Scenario, _ st: FrameState, varia
         enc.setFragmentTexture(sc.previous, index: 3)
         enc.setFragmentTexture(depthTex, index: 5)
         enc.setFragmentTexture(videoTex, index: 7)
-        enc.setFragmentTexture(videoTex, index: 8)
+        enc.setFragmentTexture(videoTexB, index: 8)
         enc.setFragmentSamplerState(sampler, index: 0)
         enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         enc.endEncoding()
@@ -732,6 +778,265 @@ func savePNG(_ eye: Eye, _ path: String) {
         image = small.makeImage()!
     }
     writePNG(image, path)
+}
+
+// MARK: - Footage sequence (--footage-seq): the still image with moving archive footage
+
+/// VideoFrameSource without the clock: decodes a clip with AVAssetReader and runs the app's pre-pass
+/// kernel into three rotating stage textures (r = levelled luma, g = slow average, b = motion).
+final class FootageFeed {
+    struct Params { var black: Float, white: Float, blend: Float, slowK: Float, motionK: Float, crop: Float, hasPrev: Float, pad: Float }
+    let reader: AVAssetReader
+    let output: AVAssetReaderTrackOutput
+    let pipeline: MTLComputePipelineState
+    let commands: MTLCommandQueue
+    var stages: [MTLTexture] = []
+    var frameTex: MTLTexture?
+    var pending: CMSampleBuffer?
+    var writeIndex = 0, decoded = 0
+    var hasHistory = false
+    var lastFrameWall = 0.0
+    let start: Double, rate: Double
+    let black: Float, white: Float
+    let aspect: Float
+    private(set) var latest: MTLTexture?
+
+    static func texture(_ device: MTLDevice, _ format: MTLPixelFormat, _ w: Int, _ h: Int, usage: MTLTextureUsage,
+                        storage: MTLStorageMode) -> MTLTexture {
+        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: format, width: w, height: h, mipmapped: false)
+        d.usage = usage
+        d.storageMode = storage
+        return device.makeTexture(descriptor: d)!
+    }
+
+    init(path: String, start: Double, rate: Double, pipeline: MTLComputePipelineState, commands: MTLCommandQueue) {
+        self.commands = commands
+        let asset = AVURLAsset(url: URL(fileURLWithPath: path))
+        guard let track = asset.tracks(withMediaType: .video).first, let r = try? AVAssetReader(asset: asset) else {
+            fatalError("cannot open footage \(path)")
+        }
+        let duration = asset.duration.seconds
+        let s = min(max(start, 0), max(duration - 1, 0))
+        r.timeRange = CMTimeRange(start: CMTime(seconds: s, preferredTimescale: 600), duration: .positiveInfinity)
+        let o = AVAssetReaderTrackOutput(track: track, outputSettings: [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])
+        r.add(o)
+        guard r.startReading() else { fatalError("footage \(path): \(r.error?.localizedDescription ?? "cannot read")") }
+        reader = r; output = o; self.pipeline = pipeline; self.start = s; self.rate = rate
+        let size = track.naturalSize
+        // The stage shows the frame minus the 6 % crop on each side: same aspect as the frame.
+        aspect = Float(abs(size.width) / max(abs(size.height), 1))
+        // ArchiveClipValidator.levels: 5th / 95th luma percentiles over 8 small frames, 6 % inset.
+        let gen = AVAssetImageGenerator(asset: asset)
+        gen.maximumSize = CGSize(width: 160, height: 160)
+        gen.appliesPreferredTrackTransform = true
+        gen.requestedTimeToleranceBefore = CMTime(seconds: 2, preferredTimescale: 600)
+        gen.requestedTimeToleranceAfter = CMTime(seconds: 2, preferredTimescale: 600)
+        var hist = [Int](repeating: 0, count: 256)
+        for k in 0..<8 {
+            let t = CMTime(seconds: duration * (0.1 + 0.8 * Double(k) / 7), preferredTimescale: 600)
+            guard let img = try? gen.copyCGImage(at: t, actualTime: nil) else { continue }
+            let w = img.width, h = img.height
+            var px = [UInt8](repeating: 0, count: w * h)
+            let ctx = CGContext(data: &px, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w,
+                                space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue)!
+            ctx.draw(img, in: CGRect(x: 0, y: 0, width: w, height: h))
+            let ix = w * 6 / 100, iy = h * 6 / 100
+            for y in iy..<(h - iy) { for x in ix..<(w - ix) { hist[Int(px[y * w + x])] += 1 } }
+        }
+        let total = hist.reduce(0, +)
+        func pct(_ p: Double) -> Float {
+            var acc = 0
+            for (i, n) in hist.enumerated() { acc += n; if Double(acc) >= p * Double(max(total, 1)) { return Float(i) / 255 } }
+            return 1
+        }
+        var b = pct(0.05), w = pct(0.95)
+        if total == 0 { b = 0; w = 1 }
+        if w - b < 0.25 { let m = (w + b) / 2; b = max(0, m - 0.125); w = min(1, m + 0.125) }
+        black = b; white = w
+        stages = (0..<3).map { _ in Self.texture(commands.device, .rgba8Unorm, 960, 720, usage: [.shaderRead, .shaderWrite], storage: .shared) }
+    }
+
+    /// The newest stage as a 240x180 image (RGB = luma / slow average / motion).
+    func stageImage() -> CGImage? {
+        guard let t = latest else { return nil }
+        let w = t.width, h = t.height
+        var buf = [UInt8](repeating: 0, count: w * h * 4)
+        t.getBytes(&buf, bytesPerRow: w * 4, from: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0)
+        let cs = CGColorSpace(name: CGColorSpace.sRGB)!
+        let info = CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.noneSkipLast.rawValue
+        guard let full = CGContext(data: &buf, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                   space: cs, bitmapInfo: info)?.makeImage(),
+              let small = CGContext(data: nil, width: 240, height: 180, bitsPerComponent: 8, bytesPerRow: 960,
+                                    space: cs, bitmapInfo: info) else { return nil }
+        small.interpolationQuality = .medium
+        small.draw(full, in: CGRect(x: 0, y: 0, width: 240, height: 180))
+        return small.makeImage()
+    }
+
+    /// Advance to `wall` seconds since the piece began (the decoder's 30 Hz tick): show the newest frame
+    /// whose time has come, as VideoFrameSource.tick.
+    func tick(wall: Double) {
+        let target = start + wall * rate
+        var newest: CMSampleBuffer?
+        while true {
+            if pending == nil { pending = output.copyNextSampleBuffer() }
+            guard let sb = pending else { break }   // end of the clip: hold the last frame
+            if CMSampleBufferGetPresentationTimeStamp(sb).seconds > target && (decoded > 0 || newest != nil) { break }
+            newest = sb
+            pending = nil
+        }
+        guard let frame = newest, let pb = CMSampleBufferGetImageBuffer(frame) else { return }
+        decoded += 1
+        let w = CVPixelBufferGetWidth(pb), h = CVPixelBufferGetHeight(pb)
+        if frameTex?.width != w || frameTex?.height != h {
+            frameTex = Self.texture(commands.device, .bgra8Unorm, w, h, usage: .shaderRead, storage: .shared)
+        }
+        CVPixelBufferLockBaseAddress(pb, .readOnly)
+        frameTex!.replace(region: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0,
+                          withBytes: CVPixelBufferGetBaseAddress(pb)!, bytesPerRow: CVPixelBufferGetBytesPerRow(pb))
+        CVPixelBufferUnlockBaseAddress(pb, .readOnly)
+        let dt = max(wall - lastFrameWall, 1.0 / 60)
+        lastFrameWall = wall
+        var p = Params(black: black, white: max(white, black + 0.05), blend: 0.4,
+                       slowK: Float(1 - exp(-dt / 0.5)), motionK: Float(1 - exp(-dt / 0.25)),
+                       crop: 0.06, hasPrev: hasHistory ? 1 : 0, pad: 0)
+        let cb = commands.makeCommandBuffer()!
+        let enc = cb.makeComputeCommandEncoder()!
+        let out = stages[writeIndex]
+        enc.setComputePipelineState(pipeline)
+        enc.setTexture(frameTex, index: 0)
+        enc.setTexture(stages[(writeIndex + 2) % 3], index: 1)
+        enc.setTexture(out, index: 2)
+        enc.setBytes(&p, length: MemoryLayout<Params>.stride, index: 0)
+        enc.dispatchThreadgroups(MTLSize(width: 60, height: 45, depth: 1),
+                                 threadsPerThreadgroup: MTLSize(width: 16, height: 16, depth: 1))
+        enc.endEncoding()
+        cb.commit()
+        cb.waitUntilCompleted()
+        latest = out
+        hasHistory = true
+        writeIndex = (writeIndex + 1) % 3
+    }
+}
+
+if footageSeq, let outDir = outDir {
+    try? FileManager.default.createDirectory(atPath: outDir, withIntermediateDirectories: true)
+    let intensity = intensityArg ?? EffectLook.defaultIntensity
+    let age: Float = imageAgeArg ?? 30   // a settled picture
+    let refOff: [String: Float] = [
+        "distortionAmplitude": 0, "logSphereAmount": 0, "fractalNoiseAmount": 0, "chromaticAmount": 0,
+        "hueBlendAmount": 0, "hueWaveIntensity": 0, "fractalHueAmount": 0, "bloomAmount": 0,
+        "ghostTapCount": 0, "feedbackMix": 0, "vibranceAmount": 0, "blackPoint": 0, "stereoOffset": 0,
+    ]
+    var feedA: FootageFeed?, feedB: FootageFeed?
+    if seqRef == nil, let fp = footagePath, let pm = prepassMetallibPath {
+        guard let fn = loadLibrary(pm).makeFunction(name: "videoPrepass"),
+              let pipe = try? device.makeComputePipelineState(function: fn) else { fail("no videoPrepass in \(pm)") }
+        feedA = FootageFeed(path: fp, start: footageStart, rate: footageRate, pipeline: pipe, commands: queue)
+        if let fb = footagePathB { feedB = FootageFeed(path: fb, start: footageStartB, rate: footageRate, pipeline: pipe, commands: queue) }
+    }
+    guard let lookA = VideoLook(name: videoLookArg) else { fail("--video-look: phantom, imprint, window or emerge") }
+    guard let lookB = VideoLook(name: videoLookArgB ?? videoLookArg) else { fail("--video-look-b: phantom, imprint, window or emerge") }
+    let tint = VideoComposite.tint(of: framed)
+    let stride = seqSimFps / seqFps
+    let total = Int((seqLen * Double(seqSimFps)).rounded())
+    let decodeEvery = max(1, seqSimFps / 30)   // VideoFrameSource ticks every 33 ms
+    let leadB = 3.0                            // the incoming decoder starts 3 s before its crossfade
+    let st = FrameState(makeEyes(storage: .shared))
+    var frameList: [[String: Any]] = []
+    func smooth(_ x: Double) -> Double { let c = min(max(x, 0), 1); return c * c * (3 - 2 * c) }
+
+    func scenario(at k: Int) -> (Scenario, [String: Any]) {
+        let rel = Double(k) / Double(seqSimFps)
+        let t = seqStart + Float(rel)
+        let x = footageXfade.map { smooth((rel - $0.at) / $0.len) } ?? 0
+        var envA = feedA == nil ? 0 : 1 - x, envB = feedB == nil ? 0 : x
+        if feedA?.latest == nil { envA = 0 }
+        if feedB?.latest == nil { envB = 0 }
+        var state = VideoCompositeState.off
+        if envA > 0 || envB > 0 {
+            state = VideoCompositeState(
+                a: envA > 0 ? VideoLayer(weight: Float(envA) * videoLevelArg, look: lookA, seed: videoSeedArg,
+                                         aspect: feedA!.aspect, warp: videoWarpArg) : nil,
+                b: envB > 0 ? VideoLayer(weight: Float(envB) * videoLevelArg, look: lookB, seed: videoSeedArgB,
+                                         aspect: feedB!.aspect, warp: videoWarpArg) : nil,
+                tint: tint.tint, shade: tint.shade)
+            state.constantMix = videoMixArg
+        }
+        var u = EffectsUniformsComputer.compute(time: t, transitionProgress: 0, hasSaliencyMap: false, vibrance: vibrance,
+            look: EffectLook(intensity: intensity, imageAge: age, transitionDuration: txSpec.duration),
+            transition: txSpec, video: state)
+        if videoMixArg != nil { u.videoMix *= Float(envA); u.videoMixB *= Float(envB) }   // a pinned mix still crossfades
+        let (buf, count) = ghostTaps(at: t)
+        u.ghostTapCount = Float(count)
+        if seqRef != nil {
+            applyOverrides(&u, refOff)
+        } else {
+            let offset = 0.003 + 0.007 * SmoothOscillator.value(at: t)
+            u.stereoOffset = depthPath != nil ? abs(offset) : 0
+            applyOverrides(&u, globalOverrides)
+        }
+        var info: [String: Any] = ["time": Double(t), "rel": rel, "env_a": envA, "env_b": envB]
+        info["uniforms"] = uniformsDict(u)
+        return (Scenario(name: "footage", uniforms: u, taps: buf, previous: sourceTex), info)
+    }
+    func feed(at k: Int) {
+        guard k % decodeEvery == 0 else { return }
+        let rel = Double(k) / Double(seqSimFps)
+        feedA?.tick(wall: rel)
+        if let fb = feedB, let xf = footageXfade, rel >= xf.at - leadB { fb.tick(wall: rel - (xf.at - leadB)) }
+        if let tex = feedA?.latest { videoTex = tex }
+        videoTexB = feedB?.latest ?? videoTex
+    }
+
+    // Warm-up at the first frame's time so the feedback trails have converged before frame 0.
+    feed(at: 0)
+    if seqRef == nil {
+        let (first, _) = scenario(at: 0)
+        let cb = queue.makeCommandBuffer()!
+        for _ in 0..<max(1, pngFrames) { _ = encodeFrame(cb, first, st) }
+        cb.commit()
+        cb.waitUntilCompleted()
+    }
+    var written = 0
+    for k in 0...total {
+        if seqRef != nil && k % stride != 0 { continue }
+        feed(at: k)
+        let (sc, info) = scenario(at: k)
+        let cb = queue.makeCommandBuffer()!
+        let out = encodeFrame(cb, sc, st)
+        cb.commit()
+        cb.waitUntilCompleted()
+        if let err = cb.error { fail("command buffer error: \(err)") }
+        if k % stride == 0 {
+            let name = String(format: "f%04d", written)
+            savePNG(out.left, "\(outDir)/\(name)-L.png")
+            if !leftOnly { savePNG(out.right, "\(outDir)/\(name)-R.png") }
+            if footageDump {
+                let n = String(format: "s%04d", written)
+                if let img = feedA?.stageImage() { writePNG(img, "\(outDir)/\(n)-A.png") }
+                if let img = feedB?.stageImage() { writePNG(img, "\(outDir)/\(n)-B.png") }
+            }
+            var entry = info
+            entry["frame"] = name
+            frameList.append(entry)
+            written += 1
+        }
+    }
+    log("wrote \(written) footage-sequence frames to \(outDir) (decoded A \(feedA?.decoded ?? 0), B \(feedB?.decoded ?? 0))")
+    let text = jsonString([
+        "label": label, "image": imagePath, "out": outDir, "footage": footagePath ?? "", "footage_b": footagePathB ?? "",
+        "footage_start": footageStart, "footage_rate": footageRate,
+        "levels": feedA.map { ["black": Double($0.black), "white": Double($0.white)] } ?? [:],
+        "look": seqRef == nil && feedA != nil ? lookA.name : "", "look_b": feedB != nil ? lookB.name : "",
+        "level": Double(videoLevelArg), "mix": videoMixArg.map { Double($0) } ?? -1, "warp": Double(videoWarpArg),
+        "ref": seqRef ?? "", "intensity": Double(intensity), "start": Double(seqStart), "len": seqLen,
+        "fps": seqFps, "sim_fps": seqSimFps, "frames": frameList,
+    ] as [String: Any])
+    try? text.write(toFile: jsonPath ?? "\(outDir)/sequence.json", atomically: true, encoding: .utf8)
+    print(jsonString(["out": outDir, "frames": written, "look": lookA.name, "footage": footagePath ?? ""] as [String: Any]))
+    exit(0)
 }
 
 // MARK: - Transition sequence (--sequence): image A -> image B on the app's timeline
