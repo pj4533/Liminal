@@ -66,6 +66,15 @@ struct EffectsUniforms {
     var videoScaleB: Float = 0
     var videoAspectB: Float = 0
     var videoWarpB: Float = 0
+    // Footage interaction modes (docs/plans/footage-fx.md 6; appended last, defaults 0 = blend only).
+    var videoDrive: Float = 0  // FootageDrive raw value of layer A (0 = none)
+    var videoDriveAmt: Float = 0  // 0...1: intensity, clarity cycle, fresh hold and the piece's envelope
+    var videoKey: Float = 0  // FootageKey raw value of layer A (0 = the look's own mask)
+    var videoKeyAmt: Float = 0  // sign = polarity (Shadowplay) / wedge count (Kaleido); size = fold strength
+    var videoDriveB: Float = 0
+    var videoDriveAmtB: Float = 0
+    var videoKeyB: Float = 0
+    var videoKeyAmtB: Float = 0
 }
 
 /// Ghost tap data for shader. Must match Metal struct layout.

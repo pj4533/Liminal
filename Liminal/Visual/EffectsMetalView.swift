@@ -17,6 +17,9 @@ final class EffectsMetalView: MTKView {
     private var pipelineState: MTLRenderPipelineState?
     /// Archive footage variant (effectsFragmentVideo), bound only while footage shows.
     private var videoPipelineState: MTLRenderPipelineState?
+    /// Footage interaction-mode variants (effectsFragmentVideo{Keys,Drives,FX}) by variant id, bound only
+    /// while a layer needs them (VideoComposite.footageVariant; docs/decisions/footage-fx.md F11).
+    private var videoFXPipelineStates: [Int: MTLRenderPipelineState] = [:]
     private var uniformBuffer: MTLBuffer?
     private var ghostTapBuffer: MTLBuffer?
 
@@ -170,6 +173,11 @@ final class EffectsMetalView: MTKView {
         if !DebugLaunchOptions.noEffects, let f = library.makeFunction(name: "effectsFragmentVideo") {
             pipelineDescriptor.fragmentFunction = f
             videoPipelineState = try? device.makeRenderPipelineState(descriptor: pipelineDescriptor)
+        }
+        for v in FootageRecipe.fxVariants where !DebugLaunchOptions.noEffects {
+            guard let f = library.makeFunction(name: "effectsFragment" + VideoComposite.variantSuffix(v)) else { continue }
+            pipelineDescriptor.fragmentFunction = f
+            videoFXPipelineStates[v] = try? device.makeRenderPipelineState(descriptor: pipelineDescriptor)
         }
 
         // Create uniform buffer
@@ -461,7 +469,8 @@ final class EffectsMetalView: MTKView {
         renderPassDescriptor.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
 
         if let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) {
-            encoder.setRenderPipelineState(footage ? videoPipelineState ?? pipelineState : pipelineState)
+            let videoState = videoFXPipelineStates[VideoComposite.footageVariant(uniformsCopy)] ?? videoPipelineState
+            encoder.setRenderPipelineState(footage ? videoState ?? pipelineState : pipelineState)
             encoder.setFragmentTexture(sourceTexture, index: 0)
             if let saliencyTex = saliencyTexture {
                 encoder.setFragmentTexture(saliencyTex, index: 2)

@@ -9,7 +9,7 @@ struct ArchiveAudioCueTests {
 
     static func piece(start: Double = 100, length: Double = 25, rate: Float = 0.7,
                       segment: Double = 200) -> FootagePiece {
-        FootagePiece(index: 3, slot: 1, clipID: "x", segmentStart: segment, rate: rate, look: .window, seed: 0.3,
+        FootagePiece(index: 3, slot: 1, clipID: "x", segmentStart: segment, rate: rate, recipe: .window, seed: 0.3,
                      warp: 0.6, level: 0.5, swell: 0, start: start, origin: start, fadeIn: 4, length: length,
                      fadeOutStart: nil, fadeOut: nil, sound: true)
     }

@@ -31,6 +31,10 @@ final class OffscreenEffectsRenderer {
     /// footage shows, so the plain pipelines stay exactly the shader without footage.
     private let videoPipelineState: MTLRenderPipelineState?
     private let stereoVideoPipelineState: MTLRenderPipelineState?
+    /// Footage interaction-mode variants (effectsFragment*Video{Keys,Drives,FX}) by variant id, bound only
+    /// while a layer needs them (VideoComposite.footageVariant; docs/decisions/footage-fx.md F11).
+    private let videoFXPipelineStates: [Int: MTLRenderPipelineState]
+    private let stereoVideoFXPipelineStates: [Int: MTLRenderPipelineState]
     private let samplerState: MTLSamplerState
 
     // MARK: - Textures
@@ -194,6 +198,20 @@ final class OffscreenEffectsRenderer {
             stereoDescriptor.fragmentFunction = f
             return try? device.makeRenderPipelineState(descriptor: stereoDescriptor)
         }
+        var mono: [Int: MTLRenderPipelineState] = [:], stereo: [Int: MTLRenderPipelineState] = [:]
+        for v in FootageRecipe.fxVariants {
+            let suffix = VideoComposite.variantSuffix(v)
+            if let f = library.makeFunction(name: "effectsFragment" + suffix) {
+                pipelineDescriptor.fragmentFunction = f
+                mono[v] = try? device.makeRenderPipelineState(descriptor: pipelineDescriptor)
+            }
+            if let f = library.makeFunction(name: "effectsFragmentStereo" + suffix) {
+                stereoDescriptor.fragmentFunction = f
+                stereo[v] = try? device.makeRenderPipelineState(descriptor: stereoDescriptor)
+            }
+        }
+        videoFXPipelineStates = mono
+        stereoVideoFXPipelineStates = stereo
         if videoPipelineState == nil || stereoVideoPipelineState == nil {
             LMLog.visual.error("📼 footage pipelines unavailable: archive footage will not show")
         }
@@ -1006,7 +1024,9 @@ final class OffscreenEffectsRenderer {
     /// The footage variant when footage shows this frame (texture and mix), else nil (plain pipeline).
     private func footagePipeline(_ u: EffectsUniforms, stereo: Bool = false) -> MTLRenderPipelineState? {
         guard (u.videoMix > 0 && videoTexture != nil) || (u.videoMixB > 0 && videoTextureB != nil) else { return nil }
-        return stereo ? stereoVideoPipelineState : videoPipelineState
+        let v = VideoComposite.footageVariant(u)
+        if stereo { return stereoVideoFXPipelineStates[v] ?? stereoVideoPipelineState }
+        return videoFXPipelineStates[v] ?? videoPipelineState
     }
 
     /// `bgra8Unorm` view of an `_srgb` drawable texture (cached; see `renderFormat`). Falls back to the

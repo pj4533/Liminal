@@ -87,7 +87,7 @@ struct MusicRenderTests {
         let segment = Double(cfg["archive_start"] ?? "") ?? 120
         let level = Float(cfg["archive_level"] ?? "") ?? 0.5
         let fadeIn = 4.0, fadeOut = 4.0
-        var piece = FootagePiece(index: 0, slot: 0, clipID: "render", segmentStart: segment, rate: rate, look: .window,
+        var piece = FootagePiece(index: 0, slot: 0, clipID: "render", segmentStart: segment, rate: rate, recipe: .window,
                                  seed: 0.5, warp: 0.6, level: 0.5, swell: 0, start: at, origin: at, fadeIn: fadeIn,
                                  length: length, fadeOutStart: nil, fadeOut: nil, sound: true)
         piece.fadeOutStart = at + length
