@@ -172,6 +172,7 @@ struct ImmersiveDomeView: View {
             }
             .onDisappear {
                 renderTask?.cancel()
+                ArchiveFootageService.shared.stop()
                 headPose?.stop()
                 NotificationCenter.default.post(name: Self.didCloseNotification, object: nil)
                 LMLog.visual.info("🎬 SHELL: Render loop cancelled")
@@ -424,6 +425,11 @@ struct ImmersiveDomeView: View {
             // Image change: prepared off the main actor, applied when ready (no long frame).
             var preparingGeneration: UInt64 = 0
             let preparedSlot = PreparedImageSlot()
+            // Archive footage (docs/plans/archive-video.md): prefetch and moments run off the main actor;
+            // this loop only reads the current frame and reports what the director waits on.
+            let footage = ArchiveFootageService.shared
+            footage.start()
+            var lastVideoMix: Float = 0
 
             while !Task.isCancelled {
                 frameCount += 1
@@ -576,6 +582,13 @@ struct ImmersiveDomeView: View {
                     imageAge: transitionStartEffectTime.map { effectTime - $0 }.flatMap { $0 >= 0 ? $0 : nil },
                     imageInterval: Float(settings.imageInterval),
                     transitionDuration: transitionState.spec.duration)
+                let footageFrame = footage.frame(image: cgImage)
+                if frameCount % 30 == 0 {
+                    footage.update(.init(transitionRunning: transitionState.isTransitioning,
+                                         imageAge: transitionStartEffectTime.map { Double(effectTime - $0) },
+                                         musicIntensity: modulation.amount > 0 ? modulation.energy : 0,
+                                         effectIntensity: look.intensity))
+                }
                 let uniforms = EffectsUniformsComputer.compute(
                     time: effectTime,
                     transitionProgress: transitionProgress,
@@ -583,8 +596,11 @@ struct ImmersiveDomeView: View {
                     vibrance: vibrance,
                     music: modulation,
                     look: look,
-                    transition: transitionState.spec
+                    transition: transitionState.spec,
+                    video: footageFrame.state
                 )
+                renderer.videoTexture = uniforms.videoMix > 0 ? footageFrame.texture : nil
+                lastVideoMix = uniforms.videoMix
 
                 // Visuals -> music activity (un-modulated oscillators, follows the clarity drive; at most 2 Hz)
                 let activity = EffectsUniformsComputer.visualActivity(time: effectTime, transitionProgress: transitionProgress,
@@ -676,6 +692,9 @@ struct ImmersiveDomeView: View {
 
                     let perfLine = "📊 visionOS PERF: fps=\(String(format: "%.1f", actualFPS)) (\(String(format: "%.0f", fpsPercent))% of 60) | render avg=\(String(format: "%.1f", avgRenderTime))ms max=\(String(format: "%.1f", maxRenderTime))ms | dropped=\(droppedFrames) | transition=\(String(format: "%.0f", transitionState.transitionProgress * 100))% | interval p95=\(String(format: "%.2f", intervalP95))ms | \(gpuFragment)"
                     LMLog.visual.info("\(perfLine, privacy: .public)")
+                    if lastVideoMix > 0 {
+                        LMLog.visual.info("📼 FOOTAGE mix=\(String(format: "%.3f", lastVideoMix), privacy: .public) look=\(footageFrame.state.look.name, privacy: .public) env=\(String(format: "%.3f", footageFrame.state.envelope), privacy: .public)")
+                    }
                     LMLog.visual.info("🔮 3D STATUS: depth=\(hasDepth) textureStereo=\(hasStereo) gen=\(transitionState.lastGeneration) mesh avg=\(String(format: "%.3f", totalMeshTime / Double(max(frameCount, 1))), privacy: .public)ms relief k=\(String(format: "%.3f", lastReliefK), privacy: .public) breath=\(String(format: "%.3f", lastBreathing), privacy: .public)m w=\(String(format: "%.2f", lastReliefW), privacy: .public) fields=\(relief.previous != nil ? 1 : 0)+\(relief.current != nil ? 1 : 0)")
 
                     frameCount = 0

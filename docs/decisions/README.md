@@ -15,6 +15,7 @@ Each workstream has a decision log with the reasons (what, why, alternatives, nu
 | [transitions.md](transitions.md) | Image transitions: offline transition renderer and objective checks, baseline of the shipped crossfade (start pop, end stop, double exposure when calm), design of 12 styles with per-pixel swap masks, C1 envelopes, a no-repeat director and variable duration (T1-T14); implementation, round 0 measurements and GPU cost (T15-T26); tuning rounds 1-2 with blind judges (T27-T37: Ripple, Melt, Facets, Solarize replace Echo, Embers, Undertow, Depthwash); final check in the visionOS 27.2 Simulator and on macOS with `-LiminalTestImage <directory>` and `-LiminalImageInterval` (T38-T42) |
 | [final-qa.md](final-qa.md) | End-to-end QA of the merged branch on a fresh visionOS install and macOS; sim-drag helper, public log values |
 | [spatial.md](spatial.md) | One unified immersive mode replaces Dome and Spatial Diorama: 337.5 x 120 degree mirror-wrap shell of three tiles, ML depth as real vertex relief (true stereo and parallax), every effect on it from the one 2048x2048 mono render, ARKit placement, Depth slider; sim-verified at 78.5 fps, device checks open (S1-S18); plan in docs/plans/spatial.md |
+| [archive-video.md](archive-video.md) | Internet Archive footage (Prelinger, 1950-69, mostly black and white) fetched politely and cached (1 GB, 12 clips), decoded off the main actor into a 960x720 stage, blended into the picture under every effect in four looks (Phantom, Imprint, Window, Emerge) during scheduled moments; separate footage shader variants keep footage-off frames bit-identical (A1-A13); the film's sound enters 4 s after the picture, slowed, band-limited and mostly wet at about -42 dBFS under a -23 dBFS pad, and the Archive Footage settings card on both platforms (A14-A22); independent review fixes and evidence (A24-A25), summary, headset checklist and open risks at the top |
 
 ## Please review (top items per workstream)
 
@@ -68,3 +69,8 @@ Each workstream has a decision log with the reasons (what, why, alternatives, nu
 
 ### Final QA
 - Remaining observations, not changed: older macOS debug lines still show as `<private>` in `log stream`; the Playback status can say "0 images cached" in test-pattern-only mode; a harmless "audio requested=0.100s granted=0.085s MISMATCH" line appears in the Simulator.
+
+### Archive footage
+- Sound level (default about -42 dBFS, 19 dB under the music), look strengths, and "medical" in the exclusions (A25): your call.
+- Nothing measured on a real Vision Pro: 90 Hz pacing, decode cost and heat with footage on.
+- The floating screen (A23) is not built.

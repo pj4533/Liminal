@@ -15,6 +15,8 @@ final class EffectsMetalView: MTKView {
 
     private var commandQueue: MTLCommandQueue?
     private var pipelineState: MTLRenderPipelineState?
+    /// Archive footage variant (effectsFragmentVideo), bound only while footage shows.
+    private var videoPipelineState: MTLRenderPipelineState?
     private var uniformBuffer: MTLBuffer?
     private var ghostTapBuffer: MTLBuffer?
 
@@ -165,9 +167,14 @@ final class EffectsMetalView: MTKView {
         } catch {
             LMLog.visual.error("❌ Failed to create pipeline: \(error.localizedDescription)")
         }
+        if !DebugLaunchOptions.noEffects, let f = library.makeFunction(name: "effectsFragmentVideo") {
+            pipelineDescriptor.fragmentFunction = f
+            videoPipelineState = try? device.makeRenderPipelineState(descriptor: pipelineDescriptor)
+        }
 
         // Create uniform buffer
         uniformBuffer = device.makeBuffer(length: MemoryLayout<EffectsUniforms>.size, options: .storageModeShared)
+
         if uniformBuffer != nil {
             LMLog.visual.debug("✅ Uniform buffer created: \(MemoryLayout<EffectsUniforms>.size) bytes")
         }
@@ -428,6 +435,10 @@ final class EffectsMetalView: MTKView {
         var uniformsCopy = uniforms
         uniformsCopy.hasSaliencyMap = saliencyTexture != nil ? 1.0 : 0.0
         uniformsCopy.ghostTapCount = Float(ghostTapResult.activeCount)
+        // Archive footage: the newest stage texture at draw time (a lock read); none -> stage skipped.
+        let videoTexture = uniformsCopy.videoMix > 0 && videoPipelineState != nil
+            ? ArchiveFootageService.shared.latestTexture() : nil
+        if videoTexture == nil { uniformsCopy.videoMix = 0 }
         memcpy(uniformBuffer.contents(), &uniformsCopy, MemoryLayout<EffectsUniforms>.size)
 
         guard let commandBuffer = commandQueue.makeCommandBuffer() else {
@@ -446,7 +457,7 @@ final class EffectsMetalView: MTKView {
         renderPassDescriptor.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
 
         if let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) {
-            encoder.setRenderPipelineState(pipelineState)
+            encoder.setRenderPipelineState(videoTexture != nil ? videoPipelineState ?? pipelineState : pipelineState)
             encoder.setFragmentTexture(sourceTexture, index: 0)
             if let saliencyTex = saliencyTexture {
                 encoder.setFragmentTexture(saliencyTex, index: 2)
@@ -457,6 +468,7 @@ final class EffectsMetalView: MTKView {
             if let fbTex = feedbackTexture {
                 encoder.setFragmentTexture(fbTex, index: 4)
             }
+            if let videoTexture { encoder.setFragmentTexture(videoTexture, index: 7) }
             encoder.setFragmentBuffer(uniformBuffer, offset: 0, index: 0)
             encoder.setFragmentBuffer(ghostTapBuffer, offset: 0, index: 1)
             encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
@@ -503,6 +515,9 @@ final class EffectsMetalView: MTKView {
             frameIntervals.removeAll(keepingCapacity: true)
             let gpuFragment = gpuStats.drain().logFragment
 
+            if uniformsCopy.videoMix > 0 {
+                LMLog.visual.info("📼 FOOTAGE mix=\(String(format: "%.3f", uniformsCopy.videoMix), privacy: .public) look=\(Int(uniformsCopy.videoLook))")
+            }
             let perfLine = "📊 METAL PERF: fps=\(String(format: "%.1f", fps)) avgDraw=\(String(format: "%.2f", avgDrawTime))ms delay=\(String(format: "%.0f", delayPct))% src=\(srcW)x\(srcH) texUpdates=\(texUpdates) | interval p95=\(String(format: "%.2f", intervalP95))ms | \(gpuFragment)"
             LMLog.visual.info("\(perfLine, privacy: .public)")
 

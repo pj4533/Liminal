@@ -24,6 +24,7 @@
 #     --split    also pass -LiminalPerfSplitPasses YES (no-op since direct-drawable render)
 #     --app      path to Liminal.app (default: <dd>/Build/Products/Debug-xrsimulator/Liminal.app)
 #     --dd       derived-data dir holding the build (default: $SCRATCH/dd-perf)
+#     --extra    extra launch arguments, whitespace-separated (e.g. "-LiminalVideoForce YES -LiminalVideoOff YES")
 #   Env: PERF_ROOT (default $SCRATCH/perf), SCRATCH (default: this session's scratchpad dir).
 #
 # Output (<PERF_ROOT>/<label>/): log.txt (full stream), perf.txt (PERF lines in the window),
@@ -51,6 +52,7 @@ SPLIT=0
 DD="$SCRATCH/dd-perf"
 APP=""
 OUT=""
+EXTRA=""
 
 while (( $# > 0 )); do
   case "$1" in
@@ -58,6 +60,7 @@ while (( $# > 0 )); do
     --seconds) SECONDS_N=$2; shift 2;;
     --warmup) WARMUP=$2; shift 2;;
     --freeze) FREEZE=$2; shift 2;;
+    --extra) EXTRA=$2; shift 2;;
     --split) SPLIT=1; shift;;
     --udid) UDID=$2; shift 2;;
     --app) APP=$2; shift 2;;
@@ -100,6 +103,7 @@ sleep 2
 ARGS=(-LiminalAutoPlay YES -LiminalOpenDome YES -LiminalPerfLogInterval 1)
 [[ -n "$FREEZE" ]] && ARGS+=(-LiminalFreezeTime "$FREEZE")
 (( SPLIT )) && ARGS+=(-LiminalPerfSplitPasses YES)
+[[ -n "$EXTRA" ]] && ARGS+=(${=EXTRA})
 log "launching with: ${ARGS[*]}"
 xcrun simctl launch "$UDID" "$BUNDLE" "${ARGS[@]}" >/dev/null || { log "launch failed"; exit 1; }
 

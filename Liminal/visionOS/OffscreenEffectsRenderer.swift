@@ -27,6 +27,10 @@ final class OffscreenEffectsRenderer {
     private let stereoPipelineState: MTLRenderPipelineState
     private var loggedStereoFallback = false
     private let passthroughPipelineState: MTLRenderPipelineState  // DEBUG: Simple passthrough
+    /// Archive footage variants (effectsFragmentVideo / effectsFragmentStereoVideo), used only while
+    /// footage shows, so the plain pipelines stay exactly the shader without footage.
+    private let videoPipelineState: MTLRenderPipelineState?
+    private let stereoVideoPipelineState: MTLRenderPipelineState?
     private let samplerState: MTLSamplerState
 
     // MARK: - Textures
@@ -59,6 +63,9 @@ final class OffscreenEffectsRenderer {
     private var lastOutput: [MTLTexture?] = [nil, nil]
     /// 1x1 black, bound when no previous output exists (feedbackMix is also forced to 0 then).
     private let blackTexture: MTLTexture?
+    /// Archive footage stage texture for this frame (texture 7; docs/plans/archive-video.md 2.3). Set by
+    /// the render loop from ArchiveFootageService.frame; with nil (or videoMix 0) the plain pipeline runs.
+    var videoTexture: MTLTexture?
 
     // MARK: - Ghost Taps
 
@@ -174,6 +181,19 @@ final class OffscreenEffectsRenderer {
         } catch {
             LMLog.visual.error("❌ Failed to create stereo effects pipeline: \(error.localizedDescription)")
             return nil
+        }
+
+        // Archive footage variants (docs/plans/archive-video.md 2.3); footage is skipped if they fail.
+        videoPipelineState = library.makeFunction(name: "effectsFragmentVideo").flatMap { f in
+            pipelineDescriptor.fragmentFunction = f
+            return try? device.makeRenderPipelineState(descriptor: pipelineDescriptor)
+        }
+        stereoVideoPipelineState = library.makeFunction(name: "effectsFragmentStereoVideo").flatMap { f in
+            stereoDescriptor.fragmentFunction = f
+            return try? device.makeRenderPipelineState(descriptor: stereoDescriptor)
+        }
+        if videoPipelineState == nil || stereoVideoPipelineState == nil {
+            LMLog.visual.error("📼 footage pipelines unavailable: archive footage will not show")
         }
 
         // Create passthrough pipeline for debugging
@@ -661,7 +681,7 @@ final class OffscreenEffectsRenderer {
             return false
         }
 
-        encoder.setRenderPipelineState(pipelineState)
+        encoder.setRenderPipelineState(footagePipeline(uniforms) ?? pipelineState)
 
         // Set uniforms with ghost tap count for optimized shader loop
         var mutableUniforms = uniforms
@@ -684,6 +704,7 @@ final class OffscreenEffectsRenderer {
         if let depthTex = depthTexture {
             encoder.setFragmentTexture(depthTex, index: 5)
         }
+        if uniforms.videoMix > 0, let videoTexture { encoder.setFragmentTexture(videoTexture, index: 7) }
         encoder.setFragmentSamplerState(samplerState, index: 0)
 
         // Draw fullscreen quad (shader generates vertices from vertexID)
@@ -886,7 +907,7 @@ final class OffscreenEffectsRenderer {
             return false
         }
 
-        encoder.setRenderPipelineState(stereoPipelineState)
+        encoder.setRenderPipelineState(footagePipeline(uniforms, stereo: true) ?? stereoPipelineState)
 
         // Shader applies -|offset| to the left eye and +|offset| to the right eye.
         var mutableUniforms = uniforms
@@ -909,6 +930,7 @@ final class OffscreenEffectsRenderer {
         if let depthTex = depthTexture {
             encoder.setFragmentTexture(depthTex, index: 5)
         }
+        if uniforms.videoMix > 0, let videoTexture { encoder.setFragmentTexture(videoTexture, index: 7) }
         encoder.setFragmentSamplerState(samplerState, index: 0)
 
         encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
@@ -943,7 +965,7 @@ final class OffscreenEffectsRenderer {
             return false
         }
 
-        encoder.setRenderPipelineState(pipelineState)
+        encoder.setRenderPipelineState(footagePipeline(uniforms) ?? pipelineState)
 
         // Stereo parallax is applied in-shader using depth + this signed eye offset.
         var mutableUniforms = uniforms
@@ -963,6 +985,7 @@ final class OffscreenEffectsRenderer {
         if let depthTex = depthTexture {
             encoder.setFragmentTexture(depthTex, index: 5)
         }
+        if uniforms.videoMix > 0, let videoTexture { encoder.setFragmentTexture(videoTexture, index: 7) }
         encoder.setFragmentSamplerState(samplerState, index: 0)
 
         encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
@@ -973,6 +996,12 @@ final class OffscreenEffectsRenderer {
         commandBuffer.commit()
         drawable.present()
         return true
+    }
+
+    /// The footage variant when footage shows this frame (texture and mix), else nil (plain pipeline).
+    private func footagePipeline(_ u: EffectsUniforms, stereo: Bool = false) -> MTLRenderPipelineState? {
+        guard u.videoMix > 0, videoTexture != nil else { return nil }
+        return stereo ? stereoVideoPipelineState : videoPipelineState
     }
 
     /// `bgra8Unorm` view of an `_srgb` drawable texture (cached; see `renderFormat`). Falls back to the

@@ -10,8 +10,11 @@ extension GenerativeEngine {
     /// - Parameters:
     ///   - limiterBypassed: verify gain staging without the safety limiter (section 11).
     ///   - configure: optional hook run before the render starts (set sliders, scale, etc.)
+    ///   - onStep: optional hook called with the render time before every 20 ms step (timed controls, e.g.
+    ///     the archive footage sound in `MusicRenderTests`).
     func renderOffline(seconds: Double, to url: URL, limiterBypassed: Bool = false,
-                       configure: ((GenerativeEngine) -> Void)? = nil) throws {
+                       configure: ((GenerativeEngine) -> Void)? = nil,
+                       onStep: ((Double) -> Void)? = nil) throws {
         configure?(self)
         conductor.post(.limiterBypass(limiterBypassed))
         let log = ScoreLog()
@@ -44,6 +47,7 @@ extension GenerativeEngine {
         var step = 0
         let t0 = Date()
         while av.manualRenderingSampleTime < totalFrames {
+            onStep?(Double(step) * stepSec)
             conductor.advance(to: Double(step) * stepSec)
             let status = try av.renderOffline(stepFrames, to: buffer)
             if status == .success { try file.write(from: buffer) }

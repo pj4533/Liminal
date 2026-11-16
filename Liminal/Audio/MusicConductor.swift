@@ -10,6 +10,9 @@ nonisolated enum MusicControl {
     case limiterBypass(Bool)
     /// Debug / harness: layers kept active regardless of scene (solo gain-staging renders).
     case forceLayers(Set<LayerID>)
+    /// Archive footage sound (docs/plans/archive-video.md 4): start a decoded segment, fade it out, or
+    /// change its level ("Footage audio").
+    case archiveBegin(ArchiveVoice.Cue), archiveEnd(fade: Double), archiveGain(Float)
 }
 
 /// Owns time, randomness, harmony, scenes and layers (decisions D3-D6). Runs on its own serial queue in
@@ -28,6 +31,8 @@ nonisolated final class MusicConductor: @unchecked Sendable {
     private var rng: MusicRNG
     private var colorDrift: ParameterDrift.Channel
     private let rare: RareEventDirector
+    /// The archive film's sound (nil in harnesses that build a conductor without it).
+    private let archive: ArchiveVoice?
 
     // Form
     private var scenes: [MusicScene] = []          // current plus the next one during a handoff
@@ -76,7 +81,8 @@ nonisolated final class MusicConductor: @unchecked Sendable {
     /// Called for every note (conductor queue). The facade forwards drips notes to `shimmerNotePlayed`.
     var onNote: ((LayerID, Int) -> Void)?
 
-    init(layers: [MusicLayer], mix: MixBus, seed: UInt64, pinned: ScaleType?) {
+    init(layers: [MusicLayer], mix: MixBus, seed: UInt64, pinned: ScaleType?, archive: ArchiveVoice? = nil) {
+        self.archive = archive
         let root = MusicRNG(seed: seed)
         rng = root.fork(1)
         let style = MusicStyle.drift
@@ -134,12 +140,14 @@ nonisolated final class MusicConductor: @unchecked Sendable {
             runToken += 1
             let token = runToken
             for l in layers { l.silence(fade: fade, ctx: ctx) }
+            archive?.end(fade: fade, now: scheduler.now)
             mix.setMaster(0, over: fade)
             queue.asyncAfter(deadline: .now() + fade + 0.5) { [self] in
                 guard token == runToken else { return }
                 timer?.cancel(); timer = nil
                 scheduler.cancelAll()
                 for l in layers { l.powerDown() }
+                archive?.reset(now: scheduler.now)
                 began = false
             }
         }
@@ -170,6 +178,7 @@ nonisolated final class MusicConductor: @unchecked Sendable {
             for st in l.allStrips { st.swell(to: 1, over: 0, now: t) }
         }
         rare.reset(at: t)
+        archive?.reset(now: t)
         mix.setSpace(space, delayAmount: delayAmount, brightness: 0.5, shimmerScale: shimmerScale, over: 0.05)
         ctx.delayScale = mix.delaySendScale
         mix.setMaster(MusicConductor.masterGain, over: 3)
@@ -236,6 +245,9 @@ nonisolated final class MusicConductor: @unchecked Sendable {
         case .visualActivity(let a): activityTarget = min(max(a, 0), 1)
         case .limiterBypass(let b): mix.limiterBypassed = b
         case .forceLayers(let ids): forced = ids
+        case .archiveBegin(let cue): if began { archive?.begin(cue, now: scheduler.now) }
+        case .archiveEnd(let fade): archive?.end(fade: fade, now: scheduler.now)
+        case .archiveGain(let g): archive?.setGain(g)
         }
     }
 
@@ -408,6 +420,7 @@ nonisolated final class MusicConductor: @unchecked Sendable {
             scoreLog?.rare(t, k)
         }
         for l in layers { l.modulate(dt: dt, ctx: ctx) }
+        archive?.modulate(t: t)
 
         if spaceDirty || modulateCount % 5 == 0 {
             mix.setSpace(space, delayAmount: delayAmount, brightness: ctx.brightness, shimmerScale: shimmerScale,

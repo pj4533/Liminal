@@ -181,6 +181,43 @@ nonisolated enum DebugLaunchOptions {
         return v > 0 ? v : 12
     }()
 
+    // Archive footage (docs/plans/archive-video.md 3). The automation flags above do not block the archive.
+
+    /// -LiminalVideoForce YES (alias -LiminalVideoNow YES): first footage moment at 5 s, then 10 s gaps.
+    static let videoForce: Bool = defaults.bool(forKey: "LiminalVideoForce") || defaults.bool(forKey: "LiminalVideoNow")
+    /// -LiminalVideoLook phantom|imprint|window|emerge: every moment uses this look.
+    static let videoLook: String? = defaults.string(forKey: "LiminalVideoLook")
+    /// -LiminalVideoFile <mp4> (alias -LiminalVideoClip): play this local file instead of the cache; no network.
+    static let videoFile: String? = defaults.string(forKey: "LiminalVideoFile") ?? defaults.string(forKey: "LiminalVideoClip")
+    /// -LiminalVideoMix <0...1>: constant footage mix from 2 s on (frozen-time stills).
+    static let videoMix: Float? = {
+        guard defaults.object(forKey: "LiminalVideoMix") != nil else { return nil }
+        return min(max(defaults.float(forKey: "LiminalVideoMix"), 0), 1)
+    }()
+    /// -LiminalVideoSeed <n>: seed of the moment director (looks, timing, segments).
+    static let videoSeed: Int? = {
+        guard defaults.object(forKey: "LiminalVideoSeed") != nil else { return nil }
+        return defaults.integer(forKey: "LiminalVideoSeed")
+    }()
+    /// -LiminalVideoOffline YES: no Internet Archive requests; moments play from the cache.
+    static let videoOffline: Bool = defaults.bool(forKey: "LiminalVideoOffline")
+    /// -LiminalVideoOff YES: no footage at all (A/B and perf runs with the feature absent).
+    static let videoOff: Bool = defaults.bool(forKey: "LiminalVideoOff")
+    /// -LiminalControlsScroll archive: scroll the control panel / window to that section on appear
+    /// (settings screenshots; taps do not work in the Xcode 27 simulator).
+    static let controlsScroll: String? = defaults.string(forKey: "LiminalControlsScroll")
+    /// -LiminalVideoOffAt <s>: turn the "Archive footage" setting off this many seconds after footage starts
+    /// (checks the 2 s fade out of a running moment and its sound; not saved).
+    static let videoOffAt: Double? = {
+        guard defaults.object(forKey: "LiminalVideoOffAt") != nil else { return nil }
+        return defaults.double(forKey: "LiminalVideoOffAt")
+    }()
+    /// -LiminalControlsWidth <pt>: visionOS controls window width at launch (layout checks at 3 / 2 / 1 columns).
+    static let controlsWidth: Double? = {
+        guard defaults.object(forKey: "LiminalControlsWidth") != nil else { return nil }
+        return defaults.double(forKey: "LiminalControlsWidth")
+    }()
+
     /// True when any shell harness flag is set (they also block generation).
     static var anyShellFlag: Bool {
         defaults.object(forKey: "LiminalShellYaw") != nil || defaults.object(forKey: "LiminalShellPitch") != nil
@@ -196,6 +233,8 @@ nonisolated enum DebugLaunchOptions {
             || defaults.object(forKey: "LiminalSyncStrength") != nil || effectIntensity != nil
             || imageInterval != nil
             || anyShellFlag
+            || videoForce || videoLook != nil || videoFile != nil || videoMix != nil || videoSeed != nil
+            || videoOffline || videoOff || controlsScroll != nil || controlsWidth != nil || videoOffAt != nil
     }
 #else
     static let allowGeneration = false
@@ -227,6 +266,16 @@ nonisolated enum DebugLaunchOptions {
     static let depthImagePath: String? = nil
     static let shellCycle: [(image: String, depth: String?)] = []
     static let shellCycleSeconds: Double = 12
+    static let videoForce = false
+    static let videoLook: String? = nil
+    static let videoFile: String? = nil
+    static let videoMix: Float? = nil
+    static let videoSeed: Int? = nil
+    static let videoOffline = false
+    static let videoOff = false
+    static let controlsScroll: String? = nil
+    static let controlsWidth: Double? = nil
+    static let videoOffAt: Double? = nil
 #endif
 
     private static let logOnce: Void = {
@@ -264,6 +313,13 @@ nonisolated enum DebugLaunchOptions {
         if let d = shellDepth { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalShellDepth=\(d, format: .fixed(precision: 2))") }
         if let p = depthImagePath { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalDepthImage=\(p, privacy: .public) (replaces the ML depth map)") }
         if shellTextureStereo { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalShellTextureStereo=YES (per-eye texture parallax, hero tile)") }
+        if videoForce { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalVideoForce=YES (footage moment at 5 s, 10 s gaps)") }
+        if let l = videoLook { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalVideoLook=\(l, privacy: .public)") }
+        if let f = videoFile { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalVideoFile=\(f, privacy: .public) (local clip, no network)") }
+        if let m = videoMix { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalVideoMix=\(m, format: .fixed(precision: 2)) (constant footage mix)") }
+        if let n = videoSeed { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalVideoSeed=\(n)") }
+        if videoOffline { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalVideoOffline=YES (no archive requests)") }
+        if videoOff { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalVideoOff=YES (no footage)") }
         if syncStrength != 1 { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalSyncStrength=\(syncStrength, format: .fixed(precision: 2))") }
 #endif
     }()

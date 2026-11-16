@@ -18,6 +18,8 @@ final class GenerativeEngine: ObservableObject {
     let conductor: MusicConductor
     let mix: MixBus
     let layers: [MusicLayer]
+    /// The archive film's sound strip (docs/plans/archive-video.md 4).
+    let archive: ArchiveVoice
     let seed: UInt64
 
     // MARK: - Events
@@ -88,6 +90,10 @@ final class GenerativeEngine: ObservableObject {
     nonisolated func setVisualMood(_ mood: VisualMood) { conductor.post(.visualMood(mood)) }
     nonisolated func imageDidChange(transitionDuration: Double) { conductor.post(.imageDidChange(transition: transitionDuration)) }
     nonisolated func setVisualActivity(_ value: Float) { conductor.post(.visualActivity(value)) }
+    /// Posts a control from any thread (the archive footage service sends its sound this way).
+    nonisolated func post(_ control: MusicControl) { conductor.post(control) }
+    /// Format of the archive voice's buffers (the engine's format when the graph was built).
+    nonisolated var archiveFormat: AVAudioFormat { archive.format }
 
     // MARK: - Init
 
@@ -100,8 +106,10 @@ final class GenerativeEngine: ObservableObject {
                                     KeysLayer(), AirLayer(), GrainLayer(), PluckLayer()]
         self.layers = layers
         var r = MusicRNG(seed: seed ^ 0xDE1A7)
-        mix = MixBus(layers: layers.flatMap(\.allStrips), delayTime: Float(r.range(1.3...2.1)))   // slow, dark echoes (D92)
-        conductor = MusicConductor(layers: layers, mix: mix, seed: seed, pinned: nil)
+        let archive = ArchiveVoice()
+        self.archive = archive
+        mix = MixBus(layers: layers.flatMap(\.allStrips) + [archive.strip], delayTime: Float(r.range(1.3...2.1)))   // slow, dark echoes (D92)
+        conductor = MusicConductor(layers: layers, mix: mix, seed: seed, pinned: nil, archive: archive)
         engine.output = mix.output
         conductor.onNote = GenerativeEngine.noteForwarder(shimmerNotePlayed)
         let ms = Date().timeIntervalSince(t0) * 1000

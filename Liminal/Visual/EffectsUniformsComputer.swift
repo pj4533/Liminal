@@ -30,6 +30,7 @@ enum EffectsUniformsComputer {
     ///   - transition: The style of the running crossfade (docs/plans/transitions.md). Its boosts are
     ///     added after the budget, times the style's envelope; `.classic` is the pre-family crossfade.
     ///     With `transitionProgress` 0 every style gives the same uniforms as no transition at all.
+    ///   - video: Archive footage of this frame (docs/plans/archive-video.md 2.2). `.off` = no footage.
     /// - Returns: Complete EffectsUniforms ready for the shader
     static func compute(
         time: Float,
@@ -39,7 +40,8 @@ enum EffectsUniformsComputer {
         vibrance: VibranceFactors = .neutral,
         music: MusicModulation = .neutral,
         look: EffectLook = EffectLook(),
-        transition: TransitionSpec = .classic
+        transition: TransitionSpec = .classic,
+        video: VideoCompositeState = .off
     ) -> EffectsUniforms {
         typealias T = EffectLook.Tuning
         let a = music.amount
@@ -143,6 +145,13 @@ enum EffectsUniformsComputer {
             uniforms.txSeed = transition.seed
             uniforms.txSoft = transition.shaderSoft
             uniforms.txAmount = tb.shaderAmount
+        }
+        // Archive footage (docs/plans/archive-video.md 2.2): with `.off` the video uniforms stay 0 and
+        // nothing above changes.
+        if !video.isOff {
+            let settled = VideoComposite.settled(imageAge: look.imageAge, transitionDuration: look.transitionDuration,
+                                                 inTransition: inTransition)
+            VideoComposite.apply(video, to: &uniforms, intensity: i, drive: d, settled: settled)
         }
         return uniforms
     }
