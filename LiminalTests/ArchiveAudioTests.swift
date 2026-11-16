@@ -3,46 +3,53 @@ import Foundation
 import AVFoundation
 @testable import Liminal
 
-/// Archive footage sound (docs/plans/archive-video.md 4): the cue timing against the picture, the level
+/// Archive footage sound (docs/plans/archive-video.md 4, A27): the cue timing against its piece, the level
 /// mapping of "Footage audio", the sample maths of the decoder, and the voice in an offline render.
 struct ArchiveAudioCueTests {
 
-    static func plan(start: Double = 100, fadeIn: Double = 11, hold: Double = 40, fadeOut: Double = 13,
-                     rate: Float = 0.7, segment: Double = 200) -> MomentPlan {
-        MomentPlan(clipID: "x", segmentStart: segment, rate: rate, look: .window, seed: 0.3, start: start,
-                   fadeIn: fadeIn, hold: hold, fadeOut: fadeOut)
+    static func piece(start: Double = 100, length: Double = 25, rate: Float = 0.7,
+                      segment: Double = 200) -> FootagePiece {
+        FootagePiece(index: 3, slot: 1, clipID: "x", segmentStart: segment, rate: rate, look: .window, seed: 0.3,
+                     warp: 0.6, level: 0.5, swell: 0, start: start, origin: start, fadeIn: 4, length: length,
+                     fadeOutStart: nil, fadeOut: nil, sound: true)
     }
 
-    @Test func soundEntersAfterThePictureAndLeavesBeforeIt() throws {
-        let p = Self.plan()
-        let c = try #require(ArchiveAudioCuePlan(plan: p, clipDuration: 1000))
-        #expect(c.beginAt == 104)                     // 4 s after the picture starts to appear
-        #expect(c.fadeIn == 12)
-        #expect(c.fadeOutAt == p.fadeOutStart)        // with the picture's fade out
-        #expect(c.fadeOut == 10)
-        #expect(c.fadeOutAt + c.fadeOut <= p.end)     // gone before the picture
-        // In step with the slowed picture: 4 s of moment = 2.8 s of source at rate 0.7.
-        #expect(abs(c.sourceStart - (200 + 4 * 0.7)) < 1e-5)
+    @Test func soundComesAndGoesWithItsPiece() throws {
+        let p = Self.piece()
+        let c = try #require(ArchiveAudioCuePlan(piece: p, clipDuration: 1000))
+        #expect(c.beginAt == 101.5)                   // 1.5 s into the piece's fade in
+        #expect(c.endAt == 127)                       // 2 s past the planned change
+        // Slow smoothstep fades, symmetric, at most 10 s each, with a hold between.
+        #expect(abs(c.fadeIn - min(10, 25.5 * 0.42)) < 1e-9 && c.fadeIn == c.fadeOut)
+        let short = try #require(ArchiveAudioCuePlan(piece: Self.piece(length: 12), clipDuration: 1000))
+        #expect(abs(short.fadeIn - 12.5 * 0.42) < 1e-9)   // short pieces: shorter fades, still a hold
+        #expect(c.fadeIn <= 10 && c.fadeOutAt > c.beginAt + c.fadeIn)
+        // In step with the slowed picture: 1.5 s of piece = 1.05 s of source at rate 0.7.
+        #expect(abs(c.sourceStart - (200 + 1.5 * 0.7)) < 1e-5)
         // Enough source for the whole sound plus a spare second.
-        #expect(abs(c.sourceLength - (c.fadeOutAt + c.fadeOut + 1 - c.beginAt) * 0.7) < 1e-5)
+        #expect(abs(c.sourceLength - (c.endAt + 1 - c.beginAt) * 0.7) < 1e-5)
+        // A long piece: fades capped at 10 s.
+        let long = try #require(ArchiveAudioCuePlan(piece: Self.piece(length: 40), clipDuration: 1000))
+        #expect(long.fadeIn == 10 && long.fadeOut == 10)
     }
 
-    @Test func shortAndEarlyEndingMoments() throws {
-        // Picture fade out shorter than 10 s: the sound's fade is cut to it.
-        let short = Self.plan(fadeIn: 5, hold: 8, fadeOut: 6)
-        let c = try #require(ArchiveAudioCuePlan(plan: short, clipDuration: 1000))
-        #expect(c.fadeOut == 6)
-        #expect(c.fadeIn == short.fadeOutStart - c.beginAt)   // never longer than the time it has
-        // Too short to be worth starting.
-        #expect(ArchiveAudioCuePlan(plan: Self.plan(fadeIn: 4, hold: 4, fadeOut: 4), clipDuration: 1000) == nil)
-        // The clip ends: the source length is clipped to it.
-        let near = try #require(ArchiveAudioCuePlan(plan: Self.plan(segment: 220), clipDuration: 240))
-        #expect(near.sourceStart + near.sourceLength <= 240 + 1e-9)
-        // An early fade out (clip ran out, footage turned off) moves the sound's fade out with it.
-        var early = Self.plan()
-        early.fadeOutEarly(at: 130, duration: 2)
-        let e = try #require(ArchiveAudioCuePlan(plan: early, clipDuration: 1000))
-        #expect(e.fadeOutAt == 130 && e.fadeOut == 2)
+    @Test func heldPieceKeepsItsSoundInSync() throws {
+        // A piece held 3 s (its decoder was late) keeps its origin: the sound stays on the picture's clock.
+        var p = Self.piece()
+        p.start += 3
+        let c = try #require(ArchiveAudioCuePlan(piece: p, clipDuration: 1000))
+        #expect(c.beginAt == 101.5)
+        #expect(abs(c.sourceStart - (200 + 1.5 * 0.7)) < 1e-5)
+    }
+
+    @Test func shortPiecesAndClipEnds() throws {
+        // Too short to be worth starting (sound span under 7 s).
+        #expect(ArchiveAudioCuePlan(piece: Self.piece(length: 6), clipDuration: 1000) == nil)
+        #expect(ArchiveAudioCuePlan(piece: Self.piece(length: 7), clipDuration: 1000) != nil)
+        // The clip ends before the sound would: no cue (a sound is never cut off).
+        #expect(ArchiveAudioCuePlan(piece: Self.piece(segment: 220), clipDuration: 236) == nil)
+        let fits = try #require(ArchiveAudioCuePlan(piece: Self.piece(segment: 200), clipDuration: 240))
+        #expect(fits.sourceStart + fits.sourceLength <= 240 + 1e-9)
     }
 
     @Test func footageAudioLevelMapping() {

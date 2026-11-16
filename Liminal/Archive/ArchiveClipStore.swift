@@ -65,7 +65,7 @@ nonisolated enum ArchiveCachePolicy {
         return out
     }
 
-    /// The clip a fresh download replaces once the pool is full (every third moment, plan 1.4): the
+    /// The clip a fresh download replaces once the pool is full (every 12 pieces, plan 1.4, A27): the
     /// most used one (ties: least recent), never a protected one.
     static func replacement(_ clips: [ArchiveClip], protected: Set<String> = []) -> String? {
         clips.filter { !protected.contains($0.id) }
@@ -163,10 +163,10 @@ actor ArchiveClipStore {
         save()
     }
 
-    /// Deletes every cached clip (the bad list is kept), except `keeping` (the clip on screen).
-    func clear(keeping: String? = nil) {
-        for c in index.clips where c.id != keeping { try? FileManager.default.removeItem(at: url(for: c)) }
-        index.clips.removeAll { $0.id != keeping }
+    /// Deletes every cached clip (the bad list is kept), except `keeping` (the clips on screen).
+    func clear(keeping: Set<String> = []) {
+        for c in index.clips where !keeping.contains(c.id) { try? FileManager.default.removeItem(at: url(for: c)) }
+        index.clips.removeAll { !keeping.contains($0.id) }
         save()
     }
 }

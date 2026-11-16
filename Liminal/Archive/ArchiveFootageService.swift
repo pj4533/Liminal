@@ -2,12 +2,13 @@
 //  ArchiveFootageService.swift
 //  Liminal
 //
-//  Owns the archive footage feature (docs/plans/archive-video.md 1-3): the Internet Archive client,
-//  the clip cache and its prefetch, the moment director (ticked at 2 Hz off the main actor) and the
-//  video frame source. The render loops call only `frame(image:)` and `update(_:)`, each a lock
-//  access plus a little arithmetic: no scheduling, I/O or decoding on the main actor.
-//  Phase 4-5: the moment's sound (decoded off the main actor, posted to the music conductor) and the
-//  "Archive Footage" settings (on/off, amount, audio level).
+//  Owns the archive footage feature (docs/plans/archive-video.md 1-3, decision A27): the Internet Archive
+//  client, the clip cache and its prefetch, the footage weaver (ticked at 2 Hz off the main actor) and
+//  two video frame sources, one per piece of a crossfade. The render loops call only `frame(image:)` and
+//  `update(_:)`, each a lock access plus a little arithmetic: no scheduling, I/O or decoding on the main
+//  actor. While footage is on, some film always shows: a continuous stream of short pieces.
+//  The pieces' sound (decoded off the main actor, posted to the music conductor) comes and goes on its
+//  own, and the "Archive Footage" settings (on/off, change speed, audio level) apply at once.
 //
 
 import AVFoundation
@@ -19,41 +20,51 @@ import os
 nonisolated final class ArchiveFootageService: @unchecked Sendable {
     static let shared = ArchiveFootageService()
 
-    /// What a render loop draws this frame.
+    /// What a render loop draws this frame: layer A (slot 0, texture 7) and layer B (slot 1, texture 8).
     struct Frame {
         let texture: MTLTexture?
+        let textureB: MTLTexture?
         let state: VideoCompositeState
+
+        static let off = Frame(texture: nil, textureB: nil, state: .off)
     }
 
     private struct Shared {
         var running = false
         var startUptime: Double = 0
-        var plan: MomentPlan?
-        var clipAspect: Float = 4.0 / 3.0
-        var conditions = VideoMomentDirector.Conditions()
+        /// The weaver's pieces (at most two), published after every tick.
+        var pieces: [FootagePiece] = []
+        var aspects: [Float] = [4.0 / 3.0, 4.0 / 3.0]
+        var conditions = FootageWeaver.Conditions()
         // Tint eased toward the current picture's colours.
         var tint = SIMD3<Float>(0.9, 0.85, 0.75)
         var shade = SIMD3<Float>(0.06, 0.05, 0.05)
         var tintTarget = SIMD3<Float>(0.9, 0.85, 0.75)
         var shadeTarget = SIMD3<Float>(0.06, 0.05, 0.05)
         var tintKey: ObjectIdentifier?
-        var lastTintUptime: Double = 0
+        var lastFrameUptime: Double = 0
+        /// Loud music pulls the footage back a little (eased, 0.7...1).
+        var calm: Float = 1
+        /// Master fade: linear 0...1, toward 0 while the setting is being turned off (2 s), else 1.
+        var master: Float = 1
         var replaceRequested = false
         var status = "Footage starts with playback"
-        // Settings (phase 5) and lifecycle: footage runs while playback wants it AND the setting is on.
+        // Settings and lifecycle: footage runs while playback wants it AND the setting is on.
         var wantsRun = false
         var enabled = true
-        var amount: VideoAmount = .normal
+        var speed: FootageChangeSpeed = .medium
         var audioLevel: Float = 0.5
-        /// The setting was turned off during a moment: fade it out, then stop.
+        /// The setting was turned off: fade everything out over 2 s, then stop.
         var disabling = false
+        var disablingSince: Double?
         var audio: AudioState?
     }
 
-    /// The current moment's sound (plan 4).
+    /// A piece's sound (plan 4, A27).
     private struct AudioState {
         let cue: ArchiveAudioCuePlan
         let token: Int
+        let pieceIndex: Int
         var begun = false
         var ended = false
     }
@@ -71,7 +82,8 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
     private let shared = OSAllocatedUnfairLock(initialState: Shared())
     private let store = ArchiveClipStore(directory: ArchiveClipStore.defaultDirectory())
     private let client = ArchiveClient(offline: DebugLaunchOptions.videoOffline || DebugLaunchOptions.videoFile != nil)
-    private let source: VideoFrameSource?
+    /// Two decoders: the current piece and the next one, which is prepared ahead of its crossfade.
+    private let sources: [VideoFrameSource]
     private let tasks = OSAllocatedUnfairLock<[Task<Void, Never>]>(initialState: [])
     /// -LiminalVideoFile: a local clip used instead of the cache (no network).
     private let localClip = OSAllocatedUnfairLock<(clip: ArchiveClip, url: URL)?>(initialState: nil)
@@ -80,9 +92,13 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
 
     /// -LiminalVideoOff removes the feature whatever the setting says.
     static var isAvailable: Bool { !DebugLaunchOptions.videoOff }
+    /// A full cache replaces one clip every this many pieces (at most one download per 3 minutes).
+    static let piecesPerReplacement = 12
 
     private init() {
-        source = MTLCreateSystemDefaultDevice().flatMap { VideoFrameSource(device: $0) }
+        let device = MTLCreateSystemDefaultDevice()
+        let made = (0..<2).compactMap { _ in device.flatMap { VideoFrameSource(device: $0) } }
+        sources = made.count == 2 ? made : []
     }
 
     static func uptime() -> Double { Double(DispatchTime.now().uptimeNanoseconds) / 1e9 }
@@ -91,22 +107,28 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
 
     // MARK: - Lifecycle
 
-    /// The music engine that plays the moments' sound (called once by each app on appear).
+    /// The music engine that plays the pieces' sound (called once by each app on appear).
     func attachMusic(_ engine: GenerativeEngine) {
         let sink = MusicSink(format: engine.archiveFormat) { [weak engine] c in engine?.post(c) }
         music.withLock { $0 = sink }
     }
 
-    /// "Archive Footage" settings. Turning footage off fades a running moment out over 2 s and stops
-    /// prefetching (the cache stays); turning it on while playing starts it again.
-    func apply(enabled: Bool, amount: VideoAmount, audioLevel: Float) {
+    /// "Archive Footage" settings. Turning footage off fades picture and sound out over 2 s and stops
+    /// prefetching (the cache stays); turning it on while playing starts it again (on again during the
+    /// fade brings it back). The change speed applies from the next piece.
+    func apply(enabled: Bool, speed: FootageChangeSpeed, audioLevel: Float) {
         let level = min(max(audioLevel, 0), 1)
         let (wasEnabled, running, levelChanged) = shared.withLock { s -> (Bool, Bool, Bool) in
             let was = s.enabled, changed = s.audioLevel != level
             s.enabled = enabled
-            s.amount = amount
+            s.speed = speed
             s.audioLevel = level
-            if enabled { s.disabling = false } else if s.running { s.disabling = true }
+            if enabled {
+                s.disabling = false
+                s.disablingSince = nil
+            } else if s.running {
+                s.disabling = true
+            }
             return (was, s.running, changed)
         }
         if enabled != wasEnabled {
@@ -122,6 +144,7 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
                 endAudio(fade: 2)
             }
         }
+        if !enabled && running { endAudio(fade: 2) }
     }
 
     /// Playback started (Play / the immersive space opening). Idempotent.
@@ -130,26 +153,28 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
         launch()
     }
 
-    /// Starts prefetching and the moment clock when playback wants footage and the setting is on.
+    /// Starts prefetching and the weaver when playback wants footage and the setting is on.
     private func launch() {
-        guard Self.isAvailable, source != nil else {
-            if source == nil { LMLog.visual.error("📼 footage unavailable (no Metal pre-pass)") }
+        guard Self.isAvailable, !sources.isEmpty else {
+            if sources.isEmpty { LMLog.visual.error("📼 footage unavailable (no Metal pre-pass)") }
             return
         }
         let go = shared.withLock { s -> Bool in
             guard s.wantsRun, s.enabled, !s.running else { return false }
             s.running = true
             s.disabling = false
+            s.disablingSince = nil
+            s.master = 1
             s.startUptime = Self.uptime()
-            s.plan = nil
+            s.pieces = []
             s.audio = nil
             return true
         }
         guard go else { return }
         LMLog.visual.info("📼 footage start (force=\(DebugLaunchOptions.videoForce) offline=\(DebugLaunchOptions.videoOffline) file=\(DebugLaunchOptions.videoFile ?? "-", privacy: .public) look=\(DebugLaunchOptions.videoLook ?? "-", privacy: .public) mix=\(DebugLaunchOptions.videoMix.map { String($0) } ?? "-", privacy: .public))")
         let prefetch = Task.detached(priority: .utility) { [weak self] () -> Void in await self?.prefetchLoop() }
-        let director = Task.detached(priority: .userInitiated) { [weak self] () -> Void in await self?.directorLoop() }
-        tasks.withLock { $0 = [prefetch, director] }
+        let weaver = Task.detached(priority: .userInitiated) { [weak self] () -> Void in await self?.weaverLoop() }
+        tasks.withLock { $0 = [prefetch, weaver] }
     }
 
     func stop() {
@@ -163,12 +188,14 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
         // back on, Play again) then stores its own tasks, which this halt never cancels.
         let old = tasks.withLock { t -> [Task<Void, Never>] in defer { t = [] }; return t }
         let wasRunning = shared.withLock { s -> Bool in
-            defer { s.running = false; s.plan = nil; s.disabling = false; s.audio = nil }
+            defer {
+                s.running = false; s.pieces = []; s.disabling = false; s.disablingSince = nil; s.audio = nil
+            }
             return s.running
         }
         old.forEach { $0.cancel() }
         guard wasRunning else { return }
-        source?.stop()
+        sources.forEach { $0.stop() }
         shared.withLock { s in if !s.enabled { s.status = "Archive footage off" } }
         LMLog.visual.info("📼 footage stop")
     }
@@ -181,37 +208,28 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
         return (await store.clips.count, await store.totalBytes)
     }
 
-    /// Deletes every cached clip except the one on screen.
+    /// Deletes every cached clip except the ones on screen.
     func clearCache() async {
-        let keep = shared.withLock { $0.plan?.clipID }
+        let keep = shared.withLock { Set($0.pieces.map(\.clipID)) }
         await store.clear(keeping: keep)
         let n = await store.clips.count
         LMLog.visual.info("📼 cache cleared (kept \(n))")
-        shared.withLock { s in if s.plan == nil && s.enabled { s.status = n == 0 ? "Fetching footage" : "\(n) clips ready" } }
+        shared.withLock { s in if s.pieces.isEmpty && s.enabled { s.status = n == 0 ? "Fetching footage" : "\(n) clips ready" } }
     }
 
-    // MARK: - Sound (plan 4)
+    // MARK: - Sound (plan 4, A27)
 
-    /// Decodes the moment's sound off the main actor and posts it to the music at the cue's start.
-    private func scheduleAudio(plan: MomentPlan, clip: ArchiveClip, url: URL) {
-        let (level, start) = shared.withLock { ($0.audioLevel, $0.startUptime) }
-        guard let sink = music.withLock({ $0 }) else { return }
-        guard clip.hasAudio else {
-            LMLog.audio.info("📼🔊 no sound: clip has no audio track")
-            return
-        }
-        guard let gain = ArchiveAudioCuePlan.gain(level: level) else {
-            LMLog.audio.info("📼🔊 no sound: Footage audio is 0")
-            return
-        }
-        guard let cue = ArchiveAudioCuePlan(plan: plan, clipDuration: clip.duration) else {
-            LMLog.audio.info("📼🔊 no sound: moment too short")
-            return
-        }
+    /// Decodes a piece's sound off the main actor and posts it to the music at the cue's start.
+    /// Returns false when the piece will be silent after all.
+    private func scheduleAudio(piece: FootagePiece, clip: ArchiveClip, url: URL) -> Bool {
+        let (level, start, busy) = shared.withLock { ($0.audioLevel, $0.startUptime, $0.audio.map { !$0.ended } ?? false) }
+        guard let sink = music.withLock({ $0 }), !busy else { return false }
+        guard let gain = ArchiveAudioCuePlan.gain(level: level),
+              let cue = ArchiveAudioCuePlan(piece: piece, clipDuration: clip.duration) else { return false }
         let token = audioTokenSeed.withLock { $0 += 1; return $0 }
-        shared.withLock { $0.audio = AudioState(cue: cue, token: token) }
+        shared.withLock { $0.audio = AudioState(cue: cue, token: token, pieceIndex: piece.index) }
         let title = clip.title
-        LMLog.audio.info("📼🔊 sound cue at \(String(format: "%.1f", cue.beginAt), privacy: .public)s fade \(String(format: "%.1f", cue.fadeIn), privacy: .public)s, out at \(String(format: "%.1f", cue.fadeOutAt), privacy: .public)s over \(String(format: "%.1f", cue.fadeOut), privacy: .public)s, source \(String(format: "%.1f", cue.sourceStart), privacy: .public)s+\(String(format: "%.1f", cue.sourceLength), privacy: .public)s rate \(String(format: "%.2f", cue.rate), privacy: .public) gain \(String(format: "%.2f", gain), privacy: .public)")
+        LMLog.audio.info("📼🔊 sound cue piece #\(piece.index) at \(String(format: "%.1f", cue.beginAt), privacy: .public)s fade \(String(format: "%.1f", cue.fadeIn), privacy: .public)s, out at \(String(format: "%.1f", cue.fadeOutAt), privacy: .public)s over \(String(format: "%.1f", cue.fadeOut), privacy: .public)s, source \(String(format: "%.1f", cue.sourceStart), privacy: .public)s+\(String(format: "%.1f", cue.sourceLength), privacy: .public)s rate \(String(format: "%.2f", cue.rate), privacy: .public) gain \(String(format: "%.2f", gain), privacy: .public)")
         Task.detached(priority: .utility) { [weak self] in
             let t0 = Self.uptime()
             let buffer: AVAudioPCMBuffer
@@ -221,6 +239,7 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
                                                               format: sink.format)
             } catch {
                 LMLog.audio.warning("📼🔊 no sound: decode failed (\(String(describing: error), privacy: .public))")
+                self?.shared.withLock { s in if s.audio?.token == token { s.audio?.ended = true } }
                 return
             }
             let seconds = Double(buffer.frameLength) / buffer.format.sampleRate
@@ -242,10 +261,10 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
                                                      label: title)))
             if late > 0.1 { LMLog.audio.warning("📼🔊 sound started \(String(format: "%.2f", late), privacy: .public)s late") }
         }
-        _ = gain
+        return true
     }
 
-    /// Fades the current moment's sound out (once).
+    /// Fades the current sound out (once).
     private func endAudio(fade: Double) {
         let post = shared.withLock { s -> Bool in
             guard var a = s.audio, !a.ended else { return false }
@@ -266,19 +285,27 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
     func frame(key: AnyObject?, image: () -> CGImage?) -> Frame {
         let now = Self.uptime()
         let newKey = key.map(ObjectIdentifier.init)
-        let snap = shared.withLock { s -> (plan: MomentPlan?, elapsed: Double, aspect: Float,
-                                          tint: SIMD3<Float>, shade: SIMD3<Float>, measure: Bool) in
+        let snap = shared.withLock { s -> (pieces: [FootagePiece], elapsed: Double, aspects: [Float],
+                                          tint: SIMD3<Float>, shade: SIMD3<Float>, gain: Float, measure: Bool) in
             var measure = false
             if let newKey, s.tintKey != newKey {
                 s.tintKey = newKey
                 measure = true
             }
-            let dt = s.lastTintUptime > 0 ? min(now - s.lastTintUptime, 0.5) : 0
-            s.lastTintUptime = now
+            let dt = s.lastFrameUptime > 0 ? min(now - s.lastFrameUptime, 0.5) : 0
+            s.lastFrameUptime = now
             let k = Float(1 - exp(-dt / 1.0))   // about 3 s to settle (plan 2.2)
             s.tint += (s.tintTarget - s.tint) * k
             s.shade += (s.shadeTarget - s.shade) * k
-            return (s.running ? s.plan : nil, now - s.startUptime, s.clipAspect, s.tint, s.shade, measure)
+            // Loud music pulls the footage back to 70 % (eased over about 3 s); it never vanishes.
+            let calmTarget = 1 - 0.3 * Self.smooth01((s.conditions.musicIntensity - 0.7) / 0.25)
+            s.calm += (calmTarget - s.calm) * k
+            // Turning footage off: a 2 s linear ramp (smoothstepped below); on again ramps back.
+            let masterTarget: Float = s.disabling ? 0 : 1
+            let step = Float(dt) / 2
+            s.master = masterTarget < s.master ? max(s.master - step, 0) : min(s.master + step, 1)
+            let gain = s.calm * Self.smooth01(s.master)
+            return (s.running ? s.pieces : [], now - s.startUptime, s.aspects, s.tint, s.shade, gain, measure)
         }
         let measure = snap.measure ? image() : nil
         if let img = measure {
@@ -292,126 +319,158 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
                 }
             }
         }
-        guard let plan = snap.plan, let texture = source?.latest() else { return Frame(texture: nil, state: .off) }
-        let env = plan.envelope(at: snap.elapsed)
-        var state = VideoCompositeState(envelope: env, look: plan.look, seed: plan.seed, aspect: snap.aspect,
-                                        tint: snap.tint, shade: snap.shade)
+        guard !snap.pieces.isEmpty, !sources.isEmpty else { return .off }
+        var state = VideoCompositeState(a: nil, tint: snap.tint, shade: snap.shade)
         state.constantMix = DebugLaunchOptions.videoMix
-        guard !state.isOff else { return Frame(texture: nil, state: .off) }
-        return Frame(texture: texture, state: state)
+        var texA: MTLTexture?, texB: MTLTexture?
+        for p in snap.pieces {
+            let w = p.weight(at: snap.elapsed) * snap.gain
+            guard w > 0, let tex = sources[p.slot].latest() else { continue }
+            let layer = VideoLayer(weight: w, look: p.look, seed: p.seed, aspect: snap.aspects[p.slot], warp: p.warp)
+            if p.slot == 0 { state.a = layer; texA = tex } else { state.b = layer; texB = tex }
+        }
+        guard !state.isOff else { return .off }
+        return Frame(texture: texA, textureB: texB, state: state)
     }
 
-    /// The current stage texture (macOS binds it at draw time).
-    func latestTexture() -> MTLTexture? { source?.latest() }
+    /// The current stage texture of a slot (macOS binds them at draw time: 0 = texture 7, 1 = texture 8).
+    func texture(slot: Int) -> MTLTexture? { slot < sources.count ? sources[slot].latest() : nil }
 
-    /// The render loops report what the director waits on (transition, image age, music).
-    func update(_ c: VideoMomentDirector.Conditions) {
+    /// The render loops report what the weaver listens to (transition, image age, music).
+    func update(_ c: FootageWeaver.Conditions) {
         shared.withLock { $0.conditions = c }
     }
 
-    // MARK: - Moments
+    static func smooth01(_ x: Float) -> Float { let c = min(max(x, 0), 1); return c * c * (3 - 2 * c) }
 
-    private func directorLoop() async {
-        let timing: VideoMomentDirector.Timing = {
-            if DebugLaunchOptions.videoMix != nil {
-                // Constant mix for stills: one long moment from the start.
-                var t = VideoMomentDirector.Timing.forced
-                t.first = 2...2; t.length = 3600...3600; t.fadeIn = 1...1; t.fadeOut = 2...2
-                return t
-            }
-            return DebugLaunchOptions.videoForce ? .forced : .amount(shared.withLock { $0.amount })
-        }()
-        let timingFollowsSetting = DebugLaunchOptions.videoMix == nil && !DebugLaunchOptions.videoForce
+    // MARK: - Pieces
+
+    private static func timing(_ speed: FootageChangeSpeed) -> FootageWeaver.Timing {
+        if DebugLaunchOptions.videoMix != nil { return .stills }
+        if DebugLaunchOptions.videoForce { return .speed(.fast) }
+        return .speed(speed)
+    }
+
+    private func weaverLoop() async {
+        let speed = shared.withLock { $0.speed }
         let seed = DebugLaunchOptions.videoSeed.map { UInt64($0) } ?? UInt64.random(in: 0...UInt64.max)
-        var director = VideoMomentDirector(seed: seed, timing: timing,
-                                           pinnedLook: DebugLaunchOptions.videoLook.flatMap(VideoLook.init(name:)))
+        var weaver = FootageWeaver(seed: seed, timing: Self.timing(speed),
+                                   pinnedLook: DebugLaunchOptions.videoLook.flatMap(VideoLook.init(name:)))
         var rng = MusicRNG(seed: seed ^ 0xA5C1_17E5)
-        var lastClipID: String?
-        var momentsSinceReplace = 0
-        LMLog.visual.info("📼 director seed=\(seed) first moment at \(String(format: "%.0f", director.nextDue), privacy: .public)s")
+        var piecesSinceReplace = 0
+        var lastLog = -10.0
+        LMLog.visual.info("📼 weaver seed=\(seed) speed=\(speed.rawValue, privacy: .public)")
         while !Task.isCancelled {
             try? await Task.sleep(nanoseconds: 500_000_000)
             guard !Task.isCancelled else { break }
-            let (running, start, cond, amount, disabling) = shared.withLock {
-                ($0.running, $0.startUptime, $0.conditions, $0.amount, $0.disabling)
+            let now = Self.uptime()
+            let (running, start, cond, speed, disabling) = shared.withLock {
+                ($0.running, $0.startUptime, $0.conditions, $0.speed, $0.disabling)
             }
             guard running else { break }
-            let elapsed = Self.uptime() - start
-            if timingFollowsSetting, director.timing != .amount(amount) { director.timing = .amount(amount) }
-            if let off = DebugLaunchOptions.videoOffAt, elapsed >= off, !disabling {
+            let elapsed = now - start
+            if weaver.timing != Self.timing(speed) { weaver.timing = Self.timing(speed) }
+            if let off = DebugLaunchOptions.videoOffAt, elapsed >= off, !disabling,
+               shared.withLock({ $0.enabled }) {
                 LMLog.visual.info("📼 DEBUG: footage setting off at \(String(format: "%.1f", elapsed), privacy: .public)s (-LiminalVideoOffAt)")
                 let level = shared.withLock { $0.audioLevel }
-                apply(enabled: false, amount: amount, audioLevel: level)
+                apply(enabled: false, speed: speed, audioLevel: level)
                 continue
             }
             if disabling {
-                // Footage turned off: fade the moment out over 2 s, then stop (the cache stays).
-                if let p = director.current, p.end > elapsed + 2.1 {
-                    director.fadeOut(at: elapsed, duration: 2)
-                    let np = director.current
-                    shared.withLock { $0.plan = np }
-                    endAudio(fade: 2)
+                // Footage turned off: frame() ramps the picture out over 2 s; then stop (the cache stays).
+                let since = shared.withLock { s -> Double in
+                    if s.disablingSince == nil { s.disablingSince = now }
+                    return s.disablingSince ?? now
                 }
-                if director.current == nil || elapsed >= (director.current?.end ?? 0) {
-                    halt()
-                    break
-                }
+                if now - since >= 2.3 { halt(); break }
                 continue
             }
             let clips = await availableClips()
-            if director.current != nil, source?.ended == true {
-                director.fadeOut(at: elapsed, duration: 4)
-                let p = director.current
-                shared.withLock { $0.plan = p }
-                endAudio(fade: 4)
-            }
-            // The sound fades out with the picture's fade out (plan 4).
+            if let cur = weaver.current, sources[cur.slot].ended { weaver.hurry(at: elapsed) }
+            // The sound fades out on its own schedule (A27).
             if let a = shared.withLock({ $0.audio }), !a.ended, elapsed >= a.cue.fadeOutAt {
                 endAudio(fade: a.cue.fadeOut)
             }
-            switch director.tick(elapsed: elapsed, conditions: cond, hasClip: !clips.isEmpty) {
+            let decision = weaver.tick(elapsed: elapsed, conditions: cond, hasClip: !clips.isEmpty) { [sources] slot in
+                sources[slot].latest() != nil
+            }
+            switch decision {
             case .none:
                 break
-            case .end:
-                endAudio(fade: 1)
-                source?.stop()
-                shared.withLock { $0.plan = nil; $0.status = "\(clips.count) clips ready" }
-                LMLog.visual.info("📼 moment end at \(String(format: "%.1f", elapsed), privacy: .public)s; next at \(String(format: "%.0f", director.nextDue), privacy: .public)s")
-            case .begin(let b):
-                guard let clip = VideoMomentDirector.chooseClip(clips, lastID: lastClipID, rng: &rng) else { break }
-                lastClipID = clip.id
-                var fadeIn = b.fadeIn, hold = b.hold, fadeOut = b.fadeOut
-                let maxMoment = clip.duration / Double(b.rate) - 1
-                if b.total > maxMoment {
-                    // A short clip plays whole: shorten the hold (and the fades if need be).
-                    let scale = min(1, maxMoment / (fadeIn + fadeOut + 4))
-                    fadeIn *= scale; fadeOut *= scale
-                    hold = max(maxMoment - fadeIn - fadeOut, 0)
+            case .retire(let slot):
+                sources[slot].stop()
+                LMLog.visual.info("📼 piece retired slot=\(slot) at \(String(format: "%.1f", elapsed), privacy: .public)s")
+            case .drop(let slot):
+                sources[slot].stop()
+                let dropped = weaver.pieceCount - 1
+                let silence = shared.withLock { s -> Bool in s.audio.map { $0.pieceIndex == dropped && !$0.ended } ?? false }
+                if silence { endAudio(fade: 2) }
+                LMLog.visual.warning("📼 piece dropped slot=\(slot) (no frame); the current piece holds")
+            case .prepare(let r):
+                let piece = prepare(r, clips: clips, weaver: &weaver, rng: &rng, elapsed: elapsed, startUptime: start)
+                if let piece, !piece.clipID.hasPrefix("local:") {
+                    await store.markUsed(piece.clipID, segmentStart: piece.segmentStart)
+                    piecesSinceReplace += 1
+                    if piecesSinceReplace >= Self.piecesPerReplacement {
+                        piecesSinceReplace = 0
+                        shared.withLock { $0.replaceRequested = true }
+                    }
                 }
-                let sourceLength = (fadeIn + hold + fadeOut) * Double(b.rate)
-                let segStart = ArchiveCatalog.segmentStart(duration: clip.duration, length: sourceLength,
-                                                           avoid: clip.shownStarts, rng: &rng)
-                let plan = MomentPlan(clipID: clip.id, segmentStart: segStart, rate: b.rate, look: b.look,
-                                      seed: b.seed, start: elapsed, fadeIn: fadeIn, hold: hold, fadeOut: fadeOut)
-                director.didBegin(plan)
-                scheduleAudio(plan: plan, clip: clip, url: url(for: clip))
-                source?.play(.init(url: url(for: clip), start: segStart, length: min(sourceLength + 2, clip.duration - segStart),
-                                   rate: b.rate, black: clip.black, white: clip.white))
-                let aspect = Float(clip.width) / Float(max(clip.height, 1))
-                shared.withLock {
-                    $0.plan = plan
-                    $0.clipAspect = aspect
-                    $0.status = "Showing: \(clip.title)\(clip.year.map { " (\($0))" } ?? "")"
+            }
+            let pieces = weaver.pieces
+            shared.withLock { $0.pieces = pieces }
+            if elapsed - lastLog >= 10 {
+                lastLog = elapsed
+                let parts = pieces.map { p in
+                    "#\(p.index)/s\(p.slot) \(p.look.name) env=\(String(format: "%.2f", p.envelope(at: elapsed))) lvl=\(String(format: "%.2f", p.level(at: elapsed)))"
                 }
-                if !clip.id.hasPrefix("local:") { await store.markUsed(clip.id, segmentStart: segStart) }
-                momentsSinceReplace += 1
-                if momentsSinceReplace >= 3 {
-                    momentsSinceReplace = 0
-                    shared.withLock { $0.replaceRequested = true }
-                }
-                LMLog.visual.info("📼 moment begin #\(director.momentCount) look=\(b.look.name, privacy: .public) id=\(clip.id, privacy: .public) title=\"\(clip.title, privacy: .public)\" year=\(clip.year ?? 0) segment=\(String(format: "%.1f", segStart), privacy: .public)s+\(String(format: "%.1f", sourceLength), privacy: .public)s rate=\(String(format: "%.2f", b.rate), privacy: .public) fade=\(String(format: "%.1f", fadeIn), privacy: .public)/\(String(format: "%.1f", hold), privacy: .public)/\(String(format: "%.1f", fadeOut), privacy: .public)s at \(String(format: "%.1f", elapsed), privacy: .public)s")
+                LMLog.visual.info("📼 weave t=\(String(format: "%.1f", elapsed), privacy: .public)s presence=\(String(format: "%.3f", weaver.presence(at: elapsed)), privacy: .public) \(parts.joined(separator: " "), privacy: .public)")
             }
         }
+    }
+
+    /// Turns a request into a piece: a clip (never one on screen if another is cached), a segment long
+    /// enough for the piece plus room to be held, the decoder started now with its clock anchored so the
+    /// segment start shows when the piece fades in, and maybe the piece's sound.
+    private func prepare(_ r: FootageWeaver.Request, clips: [ArchiveClip], weaver: inout FootageWeaver,
+                         rng: inout MusicRNG, elapsed: Double, startUptime: Double) -> FootagePiece? {
+        let onScreen = Set(weaver.pieces.map(\.clipID))
+        guard let clip = FootageWeaver.chooseClip(clips, avoiding: onScreen, rng: &rng) else {
+            weaver.prepareFailed()
+            return nil
+        }
+        let rate = Double(r.rate)
+        // Source seconds decoded before the piece fades in (the decoder starts now).
+        let preroll = max(r.start - elapsed + 0.5, 0) * rate
+        // Room after the planned change: the next crossfade (at most 7 s) plus up to 20 s of holding.
+        let usable = max(clip.duration - 1, 1)
+        let visible = usable / rate - preroll / rate
+        var length = r.length
+        if visible < length + 12 { length = max(min(length, visible - 10), r.fadeIn + 2) }
+        let margin = min(27, max(visible - length, 2))
+        let sourceLength = min(preroll + (length + margin) * rate, usable)
+        let readStart = ArchiveCatalog.segmentStart(duration: clip.duration, length: sourceLength,
+                                                    avoid: clip.shownStarts, rng: &rng)
+        let segStart = readStart + preroll
+        var piece = r.piece(clipID: clip.id, segmentStart: segStart, length: length, sound: false)
+        let wantsSound = r.sound && clip.hasAudio
+        if wantsSound, ArchiveAudioCuePlan(piece: piece, clipDuration: clip.duration) != nil {
+            piece.sound = true
+        }
+        let url = url(for: clip)
+        if piece.sound { piece.sound = scheduleAudio(piece: piece, clip: clip, url: url) }
+        weaver.didPrepare(piece)
+        sources[r.slot].play(.init(url: url, start: readStart, length: sourceLength, rate: r.rate,
+                                   black: clip.black, white: clip.white,
+                                   anchorUptime: startUptime + r.start - preroll / rate))
+        let aspect = Float(clip.width) / Float(max(clip.height, 1))
+        shared.withLock {
+            $0.aspects[r.slot] = aspect
+            $0.status = "Showing: \(clip.title)\(clip.year.map { " (\($0))" } ?? "")"
+        }
+        LMLog.visual.info("📼 piece #\(r.index) slot=\(r.slot) look=\(r.look.name, privacy: .public) id=\(clip.id, privacy: .public) title=\"\(clip.title, privacy: .public)\" segment=\(String(format: "%.1f", segStart), privacy: .public)s rate=\(String(format: "%.2f", r.rate), privacy: .public) warp=\(String(format: "%.2f", r.warp), privacy: .public) level=\(String(format: "%.2f", r.level), privacy: .public)+\(String(format: "%.2f", r.swell), privacy: .public) length=\(String(format: "%.1f", length), privacy: .public)s fade=\(String(format: "%.1f", r.fadeIn), privacy: .public)s sound=\(piece.sound) (wanted \(r.sound), audio=\(clip.hasAudio)) starts \(String(format: "%.1f", r.start), privacy: .public)s at \(String(format: "%.1f", elapsed), privacy: .public)s")
+        return piece
     }
 
     private func url(for clip: ArchiveClip) -> URL {
@@ -442,7 +501,8 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
             LMLog.visual.info("📼 offline: playing from the cache only, no requests")
             return
         }
-        try? await Task.sleep(nanoseconds: DebugLaunchOptions.videoForce ? 1_000_000_000 : 10_000_000_000)
+        // Footage is always on (A27): start fetching almost at once on an empty cache.
+        try? await Task.sleep(nanoseconds: cached.isEmpty || DebugLaunchOptions.videoForce ? 1_000_000_000 : 5_000_000_000)
         var picker = CandidatePicker(seed: UInt64.random(in: 0...UInt64.max))
         var failures = 0
         var lastDownload = Date.distantPast
@@ -452,7 +512,7 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
             let full = clips.count >= ArchiveCachePolicy.poolTarget
             let sinceLast = Date().timeIntervalSince(lastDownload)
             // Below the minimum: back to back. Below the pool target: one per 90 s. Full: only to replace
-            // a clip (every third moment), at most one download per 3 minutes.
+            // a clip (every 12 pieces), at most one download per 3 minutes.
             let due = clips.count < ArchiveCachePolicy.minReady
                 || (!full && sinceLast >= 90)
                 || (full && replace && sinceLast >= 180)
@@ -461,7 +521,7 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
                 continue
             }
             do {
-                let protected = Set(shared.withLock { $0.plan.map { [$0.clipID] } ?? [] })
+                let protected = shared.withLock { Set($0.pieces.map(\.clipID)) }
                 if full, replace, let victim = ArchiveCachePolicy.replacement(clips, protected: protected) {
                     await store.remove(victim)
                     LMLog.visual.info("📼 replacing most-used clip \(victim, privacy: .public)")
@@ -473,14 +533,14 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
                 // now (the client still paces requests 2 s apart) instead of waiting out the 90 s.
                 if downloaded { lastDownload = Date() }
                 let n = await store.clips.count
-                shared.withLock { s in if s.plan == nil { s.status = "\(n) clips ready" } }
+                shared.withLock { s in if s.pieces.isEmpty { s.status = "\(n) clips ready" } }
             } catch is CancellationError {
                 break
             } catch {
                 failures += 1
                 let wait = ArchiveCatalog.backoff(failures: failures)
                 LMLog.visual.warning("📼 fetch failed (\(String(describing: error), privacy: .public)); retry in \(Int(wait))s")
-                shared.withLock { s in if s.plan == nil { s.status = "Footage offline" } }
+                shared.withLock { s in if s.pieces.isEmpty { s.status = "Footage offline" } }
                 try? await Task.sleep(nanoseconds: UInt64(wait * 1e9))
             }
         }
@@ -508,8 +568,8 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
 
     private static let rows = 50
     /// Largest first download on an empty cache (skipped up to `coldStartMaxSkips` times).
-    static let coldStartMaxBytes: Int64 = 40_000_000
-    static let coldStartMaxSkips = 6
+    static let coldStartMaxBytes: Int64 = 25_000_000
+    static let coldStartMaxSkips = 8
 
     /// One search (or the seed list), one metadata request, one download, validation, into the store.
     /// Returns true when a clip was added to the store.
@@ -545,7 +605,7 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
             LMLog.visual.info("📼 no playable file in \(id, privacy: .public)")
             return false
         }
-        // Cold start (empty cache): the first moment waits for this download, and Archive servers vary a lot
+        // Cold start (empty cache): the first piece waits for this download, and Archive servers vary a lot
         // (0.3-6 MB/s measured), so a film whose smallest file is large is passed over (not marked bad) for
         // a few candidates in favour of a short one. One metadata request each, still paced 2 s apart.
         if cachedIDs.isEmpty, (file.bytes ?? 0) > Self.coldStartMaxBytes, picker.coldSkips < Self.coldStartMaxSkips {
@@ -577,8 +637,8 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
                                isColour: ArchiveCatalog.tone(meta.metadata?.color?.value) == .colour,
                                licence: meta.metadata?.licenseurl?.value, added: Date(), lastUsed: nil, useCount: 0,
                                shownStarts: [])
-        // The clip on screen now, not when the download started (a moment may have begun meanwhile).
-        let protected = Set(shared.withLock { $0.plan.map { [$0.clipID] } ?? [] })
+        // The clips on screen now, not when the download started (pieces changed meanwhile).
+        let protected = shared.withLock { Set($0.pieces.map(\.clipID)) }
         let evicted = try await store.add(clip, from: tmp, protected: protected)
         let pool = await store.clips.count
         LMLog.visual.info("📼 cached id=\(id, privacy: .public) \"\(clip.title, privacy: .public)\" (\(year ?? 0)) \(v.width)x\(v.height) \(String(format: "%.0f", v.duration), privacy: .public)s audio=\(v.hasAudio) levels=\(String(format: "%.2f", v.black), privacy: .public)-\(String(format: "%.2f", v.white), privacy: .public) evicted=\(evicted.joined(separator: ","), privacy: .public) pool=\(pool)")

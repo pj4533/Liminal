@@ -232,130 +232,221 @@ struct ArchiveCachePolicyTests {
     }
 }
 
-struct VideoMomentDirectorTests {
-    static let calm = VideoMomentDirector.Conditions(transitionRunning: false, imageAge: 20, musicIntensity: 0.3,
-                                                     effectIntensity: 0.5)
+struct FootageWeaverTests {
+    typealias C = FootageWeaver.Conditions
+    static let calm = C(transitionRunning: false, imageAge: 20, musicIntensity: 0.3, effectIntensity: 0.5)
 
-    /// Runs a director for `seconds` at 2 Hz; returns the plans it began (plans begin at the tick time).
-    static func run(seed: UInt64, timing: VideoMomentDirector.Timing, seconds: Double,
-                    conditions: (Double) -> VideoMomentDirector.Conditions = { _ in calm }) -> [MomentPlan] {
-        var d = VideoMomentDirector(seed: seed, timing: timing)
-        var plans: [MomentPlan] = []
-        var t = 0.0
-        while t < seconds {
-            if case .begin(let b) = d.tick(elapsed: t, conditions: conditions(t), hasClip: true) {
-                let p = MomentPlan(clipID: "c", segmentStart: 0, rate: b.rate, look: b.look, seed: b.seed, start: t,
-                                   fadeIn: b.fadeIn, hold: b.hold, fadeOut: b.fadeOut)
-                d.didBegin(p)
-                plans.append(p)
+    struct Run {
+        /// Every piece, in its final state (fade out set once the next was placed).
+        var pieces: [FootagePiece] = []
+        /// (t, presence, pieces live) every 0.1 s.
+        var samples: [(t: Double, presence: Float, live: Int)] = []
+        var decisions: [(t: Double, d: FootageWeaver.Decision)] = []
+    }
+
+    /// Runs a weaver at 2 Hz (as the service does) and samples what the render loop would see every 0.1 s.
+    static func run(seed: UInt64, timing: FootageWeaver.Timing, seconds: Double, clipFrom: Double = 0,
+                    ready: @escaping (Int, Double) -> Bool = { _, _ in true },
+                    conditions: (Double) -> C = { _ in calm }) -> Run {
+        var w = FootageWeaver(seed: seed, timing: timing)
+        var out = Run()
+        var byIndex: [Int: FootagePiece] = [:]
+        let steps = Int(seconds * 10)
+        for i in 0..<steps {
+            let t = Double(i) / 10
+            if i % 5 == 0 {
+                let d = w.tick(elapsed: t, conditions: conditions(t), hasClip: t >= clipFrom) { ready($0, t) }
+                if d != .none { out.decisions.append((t, d)) }
+                if case .prepare(let r) = d {
+                    w.didPrepare(r.piece(clipID: "c\(r.index % 3)", segmentStart: 10))
+                }
+                for p in w.pieces { byIndex[p.index] = p }
             }
-            t += 0.5
+            out.samples.append((t, w.presence(at: t), w.pieces.count))
         }
-        return plans
+        out.pieces = byIndex.keys.sorted().map { byIndex[$0]! }
+        return out
     }
 
-    @Test func normalScheduleBoundsOverManySeeds() {
-        let timing = VideoMomentDirector.Timing.amount(.normal)
-        for seed in UInt64(0)..<1000 {
-            let plans = Self.run(seed: seed, timing: timing, seconds: 1800)
-            #expect(!plans.isEmpty)
-            guard let first = plans.first else { continue }
-            #expect(first.start >= 90 && first.start <= 150.5)
-            for p in plans {
-                #expect(p.start >= 60)
-                #expect(p.length >= 30 - 1e-9 && p.length <= 80 + 1e-9)
-                #expect(p.fadeIn >= 8 && p.fadeIn <= 14)
-                #expect(p.fadeOut >= 10 && p.fadeOut <= 16)
-                #expect(p.rate >= 0.6 && p.rate <= 0.85)
-                if p.look == .emerge { #expect(p.hold <= 20) }
-            }
-            for (a, b) in zip(plans, plans.dropFirst()) {
-                let gap = b.start - a.end
-                #expect(gap >= 150 - 0.5 && gap <= 360 + 1)
-                #expect(a.look != b.look)
+    @Test func alwaysPresentAboveTheFloorAfterTheFirstFade() {
+        for speed in FootageChangeSpeed.allCases {
+            for seed in UInt64(0)..<150 {
+                let r = Self.run(seed: seed, timing: .speed(speed), seconds: 900)
+                guard let first = r.pieces.first else { Issue.record("no piece"); continue }
+                // Cold start with a clip at once: the first piece fades in after 1 s, over 5 s.
+                #expect(first.start <= 1.5)
+                let on = first.start + first.fadeIn
+                for s in r.samples where s.t >= on {
+                    #expect(s.presence >= FootageWeaver.floor - 1e-5)
+                    #expect(s.presence <= FootageWeaver.bandTop + FootageWeaver.swellRange.upperBound + 1e-5)
+                    #expect(s.live >= 1 && s.live <= 2)
+                }
+                // Before the first fade the envelope only rises (a fade in, not a pop).
+                let early = r.samples.filter { $0.t < on }.map { first.envelope(at: $0.t) }
+                #expect(early == early.sorted())
             }
         }
     }
 
-    @Test func rareAndOftenFirstMoments() {
-        for seed in UInt64(0)..<200 {
-            let rare = Self.run(seed: seed, timing: .amount(.rare), seconds: 400).first!.start
-            #expect(rare >= 150 && rare <= 240.5)
-            let often = Self.run(seed: seed, timing: .amount(.often), seconds: 200).first!.start
-            #expect(often >= 60 && often <= 90.5)
+    @Test func pieceLengthsAndCrossfadesFollowTheSpeed() {
+        for speed in FootageChangeSpeed.allCases {
+            let timing = FootageWeaver.Timing.speed(speed)
+            for seed in UInt64(0)..<150 {
+                let r = Self.run(seed: seed, timing: timing, seconds: 900)
+                #expect(r.pieces.count >= Int(900 / (timing.pieceLength.upperBound + 1)))
+                for (a, b) in zip(r.pieces, r.pieces.dropFirst()) {
+                    // Calm conditions: no holds, so a piece lasts its planned length.
+                    let shown = b.start - a.start
+                    if a.look == .emerge {
+                        #expect(shown <= FootageWeaver.emergeMaxLength + 0.5)
+                    } else {
+                        #expect(shown >= timing.pieceLength.lowerBound - 1e-9)
+                        #expect(shown <= timing.pieceLength.upperBound + 0.5)
+                    }
+                    #expect(timing.crossfade.contains(b.fadeIn))
+                    #expect(a.look != b.look)
+                    #expect(a.slot != b.slot)
+                }
+            }
+        }
+        // Faster speed, more pieces.
+        let n = FootageChangeSpeed.allCases.map { Self.run(seed: 7, timing: .speed($0), seconds: 1200).pieces.count }
+        #expect(n[0] < n[1] && n[1] < n[2])
+    }
+
+    @Test func crossfadesAreContinuousAndComplementary() {
+        let r = Self.run(seed: 11, timing: .speed(.medium), seconds: 600)
+        for (a, b) in zip(r.pieces, r.pieces.dropFirst()) {
+            #expect(a.fadeOutStart == b.start)
+            #expect(a.fadeOut == b.fadeIn)
+            // Through the crossfade the envelopes add to exactly 1: never a cut, never a gap.
+            var t = b.start
+            while t <= b.start + b.fadeIn {
+                #expect(abs(a.envelope(at: t) + b.envelope(at: t) - 1) < 1e-5)
+                t += 0.05
+            }
+            #expect(a.envelope(at: b.start + b.fadeIn + 0.01) == 0)
+        }
+        // A piece is retired only after it has fully faded out.
+        for (t, d) in r.decisions {
+            if case .retire(let slot) = d {
+                let gone = r.pieces.filter { $0.slot == slot && ($0.end ?? .infinity) <= t }
+                #expect(!gone.isEmpty)
+            }
         }
     }
 
-    @Test func waitsForTransitionsFreshImagesAndLoudMusic() {
-        let timing = VideoMomentDirector.Timing(first: 100...100, gap: 200...200)
-        // A transition runs from 95 to 110 and the image is fresh until 118: the start waits to 118.
-        let plans = Self.run(seed: 1, timing: timing, seconds: 300) { t in
-            .init(transitionRunning: t >= 95 && t < 110, imageAge: t < 110 ? 2 : t - 110, musicIntensity: 0.2,
-                  effectIntensity: 0.5)
+    @Test func soundComesAndGoesIndependently() {
+        var sounding = 0, total = 0
+        for seed in UInt64(0)..<100 {
+            let r = Self.run(seed: seed, timing: .speed(.medium), seconds: 900)
+            total += r.pieces.count
+            let withSound = r.pieces.filter(\.sound)
+            sounding += withSound.count
+            // Never two sounds at once, always a quiet gap, and at least one silent piece between.
+            for (a, b) in zip(withSound, withSound.dropFirst()) {
+                let ca = ArchiveAudioCuePlan(piece: a, clipDuration: 10_000)!
+                let cb = ArchiveAudioCuePlan(piece: b, clipDuration: 10_000)!
+                #expect(cb.beginAt >= ca.endAt + FootageWeaver.soundGap - 1e-6)
+                #expect(b.index >= a.index + 2)
+            }
         }
-        #expect(plans.first.map { $0.start >= 118 && $0.start <= 118.5 } == true)
-        // Loud music forever: waits the full 60 s, then goes anyway.
-        let loud = Self.run(seed: 1, timing: timing, seconds: 300) { _ in
-            .init(transitionRunning: false, imageAge: 50, musicIntensity: 0.95, effectIntensity: 0.5)
-        }
-        #expect(loud.first.map { abs($0.start - 160) <= 0.5 } == true)
-        // Constant transitions: starts after the 30 s image wait.
-        let busy = Self.run(seed: 1, timing: timing, seconds: 300) { _ in
-            .init(transitionRunning: true, imageAge: 1, musicIntensity: 0.2, effectIntensity: 0.5)
-        }
-        #expect(busy.first.map { abs($0.start - 130) <= 0.5 } == true)
+        let share = Double(sounding) / Double(total)
+        #expect(share > 0.12 && share < 0.45)   // many pieces stay silent, some bring their sound
     }
 
-    @Test func noClipPostpones() {
-        var d = VideoMomentDirector(seed: 2, timing: .forced)
-        #expect(d.tick(elapsed: 6, conditions: Self.calm, hasClip: false) == .none)
-        #expect(d.nextDue == 21)
+    @Test func coldStartWaitsForTheFirstClipOnly() {
+        let r = Self.run(seed: 3, timing: .speed(.medium), seconds: 60, clipFrom: 20)
+        #expect(r.pieces.first.map { $0.start >= 20 && $0.start <= 21.5 } == true)
+        #expect(r.samples.filter { $0.t < 20 }.allSatisfy { $0.presence == 0 })
     }
 
-    @Test func forcedAndPinnedLook() {
-        var d = VideoMomentDirector(seed: 5, timing: .forced, pinnedLook: .window)
-        guard case .begin(let b) = d.tick(elapsed: 5, conditions: Self.calm, hasClip: true) else {
-            Issue.record("forced director did not begin at 5 s"); return
+    @Test func crossfadeWaitsOutAnImageTransition() {
+        let timing = FootageWeaver.Timing.speed(.medium)
+        let base = Self.run(seed: 5, timing: timing, seconds: 120)
+        let change = base.pieces[1].start
+        // A 4 s transition starting just before the planned crossfade: the crossfade waits for it.
+        let r = Self.run(seed: 5, timing: timing, seconds: 120) { t in
+            C(transitionRunning: t >= change - 1 && t < change + 3, imageAge: 1, musicIntensity: 0.2, effectIntensity: 0.5)
         }
-        #expect(b.look == .window)
+        #expect(r.pieces[1].start >= change + 3 - 1e-9)
+        #expect(r.pieces[1].start <= change + 4.5)
+        // Endless transitions: it waits at most 6 s.
+        let busy = Self.run(seed: 5, timing: timing, seconds: 120) { _ in
+            C(transitionRunning: true, imageAge: 1, musicIntensity: 0.2, effectIntensity: 0.5)
+        }
+        #expect(busy.pieces[1].start <= change + timing.maxTransitionWait + 1.5)
+        // The current piece holds meanwhile: presence never drops.
+        let on = r.pieces[0].start + r.pieces[0].fadeIn
+        #expect(r.samples.filter { $0.t >= on }.allSatisfy { $0.presence >= FootageWeaver.floor - 1e-5 })
     }
 
-    @Test func emergeOnlyAtHigherIntensity() {
+    @Test func aDecoderThatNeverDeliversIsDroppedWhileTheCurrentPieceHolds() {
+        // Slot 1 never produces a frame until 80 s.
+        let r = Self.run(seed: 9, timing: .speed(.fast), seconds: 140, ready: { slot, t in slot == 0 || t >= 80 })
+        #expect(r.decisions.contains { if case .drop(slot: 1) = $0.d { return true }; return false })
+        let on = r.pieces[0].start + r.pieces[0].fadeIn
+        #expect(r.samples.filter { $0.t >= on }.allSatisfy { $0.presence >= FootageWeaver.floor - 1e-5 })
+        // Once slot 1 delivers, pieces flow again.
+        #expect(r.pieces.contains { $0.slot == 1 && $0.start >= 80 })
+    }
+
+    @Test func aClipThatEndsBringsTheNextPieceSooner() {
+        var w = FootageWeaver(seed: 2, timing: .speed(.slow))
+        guard case .prepare(let r) = w.tick(elapsed: 0, conditions: Self.calm, hasClip: true, ready: { _ in true }) else {
+            Issue.record("no first piece"); return
+        }
+        w.didPrepare(r.piece(clipID: "a", segmentStart: 0))
+        w.hurry(at: 10)
+        #expect(w.current.map { $0.plannedChange <= 13 + 1e-9 } == true)
+    }
+
+    @Test func emergeOnlyAtHigherIntensityAndNeverTwice() {
         var rng = MusicRNG(seed: 9)
         for _ in 0..<500 {
-            #expect(VideoMomentDirector.chooseLook(last: nil, intensity: 0.3, rng: &rng) != .emerge)
-            let l = VideoMomentDirector.chooseLook(last: .imprint, intensity: 0.9, rng: &rng)
+            #expect(FootageWeaver.chooseLook(last: nil, intensity: 0.3, rng: &rng) != .emerge)
+            let l = FootageWeaver.chooseLook(last: .imprint, intensity: 0.9, rng: &rng)
             #expect(l != .imprint)
         }
     }
 
-    @Test func envelopeShape() {
-        var p = MomentPlan(clipID: "c", segmentStart: 0, rate: 0.7, look: .phantom, seed: 0, start: 10,
-                           fadeIn: 10, hold: 20, fadeOut: 10)
-        #expect(p.envelope(at: 9) == 0)
-        #expect(abs(p.envelope(at: 15) - 0.5) < 1e-6)
-        #expect(p.envelope(at: 25) == 1)
-        #expect(abs(p.envelope(at: 45) - 0.5) < 1e-6)
-        #expect(p.envelope(at: 50) == 0)
-        #expect(abs(p.sourceLength - 28) < 1e-4)   // rate is a Float
-        // Early fade out continues from the current level, within the new duration.
-        p.fadeOutEarly(at: 25, duration: 2)
-        #expect(p.end == 27)
-        #expect(p.envelope(at: 26) < 1 && p.envelope(at: 26) > 0)
-        #expect(p.envelope(at: 27.5) == 0)
+    @Test func pinnedLook() {
+        var w = FootageWeaver(seed: 5, timing: .speed(.fast), pinnedLook: .window)
+        guard case .prepare(let r) = w.tick(elapsed: 0, conditions: Self.calm, hasClip: true, ready: { _ in true }) else {
+            Issue.record("no first piece"); return
+        }
+        #expect(r.look == .window)
     }
 
-    @Test func clipChoiceAvoidsTheLastClip() {
+    @Test func pieceEnvelopeAndSwell() {
+        var p = FootagePiece(index: 0, slot: 0, clipID: "c", segmentStart: 0, rate: 0.7, look: .phantom, seed: 0,
+                             warp: 0.5, level: 0.5, swell: 0.3, start: 10, origin: 10, fadeIn: 4, length: 20,
+                             fadeOutStart: nil, fadeOut: nil, sound: false)
+        #expect(p.envelope(at: 9) == 0)
+        #expect(abs(p.envelope(at: 12) - 0.5) < 1e-6)
+        #expect(p.envelope(at: 100) == 1)          // holds until the next piece is placed
+        p.fadeOutStart = 30
+        p.fadeOut = 4
+        #expect(abs(p.envelope(at: 32) - 0.5) < 1e-6)
+        #expect(p.envelope(at: 34) == 0)
+        #expect(p.level(at: 10) == 0.5)
+        #expect(abs(p.level(at: 20) - 0.8) < 1e-6)  // the swell peaks mid-piece
+        #expect(p.level(at: 30) - 0.5 < 1e-6)
+    }
+
+    @Test func clipChoiceAvoidsClipsOnScreen() {
         let clips = ["a", "b", "c"].enumerated().map { ArchiveCachePolicyTests.clip($1, mb: 10, used: Double($0)) }
         var rng = MusicRNG(seed: 4)
         var counts: [String: Int] = [:]
         for _ in 0..<600 {
-            let c = VideoMomentDirector.chooseClip(clips, lastID: "a", rng: &rng)!
+            let c = FootageWeaver.chooseClip(clips, avoiding: ["a"], rng: &rng)!
             #expect(c.id != "a")
             counts[c.id, default: 0] += 1
         }
         #expect((counts["b"] ?? 0) > (counts["c"] ?? 0))   // least recently used is likelier
-        #expect(VideoMomentDirector.chooseClip([clips[0]], lastID: "a", rng: &rng)?.id == "a")
+        #expect(FootageWeaver.chooseClip(clips, avoiding: ["a", "b"], rng: &rng)?.id == "c")
+        // One clip cached: pieces reuse it (other segments).
+        #expect(FootageWeaver.chooseClip([clips[0]], avoiding: ["a"], rng: &rng)?.id == "a")
     }
 }
 
@@ -374,28 +465,30 @@ struct VideoCompositeTests {
     }
 
     @Test func uniformStrideMatchesTheShaderStruct() {
-        // 25 original + 2 vibrance + 6 transition + 11 footage floats, no padding (EffectsRenderer.metal).
-        #expect(MemoryLayout<EffectsUniforms>.size == 44 * 4)
-        #expect(MemoryLayout<EffectsUniforms>.stride == 44 * 4)
+        // 25 original + 2 vibrance + 6 transition + 11 footage + 7 footage layer B floats, no padding
+        // (EffectsRenderer.metal).
+        #expect(MemoryLayout<EffectsUniforms>.size == 51 * 4)
+        #expect(MemoryLayout<EffectsUniforms>.stride == 51 * 4)
         #expect(MemoryLayout<EffectsUniforms>.offset(of: \.videoMix) == 33 * 4)
         #expect(MemoryLayout<EffectsUniforms>.offset(of: \.videoShadeB) == 43 * 4)
+        #expect(MemoryLayout<EffectsUniforms>.offset(of: \.videoWarp) == 44 * 4)
+        #expect(MemoryLayout<EffectsUniforms>.offset(of: \.videoWarpB) == 50 * 4)
     }
 
     @Test func mixFormula() {
-        // envelope x ceiling x (0.75 + 0.25 drive) x (0.55 + 0.45 settled)
-        let m = VideoComposite.mix(Self.state, intensity: 0.5, drive: 1, settled: 1)
+        // weight x ceiling x (0.75 + 0.25 drive) x (0.6 + 0.4 settled)
+        let a = Self.state.a
+        let m = VideoComposite.mix(a, intensity: 0.5, drive: 1, settled: 1)
         #expect(abs(m - 0.75) < 1e-6)
-        let low = VideoComposite.mix(Self.state, intensity: 0.5, drive: 0, settled: 0)
-        #expect(abs(low - 0.75 * 0.75 * 0.55) < 1e-6)
-        var half = Self.state
-        half.envelope = 0.5
+        let low = VideoComposite.mix(a, intensity: 0.5, drive: 0, settled: 0)
+        #expect(abs(low - 0.75 * 0.75 * 0.6) < 1e-6)   // a new picture dips the footage, never hides it
+        var half = a!
+        half.weight = 0.5
         #expect(abs(VideoComposite.mix(half, intensity: 0.5, drive: 1, settled: 1) - 0.375) < 1e-6)
-        var constant = Self.state
-        constant.envelope = 0
-        constant.constantMix = 0.4
-        #expect(VideoComposite.mix(constant, intensity: 0, drive: 0, settled: 0) == 0.4)
+        #expect(VideoComposite.mix(nil, intensity: 0.5, drive: 1, settled: 1) == 0)
+        #expect(VideoComposite.mix(a, constantMix: 0.4, intensity: 0, drive: 0, settled: 0) == 0.4)
         // Emerge is absent at intensity 0.
-        var emerge = Self.state
+        var emerge = a!
         emerge.look = .emerge
         #expect(VideoComposite.mix(emerge, intensity: 0, drive: 1, settled: 1) == 0)
         // Ceilings rise with intensity and stay below 1.
@@ -404,13 +497,23 @@ struct VideoCompositeTests {
             #expect(c == c.sorted())
             #expect(c.allSatisfy { $0 <= 0.9 })
         }
+        // The floor of the band stays visible: even at its lowest (clear stretch, a new picture arriving)
+        // every look keeps a mix of at least 0.1 at the default intensity.
+        for look in VideoLook.allCases {
+            let l = VideoLayer(weight: FootageWeaver.floor, look: look, seed: 0, aspect: 1.33)
+            #expect(VideoComposite.mix(l, intensity: 0.5, drive: 0, settled: 0) > 0.1)
+        }
     }
 
-    @Test func settledHoldsBackDuringAndAfterACrossfade() {
-        #expect(VideoComposite.settled(imageAge: 1, transitionDuration: 4, inTransition: true) == 0)
+    @Test func settledDipsSmoothlyDuringAndAfterACrossfade() {
+        #expect(VideoComposite.settled(imageAge: 0, transitionDuration: 4, inTransition: true, progress: 0) == 1)
+        #expect(VideoComposite.settled(imageAge: 1, transitionDuration: 4, inTransition: true, progress: 0.3) == 0)
         #expect(VideoComposite.settled(imageAge: 4, transitionDuration: 4, inTransition: false) == 0)
         #expect(VideoComposite.settled(imageAge: 10, transitionDuration: 4, inTransition: false) == 1)
         #expect(VideoComposite.settled(imageAge: nil, transitionDuration: 4, inTransition: false) == 1)
+        // No step: small progress, small dip.
+        let s = VideoComposite.settled(imageAge: 0, transitionDuration: 4, inTransition: true, progress: 0.01)
+        #expect(s > 0.99)
     }
 
     @Test func computeWritesVideoUniforms() {
@@ -419,14 +522,34 @@ struct VideoCompositeTests {
         #expect(u.videoMix > 0.3 && u.videoMix <= 0.75)
         #expect(u.videoLook == 3)
         #expect(u.videoSeed == 0.4)
+        #expect(u.videoWarp == 0.6)
         #expect(abs(u.videoAspect - (4.0 / 3.0) / 1.5) < 1e-6)
         #expect(u.videoTintR == 0.9 && u.videoShadeB == 0.02)
+        #expect(u.videoMixB == 0)
         // Everything else matches the no-footage uniforms.
         var v = u
-        v.videoMix = 0; v.videoLook = 0; v.videoSeed = 0; v.videoScale = 0; v.videoAspect = 0
+        v.videoMix = 0; v.videoLook = 0; v.videoSeed = 0; v.videoScale = 0; v.videoAspect = 0; v.videoWarp = 0
         v.videoTintR = 0; v.videoTintG = 0; v.videoTintB = 0; v.videoShadeR = 0; v.videoShadeG = 0; v.videoShadeB = 0
         let off = EffectsUniformsComputer.compute(time: 300, transitionProgress: 0, look: EffectLook(intensity: 0.5))
         #expect(withUnsafeBytes(of: v) { Data($0) } == withUnsafeBytes(of: off) { Data($0) })
+    }
+
+    @Test func crossfadeWritesBothLayers() {
+        var s = Self.state
+        s.a?.weight = 0.3
+        s.b = VideoLayer(weight: 0.2, look: .phantom, seed: 0.8, aspect: 1.0, warp: 0.4)
+        let u = EffectsUniformsComputer.compute(time: 300, transitionProgress: 0, look: EffectLook(intensity: 0.5),
+                                                video: s)
+        #expect(u.videoMix > 0 && u.videoMixB > 0)
+        #expect(u.videoLook == 3 && u.videoLookB == 1)
+        #expect(u.videoSeedB == 0.8 && u.videoWarpB == 0.4)
+        #expect(abs(u.videoAspectB - 1.0 / 1.5) < 1e-6)
+        #expect(u.videoScaleB == VideoComposite.scale(.phantom))
+        // Only layer B (the outgoing piece on slot 0 has gone): layer A stays 0.
+        s.a = nil
+        let ub = EffectsUniformsComputer.compute(time: 300, transitionProgress: 0, look: EffectLook(intensity: 0.5),
+                                                 video: s)
+        #expect(ub.videoMix == 0 && ub.videoLook == 0 && ub.videoMixB > 0)
     }
 
     @Test func tintComesFromThePicture() throws {

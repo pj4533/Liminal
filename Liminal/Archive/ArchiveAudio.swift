@@ -2,7 +2,7 @@
 //  ArchiveAudio.swift
 //  Liminal
 //
-//  The film's sound for a footage moment (docs/plans/archive-video.md 4): when it enters and leaves
+//  The film's sound for a footage piece (docs/plans/archive-video.md 4, decision A27): when it enters and leaves
 //  (`ArchiveAudioCuePlan`, pure), how loud the "Footage audio" setting makes it, and the decoder that turns
 //  the segment's audio track into one slowed, normalised buffer off the main actor.
 //
@@ -10,19 +10,19 @@
 import AVFoundation
 import Foundation
 
-/// When a moment's sound plays, relative to the picture (plan 4, decision A15). Pure.
+/// When a piece's sound plays (decision A27): it comes in a little after the piece starts to fade in and
+/// leaves around the piece's change, with slow smoothstep fades of up to 10 s each. Pure.
 nonisolated struct ArchiveAudioCuePlan: Sendable, Equatable {
-    /// Seconds after the picture starts to appear before the sound begins.
-    static let delay: Double = 4
-    static let fadeIn: Double = 12
-    static let fadeOut: Double = 10
-    /// A sound shorter than this (begin to fade-out start) is not worth starting.
-    static let minimumAudible: Double = 6
+    static let maxFade: Double = 10
+    /// Each fade takes this share of the sound's span (the rest is the hold).
+    static let fadeShare: Double = 0.42
+    /// A sound shorter than this (begin to end) is not worth starting.
+    static let minimumAudible: Double = FootageWeaver.soundMinSpan
 
-    /// Elapsed seconds (the moment clock) at which the sound starts, already at level 0.
+    /// Elapsed seconds (the footage clock) at which the sound starts, already at level 0.
     let beginAt: Double
     let fadeIn: Double
-    /// Elapsed seconds at which the fade out starts (the picture's own fade out start).
+    /// Elapsed seconds at which the fade out starts.
     let fadeOutAt: Double
     let fadeOut: Double
     /// Source seconds of the film where the sound starts (in step with the slowed picture).
@@ -31,24 +31,28 @@ nonisolated struct ArchiveAudioCuePlan: Sendable, Equatable {
     let sourceLength: Double
     let rate: Float
 
-    init?(plan: MomentPlan, clipDuration: Double) {
-        let begin = plan.start + Self.delay
-        let fadeOutAt = plan.fadeOutStart
-        guard fadeOutAt - begin >= Self.minimumAudible else { return nil }
-        // The sound is gone before the picture: its fade is at most the picture's own.
-        let fadeOut = min(Self.fadeOut, max(plan.end - fadeOutAt, 1))
-        let rate = Double(plan.rate)
-        let start = plan.segmentStart + Self.delay * rate
+    var endAt: Double { fadeOutAt + fadeOut }
+
+    init?(piece: FootagePiece, clipDuration: Double) {
+        let begin = piece.origin + FootageWeaver.soundDelay
+        let end = piece.origin + piece.length + FootageWeaver.soundTail
+        let span = end - begin
+        guard span >= Self.minimumAudible else { return nil }
+        let rate = Double(piece.rate)
+        // The picture is at `segmentStart` at `origin` and advances at `rate`.
+        let start = piece.segmentStart + (begin - piece.origin) * rate
         // One spare second past the fade, so the buffer never ends while still audible.
-        let length = min((fadeOutAt + fadeOut + 1 - begin) * rate, clipDuration - start)
-        guard length > Self.minimumAudible * rate else { return nil }
+        let length = min((span + 1) * rate, clipDuration - start)
+        // The buffer must last to the end of the fade out (a sound is never cut off).
+        guard length >= span * rate else { return nil }
+        let fade = min(Self.maxFade, span * Self.fadeShare)
         beginAt = begin
-        fadeIn = min(Self.fadeIn, fadeOutAt - begin)
-        self.fadeOutAt = fadeOutAt
-        self.fadeOut = fadeOut
+        fadeIn = fade
+        fadeOutAt = end - fade
+        fadeOut = fade
         sourceStart = start
         sourceLength = length
-        self.rate = plan.rate
+        self.rate = piece.rate
     }
 
     /// Linear gain for the "Footage audio" setting (0...1): 0 = silent (no cue at all), 0.5 = 1 (the

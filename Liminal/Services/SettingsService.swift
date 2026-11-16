@@ -25,7 +25,9 @@ final class SettingsService: ObservableObject {
         static let effectIntensity = "visual.effectIntensity"
         static let depthStrength = "visual.depthStrength"
         static let archiveEnabled = "archive.enabled"
-        static let archiveAmount = "archive.amount"
+        static let archiveChangeSpeed = "archive.changeSpeed"
+        /// Removed in A27 ("Footage amount" Rare / Normal / Often): deleted on launch.
+        static let legacyArchiveAmount = "archive.amount"
         static let archiveAudioLevel = "archive.audioLevel"
     }
 
@@ -47,7 +49,7 @@ final class SettingsService: ObservableObject {
     static let defaultEffectIntensity: Float = EffectLook.defaultIntensity
     static let defaultDepthStrength: Float = ShellLayout.defaultDepth
     static let defaultArchiveEnabled: Bool = true
-    static let defaultArchiveAmount: VideoAmount = .normal
+    static let defaultArchiveChangeSpeed: FootageChangeSpeed = .medium
     static let defaultArchiveAudioLevel: Float = 0.5
 
     // MARK: - Published Settings
@@ -115,15 +117,15 @@ final class SettingsService: ObservableObject {
         didSet { defaults.set(depthStrength, forKey: Keys.depthStrength) }
     }
 
-    /// "Archive footage": old Internet Archive film fades into the scene now and then
-    /// (docs/plans/archive-video.md 6).
+    /// "Archive footage": old Internet Archive film always woven subtly into the scene while on
+    /// (docs/plans/archive-video.md 6, decision A27).
     @Published var archiveEnabled: Bool {
         didSet { defaults.set(archiveEnabled, forKey: Keys.archiveEnabled) }
     }
 
-    /// "Footage amount": how often a footage moment comes (Rare / Normal / Often).
-    @Published var archiveAmount: VideoAmount {
-        didSet { defaults.set(archiveAmount.rawValue, forKey: Keys.archiveAmount) }
+    /// "Change speed": how long each piece of footage stays before the next drifts in (Slow / Medium / Fast).
+    @Published var archiveChangeSpeed: FootageChangeSpeed {
+        didSet { defaults.set(archiveChangeSpeed.rawValue, forKey: Keys.archiveChangeSpeed) }
     }
 
     /// "Footage audio", 0 (silent) ... 1: level of the film's sound, deep in the reverb. 0.5 is the tuned default.
@@ -168,7 +170,10 @@ final class SettingsService: ObservableObject {
         self.depthStrength = min(max(defaults.object(forKey: Keys.depthStrength) as? Float ?? Self.defaultDepthStrength, 0), 1)
 
         self.archiveEnabled = defaults.object(forKey: Keys.archiveEnabled) as? Bool ?? Self.defaultArchiveEnabled
-        self.archiveAmount = VideoAmount(rawValue: defaults.string(forKey: Keys.archiveAmount) ?? "") ?? Self.defaultArchiveAmount
+        self.archiveChangeSpeed = FootageChangeSpeed(rawValue: defaults.string(forKey: Keys.archiveChangeSpeed) ?? "")
+            ?? Self.defaultArchiveChangeSpeed
+        // "Footage amount" no longer exists (footage is always present while on); it does not map onto a speed.
+        defaults.removeObject(forKey: Keys.legacyArchiveAmount)
         self.archiveAudioLevel = min(max(defaults.object(forKey: Keys.archiveAudioLevel) as? Float ?? Self.defaultArchiveAudioLevel, 0), 1)
 
         self.maxImagesPerHour = defaults.object(forKey: GenerationBudget.Keys.perHour) as? Int ?? GenerationBudget.defaultPerHour
@@ -192,7 +197,7 @@ final class SettingsService: ObservableObject {
         effectIntensity = Self.defaultEffectIntensity
         depthStrength = Self.defaultDepthStrength
         archiveEnabled = Self.defaultArchiveEnabled
-        archiveAmount = Self.defaultArchiveAmount
+        archiveChangeSpeed = Self.defaultArchiveChangeSpeed
         archiveAudioLevel = Self.defaultArchiveAudioLevel
         maxImagesPerHour = GenerationBudget.defaultPerHour
         maxImagesPerDay = GenerationBudget.defaultPerDay

@@ -75,29 +75,33 @@ struct MusicRenderTests {
         #expect(FileManager.default.fileExists(atPath: url.path))
     }
 
-    /// The archive moment of a render: a plan like the app's (picture fade in 11 s, out 13 s), its sound cue and
-    /// the decoded buffer. Writes `<label>.archive.json` with the timings for scripts/analyze-archive-audio.py.
+    /// The archive piece of a render: a piece like the app's (picture fade in 4 s, the next piece's crossfade
+    /// 4 s), its sound cue and the decoded buffer. Writes `<label>.archive.json` with the timings for
+    /// scripts/analyze-archive-audio.py.
     private static func archiveCue(_ cfg: [String: String], engine: GenerativeEngine, dir: String,
                                    label: String) async throws -> (plan: ArchiveAudioCuePlan, cue: ArchiveVoice.Cue)? {
         guard let path = cfg["archive"], !path.isEmpty else { return nil }
         let at = Double(cfg["archive_at"] ?? "") ?? 60
-        let length = Double(cfg["archive_len"] ?? "") ?? 70
+        let length = Double(cfg["archive_len"] ?? "") ?? 30
         let rate = Float(cfg["archive_rate"] ?? "") ?? 0.72
         let segment = Double(cfg["archive_start"] ?? "") ?? 120
         let level = Float(cfg["archive_level"] ?? "") ?? 0.5
-        let fadeIn = 11.0, fadeOut = 13.0
-        let moment = MomentPlan(clipID: "render", segmentStart: segment, rate: rate, look: .window, seed: 0.5,
-                                start: at, fadeIn: fadeIn, hold: max(length - fadeIn - fadeOut, 4), fadeOut: fadeOut)
+        let fadeIn = 4.0, fadeOut = 4.0
+        var piece = FootagePiece(index: 0, slot: 0, clipID: "render", segmentStart: segment, rate: rate, look: .window,
+                                 seed: 0.5, warp: 0.6, level: 0.5, swell: 0, start: at, origin: at, fadeIn: fadeIn,
+                                 length: length, fadeOutStart: nil, fadeOut: nil, sound: true)
+        piece.fadeOutStart = at + length
+        piece.fadeOut = fadeOut
         let url = URL(fileURLWithPath: path)
         let duration = try await AVURLAsset(url: url).load(.duration).seconds
-        guard let plan = ArchiveAudioCuePlan(plan: moment, clipDuration: duration),
+        guard let plan = ArchiveAudioCuePlan(piece: piece, clipDuration: duration),
               let gain = ArchiveAudioCuePlan.gain(level: level) else { return nil }
         let buffer = try await ArchiveAudioDecoder.decode(url: url, sourceStart: plan.sourceStart,
                                                           sourceLength: plan.sourceLength, rate: rate,
                                                           format: engine.archiveFormat)
-        let info: [String: Any] = ["clip": url.lastPathComponent, "pictureStart": moment.start,
-                                   "pictureFadeIn": fadeIn, "pictureFadeOutStart": moment.fadeOutStart,
-                                   "pictureEnd": moment.end, "beginAt": plan.beginAt, "fadeIn": plan.fadeIn,
+        let info: [String: Any] = ["clip": url.lastPathComponent, "pictureStart": piece.start,
+                                   "pictureFadeIn": fadeIn, "pictureFadeOutStart": piece.fadeOutStart ?? 0,
+                                   "pictureEnd": piece.end ?? 0, "beginAt": plan.beginAt, "fadeIn": plan.fadeIn,
                                    "fadeOutAt": plan.fadeOutAt, "fadeOut": plan.fadeOut, "rate": rate,
                                    "sourceStart": plan.sourceStart, "sourceLength": plan.sourceLength,
                                    "level": level, "gain": gain,
