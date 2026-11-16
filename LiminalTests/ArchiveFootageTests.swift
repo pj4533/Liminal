@@ -407,7 +407,7 @@ struct FootageWeaverTests {
         for _ in 0..<800 {
             let low = FootageWeaver.chooseRecipe(last: nil, recent: [], intensity: 0.15, hasDepth: false, rng: &rng)
             #expect(low.minIntensity <= 0.15)
-            #expect(![.emerge, .solar, .print, .kaleido, .undertow, .ghostfilm, .backdrop].contains(low))
+            #expect(![.emerge, .solar, .print, .kaleido, .undertow, .facets, .backdrop].contains(low))
             let mac = FootageWeaver.chooseRecipe(last: .imprint, recent: [], intensity: 0.9, hasDepth: false, rng: &rng)
             #expect(mac != .backdrop)
             #expect(mac.family != .plain)
@@ -457,7 +457,7 @@ struct FootageWeaverTests {
             Issue.record("no first piece"); return
         }
         #expect(r.recipe == .undertow)
-        #expect(FootageRecipe(name: "Ghost-Film") == .ghostfilm)
+        #expect(FootageRecipe(name: "Fa-cets") == .facets)
         #expect(FootageRecipe(name: "nope") == nil)
     }
 

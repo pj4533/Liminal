@@ -39,7 +39,7 @@ nonisolated enum VideoLook: Int, CaseIterable, Sendable, Codable {
 /// The effect a piece of film steers (shader ids FD_* in EffectsRenderer.metal; plan footage-fx.md 3).
 nonisolated enum FootageDrive: Int, CaseIterable, Sendable {
     case none = 0
-    /// The film's slow-average gradient displaces the picture's UVs (moving glass).
+    /// The film's figure gradient displaces the picture's UVs and lights the pane (moving glass).
     case undertow = 1
     /// The film's edges split the picture's colours (prismatic outlines).
     case fringe = 2
@@ -53,24 +53,24 @@ nonisolated enum FootageDrive: Int, CaseIterable, Sendable {
     case relief = 6
     /// The film's highlights light the bloom.
     case glow = 7
-    /// Wake and Fringe together at 0.7 each.
-    case ghost = 8
+    /// The film's figure shatters the picture into flat, lit shards (round 1; replaced Ghost film).
+    case facets = 8
 
     /// Geometric drives move the picture and are held off while a new picture settles (EffectLook.fresh).
-    var isGeometric: Bool { self == .undertow || self == .fringe || self == .ghost }
+    var isGeometric: Bool { self == .undertow || self == .fringe || self == .facets }
 
     /// Drive amount at effect intensity 0 / 0.5 / 1 (tune): the shader's maxima are the amount 1.
     var ceilings: (Float, Float, Float) {
         switch self {
         case .none: return (0, 0, 0)
-        case .undertow: return (0.25, 0.60, 1.0)
-        case .fringe: return (0.35, 0.70, 1.0)
-        case .wake: return (0.45, 0.80, 1.0)
-        case .aurora: return (0.40, 0.75, 1.0)
-        case .solar: return (0.0, 0.75, 1.0)
-        case .relief: return (0.35, 0.70, 1.0)
-        case .glow: return (0.50, 0.80, 1.0)
-        case .ghost: return (0.30, 0.70, 1.0)
+        case .undertow: return (0.30, 0.75, 1.0)
+        case .fringe: return (0.40, 0.80, 1.0)
+        case .wake: return (0.50, 0.90, 1.0)
+        case .aurora: return (0.45, 0.80, 1.0)
+        case .solar: return (0.0, 0.85, 1.0)
+        case .relief: return (0.40, 0.85, 1.0)
+        case .glow: return (0.50, 0.85, 1.0)
+        case .facets: return (0.40, 0.80, 1.0)
         }
     }
 }
@@ -97,7 +97,7 @@ nonisolated enum FootageRecipe: String, CaseIterable, Sendable, Codable {
     // Today's four blend looks.
     case phantom, imprint, window, emerge
     // Water: the film moves the picture.
-    case undertow, wake, ghostfilm
+    case undertow, wake, facets
     // Colour: the film steers the picture's colours.
     case fringe, aurora, solar, palette
     // Keyed: the film shows only in part of the picture.
@@ -128,12 +128,12 @@ nonisolated enum FootageRecipe: String, CaseIterable, Sendable, Codable {
     var carrier: VideoLook? {
         switch self {
         case .phantom, .wake, .fringe, .glow: return .phantom
-        case .imprint, .undertow, .aurora, .relief: return .imprint
+        case .imprint, .undertow, .aurora, .relief, .facets: return .imprint
         case .window, .backdrop: return .window
         case .emerge: return .emerge
         case .palette, .shadowplay, .kaleido: return .palette
         case .print: return .print
-        case .solar, .ghostfilm: return nil
+        case .solar: return nil
         }
     }
 
@@ -141,16 +141,21 @@ nonisolated enum FootageRecipe: String, CaseIterable, Sendable, Codable {
     /// shrinks the film's area, so its carrier runs higher.
     var carrierShare: Float {
         switch self {
-        case .phantom, .imprint, .window, .emerge, .palette, .print: return 1
-        case .undertow: return 0.45
-        case .wake: return 0.5
-        case .fringe: return 0.35
-        case .aurora, .relief: return 0.3
-        case .glow: return 0.4
-        case .kaleido: return 1.1
-        case .shadowplay: return 1.3
-        case .backdrop: return 1.2
-        case .solar, .ghostfilm: return 0
+        // Round 1 (decision F21): every mode's film share raised; round 0's judges could not find the film.
+        case .phantom, .imprint, .window, .emerge: return 1
+        case .palette: return 1.5
+        case .print: return 1.4
+        case .undertow: return 0.6
+        case .wake: return 0.8
+        case .fringe: return 0.5
+        case .aurora: return 0.45
+        case .relief: return 0.55
+        case .glow: return 0.6
+        case .kaleido: return 1.5
+        case .shadowplay: return 1.7
+        case .backdrop: return 1.6
+        case .facets: return 0.5
+        case .solar: return 0
         }
     }
 
@@ -167,7 +172,7 @@ nonisolated enum FootageRecipe: String, CaseIterable, Sendable, Codable {
         switch self {
         case .undertow: return .undertow
         case .wake: return .wake
-        case .ghostfilm: return .ghost
+        case .facets: return .facets
         case .fringe: return .fringe
         case .aurora: return .aurora
         case .solar: return .solar
@@ -180,7 +185,7 @@ nonisolated enum FootageRecipe: String, CaseIterable, Sendable, Codable {
     var family: FootageFamily {
         switch self {
         case .phantom, .imprint, .window, .emerge: return .plain
-        case .undertow, .wake, .ghostfilm: return .water
+        case .undertow, .wake, .facets: return .water
         case .fringe, .aurora, .solar, .palette: return .colour
         case .shadowplay, .backdrop, .kaleido: return .keyed
         case .relief, .glow, .print: return .light
@@ -192,7 +197,8 @@ nonisolated enum FootageRecipe: String, CaseIterable, Sendable, Codable {
         switch self {
         case .phantom, .window: return 3
         case .imprint: return 2
-        case .emerge, .solar, .print, .ghostfilm: return 1
+        case .emerge, .solar, .print: return 1
+        case .facets: return 2
         case .undertow, .wake, .fringe, .aurora, .shadowplay, .backdrop, .glow: return 3
         case .palette, .kaleido, .relief: return 2
         }
@@ -205,7 +211,7 @@ nonisolated enum FootageRecipe: String, CaseIterable, Sendable, Codable {
         case .solar: return 0.35
         case .kaleido: return 0.25
         case .undertow: return 0.2
-        case .ghostfilm: return 0.5
+        case .facets: return 0.3
         default: return 0
         }
     }

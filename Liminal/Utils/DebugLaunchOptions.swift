@@ -188,7 +188,7 @@ nonisolated enum DebugLaunchOptions {
     /// -LiminalVideoLook phantom|imprint|window|emerge: every piece uses this look.
     static let videoLook: String? = defaults.string(forKey: "LiminalVideoLook")
     /// -LiminalVideoMode <recipe> (alias -LiminalFootageMode): every piece uses this recipe (docs/plans/footage-fx.md 5:
-    /// phantom imprint window emerge undertow wake ghostfilm fringe aurora solar palette shadowplay backdrop
+    /// phantom imprint window emerge undertow wake facets fringe aurora solar palette shadowplay backdrop
     /// kaleido relief glow print).
     static let videoMode: String? = defaults.string(forKey: "LiminalVideoMode") ?? defaults.string(forKey: "LiminalFootageMode")
     /// -LiminalVideoFile <mp4> (alias -LiminalVideoClip): play this local file instead of the cache; no network.
