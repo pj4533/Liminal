@@ -38,7 +38,7 @@ EXCLUDE = ["war", "bomb", "casualty", "casualties", "surgery", "operation", "dis
            "hospital", "mental", "police", "crime", "protest", "ammunition", "atom", "atomic", "nuclear",
            "gun", "prison", "drug", "narcotic", "alcohol", "seale", "panther", "puberty", "adolescence", "sex",
            "larynx", "campaign", "debate", "nixon", "nixons", "eisenhower", "kennedy", "candidacy", "miss america",
-           "dew line", "turmoil"]
+           "dew line", "turmoil", "medical", "medicine", "quack", "quacks", "patient"]
 
 
 def full_query(q):

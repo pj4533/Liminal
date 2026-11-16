@@ -313,3 +313,7 @@ sound (A14-A19) and the "Archive Footage" settings card (A20-A22). Phase 6 (floa
 - Open questions 1-3 of the plan (collections, colour odds, floating screen).
 - The user's ear on the sound level (default -42 dBFS, about 19 dB under the music) and the look strengths.
 - Device: 90 Hz pacing with footage on, and the decode cost on the Vision Pro.
+
+## A26 (2026-11-15): "medical" terms excluded
+
+- The review found "Confidential File: Medical Quacks" passing the filters. Medical subjects don't suit a relaxing art piece, so "medical", "medicine", "quack", "quacks" and "patient" are added to the exclusions in ArchiveCatalog.swift and scripts/archive-curate.py (kept in step). The bundled seeds contain no such titles.

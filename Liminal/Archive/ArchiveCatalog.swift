@@ -56,7 +56,7 @@ nonisolated enum ArchiveCatalog {
         "hospital", "mental", "police", "crime", "protest", "ammunition", "atom", "atomic", "nuclear",
         "gun", "prison", "drug", "narcotic", "alcohol", "seale", "panther", "puberty", "adolescence", "sex",
         "larynx", "campaign", "debate", "nixon", "nixons", "eisenhower", "kennedy", "candidacy", "miss america",
-        "dew line", "turmoil",
+        "dew line", "turmoil", "medical", "medicine", "quack", "quacks", "patient",
     ]
 
     /// The query sent to advancedsearch.php: the curated clause, movies, 1950-1969, minus exclusions.
