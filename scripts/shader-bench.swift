@@ -55,9 +55,9 @@
 //                      motion) and bound at textures 7 and 8 (layer B of a piece crossfade, A27: turn it on
 //                      with --set videoMixB=0.3,videoLookB=3,videoScaleB=0.95,videoAspectB=0.89,videoWarpB=0.6).
 //                      Without it both are 1x1 black and the mixes 0.
-//   --video-look NAME  phantom | imprint | window | emerge | palette | print (default phantom)
+//   --video-look NAME  phantom | imprint | window | emerge | palette | print | poster (default phantom)
 //   --video-mode NAME  footage recipe (docs/plans/footage-fx.md 5: a blend look or an interaction mode, e.g.
-//                      undertow, fringe, wake, aurora, solar, palette, shadowplay, backdrop, kaleido, relief,
+//                      undertow, fringe, wake, aurora, solar, poster, shadowplay, backdrop, kaleido, relief,
 //                      glow, print, facets) through VideoComposite, as the app pins it with -LiminalVideoMode;
 //                      overrides --video-look. --video-mode-b NAME: layer B of --footage-b (default: the same).
 //   --video-mix X      constant footage mix (VideoCompositeState.constantMix; default: the look's
@@ -464,7 +464,7 @@ let variants: [Variant] = variantPaths.map { name, path in
         let fx = (videoPath != nil || footagePath != nil) && lib.functionNames.contains("effectsFragmentVideoFX")
         var sfx: [Int: MTLRenderPipelineState] = [:], mfx: [Int: MTLRenderPipelineState] = [:]
         if fx {
-            for v in [3, 5, 7] {
+            for v in FootageRecipe.fxVariants {
                 let suffix = VideoComposite.variantSuffix(v)
                 mfx[v] = makePipeline(lib, "effectsFragment" + suffix, attachments: 1)
                 if !mono { sfx[v] = makePipeline(lib, "effectsFragmentStereo" + suffix, attachments: 2) }

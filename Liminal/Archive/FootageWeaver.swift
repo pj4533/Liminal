@@ -329,7 +329,11 @@ nonisolated struct FootageWeaver {
     /// a drive-group recipe meet only through a plain look (decision F11).
     static func compatible(_ a: FootageRecipe?, _ b: FootageRecipe) -> Bool {
         guard let a else { return true }
-        return a.shaderGroup | b.shaderGroup != 7
+        // A key-group recipe never meets a drive or glass one (variants 7, 11, 15: the costliest, decision F11).
+        // Drives and glass may crossfade (variant 13, round 1's cost for those seconds, F25): forbidding it too
+        // left a glass piece only plain looks to follow, and the plain share rose over the weaver's band.
+        let u = a.shaderGroup | b.shaderGroup
+        return u & 2 == 0 || u & 12 == 0
     }
 
     /// Weighted recipe choice (plan footage-fx.md 5): never the previous recipe or its family, never a

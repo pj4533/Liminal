@@ -174,7 +174,7 @@ final class EffectsMetalView: MTKView {
             pipelineDescriptor.fragmentFunction = f
             videoPipelineState = try? device.makeRenderPipelineState(descriptor: pipelineDescriptor)
         }
-        for v in [3, 5, 7] where !DebugLaunchOptions.noEffects {
+        for v in FootageRecipe.fxVariants where !DebugLaunchOptions.noEffects {
             guard let f = library.makeFunction(name: "effectsFragment" + VideoComposite.variantSuffix(v)) else { continue }
             pipelineDescriptor.fragmentFunction = f
             videoFXPipelineStates[v] = try? device.makeRenderPipelineState(descriptor: pipelineDescriptor)

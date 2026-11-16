@@ -199,7 +199,7 @@ final class OffscreenEffectsRenderer {
             return try? device.makeRenderPipelineState(descriptor: stereoDescriptor)
         }
         var mono: [Int: MTLRenderPipelineState] = [:], stereo: [Int: MTLRenderPipelineState] = [:]
-        for v in [3, 5, 7] {
+        for v in FootageRecipe.fxVariants {
             let suffix = VideoComposite.variantSuffix(v)
             if let f = library.makeFunction(name: "effectsFragment" + suffix) {
                 pipelineDescriptor.fragmentFunction = f

@@ -436,7 +436,8 @@ struct FootageWeaverTests {
                                                        rng: &rng)
                     #expect(r != last)
                     #expect(r.family != last?.family)
-                    #expect((last?.shaderGroup ?? 1) | r.shaderGroup != 7)
+                    let u = (last?.shaderGroup ?? 1) | r.shaderGroup
+                    #expect(u != 7 && u != 11 && u != 15)   // keys never meet drives or glass (F11, F25)
                     #expect(intensity >= r.minIntensity)
                     if r.family == .plain { plain += 1 }
                     kinds.insert(r)

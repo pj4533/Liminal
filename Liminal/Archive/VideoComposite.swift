@@ -26,8 +26,10 @@ nonisolated enum VideoLook: Int, CaseIterable, Sendable, Codable {
     case emerge = 4
     /// The film gradient-mapped through the picture: shade -> the picture's own colour -> tint (recipes only).
     case palette = 5
-    /// The film's slow average as halftone ink or posterised bands in the picture's darkest colour (recipes only).
+    /// The film as halftone dots or an engraving line screen, inked against what it lands on (recipes only).
     case print = 6
+    /// The picture posterised into flat bands whose thresholds the film's figure shifts (recipes only; round 2).
+    case poster = 7
 
     var name: String { String(describing: self) }
     init?(name: String) {
@@ -39,9 +41,10 @@ nonisolated enum VideoLook: Int, CaseIterable, Sendable, Codable {
 /// The effect a piece of film steers (shader ids FD_* in EffectsRenderer.metal; plan footage-fx.md 3).
 nonisolated enum FootageDrive: Int, CaseIterable, Sendable {
     case none = 0
-    /// The film's figure gradient displaces the picture's UVs and lights the pane (moving glass).
+    /// The film's figure bends and shifts the picture's UVs and lights the pane (thick, moving glass).
     case undertow = 1
-    /// The film's edges split the picture's colours (prismatic outlines).
+    /// The film drawn as a contour map (iso-lines of its figure, light on darks, ink on lights); its edges
+    /// split the picture's colours.
     case fringe = 2
     /// The film's motion feeds the feedback trails and the ghost taps.
     case wake = 3
@@ -51,19 +54,21 @@ nonisolated enum FootageDrive: Int, CaseIterable, Sendable {
     case solar = 5
     /// The film embossed into the picture's surface.
     case relief = 6
-    /// The film's highlights light the bloom.
+    /// The film projected onto the picture as light and shade; its highlights swell the bloom.
     case glow = 7
     /// The film's figure shatters the picture into flat, lit shards (round 1; replaced Ghost film).
     case facets = 8
 
     /// Geometric drives move the picture and are held off while a new picture settles (EffectLook.fresh).
     var isGeometric: Bool { self == .undertow || self == .fringe || self == .facets }
+    /// The drives that move the picture's samples run in their own shader group (VARIANT_GLASS, decision F25).
+    var isGlass: Bool { isGeometric }
 
     /// Drive amount at effect intensity 0 / 0.5 / 1 (tune): the shader's maxima are the amount 1.
     var ceilings: (Float, Float, Float) {
         switch self {
         case .none: return (0, 0, 0)
-        case .undertow: return (0.30, 0.75, 1.0)
+        case .undertow: return (0.30, 0.58, 0.85)
         case .fringe: return (0.40, 0.80, 1.0)
         case .wake: return (0.50, 0.90, 1.0)
         case .aurora: return (0.45, 0.80, 1.0)
@@ -99,7 +104,7 @@ nonisolated enum FootageRecipe: String, CaseIterable, Sendable, Codable {
     // Water: the film moves the picture.
     case undertow, wake, facets
     // Colour: the film steers the picture's colours.
-    case fringe, aurora, solar, palette
+    case fringe, aurora, solar, poster
     // Keyed: the film shows only in part of the picture.
     case shadowplay, backdrop, kaleido
     // Light: the film lights, shades or inks the picture.
@@ -119,8 +124,9 @@ nonisolated enum FootageRecipe: String, CaseIterable, Sendable, Codable {
         case .imprint: return .imprint
         case .window: return .window
         case .emerge: return .emerge
-        case .palette: return .palette
+        case .palette: return .shadowplay
         case .print: return .print
+        case .poster: return .poster
         }
     }
 
@@ -131,8 +137,9 @@ nonisolated enum FootageRecipe: String, CaseIterable, Sendable, Codable {
         case .imprint, .undertow, .aurora, .relief, .facets: return .imprint
         case .window, .backdrop: return .window
         case .emerge: return .emerge
-        case .palette, .shadowplay, .kaleido: return .palette
+        case .shadowplay, .kaleido: return .palette
         case .print: return .print
+        case .poster: return .poster
         case .solar: return nil
         }
     }
@@ -142,18 +149,20 @@ nonisolated enum FootageRecipe: String, CaseIterable, Sendable, Codable {
     var carrierShare: Float {
         switch self {
         // Round 1 (decision F21): every mode's film share raised; round 0's judges could not find the film.
+        // Round 2 (F24): Poster, Kaleido, Shadowplay, Backdrop and Wake up again; Glow and Undertow down (their drives now carry
+        // the film's figure as light and glass).
         case .phantom, .imprint, .window, .emerge: return 1
-        case .palette: return 1.5
-        case .print: return 1.4
-        case .undertow: return 0.6
-        case .wake: return 0.8
+        case .poster: return 2.6
+        case .print: return 1.5
+        case .undertow: return 0.45
+        case .wake: return 1.0
         case .fringe: return 0.5
         case .aurora: return 0.45
-        case .relief: return 0.55
-        case .glow: return 0.6
-        case .kaleido: return 1.5
-        case .shadowplay: return 1.7
-        case .backdrop: return 1.6
+        case .relief: return 0.5
+        case .glow: return 0.4
+        case .kaleido: return 2.2
+        case .shadowplay: return 2.2
+        case .backdrop: return 1.9
         case .facets: return 0.5
         case .solar: return 0
         }
@@ -186,7 +195,7 @@ nonisolated enum FootageRecipe: String, CaseIterable, Sendable, Codable {
         switch self {
         case .phantom, .imprint, .window, .emerge: return .plain
         case .undertow, .wake, .facets: return .water
-        case .fringe, .aurora, .solar, .palette: return .colour
+        case .fringe, .aurora, .solar, .poster: return .colour
         case .shadowplay, .backdrop, .kaleido: return .keyed
         case .relief, .glow, .print: return .light
         }
@@ -200,7 +209,7 @@ nonisolated enum FootageRecipe: String, CaseIterable, Sendable, Codable {
         case .emerge, .solar, .print: return 1
         case .facets: return 2
         case .undertow, .wake, .fringe, .aurora, .shadowplay, .backdrop, .glow: return 3
-        case .palette, .kaleido, .relief: return 2
+        case .poster, .kaleido, .relief: return 2
         }
     }
 
@@ -221,8 +230,12 @@ nonisolated enum FootageRecipe: String, CaseIterable, Sendable, Codable {
     /// (decision F11).
     var shaderGroup: Int {
         if carrier != nil && carrier!.rawValue <= 4 && key == .own && drive == .none { return 1 }
+        if drive.isGlass { return 9 }
         return drive != .none || carrier == nil ? 5 : 3
     }
+
+    /// Every shader variant the app builds (footageVariant values other than 0 and 1).
+    static let fxVariants = [3, 5, 7, 9, 11, 13, 15]
 
     /// Only where a depth map exists (visionOS).
     var needsDepth: Bool { self == .backdrop }
@@ -305,6 +318,7 @@ nonisolated enum VideoComposite {
         case .emerge: return (0.00, 0.65, 0.85)
         case .palette: return (0.45, 0.70, 0.85)
         case .print: return (0.00, 0.75, 0.90)
+        case .poster: return (0.40, 0.70, 0.85)
         }
     }
 
@@ -324,6 +338,7 @@ nonisolated enum VideoComposite {
         case .emerge: return 1.0
         case .palette: return 0.95
         case .print: return 1.0
+        case .poster: return 1.0
         }
     }
 
@@ -390,7 +405,8 @@ nonisolated enum VideoComposite {
             guard mix > 0 else { return 0 }
             var v = 1
             if key != 0 || look > 4.5 { v |= 2 }
-            if drive != 0 || look < 0.5 { v |= 4 }
+            if FootageDrive(rawValue: Int(drive + 0.5))?.isGlass == true { v |= 8 }
+            else if drive != 0 || look < 0.5 { v |= 4 }
             return v
         }
         return bits(u.videoMix, u.videoLook, u.videoDrive, u.videoKey) | bits(u.videoMixB, u.videoLookB, u.videoDriveB, u.videoKeyB)
@@ -403,7 +419,11 @@ nonisolated enum VideoComposite {
         case 1: return "Video"
         case 3: return "VideoKeys"
         case 5: return "VideoDrives"
-        default: return "VideoFX"
+        case 7: return "VideoFX"
+        case 9: return "VideoGlass"
+        case 11: return "VideoKeysGlass"
+        case 13: return "VideoDrivesGlass"
+        default: return "VideoFXGlass"
         }
     }
 

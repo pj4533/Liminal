@@ -7,7 +7,8 @@ film and effects interact.
 Status: built on both platforms (F10-F19): 17 recipes (today's four looks plus 13 interaction modes) picked
 by the weaver, shader, uniforms, DEBUG flag `-LiminalVideoMode`, unit tests. Blind-judge round 0 scored
 (F20); tuning round 1 (F21-F22) made every mode show the film's shape and replaced Ghost film with Facets;
-round-1 clips are rendered for the next judges. Not done yet: the app run in the simulator and on the
+tuning round 2 (F23-F26) made the film a shaped region with its own treatment, replaced Palette with Poster
+and split the glass drives into their own shader group; round-2 clips are rendered for the next judges. Not done yet: the app run in the simulator and on the
 headset (plan 9.5).
 
 ## Tooling and baseline
@@ -270,16 +271,128 @@ headset (plan 9.5).
 - Parity: footage off identical to `main` (max abs diff 0, stereo and mono); the four plain looks
   identical with footage on (0, mono). Builds: macOS, visionOS simulator, visionOS device; 133 unit tests pass.
 
+## Tuning round 2
+
+### F23. Round 1 blind verdicts: louder, but the film still read as a tint
+- Two blind judges scored the 68 round-1 clips; mapped through the private key and averaged over both
+  judges and the 4 clips of each recipe (distinct, interplay, image readable, footage noticeable, beautiful):
+
+  | Recipe | dist | inter | read | notice | beauty |
+  |---|---|---|---|---|---|
+  | Aurora | 3.38 | 3.00 | 4.50 | 2.38 | 4.00 |
+  | Print | 3.38 | 3.00 | 4.00 | 2.88 | 3.38 |
+  | Solar | 2.75 | 2.75 | 4.62 | 2.25 | 3.75 |
+  | Kaleido | 2.62 | 2.62 | 4.38 | 2.12 | 3.38 |
+  | Relief | 2.50 | 2.50 | 4.50 | 2.25 | 3.12 |
+  | Facets | 2.50 | 2.38 | 4.25 | 1.75 | 3.12 |
+  | Backdrop | 2.00 | 2.25 | 4.50 | 2.88 | 3.25 |
+  | Emerge (plain) | 1.75 | 2.12 | 4.62 | 2.38 | 3.12 |
+  | Wake | 1.62 | 1.88 | 4.88 | 2.25 | 3.25 |
+  | Glow | 1.62 | 1.88 | 4.75 | 2.25 | 3.38 |
+  | Shadowplay | 1.50 | 1.88 | 4.75 | 2.25 | 3.25 |
+  | Phantom (plain) | 1.38 | 1.50 | 4.62 | 1.75 | 3.25 |
+  | Window (plain) | 1.25 | 1.50 | 4.88 | 1.62 | 3.25 |
+  | Fringe | 1.25 | 1.50 | 4.88 | 1.62 | 3.25 |
+  | Palette | 1.25 | 1.50 | 4.62 | 1.88 | 3.12 |
+  | Undertow | 1.12 | 1.50 | 5.00 | 1.38 | 3.25 |
+  | Imprint (plain) | 1.00 | 1.25 | 5.00 | 1.38 | 3.25 |
+
+- Still every recipe under 3.5 on at least one axis, but the spread opened up: the clips the judges liked
+  (Kaleido's posterised shard mosaic 5/5/3/4/4, Print's halftone in tone-shaped regions 5/4/4/4/4, Aurora's
+  magenta film regions with the bird recoloured 4/4/5/3/4, Solar's etched texture 4/4/4/2/5) all show the
+  film as a *hard-edged region with its own treatment*. Soft, low-contrast changes (Palette's gradient map,
+  Fringe's thin contours, Undertow's outline bend, Glow's light, Wake) read as "baseline-like" or "a plain
+  blend", and readability (4.0-5.0) still had headroom everywhere.
+- The four plain looks are the shipped baseline and stay bit-identical to `main` (F21): they are the quiet
+  pieces between modes, not candidates for this retune.
+
+### F24. Round 2 changes: the film as a shaped region with its own treatment; Poster replaces Palette
+- Indistinct, replaced: **Palette -> Poster** (new carrier `VIDEO_POSTER` 7, keys group, colour family): the
+  picture posterised into four flat bands of its own colour (chroma raised, every other band pulled toward
+  the tint); the film's figure shifts the band thresholds, so the band edges follow and crawl with the
+  film's shapes. It acts through the picture's own pixels, so it reads on a bright picture where the
+  gradient map was invisible. `-LiminalVideoLook palette` now resolves to Shadowplay (the palette carrier
+  stays: Shadowplay and Kaleido ride it).
+- Indistinct, reworked in place (same recipe ids, new character):
+  - Fringe -> a contour map: iso-lines of the film's soft figure at four levels (anti-aliased with
+    `fwidth`, 2-4 px at 2048) plus its sharp edges, as light (0.95) on the picture's darks and ink (-0.7) on
+    its lights; the colour split along the edges stays.
+  - Glow -> chiaroscuro: the film projected onto the picture as light and shade (relief gain
+    (hl - 0.35) x 1.3, lift hl^2 x 0.45, bloom as before): where the film is dark the picture falls into
+    shadow. Its Phantom carrier share 0.6 -> 0.4.
+  - Undertow: the film's lights also shift the picture behind them along a slowly turning direction (the
+    darks the other way, 0.45 of the maximum), so the whole figure reads as a pane of thick glass with torn
+    edges, not only its outlines; maximum 0.032 -> 0.040 UV (shared cap of the pre-drives); pane light
+    0.5 -> 0.8 plus lift 0.3 on its lit edge; carrier 0.6 -> 0.45. It reads the calmest figure
+    (`figureCalmOf`, 0.8 slow average + 0.2 levelled luma) and its ceilings drop to 0.30 / 0.58 / 0.85: with
+    the round-1 figure and ceilings the romanesco stepped 0.0132 per frame (gate 0.010), now 0.0098.
+  - Wake: moving parts carry light 0.25 -> 0.6 (from 0.08 motion, weighted by the film's tone); carrier
+    0.8 -> 1.0.
+- Kept, pushed toward what the judges liked:
+  - Aurora: two broad regions of rotated hue keyed on the film's figure (smoothstep 0.35-0.65) plus a
+    softer continuous term, hue blend 0.45-0.85, film lights lift 0.22 (dark pictures); the iridescent
+    bands of round 1 were dropped (they made it a Fringe look-alike).
+  - Solar: key 0.36-0.60 on the soft figure, and the fold starts 0.2 k up, so the picture's darks fold into
+    colour and the film's lights show as solarised figures on a dark picture. (First render: on the levelled
+    figure x 1.15 it flashed 0.048-0.053, over the 0.04 photosensitivity gate; now at most 0.026.)
+  - Relief: height from the calmest figure (the old film's scan lines read as "harsh ripple"), 6-texel step
+    x 9, lit side lift 0.25 (x 12 and 0.35 stepped 0.0127 on the romanesco).
+  - Facets: shard slip 0.016 -> 0.022 UV, and the shards inside the figure catch light, each its own (a hash
+    of the shard, relief (h - 0.4) x 0.9 and lift 0.35 h): the figure reads as a lit glass mosaic.
+  - Print: the posterised-band variant (seed >= 0.5, "blurry green glow") replaced by an engraving line
+    screen (lines thicken with the film's darks); dots 82 -> 70 cells, slightly larger; share 1.4 -> 1.5.
+  - Shadowplay: hard-edged silhouettes (smoothstep 0.40-0.60 of the film: shadow theatre); share 1.7 -> 2.2.
+  - Kaleido: the palette ramp's contrast 0.14-0.86 -> 0.28-0.72 (all palette carriers), over a calmer figure
+    for the fold (half slow average); share 1.5 -> 2.2 (2.6 on the levelled luma flashed 0.059).
+  - Backdrop: the keyed Window shows a near two-tone film (0.25-0.75) behind the subject; share 1.6 -> 1.9.
+- Still 13 interaction modes plus the 4 plain looks (17 recipes, all distinct in the round-2 sheet).
+
+### F25. A glass shader group: the drives that move the picture's samples get their own variant
+- What: `VARIANT_GLASS` 8 for Undertow, Fringe and Facets (their pre-drives, the colour split and their
+  composite light); `VARIANT_DRIVES` 4 now holds only the composite drives (Wake, Aurora, Solar, Relief,
+  Glow). `addDrive<kComp, kGlass>` compiles only its group's branches; the lift and relief fields serve both.
+  Fragments 9 (`*VideoGlass`) plus the unions 11, 13, 15 as fallbacks; `FootageRecipe.fxVariants` lists
+  what both renderers and the bench build. The F22 fallback, done.
+- Why: round 2's louder modes put Undertow at 1.20, Facets 1.21 and Fringe 1.17 of `main`'s frame with all
+  drives in one variant; every composite drive paid for the pre-drive code too. After the split the
+  composite drives dropped 4-6 % (Glow 1.11 -> 1.05, Aurora 1.12 -> 1.06, Relief 1.12 -> 1.07, Wake
+  1.11 -> 1.05, Solar 1.09 -> 1.03) and the glass ones 2-5 %.
+- Weaver: a key-group recipe still never meets a drive or glass one (`compatible`: the union has bit 2 and
+  one of 4 / 8). Drives and glass may crossfade (variant 13, which is round 1's drives variant): forbidding
+  that too left a glass piece only plain looks to follow, and the plain share left the 22-42 % band
+  (unit test failed). Rendered frames are unchanged by the split (scores identical to the digit).
+
+### F26. Round 2 measurements (68 clips, same images, films, timeline and level as rounds 0 and 1)
+- Mean difference to footage off per recipe, round 1 -> round 2 (levels, 4 clips each): Aurora 15.6 ->
+  27.2, Solar 7.5 -> 19.9, Glow 10.8 -> 17.6, Wake 7.6 -> 11.8, Facets 5.2 -> 10.2, Shadowplay 8.0 -> 10.2,
+  Backdrop 10.6 -> 12.9, Print 7.9 -> 8.8, Kaleido 5.2 -> 8.0, Undertow 5.1 -> 8.0, Fringe 5.2 -> 7.3,
+  Poster 6.8 (Palette was 6.0), Relief 4.9 -> 5.8; plain looks unchanged (3.8-13.0). Lowest mode clip:
+  Relief with Mennen on the hummingbird, 2.7 levels (gate 2).
+- The overview sheet: the film reads as a shape in most mode clips now (Aurora's hue regions, Glow's
+  projected light, Solar's folded figures, Kaleido's mandala, Facets' shard mosaic, Print's dots and
+  lines, Relief's emboss, Undertow's torn pane, Fringe's contour lines); the picture is the anchor in all 68.
+- Readability: `keep_hog` at least 0.917 (Relief, WhatsIt on the romanesco); gate 0.85.
+- Calm: step p95 at most 0.0098, flash at most 0.034 (gate 0.04). Jerk ratio over 1.8 in 11 clips, all on
+  the dark, nearly still hummingbird (1.80-2.37: Aurora, Backdrop, Fringe, Glow, Kaleido, Solar, Wake): the
+  ratio to an almost still footage-off picture, with absolute steps 0.004-0.008 (F3, as Wake in F22).
+  Accepted; the louder modes do move that picture more, which is what the judges asked for.
+- GPU (Apple M4, mono 2048 x 2048, 5 x 200 frames, against `main`'s frame with the same footage in the same
+  run, noise about +-2 %): Solar 1.03, Glow 1.05, Wake 1.05, Aurora 1.06, Relief 1.07, Poster 1.08,
+  Shadowplay 1.09, Print 1.10, Kaleido 1.13, Fringe 1.14, Undertow 1.15, Facets 1.18. Facets stays over the
+  15 % target (its light costs 1-2 %, noise level; the shard pre-drive is the cost); open.
+- Parity: footage off identical to `main` (max abs diff 0, stereo and mono); the four plain looks identical
+  with footage on (0, mono). Builds: macOS, visionOS simulator, visionOS device; 133 unit tests pass.
+
 ## Open
 
-- Round 1 judges on the new clips (key kept outside the repo); retune what still scores < 3.5.
-- GPU: Undertow 1.17 and Facets 1.19 of today's one-layer frame (F22); split the drives variant if the
-  headset shows it.
+- Round 2 judges on the new clips (key kept outside the repo); retune what still scores < 3.5.
+- GPU: Facets 1.18 of today's one-layer frame (F26); a cheaper shard grid (no rotation) is the next step if
+  the headset shows it.
 - Everything in the plan's sections 3-5 is untested; the per-mode numbers are starting points.
 - Plan section 11: the share of plain looks, a "Footage effects" setting, whether Kaleido and Print are
   wanted at all.
-- Two-mode crossfades cost 1.21-1.23x of today's two-layer frame (F11) for a few seconds; measure on the
-  headset before deciding whether to forbid same-group crossfades.
+- Two-mode crossfades cost 1.21-1.23x of today's two-layer frame (F11) for a few seconds (variant 13 is
+  round 1's drives variant); measure on the headset before deciding whether to forbid them.
 - Blind judges (plan 9.4), a 4 min simulator run logging the recipe sequence and PERF, the headset
   checklist (Undertow and Kaleido comfort, Print aliasing, Backdrop on the relief). The app was launched in
   the visionOS simulator with `-LiminalVideoMode kaleido` (runs, no crash); the Mac app cannot read a

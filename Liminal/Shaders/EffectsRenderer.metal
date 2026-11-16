@@ -205,7 +205,9 @@ static inline half3 restoreChroma(half3 c, half target, half maxGain) {
 // MARK: - Shader variants (template parameter of shadeEye; docs/decisions/footage-fx.md F11)
 constant int VARIANT_FOOTAGE = 1;   // archive footage blend looks (effectsFragment*Video)
 constant int VARIANT_KEYS = 2;      // + keys, Kaleido, Palette, Print (effectsFragment*VideoKeys)
-constant int VARIANT_DRIVES = 4;    // + the drives (effectsFragment*VideoDrives); 7 = everything (*VideoFX)
+constant int VARIANT_DRIVES = 4;    // + the composite drives (effectsFragment*VideoDrives); 7 = keys and drives (*VideoFX)
+constant int VARIANT_GLASS = 8;     // + the drives that move the picture's samples: Undertow, Fringe, Facets
+                                    // (*VideoGlass; 11, 13, 15 the crossfade fallbacks; round 2, decision F25)
 
 // MARK: - Uniforms
 
@@ -287,22 +289,23 @@ constant int VIDEO_WINDOW = 3;
 [[maybe_unused]] constant int VIDEO_EMERGE = 4;
 constant int VIDEO_PALETTE = 5;
 constant int VIDEO_PRINT = 6;
+constant int VIDEO_POSTER = 7;   // round 2: the picture posterised in bands the film shifts (Poster)
 
 // FootageDrive raw values (VideoComposite.swift): the effect the film steers.
-constant int FD_UNDERTOW = 1;   // the film's figure gradient displaces the picture's UVs
-constant int FD_FRINGE = 2;     // the film's edges split the picture's colours
+constant int FD_UNDERTOW = 1;   // the film's figure bends and shifts the picture's UVs (glass)
+constant int FD_FRINGE = 2;     // the film as a contour map; its edges split the picture's colours (glass)
 constant int FD_WAKE = 3;       // the film's motion feeds the trails and ghost taps
 constant int FD_AURORA = 4;     // the film's tones rotate the hue waves
 constant int FD_SOLAR = 5;      // the film's highlights fold the tone curve
 constant int FD_RELIEF = 6;     // the film embossed into the picture
-constant int FD_GLOW = 7;       // the film's highlights light the bloom
+constant int FD_GLOW = 7;       // the film projected as light and shade; its highlights swell the bloom
 constant int FD_FACETS = 8;     // the film's figure shatters the picture into flat shards (round 1)
 // FootageKey raw values: where the film may show.
 constant int FK_SHADOW = 1;     // the picture's shadows (key amount > 0) or highlights (< 0)
 constant int FK_BACKDROP = 2;   // far depth, behind the subject (visionOS: a depth map is bound)
 constant int FK_KALEIDO = 3;    // the film's own UVs folded into 6 (> 0) or 8 (< 0) wedges
 // Maxima at drive amount 1 (the CPU scales the amount by intensity and the clarity cycle).
-constant float FD_UNDERTOW_MAX = 0.032;   // UV (the water itself is 0.028-0.058 at the default intensity)
+constant float FD_UNDERTOW_MAX = 0.040;   // UV (the water itself is 0.028-0.058 at the default intensity)
 constant float FD_FRINGE_MAX = 0.030;     // UV (today's radial fringing reaches about 0.01 at the frame edge)
 constant half FD_AURORA_MAX = 0.42h;      // hue turns per unit of film tone offset
 constant half FD_RELIEF_MAX = 1.0h;
@@ -583,6 +586,9 @@ static inline half figureOf(half4 v) { return mix(v.g, v.r, 0.7h); }
 // The calmer figure for what moves or lights the picture itself (Undertow, Relief, Glow): the levelled luma
 // steps at the film's frame rate, which read as jitter on a dark, still picture.
 static inline half figureSoftOf(half4 v) { return mix(v.g, v.r, 0.4h); }
+// The calmest figure, for the glass that moves the picture's own samples (Undertow, round 2: a detailed picture
+// behind a pane that jumps at the film's frame rate stepped over the 0.010 gate).
+static inline half figureCalmOf(half4 v) { return mix(v.g, v.r, 0.2h); }
 
 // The footage rides part of the picture's warp (per piece, 0.35-0.85: it swims with the water but stays
 // legible as film) and drifts slowly on its own (less for the full-frame looks). uvA is the stage-A uv
@@ -678,7 +684,7 @@ static inline void addPreDrive(thread float2 &uvOffset, thread float2 &chroma, V
         // Each shard also slips by its own small offset (a hash of the cell), so it shows a shifted piece of
         // the picture: broken glass, visible even on a smooth ground, with no shading pass of its own.
         float hj = fract(dot(cc, float2(0.6180340, 0.4142136)) * 7.31) * 6.2831853;
-        uvOffset += ((cp - uvA) * 0.7 + float2(cos(hj), sin(hj)) * 0.016) * float(m);
+        uvOffset += ((cp - uvA) * 0.75 + float2(cos(hj), sin(hj)) * 0.022) * float(m);
         return;
     }
     float2 vuv = footageUV<false>(uvA, texCoord, L, u, fuv, drift);   // no recipe folds and drives at once
@@ -689,12 +695,17 @@ static inline void addPreDrive(thread float2 &uvOffset, thread float2 &chroma, V
         // glass catches a slowly turning light along those shapes, so the film's figure reads as a pane.
         // A 5-texel stencil on the figure (round 1; round 0's 8 texels of the slow average was a haze).
         float2 px = float2(5.0 / 960.0, 5.0 / 720.0);
-        half f0 = figureSoftOf(v);
-        float2 gr = float2(float(figureSoftOf(videoTexture.sample(vs, vuv + float2(px.x, 0.0))) - f0),
-                           float(figureSoftOf(videoTexture.sample(vs, vuv + float2(0.0, px.y))) - f0)) * 5.0;
+        half f0 = figureCalmOf(v);
+        float2 gr = float2(float(figureCalmOf(videoTexture.sample(vs, vuv + float2(px.x, 0.0))) - f0),
+                           float(figureCalmOf(videoTexture.sample(vs, vuv + float2(0.0, px.y))) - f0)) * 5.0;
         float gl = length(gr);
         gr *= min(gl, 1.0) / max(gl, 1.0e-3);
-        uvOffset += gr * (float(a) * FD_UNDERTOW_MAX * (0.7 + 0.3 * float(saturate(v.b * 5.0h))));
+        // Round 2 (F24): the film's lights also shift the picture behind them along a slowly turning
+        // direction (its darks the other way), so the whole figure reads as a pane of thick glass with
+        // torn edges, not only its outlines.
+        float sa = L.seed * 6.2831853 + fmod(u.time * 0.04, 6.2831853);
+        float2 tone = float2(cos(sa), sin(sa)) * float(smoothstep(0.25h, 0.75h, f0) - 0.5h) * 0.45;
+        uvOffset += (gr * (0.7 + 0.3 * float(saturate(v.b * 5.0h))) + tone) * (float(a) * FD_UNDERTOW_MAX);
     } else {
         // Prismatic outlines in the picture's colours along the film's contours.
         float2 r = uvA - 0.5;
@@ -710,6 +721,7 @@ static inline void addPreDrive(thread float2 &uvOffset, thread float2 &chroma, V
 // Adds one layer's drive to fd (docs/plans/footage-fx.md 3). Reads the film's figure (mostly the levelled,
 // frame-blended luma: cuts and flashes are already softened there, as for the blend looks), its motion and
 // its edges. Round 1 (decision F21): every drive also shows the film's shape, not only its tone.
+template <bool kComp, bool kGlass>
 static inline void addDrive(thread FootageDrive &fd, FootageTap tp, float2 uvA, VideoLayerParams L,
                             texture2d<half> videoTexture, constant EffectsUniforms &u) {
     int drive = int(L.drive + 0.5);
@@ -719,44 +731,69 @@ static inline void addDrive(thread FootageDrive &fd, FootageTap tp, float2 uvA, 
     half fig = figureOf(tp.v);
     half mot = saturate(tp.v.b * 5.0h);
     float seedA = L.seed * 6.2831853;
-    if (drive == FD_UNDERTOW) {
+    if (kGlass && drive == FD_UNDERTOW) {
         // The pane catches a slowly turning light along the film's shapes (the bend itself is a pre-drive),
         // through Relief's light: no value stays live across the picture's samples and no field of its own.
+        // Round 2: a stronger pane light, and its lit edge carries light of its own (dark pictures).
         float la = seedA + fmod(u.time * 0.05, 6.2831853);
         float2 ld = float2(cos(la), sin(la)) * float2(5.0 / 960.0, 5.0 / 720.0);
-        half h = figureSoftOf(tp.v) - figureSoftOf(videoTexture.sample(vs, tp.vuv + ld));
-        fd.relief += clamp(h * 6.0h, -1.0h, 1.0h) * a * 0.5h;
-    } else if (drive == FD_WAKE) {
-        // Where the film moves the picture lingers and smears, and the moving parts carry a little light.
+        half h = clamp((figureSoftOf(tp.v) - figureSoftOf(videoTexture.sample(vs, tp.vuv + ld))) * 7.0h, -1.0h, 1.0h);
+        fd.relief += h * a * 0.8h;
+        fd.lift += max(h, 0.0h) * a * 0.3h;
+    } else if (kComp && drive == FD_WAKE) {
+        // Where the film moves the picture lingers and smears, and the moving parts carry light, so the
+        // film's movement is drawn into the picture as glowing trails (round 2: 0.25 -> 0.6, from 0.1 motion).
         fd.wake += mot * a;
-        fd.lift += smoothstep(0.15h, 0.7h, mot) * a * 0.25h;
-    } else if (drive == FD_FRINGE) {
-        // The film's contours drawn as thin light in the picture's colours (their colour split is a pre-drive).
-        // Light on the picture's darks (the lift) and ink on its lights (a negative relief: it darkens in
-        // proportion to what is there), so the contours read on any picture without a field of their own.
-        half e = smoothstep(0.08h, 0.45h, tp.v.a) * a;
-        fd.lift += e * 0.4h;
-        fd.relief -= e * 0.45h;
-    } else if (drive == FD_AURORA) {
-        // The film's tones as bands of rotated hue, with iridescent contour lines along its levels, so the
-        // figure is drawn in hue; luma is restored by the hue stage.
-        half off = fig - 0.5h;
-        half bands = sin(fig * 18.85h);
-        fd.hue += (off + 0.10h * bands) * a * FD_AURORA_MAX * 1.4h;
-        fd.hueBlend += a * min(abs(off) * 2.5h + 0.35h, 1.0h) * 0.6h;
-    } else if (drive == FD_SOLAR) {
-        fd.solar += smoothstep(0.42h, 0.66h, fig) * a;
-    } else if (drive == FD_RELIEF) {
+        fd.lift += smoothstep(0.08h, 0.5h, mot) * (0.45h + 0.55h * fig) * a * 0.6h;
+    } else if (kGlass && drive == FD_FRINGE) {
+        // Round 2 (F24): the film drawn as a contour map, iso-lines of its soft figure at four levels,
+        // as light on the picture's darks (the lift) and ink on its lights (a negative relief), plus its
+        // sharp edges (their colour split is a pre-drive). The lines crawl as the film moves.
+        half x = figureSoftOf(tp.v) * 4.0h + 0.5h;
+        half dist = abs(fract(x) - 0.5h) / max(fwidth(x), 0.004h);
+        half e = max(1.0h - smoothstep(1.6h, 4.5h, dist), smoothstep(0.10h, 0.40h, tp.v.a)) * a;
+        fd.lift += e * 0.95h;
+        fd.relief -= e * 0.7h;
+    } else if (kComp && drive == FD_AURORA) {
+        // Round 2: the film's lights and darks as two broad regions of rotated hue (the liked "magenta
+        // regions"), a softer continuous term between, and the film's lights carry a little light of their
+        // own, so the figure shows on a dark picture; luma is otherwise restored by the hue stage.
+        half reg = smoothstep(0.35h, 0.65h, fig);
+        fd.hue += ((reg - 0.5h) * 0.75h + (fig - 0.5h) * 0.5h) * a * FD_AURORA_MAX;
+        fd.hueBlend += a * (0.45h + 0.4h * abs(reg - 0.5h) * 2.0h);
+        fd.lift += reg * a * 0.22h;
+    } else if (kComp && drive == FD_SOLAR) {
+        fd.solar += smoothstep(0.36h, 0.60h, figureSoftOf(tp.v)) * a;   // calmer figure: the fold flashed
+    } else if (kComp && drive == FD_RELIEF) {
         // A height difference along a slowly turning light: the film pressed into the picture's surface.
+        // Round 2: a smoother height (more slow average: the old film's scan lines read as noise), a wider
+        // step, and the lit side carries light so the relief shows on a dark picture.
         float la = seedA + fmod(u.time * 0.03, 6.2831853);
-        float2 ld = float2(cos(la), sin(la)) * float2(4.0 / 960.0, 4.0 / 720.0);
-        half h = figureSoftOf(tp.v) - figureSoftOf(videoTexture.sample(vs, tp.vuv + ld));
-        fd.relief += clamp(h * 14.0h, -1.0h, 1.0h) * a * FD_RELIEF_MAX;
-    } else if (drive == FD_GLOW) {
-        // The film's lights light the picture from inside, in its own colours, and its bloom swells there.
-        half hl = smoothstep(0.40h, 0.90h, figureSoftOf(tp.v));
-        fd.glow += hl * a * 0.5h;   // round 1: the bloom's per-frame noise flickered at 3.5x
-        fd.lift += hl * a * 0.7h;
+        float2 ld = float2(cos(la), sin(la)) * float2(6.0 / 960.0, 6.0 / 720.0);
+        half h = clamp((figureCalmOf(tp.v) - figureCalmOf(videoTexture.sample(vs, tp.vuv + ld))) * 9.0h, -1.0h, 1.0h);
+        fd.relief += h * a * FD_RELIEF_MAX;
+        fd.lift += max(h, 0.0h) * a * 0.25h;
+    } else if (kComp && drive == FD_GLOW) {
+        // Round 2 (F24): the film is projected onto the picture as light and shade (chiaroscuro): where it
+        // is bright the picture is lit and blooms, where it is dark the picture falls into shadow. Through
+        // the relief's light (a gain on the processed colour) and the lift: no field of its own.
+        half hl = smoothstep(0.30h, 0.80h, figureSoftOf(tp.v));
+        fd.glow += hl * a * 0.5h;
+        fd.relief += (hl - 0.35h) * a * 1.3h;
+        fd.lift += hl * hl * a * 0.45h;
+    } else if (kGlass && drive == FD_FACETS) {
+        // Round 2: the shards inside the film's figure catch light, each its own (a hash of the shard), so
+        // the figure reads as a mosaic of lit glass (the cut itself is a pre-drive). Same grid as there.
+        float cs;
+        float sn = sincos(L.seed * 3.1415927 + 0.35, cs);
+        float2 p = (uvA - 0.5) * float2(1.5, 1.0) * FD_FACET_CELLS;
+        p = float2(p.x * cs - p.y * sn, p.x * sn + p.y * cs);
+        float2 cell = floor(p);
+        float2 cc = cell + ((p.x - cell.x) > (p.y - cell.y) ? float2(0.667, 0.333) : float2(0.333, 0.667));
+        half hj = half(fract(dot(cc, float2(0.6180340, 0.4142136)) * 7.31));
+        half on = (L.seed < 0.5 ? smoothstep(0.40h, 0.60h, fig) : 1.0h - smoothstep(0.38h, 0.58h, fig)) * a;
+        fd.relief += (hj - 0.4h) * on * 0.9h;
+        fd.lift += hj * on * 0.35h;
     }
 }
 
@@ -785,7 +822,7 @@ template <int kVideo>
 static inline half3 compositeVideo(half3 c, FootageTap tp, VideoLayerParams L, half key, constant EffectsUniforms &u) {
     constexpr bool kFX = (kVideo & VARIANT_KEYS) != 0;
     int look = int(L.look + 0.5);
-    if ((kVideo & (VARIANT_KEYS | VARIANT_DRIVES)) != 0 && look == VIDEO_NONE) return c;
+    if ((kVideo & (VARIANT_KEYS | VARIANT_DRIVES | VARIANT_GLASS)) != 0 && look == VIDEO_NONE) return c;
     float seedA = L.seed * 6.2831853;
     float t = u.time;
     int keyId = int(L.key + 0.5);
@@ -816,18 +853,23 @@ static inline half3 compositeVideo(half3 c, FootageTap tp, VideoLayerParams L, h
         // A breathing, flow-edged region near the centre (or the key's area alone).
         float r0 = 0.40 + 0.04 * sin(fmod(t * 0.21, 6.2831853) + seedA);
         half wm = keyed ? 1.0h : half(1.0 - smoothstep(r0 - 0.18, r0 + 0.05, length(d) + rag));
+        // Round 2: a keyed Window (Backdrop) shows the film as a near two-tone figure behind the subject.
+        if (kFX && keyed && look == VIDEO_WINDOW) return mix(c, mix(shade, tint, smoothstep(0.25h, 0.75h, luma)), edge * m);
         if (!kFX || look == VIDEO_WINDOW) return mix(c, mix(shade, tint, luma), wm * edge * m);
         if (look == VIDEO_PALETTE) {
             half3 cs = restoreChroma(c, min(chromaOf(c) * 1.4h + 0.03h, 1.0h), 2.0h);
-            // Round 1: more film contrast in the gradient map, so the film's shapes read on a bright picture
-            // where shade -> picture -> tint are close.
-            half l2 = smoothstep(0.14h, 0.86h, luma);
+            // Round 2: near two-tone film (round 1: 0.14-0.86), so the film's shapes read as figures on a
+            // bright picture where shade -> picture -> tint are close.
+            // Kaleido's fold reads a calmer figure (half slow average): its hard ramp over the folded film flashed.
+            half l2 = smoothstep(0.28h, 0.72h, keyId == FK_KALEIDO ? smoothstep(0.03h, 0.97h, mix(v.g, v.r, 0.5h)) : luma);
             if (keyId == FK_SHADOW) {
-                // Shadowplay: in the picture's shadows the film is light (its whites glow in the tint), in
-                // its highlights it is ink (its blacks sink to the shade); the polarity eases continuously.
+                // Shadowplay: shadow theatre. In the picture's shadows the film is a lit silhouette (its whites
+                // in the tint), in its highlights it is ink (its blacks sink to the shade); the polarity eases
+                // continuously. Round 2: hard-edged (0.40-0.60) so the figures read as cut shapes.
                 half w = half(saturate(L.keyAmt * 0.5 + 0.5));
-                half3 lit = mix(cs, tint, l2);
-                half3 inked = mix(shade, cs, l2);
+                half l3 = smoothstep(0.40h, 0.60h, luma);
+                half3 lit = mix(cs, tint, l3);
+                half3 inked = mix(shade, cs, l3);
                 return mix(c, mix(inked, lit, w), edge * m);
             }
             // The film gradient-mapped through the picture: shade -> the picture's own colour (chroma
@@ -839,22 +881,43 @@ static inline half3 compositeVideo(half3 c, FootageTap tp, VideoLayerParams L, h
         // picture's darkest colour. The grid lives in the footage's coordinates, so it swims with the film.
         half ink;
         half s = 1.0h - smoothstep(0.05h, 0.95h, mix(v.g, v.r, 0.7h));
+        float ca = 0.8660254, sa = 0.5;   // 30 degrees
+        float2 p = (tp.vuv - 0.5) * float2(1.333, 1.0) * 70.0;
+        p = float2(p.x * ca - p.y * sa, p.x * sa + p.y * ca);
         if (L.seed < 0.5) {
-            float ca = 0.8660254, sa = 0.5;   // 30 degrees
-            float2 p = (tp.vuv - 0.5) * float2(1.333, 1.0) * 82.0;
-            p = float2(p.x * ca - p.y * sa, p.x * sa + p.y * ca);
             float dist = length(fract(p) - 0.5);
-            float rad = 0.66 * sqrt(float(s));
+            float rad = 0.68 * sqrt(float(s));
             float aa = max(fwidth(dist), 0.02);
             ink = half(1.0 - smoothstep(rad - aa, rad + aa, dist));
         } else {
-            half q = s * 3.0h;
-            ink = (floor(q) + smoothstep(0.35h, 0.65h, fract(q))) / 3.0h;
+            // Round 2: an engraving line screen (lines thicken with the film's darks, and bend with them)
+            // replaced the posterised bands, which read as a plain blur (F24).
+            float y = p.y + 0.35 * float(s);
+            float dist = abs(fract(y) - 0.5);
+            float aa = max(fwidth(y), 0.02);
+            ink = half(1.0 - smoothstep(0.5 * float(s) - aa, 0.5 * float(s) + aa, dist));
         }
         // Round 1: the ink contrasts with what it lands on (the picture's darkest colour on its lights, a
         // lifted tint on its darks), so the print shows on a dark picture as well as a bright one.
         half3 inkCol = mix(min(tint * 0.85h + 0.12h, 1.0h), shade * 0.8h, smoothstep(0.12h, 0.40h, dot(c, LUMA_W)));
         return mix(c, inkCol, ink * wm * edge * m);
+    }
+    if (kFX && look == VIDEO_POSTER) {
+        // Poster (round 2, F24; replaced Palette): the picture posterised into four flat bands of its own
+        // colour, chroma raised, every other band pulled toward the tint; the film's figure shifts the band
+        // thresholds, so the band edges follow and crawl with the film's shapes. Inside the flow-edged
+        // region; the picture's forms survive as the bands.
+        float r0 = 0.46 + 0.04 * sin(fmod(t * 0.21, 6.2831853) + seedA);
+        half wm = half(1.0 - smoothstep(r0 - 0.20, r0 + 0.06, length(d) + rag));
+        half y = dot(c, LUMA_W);
+        half q = saturate(y * 0.85h + (mix(v.g, v.r, 0.6h) - 0.5h) * 0.7h + 0.08h) * 4.0h;
+        half bnd = floor(q) + smoothstep(0.42h, 0.58h, fract(q));
+        half ly = bnd * 0.25h;
+        half3 cs = restoreChroma(c, min(chromaOf(c) * 1.5h + 0.06h, 1.0h), 2.0h);
+        half3 pc = min(cs * ((ly + 0.03h) / (y + 0.03h)), 1.0h);
+        half odd = abs(fract(bnd * 0.5h) - 0.5h) * 2.0h;   // 1 on even bands, 0 on odd ones
+        pc = mix(pc, min(tint * (ly + 0.25h), 1.0h), odd * 0.5h);
+        return mix(c, pc, wm * edge * m);
     }
     // Emerge: the footage takes the frame as a duotone; the picture stays as a quarter of the colour.
     half3 duo = mix(shade, tint, luma);
@@ -864,10 +927,10 @@ static inline half3 compositeVideo(half3 c, FootageTap tp, VideoLayerParams L, h
 // Stage B: stereo parallax through the final colour. Everything that differs per eye lives here.
 // kVideo: 0 = no footage (the plain fragments: exactly the shader without footage, bit-identical frames,
 // no cost: docs/decisions/archive-video.md); 1 = footage blend looks only (effectsFragmentVideo /
-// effectsFragmentStereoVideo: today's four looks at today's cost); 2 = footage interaction modes
-// (effectsFragmentVideoFX / effectsFragmentStereoVideoFX: drives, keys, Palette and Print). The renderers
-// bind 2 only while a layer has a drive, a key or a new carrier (VideoComposite.needsFX): every hook adds
-// registers that all footage frames would otherwise pay for (docs/decisions/footage-fx.md).
+// effectsFragmentStereoVideo: today's four looks at today's cost); | 2 keys and the new carriers (Kaleido,
+// Shadowplay, Backdrop, Poster, Print), | 4 the composite drives, | 8 the glass drives (Undertow, Fringe,
+// Facets). The renderers bind the bits a frame's layers need (VideoComposite.footageVariant): every hook adds
+// registers that all frames of its variant pay for (docs/decisions/footage-fx.md F11, F25).
 template <int kVideo>
 static inline half4 shadeEye(
     WarpOut warp,
@@ -887,8 +950,10 @@ static inline half4 shadeEye(
     constexpr sampler texSampler(address::clamp_to_edge, filter::linear);
     constexpr bool kAny = (kVideo & VARIANT_FOOTAGE) != 0;
     constexpr bool kKeys = (kVideo & VARIANT_KEYS) != 0;      // keys, Kaleido's fold, Palette and Print
-    constexpr bool kDrives = (kVideo & VARIANT_DRIVES) != 0;  // the drives' hooks
-    constexpr bool kFX = kKeys || kDrives;
+    constexpr bool kDrives = (kVideo & VARIANT_DRIVES) != 0;  // the composite drives' hooks
+    constexpr bool kGlass = (kVideo & VARIANT_GLASS) != 0;    // Undertow, Fringe, Facets (pre-drives + light)
+    constexpr bool kLight = kDrives || kGlass;                // the lift and relief fields both groups use
+    constexpr bool kFX = kKeys || kLight;
     float2 uv = warp.uv;
 
     // === 0. ARCHIVE FOOTAGE PRE-DRIVES (docs/plans/footage-fx.md 2.2) ===
@@ -906,7 +971,7 @@ static inline half4 shadeEye(
                uniforms.videoAspectB, uniforms.videoWarpB, uniforms.videoDriveB, uniforms.videoDriveAmtB,
                uniforms.videoKeyB, uniforms.videoKeyAmtB };
     }
-    if (kDrives) {
+    if (kGlass) {
         float2 off = float2(0.0);
         if (hasA && isPreDrive(la)) addPreDrive(off, fdChroma, la, videoTexture, warp.uv, texCoord, uniforms);
         if (hasB && isPreDrive(lb)) addPreDrive(off, fdChroma, lb, videoTextureB, warp.uv, texCoord, uniforms);
@@ -939,7 +1004,7 @@ static inline half4 shadeEye(
         float k = uniforms.txAmount * uniforms.txEnv;
         chromOffset += float2(cos(a), sin(a)) * (0.35 * k) + float2(0.5 - uv.y, uv.x - 0.5) * (0.7 * k);
     }
-    if (kDrives) {
+    if (kGlass) {
         // Fringe: the film's contours part the picture's red and blue (green, the luma detail, stays).
         float cl = length(fdChroma);
         if (cl > 1.0e-6) chromOffset += fdChroma * (min(cl, FD_FRINGE_MAX) / cl);
@@ -987,17 +1052,17 @@ static inline half4 shadeEye(
     FootageDrive fd = {};
     if (kAny && hasA) {
         FootageTap ta = tapFootage<kKeys>(kFX ? warp.uv : uv, texCoord, warp.field, videoTexture, la, uniforms);
-        if (kDrives) addDrive(fd, ta, warp.uv, la, videoTexture, uniforms);
+        if (kLight) addDrive<kDrives, kGlass>(fd, ta, warp.uv, la, videoTexture, uniforms);
         half key = kKeys ? footageKey(la, color.rgb, uv, depthTexture) : 1.0h;
         color.rgb = compositeVideo<kVideo>(color.rgb, ta, la, key, uniforms);
     }
     if (kAny && hasB) {
         FootageTap tb = tapFootage<kKeys>(kFX ? warp.uv : uv, texCoord, warp.field, videoTextureB, lb, uniforms);
-        if (kDrives) addDrive(fd, tb, warp.uv, lb, videoTextureB, uniforms);
+        if (kLight) addDrive<kDrives, kGlass>(fd, tb, warp.uv, lb, videoTextureB, uniforms);
         half key = kKeys ? footageKey(lb, color.rgb, uv, depthTexture) : 1.0h;
         color.rgb = compositeVideo<kVideo>(color.rgb, tb, lb, key, uniforms);
     }
-    if (kDrives && fd.lift > 0.001h) {
+    if (kLight && fd.lift > 0.001h) {
         // Light the film carries (Glow's lights, Fringe's contours, Wake's moving parts), screened in the
         // picture's own colours lifted toward the tint, so it reads on a dark picture too.
         half3 tint = half3(half(uniforms.videoTintR), half(uniforms.videoTintG), half(uniforms.videoTintB));
@@ -1007,8 +1072,10 @@ static inline half4 shadeEye(
     if (kDrives && fd.solar > 0.001h) {
         // Solar: where the film is bright the picture's tone curve folds over (the Solarize transition's
         // curve, channels a little out of phase); where it is dark the picture is plain.
+        // Round 2 (F24): the curve starts a little up (0.2 k), so the picture's darks fold into colour too and
+        // the film's lights show as solarised figures on a dark picture.
         half k = min(fd.solar, 1.0h);
-        half3 ph = color.rgb * (3.14159h * 2.0h + k * half3(0.0h, 1.0h, 2.0h));
+        half3 ph = (color.rgb + 0.2h * k) * (3.14159h * 2.0h + k * half3(0.0h, 1.0h, 2.0h));
         color.rgb = mix(color.rgb, 0.5h - 0.5h * cos(ph), 0.9h * k);
     }
 
@@ -1144,7 +1211,7 @@ static inline half4 shadeEye(
     }
 
     // Relief: the film's height field lights and shades the processed colour (hue and saturation stay).
-    if (kDrives && abs(fd.relief) > 0.001h) {
+    if (kLight && abs(fd.relief) > 0.001h) {
         // Round 1: the lit side also gains a little light of its own, so the relief shows on a dark picture.
         half rl = clamp(fd.relief, -0.7h, 0.7h);
         currentColor = clamp(currentColor * (1.0h + rl) + half3(0.10h) * max(rl, 0.0h), 0.0h, 1.0h);
@@ -1293,7 +1360,8 @@ fragment half4 effectsFragmentVideo(
 
 // Footage interaction-mode variants of effectsFragmentVideo (docs/plans/footage-fx.md): bound only while a
 // footage layer needs them (VideoComposite.footageVariant): Keys (keys, Kaleido, Palette, Print), Drives
-// (the drives over the blend looks or none), FX (both, during a crossfade between the two kinds).
+// (the composite drives over the blend looks or none), Glass (Undertow, Fringe, Facets: the drives that move
+// the picture's samples, round 2), and their unions (fallbacks, during a crossfade between two kinds).
 #define FOOTAGE_FRAGMENT(NAME, V) \
 fragment half4 NAME( \
     VertexOut in [[stage_in]], \
@@ -1315,6 +1383,10 @@ fragment half4 NAME( \
 FOOTAGE_FRAGMENT(effectsFragmentVideoKeys, 3)
 FOOTAGE_FRAGMENT(effectsFragmentVideoDrives, 5)
 FOOTAGE_FRAGMENT(effectsFragmentVideoFX, 7)
+FOOTAGE_FRAGMENT(effectsFragmentVideoGlass, 9)
+FOOTAGE_FRAGMENT(effectsFragmentVideoKeysGlass, 11)
+FOOTAGE_FRAGMENT(effectsFragmentVideoDrivesGlass, 13)
+FOOTAGE_FRAGMENT(effectsFragmentVideoFXGlass, 15)
 
 // MARK: - Stereo MRT Fragment Shader (visionOS)
 // Both eyes in one pass: the distortion field (about 125 of about 175 trig per eye-pixel)
@@ -1404,3 +1476,7 @@ fragment StereoEyesOut NAME( \
 FOOTAGE_STEREO_FRAGMENT(effectsFragmentStereoVideoKeys, 3)
 FOOTAGE_STEREO_FRAGMENT(effectsFragmentStereoVideoDrives, 5)
 FOOTAGE_STEREO_FRAGMENT(effectsFragmentStereoVideoFX, 7)
+FOOTAGE_STEREO_FRAGMENT(effectsFragmentStereoVideoGlass, 9)
+FOOTAGE_STEREO_FRAGMENT(effectsFragmentStereoVideoKeysGlass, 11)
+FOOTAGE_STEREO_FRAGMENT(effectsFragmentStereoVideoDrivesGlass, 13)
+FOOTAGE_STEREO_FRAGMENT(effectsFragmentStereoVideoFXGlass, 15)
