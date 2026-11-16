@@ -4,7 +4,8 @@ Decision log for the archive footage workstream. Plan with all numbers: `docs/pl
 Request: old (1950s-60s, mostly black and white, newsreel / trippy / odd) Internet Archive film fades into
 the scene now and then, under the same effects as the picture; its sound enters later, very gently.
 
-Status: built and reviewed (A24-A25). Phases 1-5 built: fetch and cache, footage in the shader on both platforms, moments, the film's
+Status: built and reviewed (A24-A25); scheduling replaced by always-on pieces (A27, supersedes the moment
+timing of A12, the sound timing of A15 and the "Footage amount" setting of A20-A21). Phases 1-5 built: fetch and cache, footage in the shader on both platforms, moments, the film's
 sound (A14-A19) and the "Archive Footage" settings card (A20-A22). Phase 6 (floating screen) is not built
 (A23).
 
@@ -317,3 +318,51 @@ sound (A14-A19) and the "Archive Footage" settings card (A20-A22). Phase 6 (floa
 ## A26 (2026-11-15): "medical" terms excluded
 
 - The review found "Confidential File: Medical Quacks" passing the filters. Medical subjects don't suit a relaxing art piece, so "medical", "medicine", "quack", "quacks" and "patient" are added to the exclusions in ArchiveCatalog.swift and scripts/archive-curate.py (kept in step). The bundled seeds contain no such titles.
+
+## A27 (2026-11-15): footage always present, as a stream of crossfading pieces
+
+- Why: on the headset the user loved the footage but saw one or two clips at "Often". Asked for: while footage is on,
+  some film should always show, subtly, as small pieces injected often from the cache, with the sound coming and
+  going and the effects varying; the setting should be about how fast it changes, not how often it appears.
+- Model (`Liminal/Archive/FootageWeaver.swift`, pure and seeded, replaces `VideoMomentDirector`): pieces of a few
+  seconds from random points of cached clips (LRU-weighted, never a clip already on screen when another is cached).
+  Each piece crossfades into the next over a few seconds; the outgoing envelope is the exact complement of the
+  incoming smoothstep, so their sum is 1 throughout (never a cut, never a gap). Per piece: clip, segment, rate
+  0.6-0.85, look (never twice in a row; Emerge only at intensity >= 0.4 and pieces <= 16 s), warp 0.35-0.85 (share of
+  the picture's warp the film rides, was a fixed 0.6), level 0.42-0.58 of the look's ceiling, and for 30 % of pieces
+  of 14 s or more a slow sin^2 swell of +0.15-0.38 peaking mid-piece.
+- "Change speed" (replaces "Footage amount"): Slow 20-30 s pieces / 5-7 s crossfades, Medium (default) 12-20 / 3.5-5,
+  Fast 8-12 / 2.5-3.5. Key `archive.changeSpeed`; the old `archive.amount` is deleted on launch (it does not map
+  onto a speed). `-LiminalVideoForce` now means Fast.
+- Start: the first piece is prepared as soon as a clip is cached and fades in over 5 s. Prefetch starts 1 s after
+  footage starts on an empty cache (5 s otherwise, was 10 s); the cold-start skip threshold is 25 MB (was 40), at
+  most 8 skips. Sim cold start: first clip (4.3 MB) cached and first piece prepared 13 s after Play.
+- Softened "never fight": the crossfade waits for a running image transition (at most 6 s); a new picture dips the
+  mix to 60 % (was 55 %) and the dip now falls smoothly over the first 30 % of the transition instead of stepping;
+  loud music (energy 0.7-0.95) eases the footage to 70 % over about 3 s. Intensity ceilings and the clarity-cycle
+  term are unchanged.
+- Decoding: two `VideoFrameSource`s (slots 0/1, alternating). The next piece's decoder starts 3 s before its
+  crossfade, with its media clock anchored to the piece (`Segment.anchorUptime`, first frame shown at once), so the
+  render loop never waits; a piece is held (1 s at a time) until its decoder has a frame, and dropped after 10 s
+  (the current piece holds). After the crossfade the old decoder is stopped: at most two readers and six 960x720
+  stage textures (16 MB).
+- Shader: two layers. Layer A = the old uniforms + `videoWarp` (texture 7), layer B = seven appended `*B` uniforms
+  (texture 8); each composite is skipped at mix 0, and the slot-to-layer mapping is fixed, so no reordering pop.
+  The plain fragments are unchanged. Bench (Apple M4, 2048², 5 trials): footage off vs `main` parity identical
+  (max abs diff 0), GPU B/A 0.99-1.02; one layer vs `main` max diff 1/255 (warp now a uniform), B/A 1.00-1.02; two
+  layers (crossfade) vs one layer on `main`, mono, B/A 1.06-1.09.
+- Sound: independent of the picture's presence. A piece brings its sound with chance 0.5 / 0.45 / 0.4 (slow /
+  medium / fast) only if the clip has audio, its whole span fits the clip and the previous sound ended 6 s before;
+  so never two at once and always a silent piece between. Begin 1.5 s into the piece's fade in, end 2 s past its
+  planned change, smoothstep fades of 42 % of the span (at most 10 s) each, same chain, trim and gain as A14-A17
+  (about 19 dB under the pad). Anchored to the piece's origin, so a held piece stays in sync.
+- Cache: unchanged policy (3 fast, then one per 90 s to 12, 1 GB); a full cache replaces one clip every 12 pieces
+  (at most one download per 3 minutes); every clip on screen (both slots) is protected from eviction and Clear.
+- Verified: 128 unit tests (weaver over 150 seeds x 3 speeds x 900 s: presence never below the floor after the first
+  fade, lengths and crossfades per speed, complementary crossfades, sound gaps, transition wait, dropped decoder,
+  clip end). visionOS sim, 4 min from an empty cache: 14 pieces from 4 films, presence 0.42-0.72 (mean 0.51) after the
+  first fade, render-loop mix 0.14-0.54 and never 0, 4 pieces with sound (fades 6.3-8 s), 79.1 fps mean.
+  `perf-run.sh` 120 s with footage on: 79.5 fps, interval p95 13.31 ms, 0.04 dropped per 5 s (one frame, during an
+  image transition), 11 piece changes with no slow frame.
+- Open: the level band and swell sizes are first guesses for the user's eye on the headset; Imprint stays faint on
+  busy pictures; device GPU cost of two layers during crossfades is unmeasured.
