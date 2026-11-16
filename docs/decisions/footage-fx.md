@@ -8,8 +8,10 @@ Status: built on both platforms (F10-F19): 17 recipes (today's four looks plus 1
 by the weaver, shader, uniforms, DEBUG flag `-LiminalVideoMode`, unit tests. Blind-judge round 0 scored
 (F20); tuning round 1 (F21-F22) made every mode show the film's shape and replaced Ghost film with Facets;
 tuning round 2 (F23-F26) made the film a shaped region with its own treatment, replaced Palette with Poster
-and split the glass drives into their own shader group; round-2 clips are rendered for the next judges. Not done yet: the app run in the simulator and on the
-headset (plan 9.5).
+and split the glass drives into their own shader group. Final verification (F27-F28): visionOS 27.2
+Simulator 3 min run (11 recipes in 19 pieces, no back-to-back repeat, 79.4 fps, no slow frame at a piece
+change), macOS run, parity, GPU A/B, judge-set gates, builds and 133 tests. Not done: round-2 blind judges
+and the headset (plan 9.5).
 
 ## Tooling and baseline
 
@@ -383,18 +385,53 @@ headset (plan 9.5).
 - Parity: footage off identical to `main` (max abs diff 0, stereo and mono); the four plain looks identical
   with footage on (0, mono). Builds: macOS, visionOS simulator, visionOS device; 133 unit tests pass.
 
+## Final verification
+
+### F27. The app with the weaver choosing: visionOS Simulator and macOS
+- visionOS 27.2 Simulator (Apple Vision Pro), `scripts/perf-run.sh` 180 s after a 15 s warm-up with
+  `-LiminalVideoForce YES -LiminalVideoFile <WhatsIt clip> -LiminalTestImage <fixtures> -LiminalImageInterval 15
+  -LiminalHideControls YES`, 60 s of it recorded (`simctl io recordVideo`). The weaver's sequence from the log
+  (19 pieces, 17 retired): undertow, phantom, relief, window, poster, backdrop, window, glow, undertow, glow,
+  facets, solar, window, undertow, glow, wake, imprint, poster, backdrop. 11 of the 17 recipes in 3.3 min,
+  no recipe twice in a row, plain looks 5 of 19 (26 %, inside the weaver's 22-42 % band).
+- PERF, footage on: 79.4 fps mean, interval p95 13.28 ms, 0.39 slow frames per 5 s. Footage off, same flags,
+  90 s: 79.1 fps, p95 13.29 ms, 0.28 per 5 s. Every slow frame in both runs falls on the 15 s image change
+  (01:19:07, :22, :37, :52 ...; the pre-existing image-change frame of T39), none at any of the 17 piece
+  changes. The on run also carried the screen recording for 60 s. A27's 79.5 fps (120 s, default image
+  interval) is matched; the extra slow frames against A27's 0.04 come from the 15 s image interval.
+- The recording shows the film reading as a figure (a man in a suit, hands) through Backdrop, Window and
+  Glow over the hummingbird and ferris wheel pictures, Facets' shards and Solar's folded colour over the
+  romanesco; the picture is the anchor throughout. Nothing new in the log's errors and faults.
+- macOS (Debug, `-LiminalVideoForce YES`, real cached archive clips because the sandboxed Mac app cannot
+  read a scratch file): 5 pieces from 5 films in the first minute (shadowplay, poster, phantom, glow, emerge), 59.5 fps
+  mean, METAL PERF GPU 2.9 ms average, no slow frame logged.
+
+### F28. Parity, GPU, gates, builds
+- Footage off against `main`'s `EffectsRenderer.metal` (`shader-bench --compare`): max abs diff 0, PSNR inf,
+  stereo MRT and mono, 10 frames each.
+- GPU A/B, Apple M4, mono 2048 x 2048, 5 x 200 frames interleaved, B = branch with the recipe pinned, A =
+  `main` with the same footage frame (its blend variant): footage off 1.01 (noise, spread 6 %; identical
+  frames), Window 1.00, Phantom 1.00, Solar 1.03, Backdrop 1.04, Glow 1.05, Wake 1.05, Aurora 1.06, Poster
+  1.07, Relief 1.08, Shadowplay 1.09, Print 1.10, Kaleido 1.14, Fringe 1.14, Undertow 1.15, Facets 1.17. Same
+  as F26 within the noise; Facets is the one recipe over +15 % (open).
+- `scripts/fx-judge-set.py` (footage off, 180 frames): PASS at 0.25 / 0.5 / 1.0 (hog loss mean 0.065 / 0.091
+  / 0.122, strain p90 max 0.50 / 0.80 / 1.18), unchanged.
+- Builds: macOS, visionOS Simulator, visionOS device (no signing): succeeded. 133 unit tests pass, 0 fail.
+- Highlight reel for the user (session scratchpad `ffx/highlights.mp4`, 37.7 s, 7.8 MB): the strongest
+  round-2 clip of each of the 13 modes by mean change with readability kept, 2.9 s each, labelled.
+  The simulator recording is `ffx/final/sim.mp4` (61 s, 19 MB) with `ffx/final/sim-sheet.jpg`.
+
 ## Open
 
 - Round 2 judges on the new clips (key kept outside the repo); retune what still scores < 3.5.
-- GPU: Facets 1.18 of today's one-layer frame (F26); a cheaper shard grid (no rotation) is the next step if
+- GPU: Facets 1.17-1.18 of today's one-layer frame (F26); a cheaper shard grid (no rotation) is the next step if
   the headset shows it.
 - Everything in the plan's sections 3-5 is untested; the per-mode numbers are starting points.
 - Plan section 11: the share of plain looks, a "Footage effects" setting, whether Kaleido and Print are
   wanted at all.
 - Two-mode crossfades cost 1.21-1.23x of today's two-layer frame (F11) for a few seconds (variant 13 is
   round 1's drives variant); measure on the headset before deciding whether to forbid them.
-- Blind judges (plan 9.4), a 4 min simulator run logging the recipe sequence and PERF, the headset
-  checklist (Undertow and Kaleido comfort, Print aliasing, Backdrop on the relief). The app was launched in
-  the visionOS simulator with `-LiminalVideoMode kaleido` (runs, no crash); the Mac app cannot read a
-  scratch footage file from its sandbox.
+- Round-2 blind judges (plan 9.4) and the headset checklist (Undertow and Kaleido comfort, Print
+  aliasing, Backdrop on the relief, 90 Hz with Facets and two-mode crossfades). The simulator run with the
+  weaver choosing is done (F27); the Mac app cannot read a scratch footage file from its sandbox.
 - The faint drives of F19 are addressed in F21; Facets is the faintest mode on the dark picture with high-key film.
