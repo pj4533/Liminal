@@ -28,6 +28,10 @@ Psychedelic and experimental footage and vintage drug education films get extra 
 
 Large films can join the rotation. Liminal prefers smaller playable versions when available. For larger downloads, it tries to keep an excerpt of up to four minutes and removes the temporary source afterward.
 
+During archive playback, new images can borrow objects, materials, and shapes from a grayscale frame of the playing film. Liminal keeps its usual psychedelic prompt and palette and asks the model to place those details in a new scene without people or faces. The main model still targets 3:2 at 2K. Image generation can start before a film is ready, in which case it uses the usual text prompt. Cache-only mode continues to reuse saved images.
+
+Liminal can sample a fresh excerpt from a cached film before generating the next image. If the image is ready near its reveal and the planned excerpt still fits, the film joins the reveal. Otherwise Liminal can revisit an unused start near the reference time while the image is on screen. Normal footage keeps playing if neither match is available.
+
 ## Controls
 
 | Control | Effect |
@@ -42,6 +46,7 @@ Large films can join the rotation. Liminal prefers smaller playable versions whe
 | **Debug effect** | Debug visualization of the effect (macOS panel) |
 | **Cache only** | Skip generation and recycle cached images |
 | **New images per hour / day** | Spending cap on Gemini image generation (default 20 / 50); past it, cached images are shown |
+| **Reset Generation Counts** | Starts the rolling hourly and daily usage counts at zero. Future generations still count toward the configured limits. |
 | **Clear All Images** | Wipes every cached image after confirmation and restarts generation |
 | **Archive footage** | Old film always woven subtly into the scene (on by default); turning it off fades picture and sound out in 2 s |
 | **Change speed** | Slow / Medium / Fast: a new piece of film drifts in every 20-30 / 12-20 / 8-12 s (default Medium) |

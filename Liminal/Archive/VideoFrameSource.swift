@@ -33,6 +33,7 @@ nonisolated final class VideoFrameSource: @unchecked Sendable {
         /// Host uptime at which the picture is at `start` (nil: when decoding begins). A piece is prepared
         /// ahead of its crossfade with an anchor in the near future or past, so picture and sound stay in step.
         var anchorUptime: Double? = nil
+        var pieceIndex: Int? = nil
     }
 
     let device: MTLDevice
@@ -60,8 +61,18 @@ nonisolated final class VideoFrameSource: @unchecked Sendable {
     private var loops = 0
     private var generation: UInt64 = 0
 
-    private struct Published { var texture: MTLTexture?; var mediaTime: Double; var ended: Bool }
-    private let published = OSAllocatedUnfairLock(initialState: Published(texture: nil, mediaTime: 0, ended: false))
+    struct Reference: Sendable {
+        let url: URL
+        let mediaTime: Double
+        let pieceIndex: Int
+    }
+
+    private struct Published {
+        var texture: MTLTexture?
+        var reference: Reference?
+        var ended = false
+    }
+    private let published = OSAllocatedUnfairLock(initialState: Published())
 
     init?(device: MTLDevice) {
         guard let cq = device.makeCommandQueue() else { return nil }
@@ -86,6 +97,14 @@ nonisolated final class VideoFrameSource: @unchecked Sendable {
     /// The newest finished stage texture (nil when nothing is playing). Lock read only.
     func latest() -> MTLTexture? { published.withLock { $0.texture } }
 
+    /// The raw source location of the latest frame that finished its video pass.
+    func reference(for pieceIndex: Int) -> Reference? {
+        published.withLock { frame in
+            guard !frame.ended, frame.reference?.pieceIndex == pieceIndex else { return nil }
+            return frame.reference
+        }
+    }
+
     /// True once the segment has played to its end (the service fades out early).
     var ended: Bool { published.withLock { $0.ended } }
 
@@ -108,7 +127,7 @@ nonisolated final class VideoFrameSource: @unchecked Sendable {
         request.withLock { $0 &+= 1 }
         queue.async {
             self.teardown()
-            self.published.withLock { $0 = Published(texture: nil, mediaTime: 0, ended: false) }
+            self.published.withLock { $0 = Published() }
         }
     }
 
@@ -127,7 +146,7 @@ nonisolated final class VideoFrameSource: @unchecked Sendable {
         hasHistory = false
         framesDecoded = 0
         loops = 0
-        published.withLock { $0.ended = false }
+        published.withLock { $0 = Published() }
         guard openReader(s) else { return }
         playStart = s.anchorUptime ?? Self.now()
         lastFrameTime = playStart
@@ -262,12 +281,13 @@ nonisolated final class VideoFrameSource: @unchecked Sendable {
         enc.dispatchThreadgroups(groups, threadsPerThreadgroup: tg)
         enc.endEncoding()
         let gen = generation
+        let reference = s.pieceIndex.map { Reference(url: s.url, mediaTime: mediaTime, pieceIndex: $0) }
         cb.addCompletedHandler { [weak self] _ in
             _ = keepAlive   // the CVMetalTexture (and its pixel buffer) live until the GPU is done
             guard let self else { return }
             self.queue.async {
                 guard gen == self.generation, self.segment != nil else { return }
-                self.published.withLock { $0.texture = out; $0.mediaTime = mediaTime }
+                self.published.withLock { $0.texture = out; $0.reference = reference }
             }
         }
         cb.commit()

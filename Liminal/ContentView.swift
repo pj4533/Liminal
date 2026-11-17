@@ -390,6 +390,7 @@ struct VisualDisplayView: View {
     private func postMood(for image: PlatformImage, imageChanged: Bool) {
         // Atomic read: the two @Published mirrors (image, metadata) have no ordering guarantee (C10).
         let metadata = visualEngine.imageBuffer.loadCurrentWithMetadata().metadata
+        ArchiveFootageService.shared.displayedImage(metadata)
         let mood = VisualMoodBuilder.mood(metadata: metadata,
                                           image: image.cgImageRepresentation.map { ImageFraming.coverCrop($0) })
         music.setVisualMood(mood)
@@ -481,6 +482,7 @@ struct VisualDisplayView: View {
             } else {
                 // Image was cleared (e.g., cache cleared) - reset transition manager
                 transitionManager.reset()
+                ArchiveFootageService.shared.displayedImage(nil)
             }
         }
         // nextImage handler removed - preloading not needed with new morph architecture

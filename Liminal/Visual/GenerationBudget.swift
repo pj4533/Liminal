@@ -84,6 +84,14 @@ nonisolated final class GenerationBudget: @unchecked Sendable {
         }
     }
 
+    /// Start fresh for both rolling counts, which share one ledger.
+    func resetUsage() {
+        lock.withLockUnchecked {
+            stamps.removeAll()
+            defaults.removeObject(forKey: Keys.ledger)
+        }
+    }
+
     func usage(now: Date = Date()) -> Usage {
         let hourLimit = perHour, dayLimit = perDay
         return lock.withLockUnchecked {

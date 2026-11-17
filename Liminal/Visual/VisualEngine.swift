@@ -146,6 +146,7 @@ final class VisualEngine: ObservableObject {
 
     /// Manually request the next image
     func advance() {
+        ArchiveFootageService.shared.queuedImage(nil)
         imageQueue.advance()
     }
 
@@ -169,9 +170,13 @@ final class VisualEngine: ObservableObject {
     // MARK: - Private
 
     private func startScheduledAdvances() {
-        scheduledTimer = Timer.scheduledTimer(withTimeInterval: scheduledInterval, repeats: true) { [weak self] _ in
+        let interval = scheduledInterval
+        ArchiveFootageService.shared.expectNextImage(after: interval)
+        scheduledTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                self?.imageQueue.advance()
+                guard let self, self.scheduledTimer != nil else { return }
+                ArchiveFootageService.shared.expectNextImage(after: interval)
+                self.imageQueue.advance()
             }
         }
     }

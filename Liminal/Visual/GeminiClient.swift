@@ -38,6 +38,14 @@ nonisolated enum GeminiError: LocalizedError, Sendable {
         }
     }
 
+    var isReferenceRejection: Bool {
+        switch self {
+        case .http(400, _): return !isImageConfigRejection
+        case .noImage: return true
+        default: return false
+        }
+    }
+
     /// 400 complaining about imageConfig/imageSize (some models reject the size field).
     var isImageConfigRejection: Bool {
         guard case .http(400, let message) = self else { return false }
@@ -66,7 +74,11 @@ nonisolated final class GeminiClient: Sendable {
     // MARK: - Wire types
 
     private struct GenerateContentRequest: Encodable {
-        struct Part: Encodable { let text: String }
+        struct Part: Encodable {
+            struct InlineData: Encodable { let mimeType: String; let data: String }
+            var text: String?
+            var inlineData: InlineData?
+        }
         struct Content: Encodable { let parts: [Part] }
         struct ImageConfig: Encodable {
             let aspectRatio: String?
@@ -101,28 +113,37 @@ nonisolated final class GeminiClient: Sendable {
 
     // MARK: - Public API
 
+    static func requestBody(prompt: String, aspectRatio: String?, imageSize: String?,
+                            referenceJPEG: Data? = nil) throws -> Data {
+        let imageConfig = (aspectRatio == nil && imageSize == nil)
+            ? nil
+            : GenerateContentRequest.ImageConfig(aspectRatio: aspectRatio, imageSize: imageSize)
+        var parts = [GenerateContentRequest.Part(text: prompt)]
+        if let referenceJPEG {
+            parts.append(.init(inlineData: .init(mimeType: "image/jpeg", data: referenceJPEG.base64EncodedString())))
+        }
+        return try JSONEncoder().encode(GenerateContentRequest(
+            contents: [.init(parts: parts)],
+            generationConfig: .init(responseModalities: ["IMAGE"], imageConfig: imageConfig)
+        ))
+    }
+
     /// Generate one image. `imageSize` nil leaves the field out (for models that reject it).
     @concurrent
-    func generate(prompt: String, model: String, aspectRatio: String?, imageSize: String?) async throws -> GeneratedImageData {
+    func generate(prompt: String, model: String, aspectRatio: String?, imageSize: String?,
+                  referenceJPEG: Data? = nil) async throws -> GeneratedImageData {
         let apiKey = EnvironmentService.shared.geminiKey
         guard EnvironmentService.shared.hasValidCredentials else { throw GeminiError.missingAPIKey }
         guard let url = URL(string: "\(baseURL)/\(model):generateContent") else {
             throw GeminiError.http(status: 404, message: "bad model name \(model)")
         }
 
-        let imageConfig = (aspectRatio == nil && imageSize == nil)
-            ? nil
-            : GenerateContentRequest.ImageConfig(aspectRatio: aspectRatio, imageSize: imageSize)
-        let body = GenerateContentRequest(
-            contents: [.init(parts: [.init(text: prompt)])],
-            generationConfig: .init(responseModalities: ["IMAGE"], imageConfig: imageConfig)
-        )
-
         var request = URLRequest(url: url, timeoutInterval: timeout)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
-        request.httpBody = try JSONEncoder().encode(body)
+        request.httpBody = try Self.requestBody(prompt: prompt, aspectRatio: aspectRatio, imageSize: imageSize,
+                                                referenceJPEG: referenceJPEG)
 
         LMLog.gemini.info("🌐 [Gemini] \(model) \(aspectRatio ?? "-") \(imageSize ?? "-"): \(prompt.prefix(80))...")
         let start = Date()

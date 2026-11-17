@@ -785,6 +785,7 @@ struct ImmersiveDomeView: View {
     @MainActor
     private func postVisualMood(metadata: ImageMetadata?, image: CGImage, imageChanged: Bool,
                                 musicDuration: Double = VisualMoodBuilder.crossfadeDuration) {
+        ArchiveFootageService.shared.displayedImage(metadata)
         // Twice the swap time: the conductor lands its chord change at half of it, i.e. on the swap.
         if imageChanged { music.imageDidChange(transitionDuration: musicDuration) }
         let music = self.music

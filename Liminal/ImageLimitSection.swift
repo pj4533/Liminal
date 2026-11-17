@@ -9,6 +9,7 @@ import SwiftUI
 
 struct ImageLimitSection: View {
     @ObservedObject var settings: SettingsService
+    @State private var usageRefreshStart = Date.now
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -22,13 +23,25 @@ struct ImageLimitSection: View {
                     .monospacedDigit()
                     .wrapping()
             }
-            TimelineView(.periodic(from: .now, by: 15)) { context in
+            TimelineView(.periodic(from: usageRefreshStart, by: 15)) { context in
                 let u = GenerationBudget.shared.usage(now: context.date)
                 Text("Generated \(u.lastHour) in the last hour, \(u.lastDay) in the last 24 hours")
                     .font(.callout.monospacedDigit())
                     .foregroundStyle(.secondary)
                     .wrapping()
             }
+            Button {
+                GenerationBudget.shared.resetUsage()
+                usageRefreshStart = .now
+            } label: {
+                Label("Reset Generation Counts", systemImage: "arrow.counterclockwise")
+            }
+            .buttonStyle(.bordered)
+
+            Text("Starts both rolling counts at zero. Future generations still count toward your configured limits.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .wrapping()
             Text("Each new image is a paid Gemini API call. When a limit is reached, cached images are shown until it resets.")
                 .font(.caption)
                 .foregroundStyle(.secondary)

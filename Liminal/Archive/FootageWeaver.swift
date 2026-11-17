@@ -235,7 +235,7 @@ nonisolated struct FootageWeaver {
     }
 
     mutating func tick(elapsed t: Double, conditions c: Conditions, hasClip: Bool,
-                       ready: (Int) -> Bool) -> Decision {
+                       matchingImageTransition: Bool = false, ready: (Int) -> Bool) -> Decision {
         // 1. A piece that has fully faded out is retired.
         if let i = pieces.firstIndex(where: { ($0.end ?? .infinity) <= t }) {
             let p = pieces.remove(at: i)
@@ -256,7 +256,10 @@ nonisolated struct FootageWeaver {
             let isReady = ready(last.slot)
             let since = holdSince ?? t
             let waited = t - since
-            if !isReady && waited >= timing.maxReadyWait {
+            // Give a speculative pair only a brief grace period. The current film
+            // stays visible and the next ordinary pick can take over if it fails.
+            let readyWait = matchingImageTransition ? min(timing.maxReadyWait, 1.5) : timing.maxReadyWait
+            if !isReady && waited >= readyWait {
                 pieces.removeLast()
                 if var cur = pieces.last {
                     cur.fadeOutStart = nil
@@ -267,7 +270,8 @@ nonisolated struct FootageWeaver {
                 holdSince = nil
                 return .drop(slot: last.slot)
             }
-            let transitionHold = pieces.count == 2 && c.transitionRunning && waited < timing.maxTransitionWait
+            let transitionHold = pieces.count == 2 && c.transitionRunning && !matchingImageTransition
+                && waited < timing.maxTransitionWait
             if !isReady || transitionHold {
                 holdSince = since
                 postponeNewest(by: 1)
@@ -363,14 +367,15 @@ nonisolated struct FootageWeaver {
     /// Start with a curated title when available, and follow any regular title with a
     /// curated one. Read the current piece so a dropped decoder does not count as a turn.
     func chooseClipForPlayback(_ clips: [ArchiveClip], rng: inout MusicRNG) -> ArchiveClip? {
-        let onScreen = Set(pieces.map(\.clipID))
+        Self.chooseClip(eligibleClips(clips), avoiding: Set(pieces.map(\.clipID)), rng: &rng)
+    }
+
+    func eligibleClips(_ clips: [ArchiveClip]) -> [ArchiveClip] {
         if current.map({ ArchiveSeedList.pinnedIDs.contains($0.clipID) }) != true {
             let curated = clips.filter { ArchiveSeedList.pinnedIDs.contains($0.id) }
-            if let choice = Self.chooseClip(curated, avoiding: onScreen, rng: &rng) {
-                return choice
-            }
+            if !curated.isEmpty { return curated }
         }
-        return Self.chooseClip(clips, avoiding: onScreen, rng: &rng)
+        return clips
     }
 
     /// Which cached clip a piece comes from: least recently used clips are likelier, never one of the

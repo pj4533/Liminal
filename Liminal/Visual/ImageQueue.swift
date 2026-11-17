@@ -258,6 +258,8 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
         await task?.value
 
         // 3-5. Buffers, internal state, UI mirrors, prompt history.
+        ArchiveFootageService.shared.queuedImage(nil)
+        ArchiveFootageService.shared.displayedImage(nil)
         imageBuffer.clear()
         await state.reset()
         director.reset()
@@ -335,6 +337,7 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
             await MainActor.run { self.currentMetadata = item.metadata }
         }
         let pending = imageBuffer.pendingCount()
+        if pending == 1 { ArchiveFootageService.shared.queuedImage(item.metadata) }
         await MainActor.run { self.queuedCount = pending }
         #else
         if imageBuffer.loadCurrent() == nil {
@@ -348,6 +351,7 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
             await state.append(item)
         }
         let queued = await state.count()
+        if queued == 1 { ArchiveFootageService.shared.queuedImage(item.metadata) }
         await MainActor.run { self.queuedCount = queued }
         #endif
     }
@@ -461,8 +465,11 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
             while !Task.isCancelled {
                 guard let self else { return }
 
-                // Backpressure: generation rate follows display rate.
-                if self.imageBuffer.hasCurrent(), await self.pendingCount() >= self.config.targetPendingCount {
+                // Keep only the next image ready during footage playback so a reference
+                // reaches the screen sooner. Elsewhere keep the usual generation cushion.
+                let footage = ArchiveFootageService.shared
+                let target = footage.isPlayingForImageGeneration ? 1 : self.config.targetPendingCount
+                if self.imageBuffer.hasCurrent(), await self.pendingCount() >= target {
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
                     continue
                 }
@@ -491,7 +498,12 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
                     await MainActor.run { self.statusMessage = msg }
                     LMLog.visual.info("💰 [Budget] \(msg, privacy: .public)")
                     await self.recycleOneFromCache()
-                    try? await Task.sleep(nanoseconds: 30_000_000_000)
+                    // Recheck during the cache-recycling pause so resetting the counts can
+                    // resume normal generation immediately when the queue has room.
+                    for _ in 0..<30 {
+                        guard !Task.isCancelled, GenerationBudget.shared.check() != .allowed else { break }
+                        try? await Task.sleep(for: .seconds(1))
+                    }
                     continue
                 }
 
@@ -501,12 +513,15 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
 
                 await MainActor.run { self.isGenerating = true }
                 do {
-                    let generated = try await self.requestImage(spec: spec, model: model)
+                    let reference = await footage.imageReference()
+                    try Task.checkCancellation()
+                    let (generated, provenance) = try await self.requestImage(spec: spec, model: model, reference: reference)
                     GenerationBudget.shared.record()
                     router.recordSuccess(model: model)
                     await MainActor.run { self.isGenerating = false; self.statusMessage = nil }
                     guard !Task.isCancelled else { break }
-                    await self.handleGenerated(generated, spec: spec, clearGeneration: clearGeneration)
+                    await self.handleGenerated(generated, spec: spec, archiveReference: provenance,
+                                               clearGeneration: clearGeneration)
                 } catch let error as GeminiError {
                     await MainActor.run { self.isGenerating = false }
                     router.recordFailure(model: model, error: error, now: Date())
@@ -523,19 +538,64 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
         }
     }
 
-    /// Calls Gemini; a fallback model that rejects imageSize is retried once without it.
-    private func requestImage(spec: PromptSpec, model: String) async throws -> GeneratedImageData {
-        let size = config.imageSize(for: model)
-        do {
-            return try await gemini.generate(prompt: spec.text, model: model, aspectRatio: config.aspectRatio, imageSize: size)
-        } catch let error as GeminiError where error.isImageConfigRejection && model != config.primaryModel {
-            LMLog.visual.warning("🔄 [Pipeline] \(model) rejected imageSize, retrying without it")
-            return try await gemini.generate(prompt: spec.text, model: model, aspectRatio: config.aspectRatio, imageSize: nil)
+    /// Keep Liminal's subject, transformation and palette, with optional details borrowed from a film.
+    static func generationPrompt(for spec: PromptSpec, usesArchiveFrame: Bool) -> String {
+        let frameDirection = usesArchiveFrame ? """
+
+
+        Use the attached archive frame only as a source of small visual motifs. Pick one or two
+        recognizable inanimate objects, materials, or shapes and weave them into the psychedelic
+        transformation described above. Invent a different setting and composition. Ignore the
+        source scene, camera angle, grayscale, colors, grain, blur, borders, captions, and logos.
+        Keep the vivid palette and crisp detail of the original art direction. If the frame has
+        no useful objects, use a surface pattern or abstract shape.
+        """ : ""
+        return spec.text + frameDirection + """
+
+
+        Hard constraint for the finished image: No humans, faces, or facial features. Exclude
+        portraits, human bodies, hands, human silhouettes, mannequins, and face-like patterns,
+        including in reflections or in the background. Use objects, environments, natural forms,
+        or abstract shapes. When a prompt or reference suggests a person or face, omit it entirely.
+        """
+    }
+
+    /// Keep size and aspect independent of the reference dimensions. A fallback
+    /// model that rejects imageSize is retried once without it.
+    private func requestImage(spec: PromptSpec, model: String, reference: ArchiveFootageService.ImageReference?)
+        async throws -> (GeneratedImageData, ImageMetadata.ArchiveReference?) {
+        func generate(_ prompt: String, jpeg: Data?) async throws -> GeneratedImageData {
+            let size = config.imageSize(for: model)
+            do {
+                return try await gemini.generate(prompt: prompt, model: model, aspectRatio: config.aspectRatio,
+                                                 imageSize: size, referenceJPEG: jpeg)
+            } catch let error as GeminiError where error.isImageConfigRejection && model != config.primaryModel {
+                try Task.checkCancellation()
+                LMLog.visual.warning("🔄 [Pipeline] \(model) rejected imageSize, retrying without it")
+                return try await gemini.generate(prompt: prompt, model: model, aspectRatio: config.aspectRatio,
+                                                 imageSize: nil, referenceJPEG: jpeg)
+            }
         }
+
+        if let reference {
+            let prompt = Self.generationPrompt(for: spec, usesArchiveFrame: true)
+            LMLog.visual.info("📼🖼️ Generating from \(reference.clipID, privacy: .public) at \(reference.sourceTime, format: .fixed(precision: 2), privacy: .public)s, \(reference.width)x\(reference.height)")
+            do {
+                let generated = try await generate(prompt, jpeg: reference.jpeg)
+                return (generated, .init(clipID: reference.clipID, sourceTime: reference.sourceTime,
+                                         width: reference.width, height: reference.height, prompt: prompt,
+                                         plannedStart: reference.plannedStart, cachedSince: reference.cachedSince))
+            } catch let error as GeminiError where error.isReferenceRejection {
+                try Task.checkCancellation()
+                LMLog.visual.warning("📼🖼️ Reference request declined; falling back to the standard image prompt")
+            }
+        }
+        return (try await generate(Self.generationPrompt(for: spec, usesArchiveFrame: false), jpeg: nil), nil)
     }
 
     /// Trim, measure, store, upscale if needed, queue. Drops the image if a clear happened meanwhile.
-    private func handleGenerated(_ generated: GeneratedImageData, spec: PromptSpec, clearGeneration: UInt64) async {
+    private func handleGenerated(_ generated: GeneratedImageData, spec: PromptSpec,
+                                 archiveReference: ImageMetadata.ArchiveReference?, clearGeneration: UInt64) async {
         guard clearGeneration == store.clearGeneration else {
             LMLog.visual.info("🗑️ [Pipeline] dropping image generated before Clear All Images")
             return
@@ -557,7 +617,8 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
             mimeType: wasTrimmed ? "image/jpeg" : generated.mimeType,
             dominantColors: analysis.colors,
             measuredBrightness: analysis.brightness,
-            measuredSaturation: analysis.saturation
+            measuredSaturation: analysis.saturation,
+            archiveReference: archiveReference
         )
 
         do {

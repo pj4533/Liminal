@@ -25,4 +25,16 @@ nonisolated struct ImageMetadata: Codable, Sendable, Equatable {
     let measuredBrightness: Double
     /// 0...1 mean saturation.
     let measuredSaturation: Double
+    /// Set when a real film frame served as the subject reference.
+    var archiveReference: ArchiveReference? = nil
+
+    nonisolated struct ArchiveReference: Codable, Sendable, Equatable {
+        let clipID: String
+        let sourceTime: Double
+        let width: Int
+        let height: Int
+        let prompt: String
+        var plannedStart: Double? = nil
+        var cachedSince: Date? = nil
+    }
 }

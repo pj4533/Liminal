@@ -11,6 +11,35 @@ import CoreGraphics
 import Testing
 @testable import Liminal
 
+struct ArchiveReferenceRequestTests {
+    @Test func filmReferenceUsesImageInputAndKeepsTheConfiguredOutputSize() throws {
+        let spec = sampleSpec()
+        let prompt = ImageQueue.generationPrompt(for: spec, usesArchiveFrame: true)
+        let reference = Data([0xff, 0xd8, 0xff, 0xd9])
+        let body = try GeminiClient.requestBody(prompt: prompt, aspectRatio: "3:2", imageSize: "2K",
+                                                referenceJPEG: reference)
+        let json = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        let contents = try #require(json["contents"] as? [[String: Any]])
+        let parts = try #require(contents.first?["parts"] as? [[String: Any]])
+        let inline = try #require(parts.last?["inlineData"] as? [String: String])
+        let settings = try #require(json["generationConfig"] as? [String: Any])
+        let image = try #require(settings["imageConfig"] as? [String: String])
+
+        #expect(parts.first?["text"] as? String == prompt)
+        #expect(prompt.hasPrefix(spec.text))
+        #expect(prompt.contains("only as a source of small visual motifs"))
+        #expect(prompt.contains("Invent a different setting and composition"))
+        #expect(prompt.contains("No humans, faces, or facial features"))
+        let fallback = ImageQueue.generationPrompt(for: spec, usesArchiveFrame: false)
+        #expect(fallback.hasPrefix(spec.text))
+        #expect(fallback.contains("No humans, faces, or facial features"))
+        #expect(!fallback.contains("attached archive frame"))
+        #expect(inline["mimeType"] == "image/jpeg")
+        #expect(inline["data"].flatMap { Data(base64Encoded: $0) } == reference)
+        #expect(image["aspectRatio"] == "3:2" && image["imageSize"] == "2K")
+    }
+}
+
 // MARK: - Helpers
 
 private func makeImage(width: Int, height: Int, draw: (CGContext) -> Void) -> CGImage {

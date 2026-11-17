@@ -50,6 +50,25 @@ struct GenerationBudgetTests {
         #expect(b.check(now: t0.addingTimeInterval(2)) != .allowed)
     }
 
+    @Test func resetClearsRollingUsageAndRetainsLimitsAcrossRelaunch() {
+        let d = makeDefaults(perHour: 1, perDay: 2)
+        let b = GenerationBudget(defaults: d)
+        let now = Date(timeIntervalSince1970: 4_000_000)
+        b.record(now: now.addingTimeInterval(-7200))
+        b.record(now: now)
+        #expect(b.check(now: now) != .allowed)
+
+        b.resetUsage()
+        let empty = GenerationBudget.Usage(lastHour: 0, lastDay: 0, perHour: 1, perDay: 2)
+        #expect(b.usage(now: now) == empty)
+        #expect(GenerationBudget(defaults: d).usage(now: now) == empty)
+        #expect(b.check(now: now) == .allowed)
+
+        b.record(now: now)
+        #expect(b.usage(now: now).lastDay == 1)
+        #expect(b.check(now: now) != .allowed)
+    }
+
     @Test func zeroMeansNoNewImages() {
         let b = GenerationBudget(defaults: makeDefaults(perHour: 0, perDay: 0))
         #expect(b.check(now: Date(timeIntervalSince1970: 4_000_000)) != .allowed)
