@@ -360,6 +360,19 @@ nonisolated struct FootageWeaver {
         return options[rng.weighted(weights)]
     }
 
+    /// Start with a curated title when available, and follow any regular title with a
+    /// curated one. Read the current piece so a dropped decoder does not count as a turn.
+    func chooseClipForPlayback(_ clips: [ArchiveClip], rng: inout MusicRNG) -> ArchiveClip? {
+        let onScreen = Set(pieces.map(\.clipID))
+        if current.map({ ArchiveSeedList.pinnedIDs.contains($0.clipID) }) != true {
+            let curated = clips.filter { ArchiveSeedList.pinnedIDs.contains($0.id) }
+            if let choice = Self.chooseClip(curated, avoiding: onScreen, rng: &rng) {
+                return choice
+            }
+        }
+        return Self.chooseClip(clips, avoiding: onScreen, rng: &rng)
+    }
+
     /// Which cached clip a piece comes from: least recently used clips are likelier, never one of the
     /// clips on screen when another exists.
     static func chooseClip(_ clips: [ArchiveClip], avoiding: Set<String>, rng: inout MusicRNG) -> ArchiveClip? {

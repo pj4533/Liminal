@@ -2,7 +2,7 @@
 //  ArchiveClipStore.swift
 //  Liminal
 //
-//  Disk cache of downloaded footage (docs/plans/archive-video.md 1.4): whole files in
+//  Disk cache of downloaded footage (docs/plans/archive-video.md 1.4): films and excerpts in
 //  Application Support/Liminal/ArchiveFootage/ with an index.json. Capped at 1 GB and 12 clips,
 //  least recently used evicted first, never the clip on screen and never below 3 clips.
 //
@@ -54,7 +54,8 @@ nonisolated enum ArchiveCachePolicy {
         var total = clips.reduce(Int64(0)) { $0 + $1.bytes } + incoming
         var count = clips.count + (incoming > 0 ? 1 : 0)
         var out: [String] = []
-        let order = clips.filter { !protected.contains($0.id) }.sorted { $0.recency < $1.recency }
+        let keep = protected.union(ArchiveSeedList.pinnedIDs)
+        let order = clips.filter { !keep.contains($0.id) }.sorted { $0.recency < $1.recency }
         for c in order {
             guard total > capBytes || count > maxClips else { break }
             guard clips.count - out.count + (incoming > 0 ? 1 : 0) > minKeep else { break }
@@ -68,7 +69,8 @@ nonisolated enum ArchiveCachePolicy {
     /// The clip a fresh download replaces once the pool is full (every 12 pieces, plan 1.4, A27): the
     /// most used one (ties: least recent), never a protected one.
     static func replacement(_ clips: [ArchiveClip], protected: Set<String> = []) -> String? {
-        clips.filter { !protected.contains($0.id) }
+        let keep = protected.union(ArchiveSeedList.pinnedIDs)
+        return clips.filter { !keep.contains($0.id) }
             .max { ($0.useCount, $1.recency) < ($1.useCount, $0.recency) }?.id
     }
 }
@@ -78,6 +80,7 @@ actor ArchiveClipStore {
         var clips: [ArchiveClip] = []
         /// Items that failed for content reasons (HTTP 4xx, no video track, excluded words): never retried.
         var bad: [String] = []
+        var filePolicyVersion: Int? = 2
     }
 
     let directory: URL
@@ -108,6 +111,12 @@ actor ArchiveClipStore {
         if let data = try? Data(contentsOf: indexURL), let i = try? JSONDecoder().decode(Index.self, from: data) {
             index = i
         }
+        // Older indexes did not distinguish oversized films from unavailable items.
+        if index.filePolicyVersion != 2 {
+            index.bad.removeAll()
+            index.filePolicyVersion = 2
+            save()
+        }
         // Drop entries whose file is gone (cleared by the system, or a partial write).
         let before = index.clips.count
         index.clips.removeAll { !fm.fileExists(atPath: url(for: $0).path) }
@@ -134,18 +143,27 @@ actor ArchiveClipStore {
         save()
     }
 
-    /// Moves a validated file into the store, evicting as needed. Returns the evicted ids.
+    enum AddFailure: Error { case insufficientCacheSpace }
+
+    /// Moves a validated file into the store before removing its victims.
     @discardableResult
-    func add(_ clip: ArchiveClip, from file: URL, protected: Set<String>) throws -> [String] {
-        let evict = ArchiveCachePolicy.victims(index.clips, incoming: clip.bytes, protected: protected)
-        for id in evict { remove(id) }
+    func add(_ clip: ArchiveClip, from file: URL, protected: Set<String>,
+             replacingMostUsed: Bool = false) throws -> [String] {
+        let replacement = replacingMostUsed ? ArchiveCachePolicy.replacement(index.clips, protected: protected) : nil
+        let remaining = index.clips.filter { $0.id != replacement }
+        let evict = ArchiveCachePolicy.victims(remaining, incoming: clip.bytes, protected: protected)
+        let retained = remaining.filter { !evict.contains($0.id) }
+        guard retained.count < ArchiveCachePolicy.poolTarget,
+              retained.reduce(clip.bytes, { $0 + $1.bytes }) <= ArchiveCachePolicy.capBytes else {
+            throw AddFailure.insufficientCacheSpace
+        }
         let dest = directory.appendingPathComponent(clip.fileName)
-        try? FileManager.default.removeItem(at: dest)
         try FileManager.default.moveItem(at: file, to: dest)
-        index.clips.removeAll { $0.id == clip.id }
+        let victims = [replacement].compactMap { $0 } + evict
+        for id in victims { remove(id) }
         index.clips.append(clip)
         save()
-        return evict
+        return victims
     }
 
     func remove(_ id: String) {
@@ -159,7 +177,7 @@ actor ArchiveClipStore {
         guard let i = index.clips.firstIndex(where: { $0.id == id }) else { return }
         index.clips[i].lastUsed = date
         index.clips[i].useCount += 1
-        index.clips[i].shownStarts = Array((index.clips[i].shownStarts + [segmentStart]).suffix(16))
+        index.clips[i].shownStarts.append(segmentStart)
         save()
     }
 
@@ -190,7 +208,7 @@ nonisolated enum ArchiveClipValidator {
     static func validate(_ url: URL) async throws -> Result {
         let asset = AVURLAsset(url: url)
         let duration = try await asset.load(.duration).seconds
-        guard duration.isFinite, duration >= ArchiveCatalog.durationRange.lowerBound else { throw Failure.tooShort }
+        guard duration.isFinite, duration >= ArchiveCatalog.minimumDuration else { throw Failure.tooShort }
         guard let video = try await asset.loadTracks(withMediaType: .video).first else { throw Failure.noVideo }
         let size = try await video.load(.naturalSize).applying(try await video.load(.preferredTransform))
         let w = Int(abs(size.width).rounded()), h = Int(abs(size.height).rounded())
@@ -198,6 +216,24 @@ nonisolated enum ArchiveClipValidator {
         let hasAudio = !(try await asset.loadTracks(withMediaType: .audio)).isEmpty
         let (black, white) = try await levels(asset, duration: duration)
         return Result(duration: duration, width: w, height: h, hasAudio: hasAudio, black: black, white: white)
+    }
+
+    /// Keep an interior excerpt without re-encoding the picture or soundtrack.
+    static func exportExcerpt(from source: URL, to destination: URL, sourceBytes: Int64,
+                              seed: UInt64) async throws -> Bool {
+        let asset = AVURLAsset(url: source)
+        let duration = try await asset.load(.duration).seconds
+        guard duration.isFinite, duration >= 60 else { return false }
+        let fraction = Double(80_000_000) / Double(sourceBytes)
+        let length = min(240, max(30, duration * fraction))
+        guard length < duration,
+              let export = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetPassthrough) else { return false }
+        var rng = MusicRNG(seed: seed)
+        let start = ArchiveCatalog.segmentStart(duration: duration, length: length, avoid: [], rng: &rng)
+        export.timeRange = CMTimeRange(start: CMTime(seconds: start, preferredTimescale: 600),
+                                       duration: CMTime(seconds: length, preferredTimescale: 600))
+        try await export.export(to: destination, as: .mp4)
+        return true
     }
 
     /// 5th / 95th luma percentiles over 8 small frames spread across the clip.

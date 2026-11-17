@@ -21,6 +21,12 @@ nonisolated enum ArchiveCatalog {
         let weight: Float
         /// Colour items are allowed from this query (at `colourOdds`); otherwise black and white only.
         let allowsColour: Bool
+
+        var candidateWeight: Float { name == "trippy" || name == "drug-education" ? 5 : 1 }
+        var excludedTerms: [String] {
+            guard name == "drug-education" else { return ArchiveCatalog.exclusions }
+            return ArchiveCatalog.exclusions.filter { !ArchiveCatalog.drugEducationExceptions.contains($0) }
+        }
     }
 
     /// Weighted queries (plan 1.2). Only the Prelinger collection: its items carry a public-domain
@@ -30,8 +36,11 @@ nonisolated enum ArchiveCatalog {
               text: "collection:prelinger AND (newsreel OR \"news magazine\" OR telenews OR \"screen magazine\")",
               weight: 3, allowsColour: false),
         Query(name: "trippy",
-              text: "collection:prelinger AND (abstract OR experimental OR kaleidoscope OR optical OR hypnosis OR dream OR surreal)",
-              weight: 3, allowsColour: true),
+              text: #"collection:prelinger AND (psychedelic OR psychedelia OR kaleidoscope OR surreal OR hypnosis OR "light show" OR "optical illusion" OR "abstract film" OR "experimental film" OR "dream sequence")"#,
+              weight: 10, allowsColour: true),
+        Query(name: "drug-education",
+              text: #"collection:prelinger AND (title:("drug abuse" OR "drug addiction" OR "drug education" OR narcotics OR marijuana OR marihuana OR LSD OR hallucinogens) OR subject:("drug abuse" OR "drug addiction" OR "drug education" OR "drug prevention" OR marijuana OR LSD))"#,
+              weight: 5, allowsColour: true),
         Query(name: "educational",
               text: "collection:prelinger AND subject:(animation OR cartoon OR \"visual effects\" OR psychology OR science OR future)",
               weight: 2, allowsColour: false),
@@ -59,9 +68,11 @@ nonisolated enum ArchiveCatalog {
         "dew line", "turmoil", "medical", "medicine", "quack", "quacks", "patient",
     ]
 
+    static let drugEducationExceptions: Set<String> = ["drug", "narcotic", "alcohol"]
+
     /// The query sent to advancedsearch.php: the curated clause, movies, 1950-1969, minus exclusions.
     static func fullQuery(_ q: Query) -> String {
-        let terms = exclusions.map { $0.contains(" ") ? "\"\($0)\"" : $0 }.joined(separator: " OR ")
+        let terms = q.excludedTerms.map { $0.contains(" ") ? "\"\($0)\"" : $0 }.joined(separator: " OR ")
         return "(\(q.text)) AND mediatype:movies AND year:[\(years.lowerBound) TO \(years.upperBound)] AND NOT (\(terms))"
     }
 
@@ -98,10 +109,10 @@ nonisolated enum ArchiveCatalog {
     // MARK: - Filters
 
     /// Whole-word (or whole-phrase) match of any exclusion term, case-insensitive.
-    static func isExcluded(_ text: String) -> Bool {
+    static func isExcluded(_ text: String, query: Query? = nil) -> Bool {
         let words = " " + text.lowercased().map { $0.isLetter || $0.isNumber ? $0 : " " }
             .split(separator: " ", omittingEmptySubsequences: true).joined(separator: " ") + " "
-        return exclusions.contains { words.contains(" \($0) ") }
+        return (query?.excludedTerms ?? exclusions).contains { words.contains(" \($0) ") }
     }
 
     enum Tone: Sendable, Equatable { case blackAndWhite, colour, unknown }
@@ -117,26 +128,25 @@ nonisolated enum ArchiveCatalog {
     /// Search-level acceptance (before the colour coin flip): years, title exclusion, colour rule.
     static func accept(_ doc: ArchiveSearchDoc, query: Query) -> Bool {
         guard let y = doc.yearValue, years.contains(y) else { return false }
-        if isExcluded(doc.titleText) { return false }
+        if isExcluded(doc.titleText, query: query) { return false }
         if tone(doc.color?.value) == .colour && !query.allowsColour { return false }
         return true
     }
 
     /// Metadata-level acceptance: the exclusion terms over title, description and subject.
-    static func accept(_ info: ArchiveItemInfo?) -> Bool {
+    static func accept(_ info: ArchiveItemInfo?, query: Query) -> Bool {
         guard let info else { return true }
         let text = [info.title?.joined, info.description?.joined, info.subject?.joined].compactMap { $0 }.joined(separator: " ")
         // Descriptions hold HTML; tags split into words harmlessly.
-        return !isExcluded(text)
+        return !isExcluded(text, query: query)
     }
 
     // MARK: - Files
 
     static let playableFormats: Set<String> = ["h.264", "h.264 ia", "512kb mpeg4", "mpeg4"]
-    static let maxBytes: Int64 = 120 * 1_000_000
     static let preferredMaxBytes: Int64 = 80 * 1_000_000
     static let minBytes: Int64 = 2 * 1_000_000
-    static let durationRange: ClosedRange<Double> = 25...1500
+    static let minimumDuration: Double = 25
 
     /// mp4 files in a playable format (LostArchiveTV findPlayableFiles, minus edit masters).
     static func playableFiles(_ files: [ArchiveFile]) -> [ArchiveFile] {
@@ -151,13 +161,12 @@ nonisolated enum ArchiveCatalog {
         f.name.lowercased().hasSuffix("_512kb.mp4") || f.format?.lowercased() == "512kb mpeg4"
     }
 
-    /// The file to download (plan 1.3): the main h.264 file when it is at most 80 MB, else the
-    /// `_512kb.mp4`; nothing over 120 MB or outside 25 s...25 min. `preferSmallest` (fewer than two clips
-    /// ready) takes the smallest acceptable file for a fast first start.
+    /// Prefer a modest main encode or a smaller derivative. Longer films can be
+    /// trimmed after downloading, so their size and runtime do not disqualify them.
     static func pickFile(_ files: [ArchiveFile], preferSmallest: Bool) -> ArchiveFile? {
         let ok = playableFiles(files).filter { f in
-            guard let b = f.bytes, b >= minBytes, b <= maxBytes else { return false }
-            if let d = parseDuration(f.length?.value) { return durationRange.contains(d) }
+            guard let b = f.bytes, b >= minBytes else { return false }
+            if let d = parseDuration(f.length?.value) { return d >= minimumDuration }
             return true
         }
         guard !ok.isEmpty else { return nil }
@@ -180,24 +189,42 @@ nonisolated enum ArchiveCatalog {
 
     // MARK: - Segments
 
-    /// Start of a `length`-second segment of a `duration`-second clip (plan 1.4). LostArchiveTV's safe
-    /// random start: a margin of min(0.2 d, 60) s at both ends (title cards, end slates), re-rolled up to
-    /// four times to stay 20 s away from segments already shown. A clip too short for the request starts at 0.
+    /// Pick an interior start at least 20 source seconds from previous starts when possible.
+    /// For crowded or short films, pick the point furthest from any previous start.
     static func segmentStart(duration: Double, length: Double, avoid: [Double], rng: inout MusicRNG) -> Double {
-        guard duration > length else { return 0 }
+        let last = max(0, duration - length)
+        guard last > 0 else { return 0 }
         let margin = min(0.2 * duration, 60)
-        var lo = margin, hi = duration - margin - length
-        if hi < lo { lo = 0; hi = duration - length }
-        var best = lo + (hi - lo) * rng.unitD()
-        var bestGap = avoid.map { abs($0 - best) }.min() ?? .infinity
-        var tries = 0
-        while bestGap < 20, tries < 4 {
-            tries += 1
-            let c = lo + (hi - lo) * rng.unitD()
-            let gap = avoid.map { abs($0 - c) }.min() ?? .infinity
-            if gap > bestGap { best = c; bestGap = gap }
+        let interior = last > 2 * margin ? margin...(last - margin) : 0...last
+        let shown = avoid.sorted()
+
+        func freshRanges(in bounds: ClosedRange<Double>) -> [ClosedRange<Double>] {
+            var starts: [ClosedRange<Double>] = []
+            var cursor = bounds.lowerBound
+            for previous in shown {
+                let end = min(previous - 20, bounds.upperBound)
+                if cursor < end { starts.append(cursor...end) }
+                cursor = max(cursor, previous + 20)
+                if cursor >= bounds.upperBound { break }
+            }
+            if cursor < bounds.upperBound { starts.append(cursor...bounds.upperBound) }
+            return starts
         }
-        return best
+
+        var ranges = freshRanges(in: interior)
+        if ranges.isEmpty, interior.lowerBound > 0 { ranges = freshRanges(in: 0...last) }
+        if !ranges.isEmpty {
+            let weights = ranges.map { Float($0.upperBound - $0.lowerBound) }
+            return rng.range(ranges[rng.weighted(weights)])
+        }
+
+        // The maximum distance from prior starts is at a boundary or halfway between two starts.
+        let edges = [0.0, last].map { edge in (start: edge, gap: shown.map { abs($0 - edge) }.min() ?? 0) }
+        let midpoints = zip(shown, shown.dropFirst()).compactMap { left, right -> (start: Double, gap: Double)? in
+            let start = (left + right) / 2
+            return (0...last).contains(start) ? (start, (right - left) / 2) : nil
+        }
+        return (edges + midpoints).max { $0.gap < $1.gap }?.start ?? 0
     }
 
     // MARK: - Failures
@@ -224,12 +251,14 @@ nonisolated struct ShuffleBag<T: Hashable> {
 
     func hasAny(excluding: Set<T>) -> Bool { items.contains { !excluding.contains($0) } }
 
-    mutating func next(rng: inout MusicRNG, excluding: Set<T> = []) -> T? {
+    mutating func next(rng: inout MusicRNG, excluding: Set<T> = [], weight: ((T) -> Float)? = nil) -> T? {
         let usable = items.filter { !excluding.contains($0) }
         guard !usable.isEmpty else { return nil }
         if remaining.allSatisfy({ excluding.contains($0) }) { remaining = usable }
         let pool = remaining.enumerated().filter { !excluding.contains($0.element) }
-        let pick = pool[rng.int(0...(pool.count - 1))]
+        let index = weight.map { weigh in rng.weighted(pool.map { weigh($0.element) }) }
+            ?? rng.int(0...(pool.count - 1))
+        let pick = pool[index]
         remaining.remove(at: pick.offset)
         return pick.element
     }
@@ -245,6 +274,27 @@ nonisolated struct ArchiveSeedList: Decodable, Sendable {
         let color: Bool
     }
     let seeds: [Seed]
+
+    /// Curated Internet Archive titles. See docs/experience.md for sources and credits.
+    static let pinned: [Seed] = [
+        Seed(id: "Narcotic1967_2", title: "Narcotics: Pit of Despair (Part II)", year: 1967,
+             query: "drug-education", color: true),
+        Seed(id: "DrugAbus1969", title: "Drug Abuse: The Chemical Tomb", year: 1969,
+             query: "drug-education", color: true),
+        Seed(id: "DrugAddi1951", title: "Drug Addiction", year: 1951,
+             query: "drug-education", color: false),
+        Seed(id: "alan-watts-the-flow-of-zen", title: "The Flow of Zen by Alan Watts", year: 1969,
+             query: "trippy", color: false),
+        Seed(id: "342-usaf-42990", title: "UFO Interview", year: 1966,
+             query: "trippy", color: false),
+        Seed(id: "lsdthespringgroveexperiment", title: "LSD: The Spring Grove Experiment", year: 1966,
+             query: "drug-education", color: false),
+        Seed(id: "Ergotthestoryofaparasiticfungus-wellcome", title: "Ergot: The Story of a Parasitic Fungus", year: 1958,
+             query: "trippy", color: false),
+        Seed(id: "Designfo1956", title: "Design for Dreaming", year: 1956,
+             query: "trippy", color: true),
+    ]
+    static let pinnedIDs = Set(pinned.map(\.id))
 
     static func bundled() -> [Seed] {
         guard let url = Bundle.main.url(forResource: "archive-seeds", withExtension: "json"),

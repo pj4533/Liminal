@@ -2,7 +2,7 @@
 
 ## Scope and workflow
 
-Liminal is a native SwiftUI ambient audiovisual app for macOS 26+ and visionOS (Apple Vision Pro). It synthesizes music, generates and caches Gemini images, renders Metal effects, and blends Prelinger archive footage. No web backend or iOS target exists. Keep documentation synchronized with source; decision records describe rationale, while plans may describe unfinished work.
+Liminal is a native SwiftUI ambient audiovisual app for macOS 26+ and visionOS (Apple Vision Pro). It synthesizes music, generates and caches Gemini images, renders Metal effects, and blends footage from the Internet Archive. No web backend or iOS target exists. Keep documentation synchronized with source; decision records describe rationale, while plans may describe unfinished work.
 
 Always build after changes. Always specify a destination to xcodebuild. Do not change signing settings to work around a local build failure.
 
@@ -37,7 +37,7 @@ Images use row zero at the top. Preserve consistent crop/orientation across plat
 
 Generation settings live in ImageGenerationConfig; budget caps live in GenerationBudget. Primary model is currently gemini-nano-banana-2.1, fallback gemini-3.1-flash-lite-image. Treat these as repository configuration, not independently verified provider availability. Cache reuse is the fallback when generation is unavailable or capped.
 
-Archive footage weaves changing segments, looks and interaction recipes into the still-image anchor. Archive audio is deliberately quiet and filtered. Preserve fades and cache limits. Retain Prelinger attribution.
+Archive footage weaves changing segments, looks and interaction recipes into the still-image anchor. Archive audio is deliberately quiet and filtered. Preserve fades and cache limits. Retain individual archive source credits.
 
 ## Safe validation and visual review
 

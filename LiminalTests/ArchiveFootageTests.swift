@@ -67,6 +67,17 @@ struct ArchiveCatalogTests {
         #expect(ArchiveCatalog.isExcluded("<p>a FIRE in the hills</p>"))
     }
 
+    @Test func drugEducationAllowsItsSubjectWithoutRelaxingOtherFilters() throws {
+        let drugEducation = try #require(ArchiveCatalog.queries.first { $0.name == "drug-education" })
+        let newsreel = try #require(ArchiveCatalog.queries.first { $0.name == "newsreel" })
+        let metadata = try JSONDecoder().decode(ArchiveItemInfo.self, from: Data(
+            #"{"title":"Classroom Drug Education","description":"A film about drug and alcohol use."}"#.utf8))
+        #expect(ArchiveCatalog.accept(metadata, query: drugEducation))
+        #expect(!ArchiveCatalog.accept(metadata, query: newsreel))
+        #expect(!drugEducation.excludedTerms.contains("drug"))
+        #expect(ArchiveCatalog.isExcluded("Drug education and war", query: drugEducation))
+    }
+
     @Test func searchURLEncodesTheQuery() throws {
         let q = ArchiveCatalog.queries.first { $0.name == "bw" }!
         let url = ArchiveCatalog.searchURL(q, page: 3, rows: 50)
@@ -108,8 +119,10 @@ struct ArchiveCatalogTests {
         let big = [ArchiveFile(name: "A.mp4", format: "h.264", size: "100000000", length: "900"),
                    ArchiveFile(name: "A_512kb.mp4", format: "512Kb MPEG4", size: "40000000", length: "900")]
         #expect(ArchiveCatalog.pickFile(big, preferSmallest: false)?.name == "A_512kb.mp4")
-        // Over 120 MB, shorter than 25 s, or tiny: nothing.
-        #expect(ArchiveCatalog.pickFile([ArchiveFile(name: "B.mp4", format: "h.264", size: "130000000")], preferSmallest: false) == nil)
+        // A large, long film still qualifies when it is the only playable version.
+        let long = ArchiveFile(name: "B.mp4", format: "h.264", size: "690000000", length: "1743")
+        #expect(ArchiveCatalog.pickFile([long], preferSmallest: false)?.name == "B.mp4")
+        // Brief and tiny files do not qualify.
         #expect(ArchiveCatalog.pickFile([ArchiveFile(name: "C.mp4", format: "h.264", size: "5000000", length: "12")], preferSmallest: false) == nil)
         #expect(ArchiveCatalog.pickFile([ArchiveFile(name: "D.mp4", format: "h.264", size: "1000")], preferSmallest: false) == nil)
     }
@@ -129,13 +142,20 @@ struct ArchiveCatalogTests {
         }
         // Too short for the request: start at 0.
         #expect(ArchiveCatalog.segmentStart(duration: 20, length: 40, avoid: [], rng: &rng) == 0)
-        // With shown segments the re-roll keeps away from them when it can.
-        var far = 0
+        // Leave 20 seconds when there is room, even if the first random draw would be close.
         for _ in 0..<200 {
             let s = ArchiveCatalog.segmentStart(duration: 900, length: 40, avoid: [300, 450], rng: &rng)
-            if abs(s - 300) >= 20 && abs(s - 450) >= 20 { far += 1 }
+            #expect(abs(s - 300) >= 20 && abs(s - 450) >= 20)
         }
-        #expect(far >= 190)
+
+        // A short, frequently reused film still gets a fresh start after its wide gaps fill up.
+        var shown: [Double] = [0, 5, 10]
+        for _ in 0..<50 {
+            let s = ArchiveCatalog.segmentStart(duration: 30, length: 20, avoid: shown, rng: &rng)
+            #expect((0...10).contains(s))
+            #expect(!shown.contains(s))
+            shown.append(s)
+        }
     }
 
     @Test func shuffleBagHasNoRepeatsUntilExhausted() {
@@ -206,6 +226,15 @@ struct ArchiveCachePolicyTests {
                      Self.clip("c", mb: 10, used: 1, count: 4)]
         #expect(ArchiveCachePolicy.replacement(clips) == "c")   // tie on count: the less recent
         #expect(ArchiveCachePolicy.replacement(clips, protected: ["c"]) == "b")
+    }
+
+    @Test func curatedFilmsSurviveRotationAndSizeEviction() throws {
+        let pinned = try #require(ArchiveSeedList.pinned.first)
+        let clips = [Self.clip(pinned.id, mb: 90, used: 1, count: 20),
+                     Self.clip("rotating", mb: 90, used: 10, count: 2)]
+        #expect(ArchiveCachePolicy.replacement(clips) == "rotating")
+        #expect(ArchiveCachePolicy.victims(clips, incoming: 90_000_000, capBytes: 180_000_000,
+                                           minKeep: 2) == ["rotating"])
     }
 
     @Test func storeAddsEvictsAndPersists() async throws {
@@ -487,6 +516,31 @@ struct FootageWeaverTests {
         // The drive follows the envelope and the swell, not the level.
         #expect(abs(p.driveEnvelope(at: 20) - 1.6) < 1e-5)
         #expect(abs(p.driveEnvelope(at: 32) - 0.5 * p.level(at: 32) / 0.5) < 1e-5)
+    }
+
+    @Test func playbackInterleavesCuratedFilmsWithTheRestOfTheCache() throws {
+        let pinnedID = try #require(ArchiveSeedList.pinned.first?.id)
+        let pinned = ArchiveCachePolicyTests.clip(pinnedID, mb: 80, used: 10)
+        let regular = ArchiveCachePolicyTests.clip("regular", mb: 20, used: 1)
+        var weaver = FootageWeaver(seed: 7, timing: .speed(.medium))
+        var rng = MusicRNG(seed: 11)
+        #expect(weaver.chooseClipForPlayback([regular], rng: &rng)?.id == regular.id)
+
+        var selected: [String] = []
+        for step in 0..<360 {
+            let decision = weaver.tick(elapsed: Double(step) / 2, conditions: Self.calm, hasClip: true) { _ in true }
+            if case .prepare(let request) = decision {
+                let clip = try #require(weaver.chooseClipForPlayback([regular, pinned], rng: &rng))
+                selected.append(clip.id)
+                weaver.didPrepare(request.piece(clipID: clip.id, segmentStart: 10))
+            }
+        }
+        #expect(selected.count >= 6)
+        #expect(selected.first == pinnedID)
+        #expect(selected.contains(regular.id))
+        for (a, b) in zip(selected, selected.dropFirst()) {
+            #expect(a == pinnedID || b == pinnedID)
+        }
     }
 
     @Test func clipChoiceAvoidsClipsOnScreen() {

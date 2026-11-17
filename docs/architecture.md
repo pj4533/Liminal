@@ -27,6 +27,6 @@ Shader pipeline order (`Liminal/Shaders/EffectsRenderer.metal`): Ken Burns, dist
 - [ShaderGraphCoder](https://github.com/praeclarum/ShaderGraphCoder): RealityKit shader materials
 - Apple frameworks: SwiftUI, Metal, RealityKit, ARKit, Core ML and MetalFX
 
-Swift packages are pinned in the Xcode workspace’s `Package.resolved`. Bundled depth and upscaling models live in `Liminal/`. Archive footage comes from the Prelinger collection on Internet Archive; retain attribution and check individual item rights when redistributing footage. The MIT license below covers this repository’s code, not third-party footage or dependencies.
+Swift packages are pinned in the Xcode workspace’s `Package.resolved`. Bundled depth and upscaling models live in `Liminal/`. Footage comes from the Internet Archive, including the Prelinger collection. The [curated film list](experience.md) links to the individual sources and their rights information. The MIT license below covers this repository’s code, not third-party footage or dependencies.
 
 

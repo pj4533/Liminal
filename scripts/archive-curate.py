@@ -25,8 +25,9 @@ SEEDS = os.path.join(ROOT, "Liminal", "Archive", "archive-seeds.json")
 
 # Mirror of ArchiveCatalog.queries / exclusions (keep in step).
 QUERIES = [
+    ("drug-education", 'collection:prelinger AND (title:("drug abuse" OR "drug addiction" OR "drug education" OR narcotics OR marijuana OR marihuana OR LSD OR hallucinogens) OR subject:("drug abuse" OR "drug addiction" OR "drug education" OR "drug prevention" OR marijuana OR LSD))', True),
+    ("trippy", 'collection:prelinger AND (psychedelic OR psychedelia OR kaleidoscope OR surreal OR hypnosis OR "light show" OR "optical illusion" OR "abstract film" OR "experimental film" OR "dream sequence")', True),
     ("newsreel", 'collection:prelinger AND (newsreel OR "news magazine" OR telenews OR "screen magazine")', False),
-    ("trippy", 'collection:prelinger AND (abstract OR experimental OR kaleidoscope OR optical OR hypnosis OR dream OR surreal)', True),
     ("educational", 'collection:prelinger AND subject:(animation OR cartoon OR "visual effects" OR psychology OR science OR future)', False),
     ("spaceage", 'collection:prelinger AND (rocket OR satellite OR "outer space" OR computer OR electronic OR television)', True),
     ("bw", 'collection:prelinger AND color:"B&W"', False),
@@ -41,14 +42,19 @@ EXCLUDE = ["war", "bomb", "casualty", "casualties", "surgery", "operation", "dis
            "dew line", "turmoil", "medical", "medicine", "quack", "quacks", "patient"]
 
 
-def full_query(q):
-    terms = " OR ".join('"%s"' % t if " " in t else t for t in EXCLUDE)
+def exclusions(name):
+    exceptions = {"drug", "narcotic", "alcohol"} if name == "drug-education" else set()
+    return [term for term in EXCLUDE if term not in exceptions]
+
+
+def full_query(q, name):
+    terms = " OR ".join('"%s"' % t if " " in t else t for t in exclusions(name))
     return "(%s) AND mediatype:movies AND year:[1950 TO 1969] AND NOT (%s)" % (q, terms)
 
 
-def excluded(text):
+def excluded(text, name):
     t = text.lower()
-    return any(re.search(r"\b%s\b" % re.escape(w), t) for w in EXCLUDE)
+    return any(re.search(r"\b%s\b" % re.escape(w), t) for w in exclusions(name))
 
 
 def is_bw(color):
@@ -62,8 +68,8 @@ def is_bw(color):
     return None
 
 
-def search(q, rows):
-    params = [("q", full_query(q)), ("rows", str(rows)), ("page", "1"), ("output", "json"), ("sort[]", "downloads desc")]
+def search(q, rows, name):
+    params = [("q", full_query(q, name)), ("rows", str(rows)), ("page", "1"), ("output", "json"), ("sort[]", "downloads desc")]
     for f in ["identifier", "title", "year", "sound", "color", "licenseurl", "runtime"]:
         params.append(("fl[]", f))
     url = "https://archive.org/advancedsearch.php?" + urllib.parse.urlencode(params)
@@ -87,7 +93,7 @@ def main():
         else:
             if i:
                 time.sleep(2)
-            data = search(q, a.rows)
+            data = search(q, a.rows, name)
         if a.save_raw:
             os.makedirs(a.save_raw, exist_ok=True)
             with open(os.path.join(a.save_raw, "search-%s.json" % name), "w") as f:
@@ -106,7 +112,7 @@ def main():
                 year = None
             if not ident or ident in seen or year is None or not (1950 <= year <= 1969):
                 continue
-            if excluded(title):
+            if excluded(title, name):
                 continue
             bw = is_bw(d.get("color"))
             if bw is False and not allow_colour:

@@ -4,7 +4,7 @@
 //
 //  "Archive Footage" settings section shared by the macOS control panel and the visionOS control
 //  window (docs/plans/archive-video.md 6, A27): on/off, change speed, the film's sound level, what is showing,
-//  the cache with a clear button, and the Prelinger credit. Plus the modifier that pushes the
+//  the cache with a clear button, and the film source credit. Plus the modifier that pushes the
 //  settings into ArchiveFootageService and attaches the music engine.
 //
 
@@ -100,7 +100,7 @@ struct ArchiveFootageSection: View {
                 .foregroundStyle(.secondary)
                 .wrapping()
 
-            Text("Films: Prelinger Archives via the Internet Archive, public domain.")
+            Text("Films from the Internet Archive, including the Prelinger Archives.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .wrapping()
