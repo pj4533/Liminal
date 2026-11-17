@@ -4,20 +4,37 @@
 
 ![macOS](https://img.shields.io/badge/macOS-26.0+-000000?style=flat&logo=apple&logoColor=white)
 ![visionOS](https://img.shields.io/badge/visionOS-immersive-000000?style=flat&logo=apple&logoColor=white)
-![Swift](https://img.shields.io/badge/Swift-5.9-F05138?style=flat&logo=swift&logoColor=white)
+![Swift](https://img.shields.io/badge/Swift-5-F05138?style=flat&logo=swift&logoColor=white)
 ![Metal](https://img.shields.io/badge/Metal-GPU-8A8A8A?style=flat&logo=apple&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-blue?style=flat)
 
 Liminal creates endless, evolving ambient soundscapes synchronized with AI-generated visuals that morph continuously. Run it in the background, let it play, and drift.
 
+[Get started](#setup) · [Controls](#controls) · [Architecture](#architecture) · [Contributing](#contributing)
+
+## Inside Apple Vision Pro
+
+Captured in the app on Apple Vision Pro. This eight-second loop shows the live visual effects; GIFs have no audio and cannot convey the headset's spatial depth.
+
 <p align="center">
-  <img src="liminal_screenshot.png" alt="Liminal Screenshot" width="600">
+  <img src="docs/media/vision-pro-demo.gif" alt="Animated Vision Pro capture of rippling, chromatic surreal imagery" width="800">
 </p>
+
+| Immersive imagery | Evolving effects |
+| --- | --- |
+| ![Pink sculptural forms with chromatic distortion](docs/media/vision-pro-immersive.jpg) | ![Glowing branching forms with rainbow edges](docs/media/vision-pro-scene.jpg) |
+
+<details>
+<summary>macOS preview</summary>
+
+![Liminal macOS interface](liminal_screenshot.png)
+
+</details>
 
 ## Features
 
 - **Generative Audio**: eight-layer synthesized ambient engine (drone, pad, lead, keys, drips, air, grains, pluck) with evolving scenes, key drift, rare events and four styles (Drift, Glass, Deep, Garden); no samples. See `docs/decisions/music.md`
-- **AI Visuals**: Gemini image generation (gemini-nano-banana-2.1, the latest model, 3:2 at 2K; hourly and daily spending cap) driven by a style/subject/transformation/palette prompt system for varied, photoreal-but-surreal imagery. See `docs/decisions/images.md`
+- **AI Visuals**: Gemini image generation (gemini-nano-banana-2.1, the configured primary model, 3:2 at 2K; hourly and daily spending cap) driven by a style/subject/transformation/palette prompt system for varied, photoreal-but-surreal imagery. See `docs/decisions/images.md`
 - **GPU Effects**: one Metal fragment shader with Ken Burns motion, turbulence distortion, chromatic aberration, a family of 12 image transitions that hide the swap inside a surge of the live effects (picked without repeats, docs/decisions/transitions.md), hue shifts, ghost taps, stochastic bloom, feedback warping and a final vibrance stage that keeps colors vivid; a slow clarity cycle and a strain budget keep the image recognisable, scaled by the Effect intensity setting
 - **Audio-visual coupling**: the music drives the visuals (note glow, scene intensity, chord-tied hue, ghost-tap burst on scene change) and each new image sends a mood (brightness, warmth, saturation, energy, mood words) back to the music. A "Sync visuals to music" switch turns the music-to-visuals direction off. See `docs/decisions/av-coupling.md`
 - **macOS and visionOS**: a window with a control panel on macOS; on visionOS a control window plus one immersive space: a 3D shell that wraps 337.5 x 120 degrees around you (the image straight ahead, mirrored continuations to the sides, above and below), pushed into real depth from the ML depth map, with every effect on it (one 2048x2048 effects render). See `docs/decisions/spatial.md`
@@ -43,9 +60,7 @@ Liminal creates endless, evolving ambient soundscapes synchronized with AI-gener
    open Liminal.xcodeproj
    ```
 
-3. Configure your API key (either way)
-   - Copy `Secrets.swift.template` to `Liminal/Secrets.swift` and fill in the key (gitignored; never commit it), or
-   - Duplicate the `Liminal` scheme as `Liminal-Dev` and add a `GEMINI_API_KEY` environment variable under Run > Arguments
+3. Copy `Secrets.swift.template` to `Liminal/Secrets.swift` (required to provide the `Secrets` type, even when using an environment variable). Leave the placeholder for cache-only use. For generation, either fill in the key in this gitignored file (never commit it), or duplicate the `Liminal` scheme as `Liminal-Dev` and add a `GEMINI_API_KEY` environment variable under Run > Arguments
 
 4. Build and run (Cmd-R). Pick the macOS or visionOS destination.
 
@@ -160,9 +175,19 @@ Simulator automation notes: `docs/research/visionos-sim-automation/README.md`.
 
 Decision records, with a review index: `docs/decisions/README.md`. Plans: `docs/plans/`.
 
+## Contributing
+
+Issues and pull requests are welcome. Include your platform, Xcode version, reproduction steps, and relevant logs with sensitive information removed. For visual changes, include captures from the affected platform; simulator depth behavior differs from hardware.
+
+Read [AGENTS.md](AGENTS.md) for the repository map, build workflow, and rendering invariants. Run the macOS unit tests above before submitting code changes. Keep credentials and generated captures out of commits unless deliberately curated for documentation.
+
 ## Dependencies
 
 - [AudioKit](https://github.com/AudioKit/AudioKit), AudioKitEX and SoundpipeAudioKit: audio synthesis and effects
+- [ShaderGraphCoder](https://github.com/praeclarum/ShaderGraphCoder): RealityKit shader materials
+- Apple frameworks: SwiftUI, Metal, RealityKit, ARKit, Core ML and MetalFX
+
+Swift packages are pinned in the Xcode workspace’s `Package.resolved`. Bundled depth and upscaling models live in `Liminal/`. Archive footage comes from the Prelinger collection on Internet Archive; retain attribution and check individual item rights when redistributing footage. The MIT license below covers this repository’s code, not third-party footage or dependencies.
 
 ## License
 
