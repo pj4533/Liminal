@@ -137,7 +137,7 @@ nonisolated struct MusicReactor {
         let wet = min(a, 1)
         huePhase = Self.wrap(huePhase + dt * (baseHueRate + (syncedRate - baseHueRate) * wet))
 
-        // 5. Intensity -> Ken Burns clock rate 0.85x...1.35x (lead stops growing when sync is off: no jump).
+        // 5. Integrate the music-driven motion timing offset for coupling diagnostics.
         motionLead += dt * min(max(a * (0.5 * energy - 0.15), -0.15), 0.35)
 
         modulation = MusicModulation(

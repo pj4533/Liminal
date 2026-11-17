@@ -25,7 +25,7 @@ nonisolated struct MusicModulation: Sendable, Equatable {
     var air: Float = 0
     /// Integrated hue phase plus the harmony offset (turns). Written straight to `hueBaseShift`.
     var hueBaseShift: Float = 0
-    /// Seconds added to the Ken Burns clock (integrated, so speed changes never jump the phase).
+    /// Integrated motion timing offset, kept for coupling diagnostics.
     var motionLead: Float = 0
     /// Increments on each music scene change; renderers forward it to GhostTapManager.requestBurst.
     var ghostBurstSerial: UInt32 = 0

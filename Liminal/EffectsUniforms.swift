@@ -75,6 +75,8 @@ struct EffectsUniforms {
     var videoDriveAmtB: Float = 0
     var videoKeyB: Float = 0
     var videoKeyAmtB: Float = 0
+    var tunnelStrength: Float = 0  // Maximum peripheral radial displacement during the image push
+    var outgoingZoomScale: Float = 0  // Frozen crop of the fading image; zero outside a swap
 }
 
 /// Ghost tap data for shader. Must match Metal struct layout.

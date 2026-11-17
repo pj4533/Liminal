@@ -274,6 +274,8 @@ struct EffectsUniforms {
     float videoDriveAmtB;
     float videoKeyB;
     float videoKeyAmtB;
+    float tunnelStrength;
+    float outgoingZoomScale;
 };
 
 // One footage layer of the composite (A or B).
@@ -385,6 +387,20 @@ struct WarpOut {
     float field;     // swap order of the flow / crystal / UV-move styles; flow term for the others
 };
 
+// Leave the center and outer frame stable, concentrating motion in the periphery.
+static inline float tunnelBand(float2 fromCenter, float radius) {
+    float edge = max(abs(fromCenter.x), abs(fromCenter.y));
+    return smoothstep(0.13, 0.40, radius) * (1.0 - smoothstep(0.35, 0.50, edge));
+}
+
+// Drive the outward wave with the crop itself. With this phase and amplitude
+// the displacement only grows as zoom advances, then holds with the image.
+static inline float2 tunnelOffset(float2 radial, float radius, float scale, float strength) {
+    float progress = clamp((scale - 1.035) / (1.32 - 1.035), 0.0, 1.0);
+    float flow = 0.72 + 0.28 * sin(radius * 25.0 - 2.0 * progress);
+    return radial * (strength * progress * tunnelBand(radial, radius) * flow);
+}
+
 // Stage A: Ken Burns + transition UV move + turbulence + log-spherical + sinusoidal noise, through
 // the UV clamp. Depends only on texCoord and uniforms, so both stereo eyes share the result.
 static inline WarpOut distortedUV(float2 texCoord, constant EffectsUniforms &uniforms, texture2d<half> depthTexture) {
@@ -401,6 +417,11 @@ static inline WarpOut distortedUV(float2 texCoord, constant EffectsUniforms &uni
     // Apply offset (normalized, convert to UV space)
     centered -= float2(uniforms.kenBurnsOffsetX, uniforms.kenBurnsOffsetY) * 0.05;  // scale down offset
     uv = centered + center;
+
+    if (uniforms.tunnelStrength > 0.0) {
+        float2 radial = texCoord - center;
+        uv -= tunnelOffset(radial, length(radial), uniforms.kenBurnsScale, uniforms.tunnelStrength);
+    }
 
     // === 1.5 TRANSITION UV MOVES (docs/plans/transitions.md 6) ===
     // Kaleidoscope, Whirlpool, Tide, Facets, Ripple and Melt move UVs here; txEnv is 0 outside a transition.
@@ -1009,10 +1030,21 @@ static inline half4 shadeEye(
         float cl = length(fdChroma);
         if (cl > 1.0e-6) chromOffset += fdChroma * (min(cl, FD_FRINGE_MAX) / cl);
     }
+    // Keep the old crop as its image fades out. Both samples share the live effects,
+    // but the wider framing belongs only to the incoming image.
+    float2 previousUV = uv;
+    if (uniforms.outgoingZoomScale > 0.0) {
+        float2 radial = texCoord - 0.5;
+        float radius = length(radial);
+        float zoomDelta = 1.0 / uniforms.outgoingZoomScale - 1.0 / uniforms.kenBurnsScale;
+        float2 tunnelDelta = tunnelOffset(radial, radius, uniforms.kenBurnsScale, uniforms.tunnelStrength)
+                           - tunnelOffset(radial, radius, uniforms.outgoingZoomScale, uniforms.tunnelStrength);
+        previousUV = clamp(uv + radial * zoomDelta + tunnelDelta, float2(0.001), float2(0.999));
+    }
     half4 prevColor = half4(
-        previousTexture.sample(texSampler, uv + chromOffset).r,
-        previousTexture.sample(texSampler, uv).g,
-        previousTexture.sample(texSampler, uv - chromOffset).b,
+        previousTexture.sample(texSampler, previousUV + chromOffset).r,
+        previousTexture.sample(texSampler, previousUV).g,
+        previousTexture.sample(texSampler, previousUV - chromOffset).b,
         1.0h
     );
 
@@ -1044,6 +1076,7 @@ static inline half4 shadeEye(
     bool showNew = w.g >= 0.5h;
     // One handle, one sample (a per-sample select made the compiler fetch both textures).
     texture2d<half> shownTexture = showNew ? sourceTexture : previousTexture;
+    float2 shownUV = showNew ? uv : previousUV;
 
     // === 2.9 ARCHIVE FOOTAGE (docs/plans/archive-video.md 2.2, footage-fx.md 2.2) ===
     // Two layers: during a piece-to-piece crossfade both show (A27); each is skipped at mix 0.
@@ -1229,7 +1262,7 @@ static inline half4 shadeEye(
     for (int i = 0; i < tapCount; i++) {
         GhostTap tap = ghostTaps[i];
         // Ghost starts at center (progress=0), moves outward (progress=1)
-        float2 ghostUV = clamp(uv + float2(tap.directionX, tap.directionY) * tap.progress * uniforms.ghostTapMaxDistance,
+        float2 ghostUV = clamp(shownUV + float2(tap.directionX, tap.directionY) * tap.progress * uniforms.ghostTapMaxDistance,
                                float2(0.001), float2(0.999));
         half4 ghostSample = shownTexture.sample(texSampler, ghostUV);
         // Alpha fade: stronger at start (progress=0), transparent at end (progress=1)
@@ -1253,7 +1286,7 @@ static inline half4 shadeEye(
             dot(fc, float2(127.1, 311.7)) + uniforms.time * 43.7,
             dot(fc, float2(269.5, 183.3)) + uniforms.time * 71.3
         )) * 43758.5453) * 2.0 - 1.0;
-        float2 bloomUV = clamp(uv + noise * uniforms.bloomRadius, float2(0.001), float2(0.999));
+        float2 bloomUV = clamp(shownUV + noise * uniforms.bloomRadius, float2(0.001), float2(0.999));
         half3 bloomSample = shownTexture.sample(texSampler, bloomUV).rgb;
         half brightness = dot(bloomSample, half3(0.299h, 0.587h, 0.114h));
         half bloomAmt = half(uniforms.bloomAmount);
@@ -1279,7 +1312,8 @@ static inline half4 shadeEye(
         // halves every frame at worst; restoreChroma's target is convex, so it cannot run away).
         half wk = kDrives ? min(fd.wake, 1.0h) : 0.0h;
         float fbWarp = kDrives ? uniforms.feedbackWarpAmount * (1.0 + 3.0 * float(wk)) : uniforms.feedbackWarpAmount;
-        float2 feedbackUV = uv + turbulence_distort(uv * 2.0, uniforms.time, 0.05) * fbWarp;
+        float2 feedbackBase = mix(previousUV, uv, float(w.g));
+        float2 feedbackUV = feedbackBase + turbulence_distort(feedbackBase * 2.0, uniforms.time, 0.05) * fbWarp;
         feedbackUV = clamp(feedbackUV, float2(0.001), float2(0.999));
         half3 feedbackColor = feedbackTexture.sample(texSampler, feedbackUV).rgb;
         half fm = half(uniforms.feedbackMix);

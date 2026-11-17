@@ -65,10 +65,6 @@ nonisolated struct EffectLook: Sendable, Equatable {
         static let hueWaveCap: Float = 0.20
         static let rainbowCap: Float = 0.065
         static let bloom: (Float, Float, Float) = (0.30, 0.50, 0.50)
-        /// Ken Burns relief (E27): in wild stretches the zoom eases back toward the whole picture by this
-        /// fraction of (scale - 1), times the clarity cycle (not the fresh hold, so a crossfade never zooms).
-        /// The silhouette carries recognition and orientation while the warps and colour carry the trip.
-        static let kenBurnsRelief: (Float, Float, Float) = (0, 0.30, 0.60)
     }
 
     // MARK: Helpers

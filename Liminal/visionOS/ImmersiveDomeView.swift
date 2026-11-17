@@ -105,6 +105,10 @@ struct ImmersiveDomeView: View {
     @ObservedObject var settings: SettingsService
     /// Plain reference, not observed: only its nonisolated bus and visual-input methods are used (C13).
     let music: GenerativeEngine
+    @Binding var isImmersed: Bool
+    @Binding var controlsVisible: Bool
+    @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismissWindow) private var dismissWindow
 
     /// Shell centre (viewer's head at entry); parent of the three tile entities.
     @State private var shellRoot: Entity?
@@ -141,10 +145,6 @@ struct ImmersiveDomeView: View {
 
     // Shell geometry, fades and relief constants: ShellLayout (docs/plans/spatial.md).
 
-    /// Posted when the immersive space goes away by any route (button, Digital Crown, Home), so the
-    /// controls window's Enter/Exit label stays in sync.
-    static let didCloseNotification = Notification.Name("LiminalImmersiveSpaceDidClose")
-
     /// Shell centre until HeadPoseProvider places it: standing eye height.
     private static let shellCentre = ShellPlacement.fallbackCentre
 
@@ -163,10 +163,12 @@ struct ImmersiveDomeView: View {
                 root.position = Self.shellCentre - DebugLaunchOptions.shellHeadOffset
                 root.orientation = Self.debugViewRotation
                 root.isEnabled = false  // Hidden until the first frame is ready to render
+                root.addChild(Self.makeControlsTapTarget())
                 content.add(root)
                 shellRoot = root
                 LMLog.visual.info("🎬 SHELL: root entity added, setup will create the tiles...")
             }
+            .gesture(SpatialTapGesture().targetedToAnyEntity().onEnded { _ in toggleControls() })
             .task {
                 await setupEffectsRendererWithBreathingMesh()
             }
@@ -174,7 +176,8 @@ struct ImmersiveDomeView: View {
                 renderTask?.cancel()
                 ArchiveFootageService.shared.stop()
                 headPose?.stop()
-                NotificationCenter.default.post(name: Self.didCloseNotification, object: nil)
+                isImmersed = false
+                if !controlsVisible { showControls() }
                 LMLog.visual.info("🎬 SHELL: Render loop cancelled")
             }
 
@@ -193,6 +196,43 @@ struct ImmersiveDomeView: View {
                 .cornerRadius(20)
             }
         }
+    }
+
+    private func toggleControls() {
+        guard isImmersed else { return }
+        if controlsVisible {
+            controlsVisible = false
+            dismissWindow(id: LiminalVisionApp.controlsWindowID)
+            LMLog.general.info("Immersive tap hid controls")
+        } else {
+            showControls()
+            LMLog.general.info("Immersive tap showed controls")
+        }
+    }
+
+    private func showControls() {
+        controlsVisible = true
+        openWindow(id: LiminalVisionApp.controlsWindowID)
+    }
+
+    /// Thin box walls catch taps looking out from inside the shell. The collision is
+    /// for input only and remains separate from the deforming render mesh.
+    private static func makeControlsTapTarget() -> Entity {
+        let target = Entity()
+        target.name = "ImmersiveControlsTapTarget"
+        let extent: Float = 12
+        let distance = extent / 2
+        let walls = [
+            ShapeResource.generateBox(size: [0.04, extent, extent]).offsetBy(translation: [distance, 0, 0]),
+            ShapeResource.generateBox(size: [0.04, extent, extent]).offsetBy(translation: [-distance, 0, 0]),
+            ShapeResource.generateBox(size: [extent, 0.04, extent]).offsetBy(translation: [0, distance, 0]),
+            ShapeResource.generateBox(size: [extent, 0.04, extent]).offsetBy(translation: [0, -distance, 0]),
+            ShapeResource.generateBox(size: [extent, extent, 0.04]).offsetBy(translation: [0, 0, distance]),
+            ShapeResource.generateBox(size: [extent, extent, 0.04]).offsetBy(translation: [0, 0, -distance]),
+        ]
+        target.components.set(InputTargetComponent(allowedInputTypes: .indirect))
+        target.components.set(CollisionComponent(shapes: walls, filter: CollisionFilter(group: [], mask: [])))
+        return target
     }
 
     // MARK: - Effects Setup
@@ -355,7 +395,7 @@ struct ImmersiveDomeView: View {
                                          rotation: simd_quatf(angle: tile.yaw, axis: [0, 1, 0]))
             root.addChild(entity)
         }
-        LMLog.visual.info("🎨 ✅ Shell tiles built (\(root.children.count)) texture=\(DebugLaunchOptions.shellTextureStereo && stereoMaterialBuilder != nil ? "stereo A/B" : "mono", privacy: .public)")
+        LMLog.visual.info("🎨 ✅ Shell tiles built (\(root.children.filter { $0 is ModelEntity }.count)) texture=\(DebugLaunchOptions.shellTextureStereo && stereoMaterialBuilder != nil ? "stereo A/B" : "mono", privacy: .public)")
     }
 
     /// Entry placement: centre the shell on the head and face the entry yaw (ARKit), else the
@@ -416,6 +456,7 @@ struct ImmersiveDomeView: View {
             // image age from the start of the current crossfade.
             var intensitySmoother = EffectIntensitySmoother()
             var transitionStartEffectTime: Float?
+            var zoom = ImageZoomTiming()
             var lastEnergy: Float?   // music energy of the last frame (nil when the visuals do not follow the music)
             // Spatial comfort: Depth setting eased, slow re-centre on the head (docs/plans/spatial.md 5).
             var depthSmoother = DepthSettingSmoother()
@@ -505,6 +546,8 @@ struct ImmersiveDomeView: View {
                     transitionState.transitionTo(framedImage)
                     relief.imageChanged(generation: generation)
                     if !wasFirst { transitionStartEffectTime = effectTime }
+                    let zoomStart = wasFirst && DebugLaunchOptions.freezeTime != nil ? 0 : effectTime
+                    zoom.imageChanged(at: zoomStart, replacing: !wasFirst)
                     LMLog.visual.info("🎬 New image detected (gen \(generation)), triggering transition (prepared off-main in \(String(format: "%.1f", prepared.milliseconds), privacy: .public)ms)")
                     // Visuals -> music at the crossfade start.
                     postVisualMood(metadata: metadata, image: framedImage, imageChanged: !wasFirst,
@@ -598,6 +641,8 @@ struct ImmersiveDomeView: View {
                     vibrance: vibrance,
                     music: modulation,
                     look: look,
+                    zoomAge: zoom.age(at: effectTime),
+                    outgoingZoomScale: transitionState.isTransitioning ? zoom.outgoingScale : 0,
                     transition: transitionState.spec,
                     video: footageFrame.state
                 )

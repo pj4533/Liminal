@@ -576,10 +576,12 @@ struct VideoCompositeTests {
     @Test func uniformStrideMatchesTheShaderStruct() {
         // 25 original + 2 vibrance + 6 transition + 11 footage + 7 footage layer B + 8 interaction floats,
         // no padding (EffectsRenderer.metal).
-        #expect(MemoryLayout<EffectsUniforms>.size == 59 * 4)
-        #expect(MemoryLayout<EffectsUniforms>.stride == 59 * 4)
+        #expect(MemoryLayout<EffectsUniforms>.size == 61 * 4)
+        #expect(MemoryLayout<EffectsUniforms>.stride == 61 * 4)
         #expect(MemoryLayout<EffectsUniforms>.offset(of: \.videoDrive) == 51 * 4)
         #expect(MemoryLayout<EffectsUniforms>.offset(of: \.videoKeyAmtB) == 58 * 4)
+        #expect(MemoryLayout<EffectsUniforms>.offset(of: \.tunnelStrength) == 59 * 4)
+        #expect(MemoryLayout<EffectsUniforms>.offset(of: \.outgoingZoomScale) == 60 * 4)
         #expect(MemoryLayout<EffectsUniforms>.offset(of: \.videoMix) == 33 * 4)
         #expect(MemoryLayout<EffectsUniforms>.offset(of: \.videoShadeB) == 43 * 4)
         #expect(MemoryLayout<EffectsUniforms>.offset(of: \.videoWarp) == 44 * 4)

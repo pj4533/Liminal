@@ -88,7 +88,7 @@ struct ImageTransitionTests {
         let b = TransitionBoost.make(spec, intensity: i, envelope: 1, tp: spec.swapCentre)
         return EffectLook.strainLoad(distortion: b.water, logSphere: b.logSphere, noise: b.noise)
             + abs(b.shaderAmount) + b.chromaticAdd * 10 + b.feedbackAdd + b.feedbackTarget + b.bloomAdd
-            + b.hueWaveTarget + b.hueBlendTarget + b.fractalHueAdd + (b.kenBurnsMul - 1)
+            + b.hueWaveTarget + b.hueBlendTarget + b.fractalHueAdd
     }
 
     @Test func intensityScalesEveryStyleMonotonically() {

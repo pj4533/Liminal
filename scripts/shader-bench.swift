@@ -648,7 +648,8 @@ let uniformFields: [String: WritableKeyPath<EffectsUniforms, Float>] = [
     "videoScaleB": \.videoScaleB, "videoAspectB": \.videoAspectB, "videoWarpB": \.videoWarpB,
     "videoDrive": \.videoDrive, "videoDriveAmt": \.videoDriveAmt, "videoKey": \.videoKey, "videoKeyAmt": \.videoKeyAmt,
     "videoDriveB": \.videoDriveB, "videoDriveAmtB": \.videoDriveAmtB, "videoKeyB": \.videoKeyB,
-    "videoKeyAmtB": \.videoKeyAmtB,
+    "videoKeyAmtB": \.videoKeyAmtB, "tunnelStrength": \.tunnelStrength,
+    "outgoingZoomScale": \.outgoingZoomScale,
 ]
 func uniformsDict(_ u: EffectsUniforms) -> [String: Double] {
     var d: [String: Double] = [:]

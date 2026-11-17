@@ -109,6 +109,11 @@ def fresh(age):
 def strain_budget(i):
     return tri(i, 0.30, 0.90, 1.45)
 
+def image_zoom_scale(age):
+    u = min(max(age / 12, 0), 1)
+    blend = min(max(u**3 * (u * (6 * u - 15) + 10), 0), 1)
+    return 1.035 + (1.32 - 1.035) * blend
+
 def proposed(t, intensity=DEFAULT_INTENSITY, age=None, tp=0.0):
     i = intensity
     d = macro_drive(t, i) * fresh(age)
@@ -120,6 +125,12 @@ def proposed(t, intensity=DEFAULT_INTENSITY, age=None, tp=0.0):
     a_t = a_clear + (tri(i, 0.016, 0.058, 0.072) - a_clear) * d * (0.55 + 0.45 * t01)
     a_l = tri(i, 0.0, 0.011, 0.020) * smoothstep(0.45, 0.90, d) * (0.35 + 0.65 * l01)
     a_n = tri(i, 0.0, 0.011, 0.022) * smoothstep(0.20, 0.80, d) * (0.35 + 0.65 * n01)
+    s = image_zoom_scale(t if age is None else age)
+    tunnel_strength = tri(i, 0.038, 0.165, 0.230)
+    tunnel_share = (tunnel_strength / 0.230) * (s - 1.035) / (1.32 - 1.035)
+    a_t *= 1 - 0.24 * tunnel_share
+    a_l *= 1 - 0.55 * tunnel_share
+    a_n *= 1 - 0.35 * tunnel_share
     # Recognisability budget: the radial and the crystalline warp give way before the water does.
     budget = strain_budget(i)
     st = K_TURB * a_t
@@ -137,10 +148,8 @@ def proposed(t, intensity=DEFAULT_INTENSITY, age=None, tp=0.0):
     c = color_cycle(t)
     hb = (0.35 + 0.65 * c) * mix(tri(i, 0.15, 0.40, 0.55), tri(i, 0.25, 0.65, 0.68))
     hw = min(c * mix(tri(i, 0.02, 0.12, 0.24), tri(i, 0.05, 0.28, 0.40)), 0.20, 0.065 / max(hb, 1e-3))
-    s = 1.18 + 0.10 * math.sin(t * 0.05) + 0.04 * math.sin(t * 0.03)
-    s = 1 + (s - 1) * (1 - tri(i, 0.0, 0.30, 0.60) * macro_drive(t, i))   # Ken Burns relief (E27)
-    _, ox, oy = ken_burns(t)
-    return {"time": t, "kenBurnsScale": s, "kenBurnsOffsetX": ox, "kenBurnsOffsetY": oy,
+    return {"time": t, "kenBurnsScale": s, "kenBurnsOffsetX": 0.0, "kenBurnsOffsetY": 0.0,
+            "tunnelStrength": tunnel_strength,
             "distortionAmplitude": a_t, "distortionSpeed": 0.08,
             "logSphereAmount": a_l, "fractalNoiseAmount": a_n,
             "chromaticAmount": min(chromatic(t) * mix(tri(i, 0.3, 1.0, 1.3), tri(i, 0.4, 1.3, 1.6)), 0.02) * (1 + 3 * b),
@@ -201,7 +210,7 @@ def fractal_noise_field(uv, time, amount):
     ny = _flow(np.sin(p + k), np.cos(p + k), 5)
     return np.stack([nx, ny]) * amount
 
-def distorted_uv(u, w=192, h=128, parts=("turbulence", "logsphere", "noise")):
+def distorted_uv(u, w=192, h=128, parts=("tunnel", "turbulence", "logsphere", "noise")):
     """Returns (kb_uv, final_uv), each (2, h, w), before the shader's final clamp."""
     xs = (np.arange(w) + 0.5) / w
     ys = (np.arange(h) + 0.5) / h
@@ -210,6 +219,16 @@ def distorted_uv(u, w=192, h=128, parts=("turbulence", "logsphere", "noise")):
     ky = (ty - 0.5) / u["kenBurnsScale"] - u["kenBurnsOffsetY"] * 0.05 + 0.5
     kb = np.stack([kx, ky])
     uv = kb.copy()
+    if "tunnel" in parts and u.get("tunnelStrength", 0) > 0:
+        radial = np.stack([tx - 0.5, ty - 0.5])
+        radius = np.hypot(radial[0], radial[1])
+        edge = np.maximum(abs(radial[0]), abs(radial[1]))
+        center_t = np.clip((radius - 0.13) / (0.40 - 0.13), 0, 1)
+        edge_t = np.clip((edge - 0.35) / (0.50 - 0.35), 0, 1)
+        band = center_t**2 * (3 - 2 * center_t) * (1 - edge_t**2 * (3 - 2 * edge_t))
+        progress = np.clip((u["kenBurnsScale"] - 1.035) / (1.32 - 1.035), 0, 1)
+        flow = 0.72 + 0.28 * np.sin(radius * 25 - 2 * progress)
+        uv -= radial * (u["tunnelStrength"] * progress * band * flow)
     if "turbulence" in parts:
         uv = uv + turbulence(uv * 3.0, u["time"], u.get("distortionSpeed", 0.08)) * u["distortionAmplitude"]
     thr = 0.00002 if "_drive" in u else 0.001   # proposed uniforms imply the proposed shader edits
@@ -219,7 +238,7 @@ def distorted_uv(u, w=192, h=128, parts=("turbulence", "logsphere", "noise")):
         uv = uv + fractal_noise_field(uv, u["time"], u["fractalNoiseAmount"])
     return kb, uv
 
-def warp_stats(u, parts=("turbulence", "logsphere", "noise")):
+def warp_stats(u, parts=("tunnel", "turbulence", "logsphere", "noise")):
     kb, uv = distorted_uv(u, parts=parts)
     d = uv - kb
     mag = np.hypot(d[0], d[1])
@@ -238,7 +257,7 @@ def warp_stats(u, parts=("turbulence", "logsphere", "noise")):
             "strain_p90": float(np.percentile(strain, 90)), "fold": float((det < 0.25).mean()),
             "clamped": float((out[0] | out[1]).mean())}
 
-PARTSETS = {"all": ("turbulence", "logsphere", "noise"), "turbulence": ("turbulence",),
+PARTSETS = {"all": ("tunnel", "turbulence", "logsphere", "noise"), "turbulence": ("turbulence",),
             "logsphere": ("logsphere",), "noise": ("noise",)}
 
 GOLDEN_INPUTS = [  # (time, intensity, image age or None, transitionProgress)

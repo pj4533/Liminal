@@ -8,6 +8,19 @@
 
 import Foundation
 
+/// Tracks framing separately from the image transition's effect envelope.
+struct ImageZoomTiming {
+    private var start: Float = 0
+    private(set) var outgoingScale: Float = 0
+
+    func age(at time: Float) -> Float { max(0, time - start) }
+
+    mutating func imageChanged(at time: Float, replacing: Bool) {
+        outgoingScale = replacing ? EffectsUniformsComputer.imageZoomScale(age: age(at: time)) : 0
+        start = time
+    }
+}
+
 /// Computes effect uniforms from time and settings.
 /// Centralizes all animation and slider-driven values to prevent platform drift.
 enum EffectsUniformsComputer {
@@ -40,6 +53,8 @@ enum EffectsUniformsComputer {
         vibrance: VibranceFactors = .neutral,
         music: MusicModulation = .neutral,
         look: EffectLook = EffectLook(),
+        zoomAge: Float? = nil,
+        outgoingZoomScale: Float = 0,
         transition: TransitionSpec = .classic,
         video: VideoCompositeState = .off
     ) -> EffectsUniforms {
@@ -60,12 +75,11 @@ enum EffectsUniformsComputer {
         let swell = transition.style == .classic ? 1 : 1 + 0.12 * min(max(a * music.pulseMotion, 0), 1)
         let tb = inTransition ? TransitionBoost.make(transition, intensity: i, envelope: env * swell, tp: tp) : TransitionBoost()
 
-        // Ken Burns: smooth continuous motion (music runs its clock 0.85x...1.35x via motionLead)
-        // In wild stretches the zoom eases back so the whole silhouette stays in view (E27).
-        let kb = computeKenBurns(time: time + music.motionLead)
-        let relief = tri(T.kenBurnsRelief) * EffectLook.macroDrive(time: time, intensity: i)
-        let kenBurns = KenBurnsParams(scale: (1 + (kb.scale - 1) * (1 - relief)) * tb.kenBurnsMul,
-                                      offsetX: kb.offsetX, offsetY: kb.offsetY)
+        // Framing belongs to the image. Clarity, music, and transition boosts cannot reverse it.
+        let scale = imageZoomScale(age: zoomAge ?? look.imageAge ?? time)
+        let tunnelStrength = tri((0.038, 0.165, 0.230))
+        let zoomProgress = (scale - 1.035) / (1.32 - 1.035)
+        let outgoingProgress = max(0, (outgoingZoomScale - 1.035) / (1.32 - 1.035))
 
         // Warps (plan 4.3 and 5): water always present; radial and noise only in the wilder part of the cycle.
         let waterClear = tri(T.waterClear)
@@ -76,6 +90,11 @@ enum EffectsUniformsComputer {
             * (0.35 + 0.65 * logSphereWave01(time: time)) * warpMusic, 0)
         var noise = max(tri(T.noiseMax) * EffectLook.smoothstep(T.noiseWindow.0, T.noiseWindow.1, d)
             * (0.35 + 0.65 * fractalNoiseWave01(time: time)) * warpMusic, 0)
+        // Give the coherent radial flow room rather than stacking it over peak distortion.
+        let tunnelShare = (tunnelStrength / 0.230) * max(zoomProgress, outgoingProgress * (1 - tp))
+        water *= 1 - 0.24 * tunnelShare
+        logSphere *= 1 - 0.55 * tunnelShare
+        noise *= 1 - 0.35 * tunnelShare
         fitStrainBudget(water: &water, logSphere: &logSphere, noise: &noise, budget: EffectLook.strainBudget(i))
         water = min(water, Caps.distortionBase) + tb.water
         logSphere = min(logSphere, Caps.logSphereBase) + tb.logSphere
@@ -107,9 +126,9 @@ enum EffectsUniformsComputer {
 
         var uniforms = EffectsUniforms(
             time: time,
-            kenBurnsScale: kenBurns.scale,
-            kenBurnsOffsetX: kenBurns.offsetX,
-            kenBurnsOffsetY: kenBurns.offsetY,
+            kenBurnsScale: scale,
+            kenBurnsOffsetX: 0,
+            kenBurnsOffsetY: 0,
             distortionAmplitude: water,
             distortionSpeed: 0.08,
             hueBaseShift: music.hueBaseShift + tb.hueBase,
@@ -134,6 +153,8 @@ enum EffectsUniformsComputer {
             fractalNoiseAmount: noise,
             fractalHueAmount: fractalHueRaw(time: time) * mix(T.fractalHue) + tb.fractalHueAdd
         )
+        uniforms.tunnelStrength = tunnelStrength
+        uniforms.outgoingZoomScale = outgoingZoomScale
         let vib = computeVibrance(time: time, imageFactor: vibrance.amount)
             + a * 0.06 * music.pulseColor * vibrance.amount
         uniforms.vibranceAmount = min(max(vib, 0), Caps.vibrance * vibrance.amount)
@@ -220,32 +241,14 @@ enum EffectsUniformsComputer {
         return (0.30 + 0.12 * wave) * imageFactor
     }
 
-    // MARK: - Ken Burns
+    // MARK: - Inward image motion
 
-    struct KenBurnsParams {
-        let scale: Float
-        let offsetX: Float
-        let offsetY: Float
+    /// Ease into the source crop and stop there until this image is replaced.
+    static func imageZoomScale(age: Float) -> Float {
+        let u = min(max(age / 12, 0), 1)
+        let blend = min(max(u * u * u * (u * (6 * u - 15) + 10), 0), 1)
+        return 1.035 + (1.32 - 1.035) * blend
     }
-
-    /// Compute Ken Burns pan/zoom from time.
-    /// Uses multiple sine waves for organic, non-repetitive motion.
-    static func computeKenBurns(time: Float) -> KenBurnsParams {
-        // Scale: gentle breathing between 1.04 and 1.32 (shows at least 57% of the picture)
-        let scale: Float = 1.18 + 0.10 * sin(time * 0.05) + 0.04 * sin(time * 0.03)
-
-        // Offset: wandering pan (normalized to -0.8...0.8 range)
-        let maxOffset: Float = 60
-        let rawOffsetX = maxOffset * sin(time * 0.04) + 20 * sin(time * 0.025)
-        let rawOffsetY = maxOffset * cos(time * 0.035) + 20 * cos(time * 0.02)
-
-        // Normalize offsets (shader expects small values)
-        let offsetX = rawOffsetX / 100.0
-        let offsetY = rawOffsetY / 100.0
-
-        return KenBurnsParams(scale: scale, offsetX: offsetX, offsetY: offsetY)
-    }
-
 
     // MARK: - Oscillators (0...1 or raw ranges; the look mixes and scales them)
 

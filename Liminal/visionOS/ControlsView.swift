@@ -19,7 +19,9 @@ struct ControlsView: View {
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
     @Environment(\.dismissWindow) private var dismissWindow
 
-    @State private var isImmersed = false
+    @Binding var isImmersed: Bool
+    @Binding var controlsVisible: Bool
+    @State private var immersiveRequestPending = false
 
     /// Minimum column width that keeps every label on one line at visionOS type sizes.
     private static let columnWidth: CGFloat = 360
@@ -55,6 +57,7 @@ struct ControlsView: View {
             .padding(32)
         }
         .onAppear {
+            controlsVisible = true
             audioEngine.apply(settings)
             applyDebugLaunchOptions()
             if let id = DebugLaunchOptions.controlsScroll {
@@ -62,10 +65,7 @@ struct ControlsView: View {
             }
         }
         }
-        // The space can also close without the button (Digital Crown, Home): keep the label in sync.
-        .onReceive(NotificationCenter.default.publisher(for: ImmersiveDomeView.didCloseNotification)) { _ in
-            isImmersed = false
-        }
+        .onDisappear { controlsVisible = false }
         .onChange(of: settings.delay) { _, newValue in audioEngine.delay = newValue }
         .onChange(of: settings.reverb) { _, newValue in audioEngine.space = newValue }
         .onChange(of: settings.notes) { _, newValue in audioEngine.density = newValue }
@@ -214,7 +214,10 @@ struct ControlsView: View {
     }
 
     private func toggleImmersive() {
+        guard !immersiveRequestPending else { return }
+        immersiveRequestPending = true
         Task {
+            defer { immersiveRequestPending = false }
             if isImmersed {
                 await dismissImmersiveSpace()
                 isImmersed = false
@@ -247,7 +250,8 @@ extension ControlsView {
                     LMLog.general.info("🧪 DEBUG: auto-opened the immersive space")
                     if DebugLaunchOptions.hideControls {
                         try? await Task.sleep(nanoseconds: 500_000_000)
-                        dismissWindow()
+                        controlsVisible = false
+                        dismissWindow(id: LiminalVisionApp.controlsWindowID)
                         LMLog.general.info("🧪 DEBUG: controls window closed (-LiminalHideControls)")
                     }
                     if let delay = DebugLaunchOptions.autoExitAfter {

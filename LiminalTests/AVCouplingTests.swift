@@ -224,7 +224,7 @@ struct AVCouplingTests {
     static func fields(_ u: EffectsUniforms) -> [Float] {
         [u.kenBurnsScale, u.kenBurnsOffsetX, u.kenBurnsOffsetY, u.distortionAmplitude, u.distortionSpeed, u.hueBaseShift,
          u.hueWaveIntensity, u.hueBlendAmount, u.ghostTapMaxDistance, u.chromaticAmount, u.feedbackWarpAmount, u.feedbackMix,
-         u.bloomAmount, u.logSphereAmount, u.fractalNoiseAmount, u.fractalHueAmount, u.vibranceAmount, u.blackPoint]
+         u.bloomAmount, u.logSphereAmount, u.fractalNoiseAmount, u.fractalHueAmount, u.vibranceAmount, u.blackPoint, u.tunnelStrength]
     }
 
     /// Fraction of variance in the 3...30 Hz band, estimated as the difference of two box filters

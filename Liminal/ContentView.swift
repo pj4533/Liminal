@@ -285,6 +285,7 @@ final class MusicSyncBox {
     var lastLogSecond = -1
     /// Effect time at which the current image's crossfade began (nil before the first crossfade).
     var transitionStart: Float?
+    var zoom = ImageZoomTiming()
     /// The current (or last) image transition; its duration also anchors the fresh-image hold.
     var transition: TransitionSpec = .classic
     var intensity = EffectIntensitySmoother()
@@ -342,6 +343,8 @@ struct VisualDisplayView: View {
             vibrance: vibrance,
             music: modulation,
             look: currentLook(effectTime: effectTime),
+            zoomAge: sync.zoom.age(at: effectTime),
+            outgoingZoomScale: transitionManager.previousFrame == nil ? 0 : sync.zoom.outgoingScale,
             transition: sync.transition,
             video: footage.state
         )
@@ -468,8 +471,13 @@ struct VisualDisplayView: View {
                     sync.transition = pickTransition()
                     return Double(sync.transition.duration)
                 })
-                if started { sync.transitionStart = DebugLaunchOptions.effectTime(Float(effectController.time)) }
-                if started || !hadFrame { postMood(for: image, imageChanged: started) }
+                if started || !hadFrame {
+                    let time = DebugLaunchOptions.effectTime(Float(effectController.time))
+                    if started { sync.transitionStart = time }
+                    let zoomStart = !hadFrame && DebugLaunchOptions.freezeTime != nil ? 0 : time
+                    sync.zoom.imageChanged(at: zoomStart, replacing: started)
+                    postMood(for: image, imageChanged: started)
+                }
             } else {
                 // Image was cleared (e.g., cache cleared) - reset transition manager
                 transitionManager.reset()
@@ -489,6 +497,7 @@ struct VisualDisplayView: View {
             if playing {
                 lastLoggedSecond = -1  // Reset so first log happens immediately
                 sync.transitionStart = nil  // the effect clock restarts at 0
+                sync.zoom = ImageZoomTiming()
                 effectController.start()
                 ArchiveFootageService.shared.start()
             } else {

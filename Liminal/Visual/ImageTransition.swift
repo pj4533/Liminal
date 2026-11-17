@@ -150,7 +150,6 @@ nonisolated struct TransitionBoost: Sendable, Equatable {
     var fractalHueAdd: Float = 0
     var bloomAdd: Float = 0, bloomRadiusMul: Float = 1
     var contrastAdd: Float = 0
-    var kenBurnsMul: Float = 1
     var ghostReachMul: Float = 1
     /// Style amount the shader reads as `txAmount` (Prism stagger, fold, swirl angle, wave, lens, tone fold, ripple, drip).
     var shaderAmount: Float = 0
@@ -205,9 +204,8 @@ nonisolated struct TransitionBoost: Sendable, Equatable {
             b.feedbackAdd = 0.12 * e
             b.chromaticMul = 1 + 1.5 * e
         case .dive:
-            b.kenBurnsMul = 1 + tri(0.5, 1.0, 1.8) * e
             b.logSphere = tri(0.006, 0.016, 0.030) * e
-            b.feedbackAdd = tri(0, 0.03, 0.06) * e   // round 2: almost no trails (the double image at the deepest zoom)
+            b.feedbackAdd = tri(0, 0.03, 0.06) * e   // a short trail during the radial swap
             b.chromaticMul = 1 + 3 * e
         case .afterimage:
             // Round 2: shorter, more warped trails, glow and contrast so the smear keeps light and
