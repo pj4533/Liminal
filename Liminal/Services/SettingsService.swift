@@ -128,7 +128,7 @@ final class SettingsService: ObservableObject {
         didSet { defaults.set(archiveChangeSpeed.rawValue, forKey: Keys.archiveChangeSpeed) }
     }
 
-    /// "Footage audio", 0 (silent) ... 1: level of the film's sound, deep in the reverb. 0.5 is the tuned default.
+    /// "Footage audio", 0 (silent) ... 1: level of the film's sound. 0.5 is the default.
     @Published var archiveAudioLevel: Float {
         didSet { defaults.set(archiveAudioLevel, forKey: Keys.archiveAudioLevel) }
     }

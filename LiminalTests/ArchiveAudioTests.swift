@@ -8,8 +8,8 @@ import AVFoundation
 struct ArchiveAudioCueTests {
 
     static func piece(start: Double = 100, length: Double = 25, rate: Float = 0.7,
-                      segment: Double = 200) -> FootagePiece {
-        FootagePiece(index: 3, slot: 1, clipID: "x", segmentStart: segment, rate: rate, recipe: .window, seed: 0.3,
+                      segment: Double = 200, seed: Float = 0.08) -> FootagePiece {
+        FootagePiece(index: 3, slot: 1, clipID: "x", segmentStart: segment, rate: rate, recipe: .window, seed: seed,
                      warp: 0.6, level: 0.5, swell: 0, start: start, origin: start, fadeIn: 4, length: length,
                      fadeOutStart: nil, fadeOut: nil, sound: true)
     }
@@ -17,20 +17,25 @@ struct ArchiveAudioCueTests {
     @Test func soundComesAndGoesWithItsPiece() throws {
         let p = Self.piece()
         let c = try #require(ArchiveAudioCuePlan(piece: p, clipDuration: 1000))
-        #expect(c.beginAt == 101.5)                   // 1.5 s into the piece's fade in
-        #expect(c.endAt == 127)                       // 2 s past the planned change
-        // Slow smoothstep fades, symmetric, at most 10 s each, with a hold between.
-        #expect(abs(c.fadeIn - min(10, 25.5 * 0.42)) < 1e-9 && c.fadeIn == c.fadeOut)
-        let short = try #require(ArchiveAudioCuePlan(piece: Self.piece(length: 12), clipDuration: 1000))
-        #expect(abs(short.fadeIn - 12.5 * 0.42) < 1e-9)   // short pieces: shorter fades, still a hold
-        #expect(c.fadeIn <= 10 && c.fadeOutAt > c.beginAt + c.fadeIn)
-        // In step with the slowed picture: 1.5 s of piece = 1.05 s of source at rate 0.7.
-        #expect(abs(c.sourceStart - (200 + 1.5 * 0.7)) < 1e-5)
-        // Enough source for the whole sound plus a spare second.
+        #expect(c.beginAt == 100.75)
+        #expect(c.endAt == 125.25)
+        #expect(c.fadeIn == 4 && c.fadeIn == c.fadeOut)
+        #expect(c.fadeOutAt > c.beginAt + c.fadeIn)
+        #expect(abs(c.sourceStart - (200 + 0.75 * 0.7)) < 1e-5)
         #expect(abs(c.sourceLength - (c.endAt + 1 - c.beginAt) * 0.7) < 1e-5)
-        // A long piece: fades capped at 10 s.
-        let long = try #require(ArchiveAudioCuePlan(piece: Self.piece(length: 40), clipDuration: 1000))
-        #expect(long.fadeIn == 10 && long.fadeOut == 10)
+        let short = try #require(ArchiveAudioCuePlan(piece: Self.piece(length: 12), clipDuration: 1000))
+        #expect(abs(short.fadeIn - 11.5 * 0.22) < 1e-9)
+    }
+
+    @Test func originalSpeedUsesTheSameAnchorAndSlowsOnlyAsNeededNearClipEnd() throws {
+        let piece = Self.piece(seed: 0.8)
+        let original = try #require(ArchiveAudioCuePlan(piece: piece, clipDuration: 1000))
+        let slowed = try #require(ArchiveAudioCuePlan(piece: piece, clipDuration: 220))
+        #expect(original.rate == 1)
+        #expect(slowed.rate > piece.rate && slowed.rate < 1)
+        #expect(slowed.sourceStart + slowed.sourceLength <= 220)
+        #expect(original.sourceStart == slowed.sourceStart)
+        #expect(original.sourceLength == original.endAt - original.beginAt + 1)
     }
 
     @Test func heldPieceKeepsItsSoundInSync() throws {
@@ -38,16 +43,16 @@ struct ArchiveAudioCueTests {
         var p = Self.piece()
         p.start += 3
         let c = try #require(ArchiveAudioCuePlan(piece: p, clipDuration: 1000))
-        #expect(c.beginAt == 101.5)
-        #expect(abs(c.sourceStart - (200 + 1.5 * 0.7)) < 1e-5)
+        #expect(c.beginAt == 100.75)
+        #expect(abs(c.sourceStart - (200 + 0.75 * 0.7)) < 1e-5)
     }
 
     @Test func shortPiecesAndClipEnds() throws {
         // Too short to be worth starting (sound span under 7 s).
         #expect(ArchiveAudioCuePlan(piece: Self.piece(length: 6), clipDuration: 1000) == nil)
-        #expect(ArchiveAudioCuePlan(piece: Self.piece(length: 7), clipDuration: 1000) != nil)
+        #expect(ArchiveAudioCuePlan(piece: Self.piece(length: 8), clipDuration: 1000) != nil)
         // The clip ends before the sound would: no cue (a sound is never cut off).
-        #expect(ArchiveAudioCuePlan(piece: Self.piece(segment: 220), clipDuration: 236) == nil)
+        #expect(ArchiveAudioCuePlan(piece: Self.piece(segment: 220), clipDuration: 235) == nil)
         let fits = try #require(ArchiveAudioCuePlan(piece: Self.piece(segment: 200), clipDuration: 240))
         #expect(fits.sourceStart + fits.sourceLength <= 240 + 1e-9)
     }

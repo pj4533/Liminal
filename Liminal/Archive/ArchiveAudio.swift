@@ -11,11 +11,11 @@ import AVFoundation
 import Foundation
 
 /// When a piece's sound plays (decision A27): it comes in a little after the piece starts to fade in and
-/// leaves around the piece's change, with slow smoothstep fades of up to 10 s each. Pure.
+/// leaves around the piece's change, with slow smoothstep fades of up to 4 s each. Pure.
 nonisolated struct ArchiveAudioCuePlan: Sendable, Equatable {
-    static let maxFade: Double = 10
+    static let maxFade: Double = 4
     /// Each fade takes this share of the sound's span (the rest is the hold).
-    static let fadeShare: Double = 0.42
+    static let fadeShare: Double = 0.22
     /// A sound shorter than this (begin to end) is not worth starting.
     static let minimumAudible: Double = FootageWeaver.soundMinSpan
 
@@ -25,7 +25,7 @@ nonisolated struct ArchiveAudioCuePlan: Sendable, Equatable {
     /// Elapsed seconds at which the fade out starts.
     let fadeOutAt: Double
     let fadeOut: Double
-    /// Source seconds of the film where the sound starts (in step with the slowed picture).
+    /// Source seconds of the film where the sound starts (anchored to the picture).
     let sourceStart: Double
     /// Source seconds to decode (the slowed sound lasts `sourceLength / rate`).
     let sourceLength: Double
@@ -38,9 +38,19 @@ nonisolated struct ArchiveAudioCuePlan: Sendable, Equatable {
         let end = piece.origin + piece.length + FootageWeaver.soundTail
         let span = end - begin
         guard span >= Self.minimumAudible else { return nil }
-        let rate = Double(piece.rate)
-        // The picture is at `segmentStart` at `origin` and advances at `rate`.
-        let start = piece.segmentStart + (begin - piece.origin) * rate
+        let pictureRate = Double(piece.rate)
+        let start = piece.segmentStart + (begin - piece.origin) * pictureRate
+        // Reserve pronounced slowdowns for a small share of cues. Near a clip's end,
+        // ease toward the picture rate only as much as needed to cover the cue and its fade.
+        let available = clipDuration - start
+        let rate: Double
+        if piece.seed < 0.20 {
+            rate = pictureRate
+        } else if available >= span {
+            rate = 1
+        } else {
+            rate = max(pictureRate, Double(Float(available / (span + 1))))
+        }
         // One spare second past the fade, so the buffer never ends while still audible.
         let length = min((span + 1) * rate, clipDuration - start)
         // The buffer must last to the end of the fade out (a sound is never cut off).
@@ -52,11 +62,11 @@ nonisolated struct ArchiveAudioCuePlan: Sendable, Equatable {
         fadeOut = fade
         sourceStart = start
         sourceLength = length
-        self.rate = piece.rate
+        self.rate = Float(rate)
     }
 
     /// Linear gain for the "Footage audio" setting (0...1): 0 = silent (no cue at all), 0.5 = 1 (the
-    /// tuned default, stem about -42 dBFS), 1 = 2 (+6 dB, about -36 dBFS). Proportional in amplitude.
+    /// default), 1 = 2 (+6 dB). Proportional in amplitude.
     static func gain(level: Float) -> Float? {
         let l = min(max(level, 0), 1)
         guard l > 0.005 else { return nil }

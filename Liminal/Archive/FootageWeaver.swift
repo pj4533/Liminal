@@ -93,7 +93,7 @@ nonisolated struct FootageWeaver {
         var firstFade: Double = 5
         var rate: ClosedRange<Float> = 0.6...0.85
         var warp: ClosedRange<Float> = 0.35...0.85
-        /// Chance that a piece brings its sound (when the previous sound is long gone).
+        /// Chance that a piece brings its sound (when the direct cue slot is free).
         var soundChance: Float
         /// Seconds the next piece's decoder (and its sound decode) get before its crossfade begins.
         var lead: Double = 3
@@ -104,9 +104,9 @@ nonisolated struct FootageWeaver {
 
         static func speed(_ s: FootageChangeSpeed) -> Timing {
             switch s {
-            case .slow: return Timing(pieceLength: 20...30, crossfade: 5...7, soundChance: 0.5)
-            case .medium: return Timing(pieceLength: 12...20, crossfade: 3.5...5, soundChance: 0.45)
-            case .fast: return Timing(pieceLength: 8...12, crossfade: 2.5...3.5, soundChance: 0.4)
+            case .slow: return Timing(pieceLength: 20...30, crossfade: 5...7, soundChance: 0.9)
+            case .medium: return Timing(pieceLength: 12...20, crossfade: 3.5...5, soundChance: 0.9)
+            case .fast: return Timing(pieceLength: 8...12, crossfade: 2.5...3.5, soundChance: 0.9)
             }
         }
         /// -LiminalVideoMix (stills): one piece for an hour, in 1 s.
@@ -125,10 +125,10 @@ nonisolated struct FootageWeaver {
     /// The first piece fades in this soon after a clip is available.
     static let firstLead: Double = 1
     /// Sound: starts this long after the piece's fade in begins; ends this long after its planned change.
-    static let soundDelay: Double = 1.5
-    static let soundTail: Double = 2
-    /// Quiet seconds after a sound before the next may start (so many pieces stay silent).
-    static let soundGap: Double = 6
+    static let soundDelay: Double = 0.75
+    static let soundTail: Double = 0.25
+    /// Minimum separation between direct cues. Their room and echo tails can overlap.
+    static let soundGap: Double = 0.25
     /// A piece shorter than this (sound start to end) brings no sound.
     static let soundMinSpan: Double = 7
 

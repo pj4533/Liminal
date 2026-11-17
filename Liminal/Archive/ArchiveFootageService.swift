@@ -225,12 +225,12 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
     // MARK: - Sound (plan 4, A27)
 
     /// Decodes a piece's sound off the main actor and posts it to the music at the cue's start.
-    /// Returns false when the piece will be silent after all.
-    private func scheduleAudio(piece: FootagePiece, clip: ArchiveClip, url: URL) -> Bool {
-        let (level, start, busy) = shared.withLock { ($0.audioLevel, $0.startUptime, $0.audio.map { !$0.ended } ?? false) }
-        guard let sink = music.withLock({ $0 }), !busy else { return false }
-        guard let gain = ArchiveAudioCuePlan.gain(level: level),
-              let cue = ArchiveAudioCuePlan(piece: piece, clipDuration: clip.duration) else { return false }
+    private func scheduleAudio(piece: FootagePiece, cue: ArchiveAudioCuePlan, clip: ArchiveClip, url: URL) {
+        let (level, start, busy) = shared.withLock { s in
+            (s.audioLevel, s.startUptime, s.audio.map { !$0.ended || $0.pieceIndex == piece.index } ?? false)
+        }
+        guard let sink = music.withLock({ $0 }), !busy,
+              let gain = ArchiveAudioCuePlan.gain(level: level) else { return }
         let token = audioTokenSeed.withLock { $0 += 1; return $0 }
         shared.withLock { $0.audio = AudioState(cue: cue, token: token, pieceIndex: piece.index) }
         let title = clip.title
@@ -263,10 +263,9 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
             }
             guard let g else { return }
             sink.post(.archiveBegin(ArchiveVoice.Cue(buffer: buffer, gain: g, fadeIn: max(1, cue.fadeIn - max(late, 0)),
-                                                     label: title)))
+                                                     label: title, claritySeed: piece.seed)))
             if late > 0.1 { LMLog.audio.warning("📼🔊 sound started \(String(format: "%.2f", late), privacy: .public)s late") }
         }
-        return true
     }
 
     /// Fades the current sound out (once).
@@ -432,6 +431,14 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
                     }
                 }
             }
+            // The next video can be ready before the outgoing audio starts fading.
+            // Retry the handoff on the loop instead of discarding that incoming cue.
+            if let next = weaver.current, next.sound,
+               let clip = clips.first(where: { $0.id == next.clipID }),
+               let cue = ArchiveAudioCuePlan(piece: next, clipDuration: clip.duration),
+               elapsed < cue.fadeOutAt {
+                scheduleAudio(piece: next, cue: cue, clip: clip, url: url(for: clip))
+            }
             let pieces = weaver.pieces
             shared.withLock { $0.pieces = pieces }
             if elapsed - lastLog >= 10 {
@@ -473,7 +480,6 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
             piece.sound = true
         }
         let url = url(for: clip)
-        if piece.sound { piece.sound = scheduleAudio(piece: piece, clip: clip, url: url) }
         weaver.didPrepare(piece)
         sources[r.slot].play(.init(url: url, start: readStart, length: sourceLength, rate: r.rate,
                                    black: clip.black, white: clip.white,

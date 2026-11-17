@@ -337,23 +337,22 @@ struct FootageWeaverTests {
         }
     }
 
-    @Test func soundComesAndGoesIndependently() {
+    @Test func audioCoversMostPiecesWithoutDirectCueOverlap() {
         var sounding = 0, total = 0
         for seed in UInt64(0)..<100 {
             let r = Self.run(seed: seed, timing: .speed(.medium), seconds: 900)
             total += r.pieces.count
             let withSound = r.pieces.filter(\.sound)
             sounding += withSound.count
-            // Never two sounds at once, always a quiet gap, and at least one silent piece between.
+            // Direct cues stay separate so the shared effects can bridge the handoff.
             for (a, b) in zip(withSound, withSound.dropFirst()) {
                 let ca = ArchiveAudioCuePlan(piece: a, clipDuration: 10_000)!
                 let cb = ArchiveAudioCuePlan(piece: b, clipDuration: 10_000)!
                 #expect(cb.beginAt >= ca.endAt + FootageWeaver.soundGap - 1e-6)
-                #expect(b.index >= a.index + 2)
             }
         }
         let share = Double(sounding) / Double(total)
-        #expect(share > 0.12 && share < 0.45)   // many pieces stay silent, some bring their sound
+        #expect(share > 0.75 && share < 0.98)
     }
 
     @Test func coldStartWaitsForTheFirstClipOnly() {

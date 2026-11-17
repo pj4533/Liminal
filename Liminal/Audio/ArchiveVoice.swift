@@ -5,16 +5,8 @@ import AVFoundation
 import Foundation
 import OSLog
 
-/// The sound of an archive film (docs/plans/archive-video.md 4, decisions A14-A18). One more static strip
-/// in the music graph, built once with the others and never rewired:
-///
-///     buffer player -> HPF 220 Hz -> LPF 2.4 kHz -> LPF 2.4 kHz -> LayerStrip
-///     LayerStrip: dry -12 dB, reverb send 1.0, delay send 0.6, slow pan walk +-0.4
-///
-/// Mostly wet: what is heard is the Zita tail and the dark tape delay of the existing `MixBus`, so the film
-/// shares the music's room. It ducks nothing and adds no reverb of its own. The buffer arrives already slowed
-/// to the footage's rate (pitched down like slowed tape) and normalised (`ArchiveAudioDecoder`). Conductor
-/// queue / offline render thread only.
+/// A static mix strip for normalised archive audio. During some cues, the direct
+/// sound and speech band open up briefly, then settle back into the shared reverb and tape delay.
 nonisolated final class ArchiveVoice {
 
     /// A decoded segment ready to play, posted with `MusicControl.archiveBegin`.
@@ -24,6 +16,8 @@ nonisolated final class ArchiveVoice {
         let gain: Float
         let fadeIn: Double
         let label: String
+        /// Seeded by the footage piece so successive cues vary in how clearly they emerge.
+        var claritySeed: Float = 0.75
     }
 
     /// Node wrapper for an `AVAudioPlayerNode` (AudioKit's `AudioPlayer` adds a mixer and file handling we
@@ -42,15 +36,55 @@ nonisolated final class ArchiveVoice {
     /// The format every cue buffer must have (the engine's format when the graph was built).
     let format: AVAudioFormat
 
-    /// Sends (plan 4): the dry path 12 dB under the sends, so the film is heard through the room.
     static let dryGain: Float = dbToGain(-12)
-    static let reverbSend: Float = 1.0
-    static let delaySend: Float = 0.6
+    static let clearDryGain: Float = dbToGain(-1)
+    static let reverbSend: Float = 1.3
+    static let delaySend: Float = 1.3
     static let highpassHz: Float = 220
     static let lowpassHz: Float = 2400
-    /// Strip trim at "Footage audio" 0.5. Tuned with the offline render (decision A16) so the stem's mean
-    /// level over a moment's hold is about -42 dBFS with a -26 dBFS RMS source (the music is about -25).
-    static let baseTrim: Float = dbToGain(-11)
+    /// Strip trim at the default Footage audio setting.
+    static let baseTrim: Float = dbToGain(-10.5)
+
+    /// Independently seeded contours with irregular spacing. Smoothstep reaches each
+    /// target with zero slope, including when two successive targets reverse direction.
+    private struct Contour {
+        private let points: [(time: Double, value: Float)]
+
+        init(segments: Int, range: ClosedRange<Float>, rng: inout MusicRNG) {
+            points = (0...segments).map { index in
+                let offset = (index == 0 || index == segments) ? 0 : rng.range(-0.38...0.38)
+                return ((Double(index) + offset) / Double(segments), rng.rangeF(range))
+            }
+        }
+
+        func value(at progress: Double) -> Float {
+            let t = min(1, max(0, progress))
+            guard let next = points.indices.dropFirst().first(where: { t <= points[$0].time }) else {
+                return points[points.count - 1].value
+            }
+            let a = points[next - 1], b = points[next]
+            let u = Float((t - a.time) / (b.time - a.time))
+            return a.value + (b.value - a.value) * (u * u * (3 - 2 * u))
+        }
+    }
+
+    private struct CueMix {
+        let clarity: Contour
+        let room: Contour
+        let echo: Contour
+
+        init(seed: Float, duration: Double) {
+            var rng = MusicRNG(seed: UInt64(seed.bitPattern))
+            let segments = max(2, Int(duration / 4))
+            clarity = Contour(segments: segments + rng.int(0...2), range: 0.42...1, rng: &rng)
+            room = Contour(segments: segments + rng.int(0...2), range: 0.95...1.85, rng: &rng)
+            echo = Contour(segments: segments + rng.int(0...2), range: 0.95...1.95, rng: &rng)
+        }
+    }
+
+    private var cueStart = 0.0
+    private var cueDuration = 1.0
+    private var cueMix: CueMix?
 
     private var playing = false
     private var stopAt: Double?
@@ -99,12 +133,16 @@ nonisolated final class ArchiveVoice {
         if playing { p.stop() }
         setFilters(running: true)
         strip.trim = Self.baseTrim * cue.gain
+        let seconds = Double(cue.buffer.frameLength) / cue.buffer.format.sampleRate
+        cueStart = now
+        cueDuration = max(1, seconds - 1)
+        cueMix = CueMix(seed: cue.claritySeed, duration: cueDuration)
+        updateMix(progress: 0)
         p.scheduleBuffer(cue.buffer, at: nil, options: [], completionHandler: nil)
         p.play()
         playing = true
         label = cue.label
         stopAt = nil
-        let seconds = Double(cue.buffer.frameLength) / cue.buffer.format.sampleRate
         endAt = now + seconds
         strip.fade(to: 1, over: cue.fadeIn, now: now)
         LMLog.audio.info("📼🔊 archive audio begin \"\(cue.label, privacy: .public)\" \(String(format: "%.1f", seconds), privacy: .public)s gain=\(String(format: "%.1f", 20 * log10(max(cue.gain, 1e-6))), privacy: .public)dB fadeIn=\(String(format: "%.1f", cue.fadeIn), privacy: .public)s")
@@ -156,9 +194,30 @@ nonisolated final class ArchiveVoice {
                     powerDown()
                 }
             }
-            setPanIfNeeded(t)
+            if playing {
+                updateMix(progress: (t - cueStart) / cueDuration)
+                setPanIfNeeded(t)
+            }
         }
         strip.tick(now: t)
+    }
+
+    private func updateMix(progress: Double) {
+        guard let cueMix else { return }
+        let value = cueMix.clarity.value(at: progress)
+        // Keep both effects present even at full clarity. The consonants come forward
+        // mainly through the wider filter, with only a small dip in the sends.
+        let wetScale = 1 - 0.18 * value
+        let reverb = cueMix.room.value(at: progress) * wetScale
+        let echo = cueMix.echo.value(at: progress) * wetScale
+        let cutoff = Self.lowpassHz + 3800 * value
+        ParamRamp.set(highpass.$cutoffFrequency, Self.highpassHz - 110 * value, over: 0.12)
+        ParamRamp.set(lowpass.$cutoffFrequency, cutoff, over: 0.12)
+        ParamRamp.set(lowpass2.$cutoffFrequency, cutoff, over: 0.12)
+        if let dry = strip.dryGain {
+            ParamRamp.setGain(dry, Self.dryGain + (Self.clearDryGain - Self.dryGain) * value, over: 0.12)
+        }
+        strip.setSends(reverb: reverb, delay: echo, over: 0.12)
     }
 
     private var lastPan: Float = 0
