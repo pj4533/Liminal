@@ -58,7 +58,7 @@
 //   --video-look NAME  phantom | imprint | window | emerge | palette | print | poster (default phantom)
 //   --video-mode NAME  footage recipe (docs/plans/footage-fx.md 5: a blend look or an interaction mode, e.g.
 //                      undertow, fringe, wake, aurora, solar, poster, shadowplay, backdrop, kaleido, relief,
-//                      glow, print, facets) through VideoComposite, as the app pins it with -LiminalVideoMode;
+//                      glow, print) through VideoComposite, as the app pins it with -LiminalVideoMode;
 //                      overrides --video-look. --video-mode-b NAME: layer B of --footage-b (default: the same).
 //   --video-mix X      constant footage mix (VideoCompositeState.constantMix; default: the look's
 //                      ceiling at the intensity). Video uniforms can also be set with --set.

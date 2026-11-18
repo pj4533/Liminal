@@ -30,7 +30,7 @@ Liminal pairs evolving ambient music with surreal AI imagery, flowing visual eff
 - **Living imagery** — generated scenes blend through fluid effects that respond to the music.
 - **Immersive space** — depth gives the imagery relief as it wraps around you on Vision Pro.
 - **Traces of old film** — Vintage films from the Internet Archive weave texture, movement, and occasional sound into the scene.
-- **Make it yours** — shape the density, space, echo, and intensity, with image-generation limits and cache-only playback.
+- **Make it yours** — choose a music style and scale, adjust footage volume and visual intensity, and set image-generation limits.
 
 <details>
 <summary>See the macOS app</summary>

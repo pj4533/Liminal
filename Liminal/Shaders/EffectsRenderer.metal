@@ -206,7 +206,7 @@ static inline half3 restoreChroma(half3 c, half target, half maxGain) {
 constant int VARIANT_FOOTAGE = 1;   // archive footage blend looks (effectsFragment*Video)
 constant int VARIANT_KEYS = 2;      // + keys, Kaleido, Palette, Print (effectsFragment*VideoKeys)
 constant int VARIANT_DRIVES = 4;    // + the composite drives (effectsFragment*VideoDrives); 7 = keys and drives (*VideoFX)
-constant int VARIANT_GLASS = 8;     // + the drives that move the picture's samples: Undertow, Fringe, Facets
+constant int VARIANT_GLASS = 8;     // + the drives that move the picture's samples: Undertow and Fringe
                                     // (*VideoGlass; 11, 13, 15 the crossfade fallbacks; round 2, decision F25)
 
 // MARK: - Uniforms
@@ -301,7 +301,6 @@ constant int FD_AURORA = 4;     // the film's tones rotate the hue waves
 constant int FD_SOLAR = 5;      // the film's highlights fold the tone curve
 constant int FD_RELIEF = 6;     // the film embossed into the picture
 constant int FD_GLOW = 7;       // the film projected as light and shade; its highlights swell the bloom
-constant int FD_FACETS = 8;     // the film's figure shatters the picture into flat shards (round 1)
 // FootageKey raw values: where the film may show.
 constant int FK_SHADOW = 1;     // the picture's shadows (key amount > 0) or highlights (< 0)
 constant int FK_BACKDROP = 2;   // far depth, behind the subject (visionOS: a depth map is bound)
@@ -311,7 +310,6 @@ constant float FD_UNDERTOW_MAX = 0.040;   // UV (the water itself is 0.028-0.058
 constant float FD_FRINGE_MAX = 0.030;     // UV (today's radial fringing reaches about 0.01 at the frame edge)
 constant half FD_AURORA_MAX = 0.42h;      // hue turns per unit of film tone offset
 constant half FD_RELIEF_MAX = 1.0h;
-constant float FD_FACET_CELLS = 30.0;     // shard cells across the frame height (Facets)
 
 // TransitionStyle raw values (ImageTransition.swift)
 constant int TX_CLASSIC = 0;
@@ -671,12 +669,12 @@ static inline FootageTap tapFootage(float2 uvA, float2 texCoord, float field, te
     return o;
 }
 
-// The drives that move the picture's samples (Undertow, Fringe, Facets) must be known before the picture
+// The drives that move the picture's samples (Undertow and Fringe) must be known before the picture
 // is sampled: a small tap of their own at the top of stage B. Only the two offsets and one shade stay live
 // across the picture samples (keeping the whole tap live there cost 14 % in occupancy).
 static inline bool isPreDrive(VideoLayerParams L) {
     int drive = int(L.drive + 0.5);
-    return (drive == FD_UNDERTOW || drive == FD_FRINGE || drive == FD_FACETS) && L.driveAmt > 0.0;
+    return (drive == FD_UNDERTOW || drive == FD_FRINGE) && L.driveAmt > 0.0;
 }
 
 static inline void addPreDrive(thread float2 &uvOffset, thread float2 &chroma, VideoLayerParams L,
@@ -684,30 +682,6 @@ static inline void addPreDrive(thread float2 &uvOffset, thread float2 &chroma, V
     constexpr sampler vs(address::clamp_to_edge, filter::linear);
     int drive = int(L.drive + 0.5);
     float2 fuv, drift;
-    if (drive == FD_FACETS) {
-        // Facets: the picture is cut into triangular shards (a slowly turned grid in picture space); where
-        // the film's figure is bright (or dark, by seed) each shard flattens toward the picture at its centre
-        // and slips: the film's shapes appear as cut glass made of the picture.
-        float cs;
-        float sn = sincos(L.seed * 3.1415927 + 0.35, cs);
-        float2 p = (uvA - 0.5) * float2(1.5, 1.0) * FD_FACET_CELLS;
-        p = float2(p.x * cs - p.y * sn, p.x * sn + p.y * cs);
-        float2 cell = floor(p);
-        float2 f = p - cell;
-        bool up = f.x > f.y;
-        float2 cc = cell + (up ? float2(0.667, 0.333) : float2(0.333, 0.667));
-        float2 cp = float2(cc.x * cs + cc.y * sn, -cc.x * sn + cc.y * cs) / FD_FACET_CELLS / float2(1.5, 1.0) + 0.5;
-        float2 vuv = footageUV<false>(cp, texCoord + (cp - uvA), L, u, fuv, drift);
-        half4 v = videoTexture.sample(vs, vuv);
-        half fig = figureOf(v);
-        half on = (L.seed < 0.5 ? smoothstep(0.40h, 0.60h, fig) : 1.0h - smoothstep(0.38h, 0.58h, fig));
-        half m = on * half(L.driveAmt) * featherOf(vuv);
-        // Each shard also slips by its own small offset (a hash of the cell), so it shows a shifted piece of
-        // the picture: broken glass, visible even on a smooth ground, with no shading pass of its own.
-        float hj = fract(dot(cc, float2(0.6180340, 0.4142136)) * 7.31) * 6.2831853;
-        uvOffset += ((cp - uvA) * 0.75 + float2(cos(hj), sin(hj)) * 0.022) * float(m);
-        return;
-    }
     float2 vuv = footageUV<false>(uvA, texCoord, L, u, fuv, drift);   // no recipe folds and drives at once
     half4 v = videoTexture.sample(vs, vuv);
     half a = half(L.driveAmt) * featherOf(vuv);
@@ -743,7 +717,7 @@ static inline void addPreDrive(thread float2 &uvOffset, thread float2 &chroma, V
 // frame-blended luma: cuts and flashes are already softened there, as for the blend looks), its motion and
 // its edges. Round 1 (decision F21): every drive also shows the film's shape, not only its tone.
 template <bool kComp, bool kGlass>
-static inline void addDrive(thread FootageDrive &fd, FootageTap tp, float2 uvA, VideoLayerParams L,
+static inline void addDrive(thread FootageDrive &fd, FootageTap tp, VideoLayerParams L,
                             texture2d<half> videoTexture, constant EffectsUniforms &u) {
     int drive = int(L.drive + 0.5);
     half a = half(L.driveAmt) * tp.feather;
@@ -802,19 +776,6 @@ static inline void addDrive(thread FootageDrive &fd, FootageTap tp, float2 uvA, 
         fd.glow += hl * a * 0.5h;
         fd.relief += (hl - 0.35h) * a * 1.3h;
         fd.lift += hl * hl * a * 0.45h;
-    } else if (kGlass && drive == FD_FACETS) {
-        // Round 2: the shards inside the film's figure catch light, each its own (a hash of the shard), so
-        // the figure reads as a mosaic of lit glass (the cut itself is a pre-drive). Same grid as there.
-        float cs;
-        float sn = sincos(L.seed * 3.1415927 + 0.35, cs);
-        float2 p = (uvA - 0.5) * float2(1.5, 1.0) * FD_FACET_CELLS;
-        p = float2(p.x * cs - p.y * sn, p.x * sn + p.y * cs);
-        float2 cell = floor(p);
-        float2 cc = cell + ((p.x - cell.x) > (p.y - cell.y) ? float2(0.667, 0.333) : float2(0.333, 0.667));
-        half hj = half(fract(dot(cc, float2(0.6180340, 0.4142136)) * 7.31));
-        half on = (L.seed < 0.5 ? smoothstep(0.40h, 0.60h, fig) : 1.0h - smoothstep(0.38h, 0.58h, fig)) * a;
-        fd.relief += (hj - 0.4h) * on * 0.9h;
-        fd.lift += hj * on * 0.35h;
     }
 }
 
@@ -949,8 +910,8 @@ static inline half3 compositeVideo(half3 c, FootageTap tp, VideoLayerParams L, h
 // kVideo: 0 = no footage (the plain fragments: exactly the shader without footage, bit-identical frames,
 // no cost: docs/decisions/archive-video.md); 1 = footage blend looks only (effectsFragmentVideo /
 // effectsFragmentStereoVideo: today's four looks at today's cost); | 2 keys and the new carriers (Kaleido,
-// Shadowplay, Backdrop, Poster, Print), | 4 the composite drives, | 8 the glass drives (Undertow, Fringe,
-// Facets). The renderers bind the bits a frame's layers need (VideoComposite.footageVariant): every hook adds
+// Shadowplay, Backdrop, Poster, Print), | 4 the composite drives, | 8 the glass drives (Undertow and Fringe).
+// The renderers bind the bits a frame's layers need (VideoComposite.footageVariant): every hook adds
 // registers that all frames of its variant pay for (docs/decisions/footage-fx.md F11, F25).
 template <int kVideo>
 static inline half4 shadeEye(
@@ -972,7 +933,7 @@ static inline half4 shadeEye(
     constexpr bool kAny = (kVideo & VARIANT_FOOTAGE) != 0;
     constexpr bool kKeys = (kVideo & VARIANT_KEYS) != 0;      // keys, Kaleido's fold, Palette and Print
     constexpr bool kDrives = (kVideo & VARIANT_DRIVES) != 0;  // the composite drives' hooks
-    constexpr bool kGlass = (kVideo & VARIANT_GLASS) != 0;    // Undertow, Fringe, Facets (pre-drives + light)
+    constexpr bool kGlass = (kVideo & VARIANT_GLASS) != 0;    // Undertow and Fringe (pre-drives + light)
     constexpr bool kLight = kDrives || kGlass;                // the lift and relief fields both groups use
     constexpr bool kFX = kKeys || kLight;
     float2 uv = warp.uv;
@@ -1085,13 +1046,13 @@ static inline half4 shadeEye(
     FootageDrive fd = {};
     if (kAny && hasA) {
         FootageTap ta = tapFootage<kKeys>(kFX ? warp.uv : uv, texCoord, warp.field, videoTexture, la, uniforms);
-        if (kLight) addDrive<kDrives, kGlass>(fd, ta, warp.uv, la, videoTexture, uniforms);
+        if (kLight) addDrive<kDrives, kGlass>(fd, ta, la, videoTexture, uniforms);
         half key = kKeys ? footageKey(la, color.rgb, uv, depthTexture) : 1.0h;
         color.rgb = compositeVideo<kVideo>(color.rgb, ta, la, key, uniforms);
     }
     if (kAny && hasB) {
         FootageTap tb = tapFootage<kKeys>(kFX ? warp.uv : uv, texCoord, warp.field, videoTextureB, lb, uniforms);
-        if (kLight) addDrive<kDrives, kGlass>(fd, tb, warp.uv, lb, videoTextureB, uniforms);
+        if (kLight) addDrive<kDrives, kGlass>(fd, tb, lb, videoTextureB, uniforms);
         half key = kKeys ? footageKey(lb, color.rgb, uv, depthTexture) : 1.0h;
         color.rgb = compositeVideo<kVideo>(color.rgb, tb, lb, key, uniforms);
     }
@@ -1394,7 +1355,7 @@ fragment half4 effectsFragmentVideo(
 
 // Footage interaction-mode variants of effectsFragmentVideo (docs/plans/footage-fx.md): bound only while a
 // footage layer needs them (VideoComposite.footageVariant): Keys (keys, Kaleido, Palette, Print), Drives
-// (the composite drives over the blend looks or none), Glass (Undertow, Fringe, Facets: the drives that move
+// (the composite drives over the blend looks or none), Glass (Undertow and Fringe: the drives that move
 // the picture's samples, round 2), and their unions (fallbacks, during a crossfade between two kinds).
 #define FOOTAGE_FRAGMENT(NAME, V) \
 fragment half4 NAME( \

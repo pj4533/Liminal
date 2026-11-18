@@ -298,29 +298,38 @@ nonisolated struct ArchiveSeedList: Decodable, Sendable {
         let year: Int
         let query: String
         let color: Bool
+        /// A vetted encode when the Archive's smallest listed MP4 is mislabeled.
+        var preferredFile: String? = nil
     }
     let seeds: [Seed]
 
     /// Curated Internet Archive titles. See docs/experience.md for sources and credits.
     static let pinned: [Seed] = [
-        Seed(id: "Narcotic1967_2", title: "Narcotics: Pit of Despair (Part II)", year: 1967,
+        Seed(id: "aapb-cpb-aacip-514-n00zp3ws90", title: "The World of LSD", year: 1967,
+             query: "drug-education", color: false, preferredFile: "cpb-aacip-514-n00zp3ws90_The World of LSD.ia.mp4"),
+        Seed(id: "VAM026", title: "History of Marijuana Legislation, Part One", year: 1967,
              query: "drug-education", color: true),
-        Seed(id: "DrugAbus1969", title: "Drug Abuse: The Chemical Tomb", year: 1969,
+        Seed(id: "gov.archives.arc.13260", title: "The Mind-Benders: LSD and the Hallucinogens", year: 1970,
              query: "drug-education", color: true),
-        Seed(id: "DrugAddi1951", title: "Drug Addiction", year: 1951,
-             query: "drug-education", color: false),
         Seed(id: "alan-watts-the-flow-of-zen", title: "The Flow of Zen by Alan Watts", year: 1969,
              query: "trippy", color: false),
         Seed(id: "342-usaf-42990", title: "UFO Interview", year: 1966,
              query: "trippy", color: false),
-        Seed(id: "lsdthespringgroveexperiment", title: "LSD: The Spring Grove Experiment", year: 1966,
-             query: "drug-education", color: false),
+        Seed(id: "Timothy_Leary_Archives_198", title: "A Conversation on LSD", year: 1979,
+             query: "drug-education", color: true),
         Seed(id: "Ergotthestoryofaparasiticfungus-wellcome", title: "Ergot: The Story of a Parasitic Fungus", year: 1958,
              query: "trippy", color: false),
         Seed(id: "Designfo1956", title: "Design for Dreaming", year: 1956,
              query: "trippy", color: true),
     ]
     static let pinnedIDs = Set(pinned.map(\.id))
+
+    /// Titles removed from rotation, including known Archive uploads of the same films.
+    static let retiredIDs: Set<String> = [
+        "Narcotic1967_2", "Narcotics_Pit_of_Despair", "0785_Narcotics_Pit_of_Despair_06_06_30_08",
+        "DrugAbus1969", "0052DrugAbuseTheChemicalTomb", "DrugAddi1951",
+        "lsdthespringgroveexperiment", "lsdthespringgroveexperimentreel1", "lsdthespringgroveexperimentreel1_202605"
+    ]
 
     static func bundled() -> [Seed] {
         guard let url = Bundle.main.url(forResource: "archive-seeds", withExtension: "json"),

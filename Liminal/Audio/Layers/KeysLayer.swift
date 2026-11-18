@@ -36,8 +36,8 @@ nonisolated final class KeysLayer: BaseLayer {
         }
         let mix = Mixer(groups)
         filter = LowPassButterworthFilter(mix, cutoffFrequency: 1600)
-        let strip = LayerStrip(source: mix, filter: filter, trim: dbToGain(-17) * 1.414 / 0.5,
-                               reverb: 0.9, delay: 0.3, dry: 0.5)
+        let strip = LayerStrip(source: mix, filter: filter, trim: dbToGain(-19) * 1.414 / 0.5,
+                               reverb: 0.9, delay: 0.3, dry: 0.32)
         var tmp = MusicRNG(seed: 0)
         loop = LoopClock(bounds: KeysLayer.loopBounds, rng: &tmp)
         super.init(id: .keys, strip: strip, entryThreshold: 0.4)
@@ -136,9 +136,9 @@ nonisolated final class KeysLayer: BaseLayer {
         let fm = ctx.coupling.fmScale * (0.8 + 0.4 * ctx.brightness)
         let (ratio, idx0, idx1, idxTime, decay, attack): (Float, Float, Float, Double, Double, Double) = {
             switch preset {
-            case .felt: return (1, 0.9, 0.1, 1.2, rng.range(4...7), 0.08)
-            case .warm: return (2, 0.5, 0.05, 1.5, rng.range(5...8), 0.12)
-            case .hollow: return (3, 0.25, 0, 1.5, rng.range(4...7), 0.14)
+            case .felt: return (1, 0.58, 0.07, 1.2, rng.range(4...7), 0.20)
+            case .warm: return (2, 0.32, 0.035, 1.5, rng.range(5...8), 0.24)
+            case .hollow: return (3, 0.16, 0, 1.5, rng.range(4...7), 0.28)
             }
         }()
         // Higher notes quieter (keeps the top soft).
@@ -234,7 +234,7 @@ nonisolated final class KeysLayer: BaseLayer {
     }
 
     override func update(dt: Double, ctx: LayerContext) {
-        ParamRamp.set(filter.$cutoffFrequency, expMap(ctx.brightness, 900, 2600), over: 0.12)
+        ParamRamp.set(filter.$cutoffFrequency, expMap(ctx.brightness, 720, 1950), over: 0.12)
         strip.setSends(reverb: 0.9, delay: 0.3 * ctx.delayScale, over: 0.12)
     }
 

@@ -56,11 +56,8 @@ nonisolated enum FootageDrive: Int, CaseIterable, Sendable {
     case relief = 6
     /// The film projected onto the picture as light and shade; its highlights swell the bloom.
     case glow = 7
-    /// The film's figure shatters the picture into flat, lit shards (round 1; replaced Ghost film).
-    case facets = 8
-
     /// Geometric drives move the picture and are held off while a new picture settles (EffectLook.fresh).
-    var isGeometric: Bool { self == .undertow || self == .fringe || self == .facets }
+    var isGeometric: Bool { self == .undertow || self == .fringe }
     /// The drives that move the picture's samples run in their own shader group (VARIANT_GLASS, decision F25).
     var isGlass: Bool { isGeometric }
 
@@ -75,7 +72,6 @@ nonisolated enum FootageDrive: Int, CaseIterable, Sendable {
         case .solar: return (0.0, 0.85, 1.0)
         case .relief: return (0.40, 0.85, 1.0)
         case .glow: return (0.50, 0.85, 1.0)
-        case .facets: return (0.40, 0.80, 1.0)
         }
     }
 }
@@ -102,7 +98,7 @@ nonisolated enum FootageRecipe: String, CaseIterable, Sendable, Codable {
     // Today's four blend looks.
     case phantom, imprint, window, emerge
     // Water: the film moves the picture.
-    case undertow, wake, facets
+    case undertow, wake
     // Colour: the film steers the picture's colours.
     case fringe, aurora, solar, poster
     // Keyed: the film shows only in part of the picture.
@@ -134,7 +130,7 @@ nonisolated enum FootageRecipe: String, CaseIterable, Sendable, Codable {
     var carrier: VideoLook? {
         switch self {
         case .phantom, .wake, .fringe, .glow: return .phantom
-        case .imprint, .undertow, .aurora, .relief, .facets: return .imprint
+        case .imprint, .undertow, .aurora, .relief: return .imprint
         case .window, .backdrop: return .window
         case .emerge: return .emerge
         case .shadowplay, .kaleido: return .palette
@@ -163,7 +159,6 @@ nonisolated enum FootageRecipe: String, CaseIterable, Sendable, Codable {
         case .kaleido: return 2.2
         case .shadowplay: return 2.2
         case .backdrop: return 1.9
-        case .facets: return 0.5
         case .solar: return 0
         }
     }
@@ -181,7 +176,6 @@ nonisolated enum FootageRecipe: String, CaseIterable, Sendable, Codable {
         switch self {
         case .undertow: return .undertow
         case .wake: return .wake
-        case .facets: return .facets
         case .fringe: return .fringe
         case .aurora: return .aurora
         case .solar: return .solar
@@ -194,7 +188,7 @@ nonisolated enum FootageRecipe: String, CaseIterable, Sendable, Codable {
     var family: FootageFamily {
         switch self {
         case .phantom, .imprint, .window, .emerge: return .plain
-        case .undertow, .wake, .facets: return .water
+        case .undertow, .wake: return .water
         case .fringe, .aurora, .solar, .poster: return .colour
         case .shadowplay, .backdrop, .kaleido: return .keyed
         case .relief, .glow, .print: return .light
@@ -207,7 +201,6 @@ nonisolated enum FootageRecipe: String, CaseIterable, Sendable, Codable {
         case .phantom, .window: return 3
         case .imprint: return 2
         case .emerge, .solar, .print: return 1
-        case .facets: return 2
         case .undertow, .wake, .fringe, .aurora, .shadowplay, .backdrop, .glow: return 3
         case .poster, .kaleido, .relief: return 2
         }
@@ -220,7 +213,6 @@ nonisolated enum FootageRecipe: String, CaseIterable, Sendable, Codable {
         case .solar: return 0.35
         case .kaleido: return 0.25
         case .undertow: return 0.2
-        case .facets: return 0.3
         default: return 0
         }
     }

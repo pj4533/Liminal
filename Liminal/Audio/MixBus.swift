@@ -9,9 +9,9 @@ import Foundation
 ///     strips -> dryBus --------------------------------------------------------------------------+
 ///     strips -> delayBus -> LPF (pre) -> VariableDelay (wow) -> LPF -> delayReturn ----------------+--> master
 ///                                                                       +-> Fader(0.5) -> reverbBus
-///     strips -> reverbBus -> ZitaReverb (wet) -> LPF 4k -> reverbReturn ------------------------------+
+///     strips -> reverbBus -> ZitaReverb (wet) -> LPF 2.9 kHz -> reverbReturn -------------------------+
 ///               reverbBus -> HPF 300 -> LPF 1.8k -> Costello (halo) -> shimmerReturn ----------------+
-///     master -> HPF 28 Hz -> LPF 7 kHz -> masterTrim -> PeakLimiter -> -1.5 dB -> output
+///     master -> HPF 28 Hz -> LPF 5.4 kHz -> masterTrim -> PeakLimiter -> -1.5 dB -> output
 nonisolated final class MixBus {
     let dryBus = Mixer()
     let reverbBus = Mixer()
@@ -66,8 +66,8 @@ nonisolated final class MixBus {
         reverbBus.addInput(delayToReverb)
         reverb = ZitaReverb(reverbBus, predelay: 60, crossoverFrequency: 200, lowReleaseTime: 4.8,
                             midReleaseTime: 8, dampingFrequency: 2400, dryWetMix: 1)
-        // A long, dark tail (D92): the return is low-passed at 4 kHz so nothing glassy comes back out of it.
-        reverbLP = LowPassButterworthFilter(reverb, cutoffFrequency: 4000)
+        // Filter the late tail so short accents leave a soft wash behind.
+        reverbLP = LowPassButterworthFilter(reverb, cutoffFrequency: 2900)
         reverbReturn = Fader(reverbLP, gain: dbToGain(-5))
         // Halo (D92, was the octave-up shimmer of D12/D57): the reverb send, band-limited to 300 Hz-1.8 kHz,
         // into its own long Costello tail. No pitch shifter: an octave up of every note was the opposite of calm.
@@ -77,8 +77,7 @@ nonisolated final class MixBus {
         shimmerReturn = Fader(shimmerVerb, gain: 0)
         master = Mixer(dryBus, reverbReturn, delayReturn, shimmerReturn)
         highpass = HighPassButterworthFilter(master, cutoffFrequency: 28)
-        // Safety net (D92): nothing above 7 kHz belongs in this music.
-        lowpass = LowPassButterworthFilter(highpass, cutoffFrequency: 7000)
+        lowpass = LowPassButterworthFilter(highpass, cutoffFrequency: 5400)
         masterTrim = Fader(lowpass, gain: 0)
         limiter = PeakLimiter(masterTrim, attackTime: 0.01, decayTime: 0.06, preGain: 0)
         finalTrim = Fader(limiter, gain: dbToGain(-1.5))
@@ -91,17 +90,17 @@ nonisolated final class MixBus {
     }
 
     /// Space macro 0...1 (section 9, calm retune D92): reverb return -9...-1 dB, RT60 6 s up to Zita's 8 s
-    /// ceiling (8 s from space 0.33), damping 1.8-3.2 kHz, delay feedback 0.3-0.55, halo return.
+    /// ceiling (8 s from space 0.33), warm damping, delay feedback up to 0.5, and a little halo.
     func setSpace(_ s: Float, delayAmount d: Float, brightness b: Float, shimmerScale: Float = 1, over: Double) {
         space = min(max(s, 0), 1)
         delayAmount = min(max(d, 0), 1)
         let ret = dbToGain(-9 + 8 * space)
         let mid = min(8, 6 + 6 * space)
         // Low band decays faster than the mids so the stereo reverb tail does not smear the sub (D74).
-        setReverb(returnGain: ret, midRT60: mid, lowRT60: max(1, 0.6 * mid), damping: expMap(b, 1800, 3200), over: over)
-        let fb = 0.3 + 0.25 * (0.5 * space + 0.5 * delayAmount)
-        setDelay(feedback: fb, returnGain: dbToGain(-10 + 5 * delayAmount), cutoff: expMap(b, 2000, 2800),
-                 preCutoff: expMap(b, 1600, 2200), over: over)
+        setReverb(returnGain: ret, midRT60: mid, lowRT60: max(1, 0.48 * mid), damping: expMap(b, 1450, 2500), over: over)
+        let fb = 0.3 + 0.2 * (0.4 * space + 0.6 * delayAmount)
+        setDelay(feedback: fb, returnGain: dbToGain(-10 + 5 * delayAmount), cutoff: expMap(b, 1450, 2300),
+                 preCutoff: expMap(b, 1200, 1900), over: over)
         // Halo: -26 dB at space 0 to -12 dB at space 1, scaled by style and image; capped at -14 dB.
         setShimmer(returnGain: dbToGain(-26 + 14 * space) * shimmerScale, over: over)
     }

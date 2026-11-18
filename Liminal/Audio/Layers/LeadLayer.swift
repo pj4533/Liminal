@@ -20,11 +20,11 @@ nonisolated final class LeadLayer: BaseLayer {
     private var panLFO = ParameterDrift.Channel(period: 53, phase: 0)
     private let peak: Float = 0.5
     static let loopBounds: ClosedRange<Double> = 18...34
-    static let top = 79
+    static let top = 76
 
     init() {
         let cfg = VoiceLayer.Config(oscillatorCount: 2, detuneAmount: 0.0015, attackTime: 1.0, releaseTime: 5,
-                                    amplitude: 0.5, waveforms: [Table(.sine), Table(.triangle)], mix: [1, 0.3])
+                                    amplitude: 0.5, waveforms: [Table(.sine), Table(.triangle)], mix: [1, 0.18])
         voices = [VoiceLayer(config: cfg), VoiceLayer(config: cfg)]
         var acfg = cfg
         acfg.waveforms = [Table(.sine), Table(.sine)]
@@ -32,11 +32,11 @@ nonisolated final class LeadLayer: BaseLayer {
         answers = [VoiceLayer(config: acfg), VoiceLayer(config: acfg)]
         let mix = Mixer(voices.map(\.output))
         filter = LowPassButterworthFilter(mix, cutoffFrequency: 3000)
-        let strip = LayerStrip(source: mix, filter: filter, trim: dbToGain(-22) * 1.414 / 0.5,
+        let strip = LayerStrip(source: mix, filter: filter, trim: dbToGain(-24) * 1.414 / 0.5,
                                reverb: 0.8, delay: 0.45)
         var tmp = MusicRNG(seed: 0)
         loop = LoopClock(bounds: LeadLayer.loopBounds, rng: &tmp)
-        answerStrip = LayerStrip(source: Mixer(answers.map(\.output)), trim: dbToGain(-23) * 1.414 / 0.5,
+        answerStrip = LayerStrip(source: Mixer(answers.map(\.output)), trim: dbToGain(-25) * 1.414 / 0.5,
                                  reverb: 0.75, delay: 0.55)
         super.init(id: .lead, strip: strip, entryThreshold: 0.45)
         extraStrips = [answerStrip]
@@ -143,7 +143,7 @@ nonisolated final class LeadLayer: BaseLayer {
     }
 
     override func update(dt: Double, ctx: LayerContext) {
-        ParamRamp.set(filter.$cutoffFrequency, expMap(ctx.brightness, 900, 2400), over: 0.12)
+        ParamRamp.set(filter.$cutoffFrequency, expMap(ctx.brightness, 750, 1900), over: 0.12)
         let pan = 0.5 * panLFO.value(at: ctx.time)
         strip.setPan(pan, over: 0.12)
         answerStrip.setPan(-pan - (pan >= 0 ? 0.15 : -0.15), over: 0.12)

@@ -79,7 +79,6 @@ final class EffectsMetalView: MTKView {
     )
 
     /// Delay setting from slider (0-1), controls ghost tap spawn frequency
-    var delay: Float = 0.5
 
     // Track if we have a valid source
     private var hasValidSource = false
@@ -431,7 +430,7 @@ final class EffectsMetalView: MTKView {
         }
 
         // Update ghost taps and get active count for optimized shader loop
-        let ghostTapResult = ghostTapManager.updateWithCount(currentTime: uniforms.time, delay: delay)
+        let ghostTapResult = ghostTapManager.updateWithCount(currentTime: uniforms.time)
 
         // Copy ghost tap data to GPU buffer
         ghostTapBuffer.contents().copyMemory(
@@ -522,7 +521,6 @@ final class EffectsMetalView: MTKView {
             let srcW = sourceTexture.width
             let srcH = sourceTexture.height
             let texUpdates = textureUpdateCount
-            let delayPct = delay * 100
 
             frameIntervals.sort()
             let intervalP95 = GPUTimingStats.percentile(frameIntervals, 0.95)
@@ -532,7 +530,7 @@ final class EffectsMetalView: MTKView {
             if uniformsCopy.videoMix > 0 || uniformsCopy.videoMixB > 0 {
                 LMLog.visual.info("📼 FOOTAGE mix=\(String(format: "%.3f", uniformsCopy.videoMix + uniformsCopy.videoMixB), privacy: .public) A=\(String(format: "%.3f", uniformsCopy.videoMix), privacy: .public)/\(Int(uniformsCopy.videoLook)) B=\(String(format: "%.3f", uniformsCopy.videoMixB), privacy: .public)/\(Int(uniformsCopy.videoLookB))")
             }
-            let perfLine = "📊 METAL PERF: fps=\(String(format: "%.1f", fps)) avgDraw=\(String(format: "%.2f", avgDrawTime))ms delay=\(String(format: "%.0f", delayPct))% src=\(srcW)x\(srcH) texUpdates=\(texUpdates) | interval p95=\(String(format: "%.2f", intervalP95))ms | \(gpuFragment)"
+            let perfLine = "📊 METAL PERF: fps=\(String(format: "%.1f", fps)) avgDraw=\(String(format: "%.2f", avgDrawTime))ms src=\(srcW)x\(srcH) texUpdates=\(texUpdates) | interval p95=\(String(format: "%.2f", intervalP95))ms | \(gpuFragment)"
             LMLog.visual.info("\(perfLine, privacy: .public)")
 
             // Reset counters
@@ -562,7 +560,6 @@ struct EffectsMetalViewRepresentable: NSViewRepresentable {
     let previousImage: NSImage?  // For GPU crossfade blending
     let saliencyMap: NSImage?
     let uniforms: EffectsUniforms  // Single struct - matches visionOS pattern
-    let delay: Float  // Delay slider value (0-1), controls ghost tap spawn frequency
     var ghostBurstSerial: UInt32 = 0  // MusicModulation.ghostBurstSerial (scene-change trail burst)
 
     func makeNSView(context: Context) -> EffectsMetalView {
@@ -581,9 +578,8 @@ struct EffectsMetalViewRepresentable: NSViewRepresentable {
         // Update saliency map (internally checks if changed)
         nsView.updateSaliencyMap(saliencyMap)
 
-        // Pass uniforms and delay
+        // Pass uniforms
         nsView.uniforms = uniforms
-        nsView.delay = delay
         nsView.requestGhostBurst(serial: ghostBurstSerial)
     }
 }

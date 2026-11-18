@@ -105,7 +105,7 @@ final class GhostTapManager {
     /// Update ghost taps for the current frame.
     /// - Parameters:
     ///   - currentTime: Current animation time in seconds
-    ///   - delay: Delay slider value (0-1), controls spawn frequency
+    ///   - delay: Trail rate (0-1), for explicit benchmark inputs
     /// - Returns: Array of exactly 8 GhostTapData structs for the shader
     func update(currentTime: Float, delay: Float) -> [GhostTapData] {
         return updateWithCount(currentTime: currentTime, delay: delay).data
@@ -113,7 +113,7 @@ final class GhostTapManager {
 
     /// Update ghost taps and return both data and active count.
     /// Use this for optimized shader loops that skip inactive slots.
-    func updateWithCount(currentTime: Float, delay: Float) -> UpdateResult {
+    func updateWithCount(currentTime: Float, delay: Float = 0.5) -> UpdateResult {
         // Remove expired taps
         taps.removeAll { $0.isExpired(at: currentTime) }
 

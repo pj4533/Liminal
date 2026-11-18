@@ -66,9 +66,6 @@ struct ControlsView: View {
         }
         }
         .onDisappear { controlsVisible = false }
-        .onChange(of: settings.delay) { _, newValue in audioEngine.delay = newValue }
-        .onChange(of: settings.reverb) { _, newValue in audioEngine.space = newValue }
-        .onChange(of: settings.notes) { _, newValue in audioEngine.density = newValue }
         .onChange(of: settings.style) { _, newValue in audioEngine.style = newValue }
         .onChange(of: settings.pinnedScale) { _, newValue in audioEngine.pinnedScale = newValue }
         .archiveFootageSettings(settings, audioEngine: audioEngine)
@@ -135,9 +132,6 @@ struct ControlsView: View {
     private var musicSection: some View {
         ControlSection(title: "Music", systemImage: "music.note") {
             StylePicker(style: $settings.style)
-            ValueSlider(title: "Density", value: $settings.notes)
-            ValueSlider(title: "Space", value: $settings.reverb)
-            ValueSlider(title: "Echo", value: $settings.delay)
             ScalePicker(selection: settings.scaleSelection)
         }
     }

@@ -105,6 +105,31 @@ struct ModelRouterTests {
         #expect(router.cooldownRemaining(m, now: t0) == ModelRouter.baseCooldown)
     }
 
+    @Test func billingErrorUsesCacheUntilAutomaticRetry() {
+        var router = ModelRouter(config: config)
+        var rng = SeededRNG(seed: 1)
+        let model = config.primaryModel
+        let error = GeminiError.http(status: 402, message: "Prepayment credits are depleted")
+        router.recordFailure(model: model, error: error, now: t0)
+
+        #expect(router.isBillingPaused(now: t0))
+        #expect(router.allCoolingDown(now: t0))
+        #expect(router.model(for: sampleSpec(), now: t0, using: &rng) == nil)
+        let restart = ModelRouter(config: config)
+        #expect(!restart.allCoolingDown(now: t0))
+
+        let retry = t0.addingTimeInterval(ModelRouter.initialBillingCooldown)
+        #expect(!router.allCoolingDown(now: retry))
+        #expect(router.model(for: sampleSpec(), now: retry, using: &rng) == model)
+        router.recordFailure(model: model, error: error, now: retry)
+        #expect(router.delayBeforeNextAttempt(now: retry) == 2 * ModelRouter.initialBillingCooldown)
+
+        let later = retry.addingTimeInterval(2 * ModelRouter.initialBillingCooldown)
+        router.recordSuccess(model: model)
+        router.recordFailure(model: model, error: error, now: later)
+        #expect(router.delayBeforeNextAttempt(now: later) == ModelRouter.initialBillingCooldown)
+    }
+
     @Test func safetyBlockKeepsModelAndPausesAfterThree() {
         var router = ModelRouter(config: config)
         var rng = SeededRNG(seed: 1)

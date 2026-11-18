@@ -3,8 +3,8 @@
 //  Liminal
 //
 //  Disk cache of downloaded footage (docs/plans/archive-video.md 1.4): films and excerpts in
-//  Application Support/Liminal/ArchiveFootage/ with an index.json. Capped at 1 GB and 12 clips,
-//  least recently used evicted first, never the clip on screen and never below 3 clips.
+//  Application Support/Liminal/ArchiveFootage/ with an index.json. Holds the pinned titles and
+//  two discoveries, within a 3 GB budget.
 //
 
 import AVFoundation
@@ -39,11 +39,26 @@ nonisolated struct ArchiveClip: Codable, Sendable, Equatable, Identifiable {
 
 /// Pure eviction rules (unit-tested).
 nonisolated enum ArchiveCachePolicy {
-    static let capBytes: Int64 = 1_000_000_000
-    static let poolTarget = 12
+    static let capBytes: Int64 = 3_000_000_000
+    static let discoverySlots = 2
+    static let discoveryPlayLimit = 2
+    static var poolTarget: Int { ArchiveSeedList.pinned.count + discoverySlots }
     static let minReady = 3
     /// No downloads when the volume has less than this free.
     static let minFreeBytes: Int64 = 2_000_000_000
+
+    static func isFreshDiscovery(_ clip: ArchiveClip) -> Bool {
+        !ArchiveSeedList.pinnedIDs.contains(clip.id) && clip.useCount < discoveryPlayLimit
+    }
+
+    static func excessDiscoveries(_ clips: [ArchiveClip]) -> [String] {
+        let discoveries = clips.filter { !ArchiveSeedList.pinnedIDs.contains($0.id) }
+        let order = discoveries.sorted {
+            if $0.useCount != $1.useCount { return $0.useCount < $1.useCount }
+            return $0.recency > $1.recency
+        }
+        return order.dropFirst(discoverySlots).map(\.id)
+    }
 
     /// Clips to delete so that `incoming` more bytes fit under `capBytes` and the pool stays at most
     /// `maxClips` (counting the incoming clip). Least recently used first; never a protected clip and
@@ -66,11 +81,10 @@ nonisolated enum ArchiveCachePolicy {
         return out
     }
 
-    /// The clip a fresh download replaces once the pool is full (every 12 pieces, plan 1.4, A27): the
-    /// most used one (ties: least recent), never a protected one.
+    /// Replace a discovery after two excerpts, once its outgoing crossfade is complete.
     static func replacement(_ clips: [ArchiveClip], protected: Set<String> = []) -> String? {
         let keep = protected.union(ArchiveSeedList.pinnedIDs)
-        return clips.filter { !keep.contains($0.id) }
+        return clips.filter { !keep.contains($0.id) && $0.useCount >= discoveryPlayLimit }
             .max { ($0.useCount, $1.recency) < ($1.useCount, $0.recency) }?.id
     }
 }
@@ -81,6 +95,7 @@ actor ArchiveClipStore {
         /// Items that failed for content reasons (HTTP 4xx, no video track, excluded words): never retried.
         var bad: [String] = []
         var filePolicyVersion: Int? = 2
+        var recentDiscoveries: [String]?
     }
 
     let directory: URL
@@ -117,9 +132,17 @@ actor ArchiveClipStore {
             index.filePolicyVersion = 2
             save()
         }
-        // Drop entries whose file is gone (cleared by the system, or a partial write).
+        // Remove retired titles and entries whose files are gone.
         let before = index.clips.count
-        index.clips.removeAll { !fm.fileExists(atPath: url(for: $0).path) }
+        index.clips.removeAll { clip in
+            let file = url(for: clip)
+            if ArchiveSeedList.retiredIDs.contains(clip.id) {
+                try? fm.removeItem(at: file)
+                return true
+            }
+            return !fm.fileExists(atPath: file.path)
+        }
+        for id in ArchiveCachePolicy.excessDiscoveries(index.clips) { remove(id, rememberDiscovery: true) }
         if index.clips.count != before { save() }
     }
 
@@ -133,6 +156,7 @@ actor ArchiveClipStore {
 
     var clips: [ArchiveClip] { index.clips }
     var badIDs: Set<String> { Set(index.bad) }
+    var recentDiscoveryIDs: Set<String> { Set(index.recentDiscoveries ?? []) }
     var totalBytes: Int64 { index.clips.reduce(0) { $0 + $1.bytes } }
 
     func contains(_ id: String) -> Bool { index.clips.contains { $0.id == id } }
@@ -147,9 +171,11 @@ actor ArchiveClipStore {
 
     /// Moves a validated file into the store before removing its victims.
     @discardableResult
-    func add(_ clip: ArchiveClip, from file: URL, protected: Set<String>,
-             replacingMostUsed: Bool = false) throws -> [String] {
-        let replacement = replacingMostUsed ? ArchiveCachePolicy.replacement(index.clips, protected: protected) : nil
+    func add(_ clip: ArchiveClip, from file: URL, protected: Set<String>) throws -> [String] {
+        let addingDiscovery = !ArchiveSeedList.pinnedIDs.contains(clip.id)
+        let slotsFull = index.clips.filter { !ArchiveSeedList.pinnedIDs.contains($0.id) }.count >= ArchiveCachePolicy.discoverySlots
+        let replacement = addingDiscovery && slotsFull ? ArchiveCachePolicy.replacement(index.clips, protected: protected) : nil
+        if addingDiscovery && slotsFull && replacement == nil { throw AddFailure.insufficientCacheSpace }
         let remaining = index.clips.filter { $0.id != replacement }
         let evict = ArchiveCachePolicy.victims(remaining, incoming: clip.bytes, protected: protected)
         let retained = remaining.filter { !evict.contains($0.id) }
@@ -160,16 +186,19 @@ actor ArchiveClipStore {
         let dest = directory.appendingPathComponent(clip.fileName)
         try FileManager.default.moveItem(at: file, to: dest)
         let victims = [replacement].compactMap { $0 } + evict
-        for id in victims { remove(id) }
+        for id in victims { remove(id, rememberDiscovery: true) }
         index.clips.append(clip)
         save()
         return victims
     }
 
-    func remove(_ id: String) {
+    func remove(_ id: String, rememberDiscovery: Bool = false) {
         guard let c = index.clips.first(where: { $0.id == id }) else { return }
         try? FileManager.default.removeItem(at: url(for: c))
         index.clips.removeAll { $0.id == id }
+        if rememberDiscovery {
+            index.recentDiscoveries = Array(((index.recentDiscoveries ?? []) + [id]).suffix(24))
+        }
         save()
     }
 

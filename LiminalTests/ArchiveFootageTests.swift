@@ -222,20 +222,21 @@ struct ArchiveCachePolicyTests {
         let clips = [Self.clip("a", mb: 300, used: 5000), Self.clip("b", mb: 300, used: 2000),
                      Self.clip("c", mb: 300, used: 8000), Self.clip("d", mb: 50, used: nil)]
         // 950 MB + 200 MB incoming > 1 GB: the oldest by recency goes first (d was added at 1000, never used).
-        #expect(ArchiveCachePolicy.victims(clips, incoming: 200_000_000) == ["d", "b"])
+        #expect(ArchiveCachePolicy.victims(clips, incoming: 200_000_000, capBytes: 1_000_000_000) == ["d", "b"])
         // Under the cap and the pool size: nothing.
-        #expect(ArchiveCachePolicy.victims(clips, incoming: 10_000_000).isEmpty)
+        #expect(ArchiveCachePolicy.victims(clips, incoming: 10_000_000, capBytes: 1_000_000_000).isEmpty)
         // The clip on screen is never evicted.
-        #expect(ArchiveCachePolicy.victims(clips, incoming: 200_000_000, protected: ["d"]) == ["b"])
+        #expect(ArchiveCachePolicy.victims(clips, incoming: 200_000_000, capBytes: 1_000_000_000,
+                                           protected: ["d"]) == ["b"])
     }
 
     @Test func neverBelowMinimumAndPoolCap() {
         let three = [Self.clip("a", mb: 600, used: 1), Self.clip("b", mb: 600, used: 2), Self.clip("c", mb: 600, used: 3)]
         // Over the cap, but the pool (counting the incoming clip) never drops below 3.
-        #expect(ArchiveCachePolicy.victims(three, incoming: 600_000_000) == ["a"])
-        #expect(ArchiveCachePolicy.victims(Array(three.prefix(2)), incoming: 900_000_000).isEmpty)
-        let many = (0..<12).map { Self.clip("k\($0)", mb: 10, used: Double($0)) }
-        #expect(ArchiveCachePolicy.victims(many, incoming: 10_000_000) == ["k0"])   // 13th clip: one goes
+        #expect(ArchiveCachePolicy.victims(three, incoming: 600_000_000, capBytes: 1_000_000_000) == ["a"])
+        #expect(ArchiveCachePolicy.victims(Array(three.prefix(2)), incoming: 900_000_000, capBytes: 1_000_000_000).isEmpty)
+        let many = (0..<ArchiveCachePolicy.poolTarget).map { Self.clip("k\($0)", mb: 10, used: Double($0)) }
+        #expect(ArchiveCachePolicy.victims(many, incoming: 10_000_000) == ["k0"])
     }
 
     @Test func replacementIsMostUsed() {
@@ -254,12 +255,36 @@ struct ArchiveCachePolicyTests {
                                            minKeep: 2) == ["rotating"])
     }
 
+    @Test func discoveryReplacementWaitsForTwoPlaysAndTheFade() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("liminal-store-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = ArchiveClipStore(directory: dir)
+        await store.load()
+        let staged = dir.appendingPathComponent("incoming.mp4")
+        for id in ["a", "b"] {
+            try Data([1]).write(to: staged)
+            try await store.add(Self.clip(id, mb: 1, used: nil), from: staged, protected: [])
+        }
+        try Data([1]).write(to: staged)
+        let newcomer = Self.clip("c", mb: 1, used: nil)
+        await store.markUsed("a", segmentStart: 40)
+        await #expect(throws: ArchiveClipStore.AddFailure.insufficientCacheSpace) {
+            try await store.add(newcomer, from: staged, protected: [])
+        }
+        await store.markUsed("a", segmentStart: 90)
+        await #expect(throws: ArchiveClipStore.AddFailure.insufficientCacheSpace) {
+            try await store.add(newcomer, from: staged, protected: ["a"])
+        }
+        #expect(try await store.add(newcomer, from: staged, protected: []) == ["a"])
+        #expect(await store.recentDiscoveryIDs == ["a"])
+    }
+
     @Test func storeAddsEvictsAndPersists() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("liminal-store-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = ArchiveClipStore(directory: dir)
         await store.load()
-        for i in 0..<3 {
+        for i in 0..<2 {
             let f = dir.appendingPathComponent("in\(i).bin")
             try Data(repeating: 1, count: 10).write(to: f)
             try await store.add(Self.clip("x\(i)", mb: 1, used: Double(i)), from: f, protected: [])
@@ -269,12 +294,34 @@ struct ArchiveCachePolicyTests {
         let again = ArchiveClipStore(directory: dir)
         await again.load()
         let clips = await again.clips
-        #expect(clips.map(\.id).sorted() == ["x0", "x1", "x2"])
+        #expect(clips.map(\.id).sorted() == ["x0", "x1"])
         #expect(clips.first { $0.id == "x1" }?.useCount == 1)
         #expect(clips.first { $0.id == "x1" }?.shownStarts == [42])
         #expect(await again.badIDs == ["bad1"])
         await again.remove("x0")
         #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent("x0.mp4").path))
+    }
+
+    @Test func loadingAnExistingCacheRemovesRetiredFilms() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("liminal-store-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let kept = try #require(ArchiveSeedList.pinned.first?.id)
+        let retired = ["Narcotic1967_2", "lsdthespringgroveexperimentreel1"]
+        let legacy = (retired + [kept, "fresh-a", "fresh-b"]).map { Self.clip($0, mb: 1, used: nil) }
+            + [Self.clip("old-discovery", mb: 1, used: nil, count: 2)]
+        for clip in legacy {
+            try Data([1]).write(to: dir.appendingPathComponent(clip.fileName))
+        }
+        try JSONEncoder().encode(ArchiveClipStore.Index(clips: legacy)).write(to: dir.appendingPathComponent("index.json"))
+
+        let reloaded = ArchiveClipStore(directory: dir)
+        await reloaded.load()
+        #expect(Set(await reloaded.clips.map(\.id)) == [kept, "fresh-a", "fresh-b"])
+        #expect(await reloaded.recentDiscoveryIDs == ["old-discovery"])
+        for id in retired {
+            #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent("\(id).mp4").path))
+        }
     }
 }
 
@@ -452,7 +499,7 @@ struct FootageWeaverTests {
         for _ in 0..<800 {
             let low = FootageWeaver.chooseRecipe(last: nil, recent: [], intensity: 0.15, hasDepth: false, rng: &rng)
             #expect(low.minIntensity <= 0.15)
-            #expect(![.emerge, .solar, .print, .kaleido, .undertow, .facets, .backdrop].contains(low))
+            #expect(![.emerge, .solar, .print, .kaleido, .undertow, .backdrop].contains(low))
             let mac = FootageWeaver.chooseRecipe(last: .imprint, recent: [], intensity: 0.9, hasDepth: false, rng: &rng)
             #expect(mac != .backdrop)
             #expect(mac.family != .plain)
@@ -503,7 +550,8 @@ struct FootageWeaverTests {
             Issue.record("no first piece"); return
         }
         #expect(r.recipe == .undertow)
-        #expect(FootageRecipe(name: "Fa-cets") == .facets)
+        #expect(FootageRecipe(name: "Shadow-play") == .shadowplay)
+        #expect(FootageRecipe(name: "facets") == nil)
         #expect(FootageRecipe(name: "nope") == nil)
     }
 
@@ -535,7 +583,7 @@ struct FootageWeaverTests {
         #expect(abs(p.driveEnvelope(at: 32) - 0.5 * p.level(at: 32) / 0.5) < 1e-5)
     }
 
-    @Test func playbackInterleavesCuratedFilmsWithTheRestOfTheCache() throws {
+    @Test func playbackRunsFourCuratedExcerptsBetweenDiscoveries() throws {
         let pinnedID = try #require(ArchiveSeedList.pinned.first?.id)
         let pinned = ArchiveCachePolicyTests.clip(pinnedID, mb: 80, used: 10)
         let regular = ArchiveCachePolicyTests.clip("regular", mb: 20, used: 1)
@@ -555,8 +603,8 @@ struct FootageWeaverTests {
         #expect(selected.count >= 6)
         #expect(selected.first == pinnedID)
         #expect(selected.contains(regular.id))
-        for (a, b) in zip(selected, selected.dropFirst()) {
-            #expect(a == pinnedID || b == pinnedID)
+        for (index, id) in selected.enumerated() {
+            #expect(id == (index % 5 == 4 ? regular.id : pinnedID))
         }
     }
 

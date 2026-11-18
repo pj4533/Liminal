@@ -30,7 +30,7 @@ nonisolated final class DripsLayer: BaseLayer {
             let m = Mixer(o[i]); m.pan = DripsLayer.voicePans[i]; return m
         })
         filter = LowPassButterworthFilter(mix, cutoffFrequency: 1800)
-        let strip = LayerStrip(source: mix, filter: filter, trim: dbToGain(-20) * 1.414 / 0.5,
+        let strip = LayerStrip(source: mix, filter: filter, trim: dbToGain(-22) * 1.414 / 0.5,
                                reverb: 1.0, delay: 0.5, dry: 0.3)
         var tmp = MusicRNG(seed: 0)
         loop = LoopClock(bounds: DripsLayer.loopBounds, rng: &tmp)
@@ -91,7 +91,7 @@ nonisolated final class DripsLayer: BaseLayer {
         // Higher motes a little quieter (about -1 dB per 3 semitones above G4).
         let tilt = Float(max(0.6, 1 - 0.035 * Double(max(0, midi - 67))))
         let peak = 0.5 * velocity * tilt * ctx.shareAttack(layer: .drips, weight: 0.5)
-        let attack = rng.range(0.12...0.35)
+        let attack = rng.range(0.28...0.55)
         let decay = rng.range(2.5...5)
         ParamRamp.set(osc.$amplitude, 0, over: 0.08)
         after(0.1, ctx: ctx) { [weak self] in
@@ -121,7 +121,7 @@ nonisolated final class DripsLayer: BaseLayer {
     }
 
     override func update(dt: Double, ctx: LayerContext) {
-        ParamRamp.set(filter.$cutoffFrequency, expMap(ctx.brightness, 1400, 2200), over: 0.12)
+        ParamRamp.set(filter.$cutoffFrequency, expMap(ctx.brightness, 1000, 1800), over: 0.12)
         strip.setSends(reverb: 1.0, delay: 0.5 * ctx.delayScale, over: 0.12)
     }
 

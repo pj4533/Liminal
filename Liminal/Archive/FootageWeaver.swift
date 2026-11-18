@@ -189,6 +189,9 @@ nonisolated struct FootageWeaver {
     private(set) var recent: [FootageRecipe] = []
     private(set) var soundFreeAt: Double = 0
     private var holdSince: Double?
+    private static let pinnedPiecesPerDiscovery = 4
+    private var pinnedRun = 0
+    private var pinnedRunBeforePrepare = 0
     /// A `.prepare` was issued and not yet answered.
     private var awaiting = false
     /// -LiminalVideoLook / -LiminalVideoMode: every piece uses this recipe.
@@ -216,6 +219,8 @@ nonisolated struct FootageWeaver {
             pieces[pieces.count - 1] = last
         }
         pieces.append(piece)
+        pinnedRunBeforePrepare = pinnedRun
+        pinnedRun = ArchiveSeedList.pinnedIDs.contains(piece.clipID) ? min(pinnedRun + 1, Self.pinnedPiecesPerDiscovery) : 0
         lastRecipe = piece.recipe
         recent.append(piece.recipe)
         if recent.count > Self.recentCount { recent.removeFirst(recent.count - Self.recentCount) }
@@ -261,6 +266,7 @@ nonisolated struct FootageWeaver {
             let readyWait = matchingImageTransition ? min(timing.maxReadyWait, 1.5) : timing.maxReadyWait
             if !isReady && waited >= readyWait {
                 pieces.removeLast()
+                pinnedRun = pinnedRunBeforePrepare
                 if var cur = pieces.last {
                     cur.fadeOutStart = nil
                     cur.fadeOut = nil
@@ -364,18 +370,16 @@ nonisolated struct FootageWeaver {
         return options[rng.weighted(weights)]
     }
 
-    /// Start with a curated title when available, and follow any regular title with a
-    /// curated one. Read the current piece so a dropped decoder does not count as a turn.
+    /// Four curated excerpts for every discovery when both are available.
     func chooseClipForPlayback(_ clips: [ArchiveClip], rng: inout MusicRNG) -> ArchiveClip? {
         Self.chooseClip(eligibleClips(clips), avoiding: Set(pieces.map(\.clipID)), rng: &rng)
     }
 
     func eligibleClips(_ clips: [ArchiveClip]) -> [ArchiveClip] {
-        if current.map({ ArchiveSeedList.pinnedIDs.contains($0.clipID) }) != true {
-            let curated = clips.filter { ArchiveSeedList.pinnedIDs.contains($0.id) }
-            if !curated.isEmpty { return curated }
-        }
-        return clips
+        let curated = clips.filter { ArchiveSeedList.pinnedIDs.contains($0.id) }
+        let discoveries = clips.filter(ArchiveCachePolicy.isFreshDiscovery)
+        if curated.isEmpty { return discoveries.isEmpty ? clips : discoveries }
+        return pinnedRun >= Self.pinnedPiecesPerDiscovery && !discoveries.isEmpty ? discoveries : curated
     }
 
     /// Which cached clip a piece comes from: least recently used clips are likelier, never one of the

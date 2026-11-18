@@ -52,7 +52,6 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
         var calm: Float = 1
         /// Master fade: linear 0...1, toward 0 while the setting is being turned off (2 s), else 1.
         var master: Float = 1
-        var replaceRequested = false
         var status = "Footage starts with playback"
         // Settings and lifecycle: footage runs while playback wants it AND the setting is on.
         var wantsRun = false
@@ -108,9 +107,6 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
 
     /// -LiminalVideoOff removes the feature whatever the setting says.
     static var isAvailable: Bool { !DebugLaunchOptions.videoOff }
-    /// A full cache replaces one clip every this many pieces (at most one download per 3 minutes).
-    static let piecesPerReplacement = 12
-
     private init() {
         let device = MTLCreateSystemDefaultDevice()
         let made = (0..<2).compactMap { _ in device.flatMap { VideoFrameSource(device: $0) } }
@@ -513,7 +509,7 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
                                    pinnedLook: DebugLaunchOptions.videoLook.flatMap(VideoLook.init(name:)),
                                    pinnedRecipe: DebugLaunchOptions.videoMode.flatMap(FootageRecipe.init(name:)))
         var rng = MusicRNG(seed: seed ^ 0xA5C1_17E5)
-        var piecesSinceReplace = 0
+        var recordedPieceIndex = -1
         var lastLog = -10.0
         LMLog.visual.info("📼 weaver seed=\(seed) speed=\(speed.rawValue, privacy: .public)")
         while !Task.isCancelled {
@@ -570,17 +566,18 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
                 if silence { endAudio(fade: 2) }
                 LMLog.visual.warning("📼 piece dropped slot=\(slot) (no frame); the current piece holds")
             case .prepare(let r):
-                let piece = prepare(r, clips: clips, pairings: pairings, weaver: &weaver,
-                                    rng: &rng, elapsed: elapsed, startUptime: start)
-                if let piece, piece.clipID.hasPrefix("local:") {
+                _ = prepare(r, clips: clips, pairings: pairings, weaver: &weaver,
+                            rng: &rng, elapsed: elapsed, startUptime: start)
+            }
+            let pieces = weaver.pieces
+            shared.withLock { $0.pieces = pieces }
+            if let piece = weaver.current, piece.index > recordedPieceIndex,
+               elapsed >= piece.start, sources[piece.slot].latest() != nil {
+                recordedPieceIndex = piece.index
+                if piece.clipID.hasPrefix("local:") {
                     localClip.withLock { $0?.clip.shownStarts.append(piece.segmentStart) }
-                } else if let piece {
+                } else {
                     await store.markUsed(piece.clipID, segmentStart: piece.segmentStart)
-                    piecesSinceReplace += 1
-                    if piecesSinceReplace >= Self.piecesPerReplacement {
-                        piecesSinceReplace = 0
-                        shared.withLock { $0.replaceRequested = true }
-                    }
                 }
             }
             // The next video can be ready before the outgoing audio starts fading.
@@ -591,8 +588,6 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
                elapsed < cue.fadeOutAt {
                 scheduleAudio(piece: next, cue: cue, clip: clip, url: url(for: clip))
             }
-            let pieces = weaver.pieces
-            shared.withLock { $0.pieces = pieces }
             if elapsed - lastLog >= 10 {
                 lastLog = elapsed
                 let parts = pieces.map { p in
@@ -721,31 +716,26 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
         var lastDownload = Date.distantPast
         while !Task.isCancelled, shared.withLock({ $0.running }) {
             let clips = await store.clips
-            let replace = shared.withLock { $0.replaceRequested }
-            let full = clips.count >= ArchiveCachePolicy.poolTarget
             let cachedIDs = Set(clips.map(\.id))
             let pinned = ArchiveSeedList.pinned.first { !cachedIDs.contains($0.id) && !picker.skipped.contains($0.id) }
             let sinceLast = Date().timeIntervalSince(lastDownload)
-            // Below the minimum: back to back. Below the pool target: one per 90 s. Full: only to replace
-            // a clip (every 12 pieces), at most one download per 3 minutes.
-            let due = pinned != nil
-                ? (clips.count < ArchiveCachePolicy.minReady || sinceLast >= 15)
-                : (clips.count < ArchiveCachePolicy.minReady || (!full && sinceLast >= 90)
-                   || (full && replace && sinceLast >= 180))
+            let protected = shared.withLock { Set($0.pieces.map(\.clipID)) }
+            let discoveryCount = cachedIDs.subtracting(ArchiveSeedList.pinnedIDs).count
+            let discoveryDue = discoveryCount < ArchiveCachePolicy.discoverySlots
+                || ArchiveCachePolicy.replacement(clips, protected: protected) != nil
+            let due = (pinned != nil || discoveryDue)
+                && (clips.count < ArchiveCachePolicy.minReady || sinceLast >= 15)
             if !due || !Self.hasFreeSpace(store.directory) {
                 try? await Task.sleep(nanoseconds: 10_000_000_000)
                 continue
             }
             do {
                 let downloaded = try await fetchOne(picker: &picker, preferSmallest: pinned != nil || clips.count < 2,
-                                                    pinned: pinned, replacingMostUsed: pinned == nil && full && replace)
+                                                    pinned: pinned)
                 failures = 0
                 // A skipped candidate (colour odds, excluded, no file) is not a download: try the next one
-                // now (the client still paces requests 2 s apart) instead of waiting out the 90 s.
-                if downloaded {
-                    lastDownload = Date()
-                    if pinned == nil { shared.withLock { $0.replaceRequested = false } }
-                }
+                // now (the client still paces requests 2 s apart).
+                if downloaded { lastDownload = Date() }
                 let n = await store.clips.count
                 shared.withLock { s in if s.pieces.isEmpty { s.status = "\(n) clips ready" } }
             } catch is CancellationError {
@@ -787,7 +777,7 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
     /// Returns true when a clip was added to the store.
     @discardableResult
     private func fetchOne(picker: inout CandidatePicker, preferSmallest: Bool,
-                          pinned: ArchiveSeedList.Seed?, replacingMostUsed: Bool) async throws -> Bool {
+                          pinned: ArchiveSeedList.Seed?) async throws -> Bool {
         let cachedIDs = Set(await store.clips.map(\.id))
         let id: String
         let entry: (doc: ArchiveSearchDoc?, seed: ArchiveSeedList.Seed?, query: ArchiveCatalog.Query)
@@ -796,7 +786,9 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
             entry = (nil, pinned, query)
         } else {
             let bad = await store.badIDs
-            let exclude = cachedIDs.union(bad).union(picker.skipped).union(ArchiveSeedList.pinnedIDs)
+            let recent = await store.recentDiscoveryIDs
+            let exclude = cachedIDs.union(bad).union(picker.skipped)
+                .union(ArchiveSeedList.pinnedIDs).union(ArchiveSeedList.retiredIDs).union(recent)
             if !picker.bag.hasAny(excluding: exclude) || picker.rng.chance(0.25) {
                 try await refill(&picker)
             }
@@ -826,7 +818,13 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
             LMLog.visual.info("📼 excluded by metadata: \(id, privacy: .public)")
             return false
         }
-        guard let file = ArchiveCatalog.pickFile(meta.files, preferSmallest: preferSmallest) else {
+        let files = if let preferredFile = pinned?.preferredFile,
+                       let preferred = meta.files.first(where: { $0.name == preferredFile }) {
+            [preferred]
+        } else {
+            meta.files
+        }
+        guard let file = ArchiveCatalog.pickFile(files, preferSmallest: preferSmallest) else {
             picker.skipped.insert(id)
             await store.markBad(id)
             LMLog.visual.info("📼 no playable file in \(id, privacy: .public)")
@@ -854,8 +852,11 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
             ?? file.bytes ?? 0
         var staged = tmp
         let v: ArchiveClipValidator.Result
+        let pinnedBytes = await store.clips.filter { ArchiveSeedList.pinnedIDs.contains($0.id) }
+            .reduce(Int64(0)) { $0 + $1.bytes }
+        let keepFull = pinned != nil && sourceBytes <= ArchiveCachePolicy.capBytes - pinnedBytes
         do {
-            if sourceBytes > 120_000_000,
+            if !keepFull, sourceBytes > 120_000_000,
                (try? await ArchiveClipValidator.exportExcerpt(from: tmp, to: excerpt, sourceBytes: sourceBytes,
                                                                seed: picker.rng.next())) == true,
                let validated = try? await ArchiveClipValidator.validate(excerpt) {
@@ -888,7 +889,7 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
         let protected = shared.withLock { Set($0.pieces.map(\.clipID)) }
         let evicted: [String]
         do {
-            evicted = try await store.add(clip, from: staged, protected: protected, replacingMostUsed: replacingMostUsed)
+            evicted = try await store.add(clip, from: staged, protected: protected)
         } catch ArchiveClipStore.AddFailure.insufficientCacheSpace {
             picker.skipped.insert(id)
             LMLog.visual.info("📼 not enough cache space for \(id, privacy: .public)")

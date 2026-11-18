@@ -142,7 +142,7 @@ nonisolated final class PadLayer: BaseLayer {
         let active = ctx.intensity < 0.2 ? 2 : (ctx.intensity < 0.4 ? 3 : 4)
         let b = min(1, ctx.bedBrightness + ctx.padBrightnessBoost)
         let width = 0.7 + 0.3 * widthLFO.unit(at: t) + 0.15 * (ctx.activity - 0.5)
-        let baseIndex = min(max(0.2 + 2.6 * b, 0), 3)
+        let baseIndex = min(max(0.2 + 2.0 * b, 0), 3)
         for v in 0..<PadLayer.voiceCount {
             // Voice count: drop the outer voices first (top, then bottom).
             let rank = [2, 1, 3, 0][v]   // priority: voice 2 and 1 always, then 3, then 0
@@ -167,7 +167,7 @@ nonisolated final class PadLayer: BaseLayer {
             let breathDepth = 0.45 - 0.25 * ctx.intensity
             let breath = 1 - breathDepth + breathDepth * voices[v].breathLFO.unit(at: t)
             let a = perOsc * gate * env * tilt * breath
-            let idx = min(max(baseIndex + 1.0 * voices[v].indexLFO.value(at: t), 0), 3)
+            let idx = min(max(baseIndex + 0.55 * voices[v].indexLFO.value(at: t), 0), 3)
             ParamRamp.set(left[v].$frequency, fl, over: 0.12)
             ParamRamp.set(right[v].$frequency, fr, over: 0.12)
             ParamRamp.set(left[v].$amplitude, a, over: 0.12)
@@ -175,7 +175,7 @@ nonisolated final class PadLayer: BaseLayer {
             ParamRamp.set(left[v].$index, idx, over: 0.12)
             ParamRamp.set(right[v].$index, min(idx + 0.15, 3), over: 0.12)
         }
-        ParamRamp.set(ladder.$cutoffFrequency, expMap(b, 450, 6000), over: 0.12)
+        ParamRamp.set(ladder.$cutoffFrequency, expMap(b, 400, 3250), over: 0.12)
         strip.setPan(0.15 * panLFO.value(at: t), over: 0.12)
     }
 

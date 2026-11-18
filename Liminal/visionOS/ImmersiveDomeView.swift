@@ -348,7 +348,7 @@ struct ImmersiveDomeView: View {
     /// Three tiles (hero, right, left) sharing `mesh`, each with its own faded material.
     /// Default: every tile samples the one mono effects texture. DEBUG -LiminalShellTextureStereo:
     /// the hero uses the old per-eye stereo material and the sides its left-eye texture.
-    /// Fallback if ShaderGraph fails: mono UnlitMaterial on the hero only.
+    /// A full surround fills the poles and rear gap behind the depth-displaced tiles.
     @MainActor
     private func buildTiles(mesh: SpatialShellMesh, monoTexture: TextureResource, root: Entity) async {
         var sideTexture = monoTexture
@@ -396,6 +396,22 @@ struct ImmersiveDomeView: View {
             root.addChild(entity)
         }
         LMLog.visual.info("🎨 ✅ Shell tiles built (\(root.children.filter { $0 is ModelEntity }.count)) texture=\(DebugLaunchOptions.shellTextureStereo && stereoMaterialBuilder != nil ? "stereo A/B" : "mono", privacy: .public)")
+
+        let surroundMaterial: any RealityKit.Material
+        do {
+            surroundMaterial = try await ShellMaterialBuilder.buildSurround(texture: sideTexture)
+        } catch {
+            LMLog.visual.warning("⚠️ Surround material failed: \(error.localizedDescription); using standard spherical mapping")
+            var unlit = UnlitMaterial(applyPostProcessToneMap: false)
+            unlit.color = .init(texture: .init(sideTexture))
+            unlit.faceCulling = .front
+            surroundMaterial = unlit
+        }
+        // Outside the shell's largest possible corner (farRadius / cos(60°) = 12 m).
+        let surround = ModelEntity(mesh: .generateSphere(radius: 14), materials: [surroundMaterial])
+        surround.name = "ShellSurround"
+        root.addChild(surround)
+        LMLog.visual.info("🎨 ✅ Full shell surround built")
     }
 
     /// Entry placement: centre the shell on the head and face the entry yaw (ARKit), else the
@@ -716,13 +732,12 @@ struct ImmersiveDomeView: View {
                         sourceImage: cgImage,
                         previousImage: previousImage,
                         uniforms: uniforms,
-                        delay: settings.delay,
                         leftQueue: leftQueue,
                         rightQueue: rightQueue,
                         stereoOffset: stereoOffset
                     )
                 } else {
-                    _ = renderer.renderAndPresent(sourceImage: cgImage, previousImage: previousImage, uniforms: uniforms, delay: settings.delay)
+                    _ = renderer.renderAndPresent(sourceImage: cgImage, previousImage: previousImage, uniforms: uniforms)
                 }
                 let renderTime = Date().timeIntervalSince(renderStartTime) * 1000
                 totalRenderTime += renderTime

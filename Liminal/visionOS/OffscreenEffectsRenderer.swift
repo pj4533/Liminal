@@ -542,9 +542,8 @@ final class OffscreenEffectsRenderer {
     ///   - sourceImage: The current source image
     ///   - previousImage: Optional previous image for GPU crossfade blending during transitions
     ///   - uniforms: Effect parameters (includes transitionProgress for blending)
-    ///   - delay: Delay slider value (0-1), controls ghost tap spawn frequency
     /// - Returns: True if rendering succeeded
-    func renderAndPresent(sourceImage: CGImage, previousImage: CGImage? = nil, uniforms: EffectsUniforms, delay: Float) -> Bool {
+    func renderAndPresent(sourceImage: CGImage, previousImage: CGImage? = nil, uniforms: EffectsUniforms) -> Bool {
         renderCount += 1
         perfFrameCount += 1
         let shouldLog = renderCount == 1 || renderCount % 300 == 0
@@ -677,7 +676,7 @@ final class OffscreenEffectsRenderer {
         }
 
         // Update ghost taps and get active count for optimized shader loop
-        let ghostTapResult = ghostTapManager.updateWithCount(currentTime: uniforms.time, delay: delay)
+        let ghostTapResult = ghostTapManager.updateWithCount(currentTime: uniforms.time)
 
         // Copy ghost tap data to GPU buffer
         ghostTapBuffer.contents().copyMemory(
@@ -796,7 +795,6 @@ final class OffscreenEffectsRenderer {
     ///   - sourceImage: The current source image
     ///   - previousImage: Optional previous image for GPU crossfade
     ///   - uniforms: Effect parameters
-    ///   - delay: Delay slider value
     ///   - leftQueue: DrawableQueue for left eye
     ///   - rightQueue: DrawableQueue for right eye
     ///   - stereoOffset: Per-eye UV offset magnitude (oscillates for depth breathing)
@@ -805,7 +803,6 @@ final class OffscreenEffectsRenderer {
         sourceImage: CGImage,
         previousImage: CGImage? = nil,
         uniforms: EffectsUniforms,
-        delay: Float,
         leftQueue: TextureResource.DrawableQueue,
         rightQueue: TextureResource.DrawableQueue,
         stereoOffset: Float = 0.003
@@ -817,7 +814,7 @@ final class OffscreenEffectsRenderer {
         bindImageTextures(source: sourceImage, previous: previousImage)
 
         // Update ghost taps
-        let ghostTapResult = ghostTapManager.updateWithCount(currentTime: uniforms.time, delay: delay)
+        let ghostTapResult = ghostTapManager.updateWithCount(currentTime: uniforms.time)
         if let ghostTapBuffer = ghostTapBuffer {
             ghostTapBuffer.contents().copyMemory(
                 from: ghostTapResult.data,

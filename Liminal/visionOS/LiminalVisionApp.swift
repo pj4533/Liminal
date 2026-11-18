@@ -23,9 +23,7 @@ struct LiminalVisionApp: App {
     @State private var isImmersed = false
     @State private var controlsVisible = true
 
-    /// Progressive by default at full immersion (the Digital Crown can bring the room back down to
-    /// 40%), or full.
-    @State private var immersionStyle: ImmersionStyle = .progressive(0.4...1.0, initialAmount: 1.0)
+    @State private var immersionStyle: ImmersionStyle = .full
 
     var body: some Scene {
         WindowGroup(id: Self.controlsWindowID) {
@@ -39,7 +37,7 @@ struct LiminalVisionApp: App {
             ImmersiveDomeView(visualEngine: visualEngine, settings: settings, music: audioEngine,
                               isImmersed: $isImmersed, controlsVisible: $controlsVisible)
         }
-        .immersionStyle(selection: $immersionStyle, in: .progressive(0.4...1.0, initialAmount: 1.0), .full)
+        .immersionStyle(selection: $immersionStyle, in: .full)
     }
 }
 

@@ -4,7 +4,7 @@ import OSLog
 
 /// Controls posted from any thread; drained at the start of every `advance`.
 nonisolated enum MusicControl {
-    case density(Float), space(Float), delayAmount(Float), style(MusicStyle.ID)
+    case style(MusicStyle.ID)
     case pinScale(ScaleType?)                       // nil = auto (evolving)
     case visualMood(VisualMood), imageDidChange(transition: Double), visualActivity(Float)
     case limiterBypass(Bool)
@@ -30,9 +30,14 @@ nonisolated final class MusicConductor: @unchecked Sendable {
     private let ctx: LayerContext
     private var rng: MusicRNG
     private var colorDrift: ParameterDrift.Channel
+    private let densityDrift: ParameterDrift.Channel
+    private let spaceDrift: ParameterDrift.Channel
+    private let echoDrift: ParameterDrift.Channel
     private let rare: RareEventDirector
     /// The archive film's sound (nil in harnesses that build a conductor without it).
     private let archive: ArchiveVoice?
+    private let accentStrips: [LayerStrip]
+    private var archiveDuck: Float = 0
 
     // Form
     private var scenes: [MusicScene] = []          // current plus the next one during a handoff
@@ -43,10 +48,10 @@ nonisolated final class MusicConductor: @unchecked Sendable {
     private var chordToken = 0
     private var hysteresis: [LayerID: Bool] = [:]
 
-    // Controls
-    private var density: Float = 0.5
-    private var space: Float = 0.5
-    private var delayAmount: Float = 0.5
+    // Mix automation and controls
+    private var density: Float = 0.33
+    private var space: Float = 0.62
+    private var delayAmount: Float = 0.52
     private var activityTarget: Float = 0.5
     private var lastImageChange = -1000.0
     private var styleID: MusicStyle.ID = .drift
@@ -89,10 +94,15 @@ nonisolated final class MusicConductor: @unchecked Sendable {
         harmony = HarmonyEngine(rng: root.fork(2), palette: style.palette, pinned: pinned)
         director = SceneDirector(rng: root.fork(3), style: style)
         self.layers = layers
+        accentStrips = layers.filter { [.keys, .lead, .pluck, .drips, .grains].contains($0.id) }.flatMap(\.allStrips)
         self.mix = mix
         ctx = LayerContext(scheduler: scheduler, harmony: harmony)
         var r = root.fork(4)
         colorDrift = ParameterDrift.Channel(period: r.range(80...120), phase: r.range(0...6))
+        var mixRNG = root.fork(6)
+        densityDrift = .init(period: mixRNG.range(135...185), phase: mixRNG.range(0...(2 * .pi)))
+        spaceDrift = .init(period: mixRNG.range(170...230), phase: mixRNG.range(0...(2 * .pi)))
+        echoDrift = .init(period: mixRNG.range(110...160), phase: mixRNG.range(0...(2 * .pi)))
         for (i, l) in layers.enumerated() { l.prepare(rng: root.fork(100 + UInt64(l.id.rawValue) * 7 + UInt64(i))) }
         rare = RareEventDirector(rng: root.fork(5), mix: mix)
         rare.keys = layers.first { $0.id == .keys } as? KeysLayer
@@ -179,6 +189,8 @@ nonisolated final class MusicConductor: @unchecked Sendable {
         }
         rare.reset(at: t)
         archive?.reset(now: t)
+        archiveDuck = 0
+        updateMixAutomation(at: 0)
         mix.setSpace(space, delayAmount: delayAmount, brightness: 0.5, shimmerScale: shimmerScale, over: 0.05)
         ctx.delayScale = mix.delaySendScale
         mix.setMaster(MusicConductor.masterGain, over: 3)
@@ -223,9 +235,6 @@ nonisolated final class MusicConductor: @unchecked Sendable {
 
     private func apply(_ c: MusicControl) {
         switch c {
-        case .density(let d): density = min(max(d, 0), 1)
-        case .space(let s): space = min(max(s, 0), 1); spaceDirty = true
-        case .delayAmount(let d): delayAmount = min(max(d, 0), 1); spaceDirty = true
         case .style(let id):
             guard id != styleID else { break }
             styleID = id
@@ -382,6 +391,16 @@ nonisolated final class MusicConductor: @unchecked Sendable {
 
     // MARK: Modulation (10 Hz)
 
+    /// Separate slow movements let the space and echoes change as the notes thin out and return.
+    /// The density range leaves only two or three simultaneous layers.
+    private func updateMixAutomation(at time: Double) {
+        density = ParameterDrift.apply(center: 0.33, drift: densityDrift.value(at: time), range: 0.115)
+        space = ParameterDrift.apply(center: 0.62, drift: spaceDrift.value(at: time), range: 0.13)
+        delayAmount = ParameterDrift.apply(center: 0.52, drift: echoDrift.value(at: time), range: 0.13)
+        ctx.density = density * ctx.coupling.energyScale * 0.8
+        ctx.space = space
+    }
+
     private func modulate(_ t: Double) {
         let dt = lastModulate < 0 ? 0.1 : t - lastModulate
         lastModulate = t
@@ -392,23 +411,22 @@ nonisolated final class MusicConductor: @unchecked Sendable {
         ctx.coupling.smooth(dt: dt)
         ctx.activity += (activityTarget - ctx.activity) * a
         let cpl = ctx.coupling
+        updateMixAutomation(at: t - sessionStart)
 
         var intensity = MusicScene.floor
         for s in scenes { intensity = max(intensity, s.intensity(at: t)) }
         let bias = newest?.brightness ?? 0
-        // Calm brightness macro (decision D94): lower centre, half the scene and intensity weight, ceiling 0.70.
+        // Keep bright images and busy scenes from opening the accent filters too far.
         let drift = colorDrift.value(at: t)
-        let b = 0.42 + 0.4 * bias + 0.2 * (intensity - 0.4) + cpl.brightnessNudge + 0.1 * drift
+        let b = 0.35 + 0.34 * bias + 0.15 * (intensity - 0.4) + 0.7 * cpl.brightnessNudge + 0.08 * drift
         ctx.intensity = intensity
         ctx.brightness = MusicConductor.shapeBrightness(b)
         // The beds (drone, pad) keep the previous macro and scene biases, which the user liked, with only the
         // top of the curve trimmed.
         let bed = 0.5 + 0.6 * (newest?.bedBrightness ?? 0) + 0.35 * (intensity - 0.4) + cpl.brightnessNudge + 0.12 * drift
         ctx.bedBrightness = MusicConductor.shapeBedBrightness(bed)
-        ctx.density = min(max(density * cpl.energyScale, 0), 1)
-        ctx.registerShift = min(max((newest?.registerShift ?? 0) + cpl.registerNudge, -5), 7)
+        ctx.registerShift = min(max((newest?.registerShift ?? 0) + cpl.registerNudge, -5), 4)
         ctx.mood = cpl.mood
-        ctx.space = space
 
         updateActivation(t)
         // Warm images: drone up to +3 dB and air down; cool images the reverse.
@@ -419,8 +437,14 @@ nonisolated final class MusicConductor: @unchecked Sendable {
             emit(.rareEvent, layer: .drone, midi: Int(k.rawValue), velocity: 1)
             scoreLog?.rare(t, k)
         }
-        for l in layers { l.modulate(dt: dt, ctx: ctx) }
         archive?.modulate(t: t)
+        // Leave the bass and sustained beds in place. Make room in the midrange while a film speaks.
+        let targetDuck = archive?.presence ?? 0
+        let duckTime = targetDuck > archiveDuck ? 0.8 : 2.8
+        archiveDuck += (targetDuck - archiveDuck) * Float(1 - exp(-dt / duckTime))
+        let accentGain = dbToGain(-3 * archiveDuck)
+        for strip in accentStrips { strip.tilt = accentGain }
+        for l in layers { l.modulate(dt: dt, ctx: ctx) }
 
         if spaceDirty || modulateCount % 5 == 0 {
             mix.setSpace(space, delayAmount: delayAmount, brightness: ctx.brightness, shimmerScale: shimmerScale,
@@ -436,10 +460,9 @@ nonisolated final class MusicConductor: @unchecked Sendable {
         if modulateCount % 10 == 0 { scoreLog?.sample(t, intensity: intensity, brightness: ctx.brightness, layers: layers) }
     }
 
-    /// Brightness macro shaping (decisions D89, D94): linear up to 0.5, then a soft knee that approaches 0.70
-    /// (the pointed layers' filters and the reverb damping never open fully; was knee 0.6, ceiling 0.92).
+    /// Soften the upper part of the brightness range for the accent filters and reverb.
     static func shapeBrightness(_ raw: Float) -> Float {
-        let knee: Float = 0.5, span: Float = 0.2
+        let knee: Float = 0.42, span: Float = 0.18
         if raw <= knee { return max(raw, 0) }
         return knee + span * tanhf((raw - knee) / span)
     }
@@ -481,8 +504,8 @@ nonisolated final class MusicConductor: @unchecked Sendable {
                 desired.append((pick, 0.99))
             }
         }
-        // Max active layers 3 + round(2 D) (4 at default density, D101); drop the highest thresholds first.
-        let cap = 3 + Int((2 * density).rounded())
+        // Two or three simultaneous layers in the automatic density range.
+        let cap = 2 + Int((2 * density).rounded())
         var keep = Set(desired.sorted { $0.1 < $1.1 }.prefix(cap).map { $0.0.id })
         // A layer still fading out above 20 % counts against the cap, so a newcomer waits for it instead of
         // briefly making five audible layers (D101; the fades are 20-50 s long now).

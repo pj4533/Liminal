@@ -32,31 +32,6 @@ final class GenerativeEngine: ObservableObject {
 
     @Published private(set) var isRunning = false
 
-    /// Delay amount (0-1): scales every layer's delay send and the delay feedback.
-    @Published var delay: Float = 0.5 {
-        didSet { conductor.post(.delayAmount(delay)) }
-    }
-
-    /// Reverb slider (0-1): drives the Space macro in PASS 1.
-    @Published var reverb: Float = 0.5 {
-        didSet { space = reverb }
-    }
-
-    /// Notes slider (0-1): drives Density in PASS 1.
-    @Published var notes: Float = 0.5 {
-        didSet { density = notes }
-    }
-
-    /// Density 0-1: rests, loop periods, scene peaks, max active layers.
-    @Published var density: Float = 0.5 {
-        didSet { conductor.post(.density(density)) }
-    }
-
-    /// Space 0-1: reverb return and decay, delay send and feedback.
-    @Published var space: Float = 0.5 {
-        didSet { conductor.post(.space(space)) }
-    }
-
     @Published var style: MusicStyle.ID = .drift {
         didSet { conductor.post(.style(style)) }
     }

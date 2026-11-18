@@ -4,13 +4,13 @@ import SoundpipeAudioKit
 import Foundation
 
 /// Soft harp (decision D97; was the Karplus-Strong pluck and ostinato of D62, D84, which carried half of the
-/// "tinks"). Three voices, each an `Oscillator` on a soft table (fundamental, a quarter of the second and a
-/// little third harmonic), with ramp envelopes: a 45-90 ms swell and a 2.5-4 s fall. Phrases of 2-4 chord tones
-/// in C3-C5, 0.8-1.8 s apart, every 20-45 s. Low-passed at 0.7-1.8 kHz and sent mostly to the reverb and delay.
+/// "tinks"). Three voices, each an `Oscillator` on a soft table (mostly fundamental with a little second and
+/// third harmonic), with ramp envelopes: a 160-320 ms swell and a 2.5-4 s fall. Phrases of 2-4 chord tones
+/// in C3-C5, 0.8-1.8 s apart, every 20-45 s. Low-passed at 0.6-1.45 kHz and sent mostly to the reverb and delay.
 nonisolated final class PluckLayer: BaseLayer {
     static let poolSize = 3
     static let loopBounds: ClosedRange<Double> = 20...45
-    static let table: Table = PadTables.additive([(1, 1), (2, 0.25), (3, 0.08)])
+    static let table: Table = PadTables.additive([(1, 1), (2, 0.16), (3, 0.045)])
     private let oscs: [Oscillator]
     private let filter: LowPassButterworthFilter
     private var loop: LoopClock
@@ -21,8 +21,8 @@ nonisolated final class PluckLayer: BaseLayer {
         oscs = (0..<PluckLayer.poolSize).map { _ in Oscillator(waveform: PluckLayer.table, frequency: 220, amplitude: 0) }
         let mix = Mixer(oscs)
         filter = LowPassButterworthFilter(mix, cutoffFrequency: 1200)
-        let strip = LayerStrip(source: mix, filter: filter, trim: dbToGain(-16) * 1.414 / 0.5,
-                               reverb: 0.8, delay: 0.5, dry: 0.4)
+        let strip = LayerStrip(source: mix, filter: filter, trim: dbToGain(-19) * 1.414 / 0.5,
+                               reverb: 0.8, delay: 0.5, dry: 0.25)
         var tmp = MusicRNG(seed: 0)
         loop = LoopClock(bounds: PluckLayer.loopBounds, rng: &tmp)
         super.init(id: .pluck, strip: strip, entryThreshold: 0.5)
@@ -72,7 +72,7 @@ nonisolated final class PluckLayer: BaseLayer {
         let osc = oscs[v]
         let tilt = Float(max(0.6, 1 - 0.02 * Double(max(0, midi - 60))))
         let peak = amp * velocity * tilt * ctx.shareAttack(layer: .pluck)
-        let attack = rng.range(0.045...0.09)
+        let attack = rng.range(0.16...0.32)
         let decay = rng.range(2.5...4)
         ParamRamp.set(osc.$amplitude, 0, over: 0.08)
         after(0.1, ctx: ctx) { [weak self] in
@@ -92,7 +92,7 @@ nonisolated final class PluckLayer: BaseLayer {
     }
 
     override func update(dt: Double, ctx: LayerContext) {
-        ParamRamp.set(filter.$cutoffFrequency, expMap(ctx.brightness, 700, 1800), over: 0.12)
+        ParamRamp.set(filter.$cutoffFrequency, expMap(ctx.brightness, 600, 1450), over: 0.12)
         strip.setSends(reverb: 0.8, delay: 0.5 * ctx.delayScale, over: 0.12)
     }
 

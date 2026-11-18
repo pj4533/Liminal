@@ -477,8 +477,11 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
                 let now = Date()
                 if router.allCoolingDown(now: now) {
                     // Keep the display moving from the cache until a model is back.
-                    await MainActor.run { self.statusMessage = "Image models busy, showing cached images" }
-                    await self.recycleOneFromCache()
+                    let billingPaused = router.isBillingPaused(now: now)
+                    let recycled = await self.recycleOneFromCache()
+                    let reason = billingPaused ? "Gemini billing paused generation" : "Image models busy"
+                    let status = recycled ? "\(reason), showing cached images" : "\(reason), no cached images available"
+                    await MainActor.run { self.statusMessage = status }
                     let wait = min(5, max(1, router.delayBeforeNextAttempt(now: now)))
                     try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
                     continue

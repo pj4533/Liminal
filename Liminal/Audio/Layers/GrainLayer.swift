@@ -4,8 +4,8 @@ import SoundpipeAudioKit
 import Foundation
 
 /// Mist (decision D98; were the grains of D33, D61, D84 with 12-30 ms "glints" up to MIDI 106). A pool of
-/// slow sine swells on chord tones in C4-C6 (octave drops only), +-6 cents jitter, in four fixed pan groups
-/// (-0.7, -0.25, 0.25, 0.7). Each swell rises over 150-400 ms and fades over 0.8-2 s; at most 1.5 starts per
+/// slow sine swells on chord tones in C4-G5 (octave drops only), +-6 cents jitter, in four fixed pan groups
+/// (-0.7, -0.25, 0.25, 0.7). Each swell rises over 280-560 ms and fades over 0.8-2 s; at most 1.5 starts per
 /// second, scaled by how far intensity is above the layer's threshold, density and image energy. Mostly wet.
 /// Envelopes are linear amplitude ramps on the oscillators and the groups are panned by `Mixer.pan` (D68).
 nonisolated final class GrainLayer: BaseLayer {
@@ -26,7 +26,7 @@ nonisolated final class GrainLayer: BaseLayer {
             return m
         }
         let mix = Mixer(groups)
-        let strip = LayerStrip(source: mix, trim: dbToGain(-22) * 1.414 / 0.5, reverb: 1.0, delay: 0.2, dry: 0.25)
+        let strip = LayerStrip(source: mix, trim: dbToGain(-24) * 1.414 / 0.5, reverb: 1.0, delay: 0.2, dry: 0.25)
         super.init(id: .grains, strip: strip, entryThreshold: 0.65)
         generators = oscs
     }
@@ -62,16 +62,16 @@ nonisolated final class GrainLayer: BaseLayer {
 
     private func grain(ctx: LayerContext) {
         let shift = max(-3, min(3, ctx.registerShift))
-        let tones = ctx.field.chordTones(in: (64 + shift)...(84 + shift))
+        let tones = ctx.field.chordTones(in: (62 + shift)...(79 + shift))
         guard !tones.isEmpty else { return }
         var m = rng.pick(tones)
         if rng.unit() < 0.25 { m -= 12 }
-        m = min(max(m, 60), 84)
+        m = min(max(m, 58), 79)
         let cents = Double(rng.rangeF(-6...6))
         let (v, tok) = pool.take(now: ctx.time)
         let osc = oscs[v]
         let vel = rng.rangeF(0.35...0.9)
-        let attack = rng.range(0.15...0.4)
+        let attack = rng.range(0.28...0.56)
         let release = rng.range(0.8...2)
         let tilt = Float(max(0.6, 1 - 0.02 * Double(max(0, m - 67))))
         // Constant-loudness cloud (decision D84): above 1 start/s each swell is scaled by sqrt(1 / rate).

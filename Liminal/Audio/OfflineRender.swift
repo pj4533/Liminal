@@ -76,7 +76,6 @@ extension GenerativeEngine {
         try av.enableManualRenderingMode(.offline, format: format, maximumFrameCount: 4096)
         try engine.start()
         guard let buffer = AVAudioPCMBuffer(pcmFormat: av.manualRenderingFormat, frameCapacity: 4096) else { return "no buffer" }
-        density = 0.9
         conductor.start()
         let t0 = Date()
         var peak: Float = 0

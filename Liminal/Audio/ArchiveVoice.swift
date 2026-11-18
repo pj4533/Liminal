@@ -95,6 +95,7 @@ nonisolated final class ArchiveVoice {
 
     /// Fade position 0...1 (tests, logs).
     var level: Float { strip.fadeValue }
+    var presence: Float { playing ? level * min(1, strip.trim / Self.baseTrim) : 0 }
     var isPlaying: Bool { playing }
 
     init(format: AVAudioFormat = Settings.audioFormat) {
@@ -210,7 +211,7 @@ nonisolated final class ArchiveVoice {
         let wetScale = 1 - 0.18 * value
         let reverb = cueMix.room.value(at: progress) * wetScale
         let echo = cueMix.echo.value(at: progress) * wetScale
-        let cutoff = Self.lowpassHz + 3800 * value
+        let cutoff = Self.lowpassHz + 2100 * value
         ParamRamp.set(highpass.$cutoffFrequency, Self.highpassHz - 110 * value, over: 0.12)
         ParamRamp.set(lowpass.$cutoffFrequency, cutoff, over: 0.12)
         ParamRamp.set(lowpass2.$cutoffFrequency, cutoff, over: 0.12)

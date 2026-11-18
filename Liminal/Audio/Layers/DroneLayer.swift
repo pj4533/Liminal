@@ -55,7 +55,7 @@ nonisolated final class DroneLayer: BaseLayer {
         }
         let mix = Mixer(oscs)
         filter = LowPassButterworthFilter(mix, cutoffFrequency: 500)
-        let strip = LayerStrip(source: mix, filter: filter, trim: dbToGain(-29) * 1.414 / 0.45,
+        let strip = LayerStrip(source: mix, filter: filter, trim: dbToGain(-27.5) * 1.414 / 0.45,
                                reverb: 0.25, delay: 0)
         super.init(id: .drone, strip: strip, entryThreshold: 0)
         generators = oscs
