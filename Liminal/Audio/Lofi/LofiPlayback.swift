@@ -201,7 +201,7 @@ final class LofiPlayback {
         }
         let targetDuck = archiveActivity?() ?? 0
         duck += (targetDuck - duck) * (targetDuck > duck ? 0.46 : 0.145)
-        let gain = dbToGain(-4.3 * duck)
+        let gain = dbToGain(-2.8 * duck)
         if abs(gain - lastDuckGain) > 0.004 {
             ParamRamp.setGain(musicFader, gain, over: 0.11)
             lastDuckGain = gain

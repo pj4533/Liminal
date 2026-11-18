@@ -158,7 +158,7 @@ nonisolated struct LofiScore: Sendable, Equatable {
                 let pitch = center + scale[(degree + offset) % 7] + 12 * ((degree + offset) / 7)
                 let midi = pitch > 68 ? pitch - 12 : pitch
                 let feel = drift.at(startBeat + beat)
-                let length = melody.range(0.20...0.50)
+                let length = melody.range(0.32...0.68)
                 let color = Double(feel.space * 0.70 + feel.density * 0.30)
                 notes.append(.init(part: .lead, midi: midi, beat: beat + Double(feel.groove) * 0.042,
                                    length: length, velocity: (step == 0 ? 0.61 : 0.51) + 0.14 * feel.density,

@@ -3,6 +3,7 @@ import Foundation
 
 /// Builds the dry rhythm and the wet instruments off the audio thread.
 nonisolated enum LofiRenderer {
+    static let leadGain: Float = 1.38
     struct Tail: Sendable {
         let clock: LofiClock
         let left: [Float]
@@ -110,9 +111,9 @@ nonisolated enum LofiRenderer {
                 let previous: LofiEffects.Stereo = carry?.sample(frame, at: clock) ?? (0, 0)
                 let envelope = min(1, Float(min(frame, n - 1 - frame)) / Float(edge))
                 let musicScale: Float = 0.92
-                music[0][frame] = musicScale * headroom(0.91 * dryLead.0 + 0.37 * dryTexture.0
+                music[0][frame] = musicScale * headroom(Self.leadGain * dryLead.0 + 0.37 * dryTexture.0
                                        + wet.left + previous.left + hiss * 0.007 * dust) * envelope
-                music[1][frame] = musicScale * headroom(0.91 * dryLead.1 + 0.37 * dryTexture.1
+                music[1][frame] = musicScale * headroom(Self.leadGain * dryLead.1 + 0.37 * dryTexture.1
                                         + wet.right + previous.right + hiss * 0.007 * dust) * envelope
                 left[frame] = headroom(left[frame]) * envelope
                 right[frame] = headroom(right[frame]) * envelope

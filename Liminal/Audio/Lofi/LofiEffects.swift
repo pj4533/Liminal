@@ -29,6 +29,7 @@ nonisolated struct LofiEffects {
     private var particleTap: Delay
     private var room: Room
     private var motion: LofiMotion
+    private var ensemble: Ensemble
     private var leadPresence: Float = 0
     private let profile: LofiPreset.Space
     private let beatStep: Float
@@ -43,6 +44,7 @@ nonisolated struct LofiEffects {
         echoR = Delay(frames: clock.frame(at: taps.right), damping: 0.18)
         particleTap = Delay(frames: clock.frame(at: taps.right + 0.5), damping: 0.14)
         room = Room(rate: clock.sampleRate)
+        ensemble = Ensemble(rate: clock.sampleRate)
         motion = LofiMotion(clock: clock, tonic: tonic, seed: seed, gesture: gesture)
     }
 
@@ -60,20 +62,63 @@ nonisolated struct LofiEffects {
         echoR.write(tape(lead.right * 0.76 + grainL * 0.32 + echoA * feedback))
         particleTap.write(tape(0.36 * (grainL - grainR) + 0.28 * scatter))
         let animated = motion.process(lead: lead, texture: texture, grain: (grainL, grainR))
+        orbit += beatStep
+        let cloud = ensemble.process(left: 0.72 * grainL + 0.55 * animated.left,
+                                     right: 0.72 * grainR + 0.55 * animated.right, beat: orbit)
+        // Two slow rhythmic swells trade places, leaving the dry instrument centered.
+        let pulseL = 0.74 + 0.26 * cosf(2 * .pi * orbit / 1.5)
+        let pulseR = 0.74 + 0.26 * cosf(2 * .pi * orbit - .pi * 0.5)
+        let bloomL = pulseL * cloud.left
+        let bloomR = pulseR * cloud.right
         let wash = room.process(
-            texture.left + 0.23 * lead.left + 0.39 * echoA + 0.72 * grainL + scatter + 0.61 * animated.left,
-            texture.right + 0.23 * lead.right + 0.39 * echoB + 0.72 * grainR - scatter + 0.61 * animated.right
+            texture.left + 0.18 * lead.left + 0.39 * echoA + 0.45 * grainL + scatter + bloomL,
+            texture.right + 0.18 * lead.right + 0.39 * echoB + 0.45 * grainR - scatter + bloomR
         )
         // Keep the attack legible, then let repeats and grains become the foreground.
         let echoGain = 0.57 + 0.19 * space - 0.15 * presence
-        let roomGain = profile.diffusion * (0.68 + 0.74 * space - 0.18 * presence)
-        orbit += beatStep
+        let roomGain = profile.diffusion * (0.78 + 0.74 * space - 0.28 * presence)
         let pan = 0.21 * profile.stereo * (sinf(orbit * 0.73) + 0.42 * sinf(orbit * 2.39))
-        return (echoGain * echoA + roomGain * wash.left + (0.54 + pan) * grainL + scatter + animated.left,
-                echoGain * echoB + roomGain * wash.right + (0.54 - pan) * grainR - scatter + animated.right)
+        return (echoGain * echoA + roomGain * wash.left + (0.49 + pan) * grainL + scatter + animated.left + 0.25 * bloomL,
+                echoGain * echoB + roomGain * wash.right + (0.49 - pan) * grainR - scatter + animated.right + 0.25 * bloomR)
     }
 
     private func tape(_ x: Float) -> Float { x / (1 + 0.42 * abs(x)) }
+
+    /// Short moving read heads smear the grain cloud ahead of the room. Their modulation follows the bar clock.
+    private struct Ensemble {
+        private var left: [Float]
+        private var right: [Float]
+        private var index = 0
+        private let rate: Float
+
+        init(rate: Double) {
+            self.rate = Float(rate)
+            left = [Float](repeating: 0, count: max(4, Int(rate * 0.023) + 2))
+            right = left
+        }
+
+        mutating func process(left inputL: Float, right inputR: Float, beat: Float) -> Stereo {
+            left[index] = inputL
+            right[index] = inputR
+            let sway = sinf(beat * .pi * 0.5)
+            let drift = sinf(beat * .pi / 3)
+            let a = tap(left, seconds: 0.007 + 0.0028 * sway)
+            let b = tap(right, seconds: 0.011 - 0.0035 * sway)
+            let c = tap(left, seconds: 0.016 - 0.003 * drift)
+            let d = tap(right, seconds: 0.018 + 0.003 * drift)
+            index = (index + 1) % left.count
+            return (0.57 * a + 0.43 * d, 0.57 * b + 0.43 * c)
+        }
+
+        private func tap(_ storage: [Float], seconds: Float) -> Float {
+            let position = Float(index + storage.count) - seconds * rate
+            let frame = Int(position)
+            let u = position - Float(frame)
+            let a = storage[frame % storage.count]
+            let b = storage[(frame + 1) % storage.count]
+            return a + (b - a) * u
+        }
+    }
 
     /// Replay staggered pieces of the last note of each group. Reverse grains make a swell
     /// and half-speed adds an octave-down answer without adding an unrelated melody.

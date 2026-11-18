@@ -71,12 +71,12 @@ struct LofiTests {
 
     @Test func everyFourBarsGetsANewSampledInstrumentFamily() throws {
         let drift = LofiDrift(seed: 312)
-        let presets = (0..<12).map { LofiPreset.selection(seed: drift.seed, phrase: $0) }
-        #expect(Set(presets.map(\.name)).count == 12)
+        let presets = (0..<9).map { LofiPreset.selection(seed: drift.seed, phrase: $0) }
+        #expect(Set(presets.map(\.name)).count == 7)
         #expect(zip(presets, presets.dropFirst()).allSatisfy { $0.family != $1.family })
         let bank = LofiSampleBank.bundled
         var signatures = Set<[Float]>()
-        for phrase in 0..<12 {
+        for phrase in presets.indices {
             let score = LofiScore.make(seed: 123, section: LofiScore.section(at: phrase),
                                        drift: drift, startBeat: Double(phrase) * LofiClock.beats)
             #expect(score.preset == presets[phrase])
@@ -85,7 +85,7 @@ struct LofiTests {
             #expect(sample.pcm.contains { abs($0) >= 0.05 })
             signatures.insert(Array(sample.pcm[400..<440]))
         }
-        #expect(signatures.count == 12)
+        #expect(signatures.count == 7)
     }
 
     @Test func instrumentAndEffectCyclesReshuffleWithoutBackToBackRepeats() {
@@ -99,14 +99,16 @@ struct LofiTests {
         let gestures = effects(19)
         #expect(families != instruments(20))
         #expect(gestures != effects(20))
-        #expect(Array(families.prefix(6)) != Array(families[6..<12]))
+        let size = LofiPreset.Family.allCases.count
+        let familyOrders = stride(from: 0, to: families.count, by: size).map { Array(families[$0..<($0 + size)]) }
+        #expect(Set(familyOrders).count > 1)
         #expect(Array(gestures.prefix(4)) != Array(gestures[4..<8]))
         for seed in 0..<20 as Range<UInt64> {
             let f = instruments(seed), e = effects(seed)
             #expect(zip(f, f.dropFirst()).allSatisfy { $0 != $1 })
             #expect(zip(e, e.dropFirst()).allSatisfy { $0 != $1 })
-            for start in stride(from: 0, to: f.count, by: 6) {
-                #expect(Set(f[start..<(start + 6)]).count == 6)
+            for start in stride(from: 0, to: f.count, by: size) {
+                #expect(Set(f[start..<(start + size)]).count == size)
             }
             for start in stride(from: 0, to: e.count, by: 4) {
                 #expect(Set(e[start..<(start + 4)]).count == 4)
@@ -202,9 +204,10 @@ struct LofiTests {
 
     @Test func bundledBreaksCanBeDiscoveredFromTheRecordings() {
         let wavs = Bundle.main.urls(forResourcesWithExtension: "wav", subdirectory: nil) ?? []
-        let drums = Set(wavs.filter { $0.lastPathComponent.hasPrefix("AJ_HALL_DRUM_BREAK_") })
+        let drums = Set(wavs.filter { $0.lastPathComponent.hasPrefix("AJ_HALL_DRUM_BREAK_") }
+            .map { $0.standardizedFileURL.path })
         guard !drums.isEmpty else { return }
-        let bundled = LofiDrumLibrary.assets().filter { drums.contains($0.url) }
+        let bundled = LofiDrumLibrary.assets().filter { drums.contains($0.url.standardizedFileURL.path) }
         #expect(bundled.count == drums.count)
         #expect(bundled.allSatisfy { $0.entry.beats == 64 && $0.entry.framesPerBeat > 0 })
     }

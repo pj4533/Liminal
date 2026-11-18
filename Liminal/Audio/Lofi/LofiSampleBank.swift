@@ -57,7 +57,7 @@ nonisolated struct LofiSampleBank: Sendable {
         let l = sqrtf(0.5 * (1 - pan))
         let r = sqrtf(0.5 * (1 + pan))
         let presence = 1_700 + 1_500 * preset.brightness + 380 * note.color
-        let color = min(presence, (preset.family == .brass || preset.family == .mallets) ? 2_400 : 3_150)
+        let color = min(presence, 2_800)
         let coefficient = Float(1 - exp(-2 * .pi * color / rate))
         let drift = preset.movement * 0.0025
         var filtered: Float = 0
