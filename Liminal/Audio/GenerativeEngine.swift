@@ -36,6 +36,7 @@ final class GenerativeEngine: ObservableObject {
     // MARK: - Published State
 
     @Published private(set) var isRunning = false
+    @Published private(set) var isPlaybackReady = false
     @Published var musicMode: MusicMode = .ambient {
         didSet { if isRunning && oldValue != musicMode { activateMusicMode() } }
     }
@@ -109,11 +110,10 @@ final class GenerativeEngine: ObservableObject {
         conductor = MusicConductor(layers: layers, mix: mix, seed: seed, pinned: nil, archive: archive)
         lofi = LofiPlayback(seed: initialLofiSeed, sampleRate: archive.format.sampleRate)
         master = LofiMasterBus(archiveAndAmbient: mix.output, lofi: lofi.output)
-        lofi.onBeatDurationChange = { [weak conductor, weak master] duration in
-            conductor?.updateArchiveTempo(beatDuration: duration)
+        lofi.onPhrase = { [weak conductor, weak master] duration, index, seed in
+            conductor?.updateArchiveTempo(beatDuration: duration, phrase: index, seed: seed)
             master?.setCalibrationBeatDuration(duration)
         }
-        lofi.archiveActivity = { [weak conductor] in conductor?.archiveActivity ?? 0 }
         engine.output = master.output
         conductor.onNote = GenerativeEngine.noteForwarder(shimmerNotePlayed)
         let ms = Date().timeIntervalSince(t0) * 1000
@@ -175,6 +175,7 @@ final class GenerativeEngine: ObservableObject {
         lofi.stop()
         master.stopCalibration()
         lofiActive.store(false, ordering: .relaxed)
+        isPlaybackReady = false
         isRunning = false
         LMLog.audio.info("🛑 Engine stopped")
     }
@@ -184,6 +185,7 @@ final class GenerativeEngine: ObservableObject {
         lofi.stop(immediately: true)
         master.stopCalibration()
         lofiActive.store(false, ordering: .relaxed)
+        isPlaybackReady = false
         isRunning = false
         engine.stop()
     }
@@ -194,14 +196,19 @@ final class GenerativeEngine: ObservableObject {
             master.stopCalibration()
             lofiActive.store(false, ordering: .relaxed)
             conductor.start()
+            isPlaybackReady = true
         } else {
-            let clock = LofiClock(tempo: lofi.options.safeTempo, sampleRate: archive.format.sampleRate)
-            conductor.start(archiveBeatDuration: clock.beatDuration)
-            lofi.start { [weak self] in
+            if isPlaybackReady { conductor.stop(fade: 0.18) }
+            isPlaybackReady = false
+            lofiActive.store(false, ordering: .relaxed)
+            lofi.start(onReady: { [weak self] clock, seed in
                 guard let self, isRunning, musicMode == .lofi else { return }
+                conductor.start(archiveBeatDuration: clock.beatDuration, pattern: .choose(seed: seed, phrase: 0))
+                master.setCalibrationBeatDuration(clock.beatDuration)
                 lofiActive.store(true, ordering: .relaxed)
                 master.startCalibration()
-            }
+                isPlaybackReady = true
+            }, onFailure: { [weak self] in self?.stop() })
         }
     }
 }

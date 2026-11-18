@@ -25,6 +25,10 @@ final class EffectsMetalView: MTKView {
 
     // Source texture (from morphPlayer - current/target image)
     private var sourceTexture: MTLTexture?
+    var beatReveal: LofiImageReveal?
+    private var lastLoggedDownbeat: Double?
+    private var stagingID: ObjectIdentifier?
+    private var stagedTexture: (image: NSImage, texture: MTLTexture, crop: CGRect)?
     private var textureLoader: MTKTextureLoader?
     private var lastSourceImageHash: Int = 0  // Track image changes
     /// Hash of the image whose texture MTKTextureLoader is decoding off the main thread (0 = none).
@@ -196,6 +200,23 @@ final class EffectsMetalView: MTKView {
 
     // MARK: - Texture Management
 
+    func preload(_ image: NSImage?) {
+        guard let image, stagingID != ObjectIdentifier(image), let textureLoader,
+              let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
+        stagingID = ObjectIdentifier(image)
+        let crop = ImageFraming.coverCropRect(width: cg.width, height: cg.height)
+        let framed = ImageFraming.crop(cg, normalized: crop)
+        let options: [MTKTextureLoader.Option: Any] = [.SRGB: false, .generateMipmaps: false]
+        textureLoader.newTexture(cgImage: framed, options: options) { [weak self] texture, _ in
+            nonisolated(unsafe) let texture = texture
+            Task { @MainActor [weak self] in
+                guard let self, self.stagingID == ObjectIdentifier(image), let texture else { return }
+                self.stagedTexture = (image, texture, crop)
+            }
+        }
+        Task.detached { _ = ImageColorStats.cachedFactors(key: image) { framed } }
+    }
+
     /// Update the source image from morphPlayer - ONLY if image changed.
     /// The decode + upload runs on MTKTextureLoader's background queue; the old source keeps
     /// drawing until the new texture lands (a frame or a few into the transition, which then
@@ -215,6 +236,15 @@ final class EffectsMetalView: MTKView {
         if newHash == pendingSourceHash { return }  // already loading
         if newHash == lastSourceImageHash && hasValidSource {
             // Same image, skip expensive texture creation
+            return
+        }
+
+        if let staged = stagedTexture, staged.image === image {
+            sourceCrop = staged.crop
+            pendingSourceHash = newHash
+            sourceTextureLoaded(staged.texture, hash: newHash, error: nil, startTime: Date())
+            stagedTexture = nil
+            stagingID = nil
             return
         }
 
@@ -440,6 +470,17 @@ final class EffectsMetalView: MTKView {
 
         // Copy uniforms to GPU buffer with ghost tap count
         var uniformsCopy = uniforms
+        if let beatReveal, previousTexture != nil {
+            let now = ArchiveFootageService.uptime()
+            let p = max(0.000001, Float(beatReveal.progress(at: now)))
+            if p >= 0.5, lastLoggedDownbeat != beatReveal.downbeat, previousTexture !== sourceTexture {
+                lastLoggedDownbeat = beatReveal.downbeat
+                LMLog.visual.info("Lo-Fi image crossed midpoint on draw \((now - beatReveal.downbeat) * 1000, format: .fixed(precision: 1)) ms after downbeat")
+            }
+            uniformsCopy.transitionProgress = p
+            uniformsCopy.txMix = beatReveal.spec.swap(p)
+            uniformsCopy.txEnv = beatReveal.spec.envelope(p)
+        }
         uniformsCopy.hasSaliencyMap = saliencyTexture != nil ? 1.0 : 0.0
         uniformsCopy.ghostTapCount = Float(ghostTapResult.activeCount)
         // Archive footage: the newest stage texture of each layer at draw time (a lock read each; slot 0 =
@@ -557,6 +598,8 @@ final class EffectsMetalView: MTKView {
 
 struct EffectsMetalViewRepresentable: NSViewRepresentable {
     let sourceImage: NSImage?
+    var stagedImage: NSImage? = nil
+    var beatReveal: LofiImageReveal? = nil
     let previousImage: NSImage?  // For GPU crossfade blending
     let saliencyMap: NSImage?
     let uniforms: EffectsUniforms  // Single struct - matches visionOS pattern
@@ -570,7 +613,9 @@ struct EffectsMetalViewRepresentable: NSViewRepresentable {
 
     func updateNSView(_ nsView: EffectsMetalView, context: Context) {
         // Update source image (internally checks if changed)
+        nsView.preload(stagedImage)
         nsView.updateSourceImage(sourceImage)
+        nsView.beatReveal = beatReveal
 
         // Update previous image for GPU crossfade (internally checks if changed)
         nsView.updatePreviousImage(previousImage)

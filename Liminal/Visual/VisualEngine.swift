@@ -2,6 +2,22 @@ import Foundation
 import Combine
 import OSLog
 
+/// On both screens the midpoint of the image exchange belongs to the audible fill.
+nonisolated struct LofiImageReveal: Sendable {
+    let downbeat: Double
+    let duration: Double
+    var start: Double { downbeat - duration / 2 }
+    var spec: TransitionSpec {
+        TransitionSpec(style: .classic, seed: 0, duration: Float(duration), flip: false)
+    }
+    func progress(at uptime: Double) -> Double { min(1, max(0, (uptime - start) / duration)) }
+
+    static func next(on grid: LofiTakeGrid, after uptime: Double) -> Self {
+        let boundary = grid.nextBoundary(after: uptime)
+        return Self(downbeat: boundary.time, duration: boundary.fill.dissolveBeats * grid.beatDuration)
+    }
+}
+
 /// Coordinates visual generation.
 /// Advances images on a schedule; prompts come from PromptDirector inside ImageQueue.
 ///
@@ -52,6 +68,11 @@ final class VisualEngine: ObservableObject {
         return d
     }()
     private var scheduledTimer: Timer?
+    private var fillTask: Task<Void, Never>?
+    @Published private(set) var stagedImage: ImageQueue.DisplayItem?
+    private(set) var reveal: LofiImageReveal?
+    private var standbyIndex = 0
+
     private var cancellables = Set<AnyCancellable>()
 
     // MARK: - Init
@@ -65,7 +86,6 @@ final class VisualEngine: ObservableObject {
     private func setupQueueObservation() {
         // Mirror queue's current image
         imageQueue.$currentImage
-            .receive(on: RunLoop.main)
             .sink { [weak self] image in
                 self?.currentImage = image
             }
@@ -117,20 +137,35 @@ final class VisualEngine: ObservableObject {
 
     // MARK: - Control
 
-    func start() {
-        guard EnvironmentService.shared.hasValidCredentials else {
-            LMLog.visual.warning("Cannot start VisualEngine: missing API key")
-            return
-        }
-
+    func start(music: GenerativeEngine) {
+        stopScheduling()
         imageQueue.start()
-        startScheduledAdvances()
+        if music.musicMode == .lofi {
+            if !imageBuffer.hasCurrent(), let initial = imageQueue.standbyImage(index: standbyIndex) {
+                imageQueue.showReserved(initial)
+                standbyIndex += 1
+            }
+            fillTask = Task { [weak self, weak music] in
+                guard let self, let music else { return }
+                await scheduleFills(on: music.musicState)
+            }
+        } else {
+            startScheduledAdvances()
+        }
         LMLog.visual.info("VisualEngine started")
     }
 
-    func stop() {
+    private func stopScheduling() {
+        fillTask?.cancel()
+        fillTask = nil
+        stagedImage = nil
+        reveal = nil
         scheduledTimer?.invalidate()
         scheduledTimer = nil
+    }
+
+    func stop() {
+        stopScheduling()
         imageQueue.stop()
         LMLog.visual.info("VisualEngine stopped")
     }
@@ -138,6 +173,7 @@ final class VisualEngine: ObservableObject {
     /// The transition for the crossfade that starts now (call once per crossfade).
     /// - Parameters: energy = music energy when the visuals follow the music, else nil.
     func nextTransition(effectTime: Float, intensity: Float, energy: Float?, hasDepth: Bool) -> TransitionSpec {
+        if let reveal { return reveal.spec }
         let spec = transitionDirector.next(time: effectTime, intensity: intensity, energy: energy, hasDepth: hasDepth,
                                            imageInterval: Float(scheduledInterval))
         LMLog.visual.info("🌀 TRANSITION style=\(spec.style.name, privacy: .public) seed=\(String(format: "%.3f", spec.seed), privacy: .public) duration=\(String(format: "%.2f", spec.duration), privacy: .public)s flip=\(spec.flip)")
@@ -146,6 +182,7 @@ final class VisualEngine: ObservableObject {
 
     /// Manually request the next image
     func advance() {
+        guard fillTask == nil else { return }
         ArchiveFootageService.shared.queuedImage(nil)
         imageQueue.advance()
     }
@@ -162,12 +199,56 @@ final class VisualEngine: ObservableObject {
     /// display buffers and prompt history, and restarts generation if it was running.
     func clearAllImages() async {
         guard !isClearing else { return }
+        stagedImage = nil
         isClearing = true
         defer { isClearing = false }
         await imageQueue.clearAllImages()
     }
 
     // MARK: - Private
+
+    private func scheduleFills(on bus: MusicStateBus) async {
+        let now = ArchiveFootageService.uptime
+        var lastDownbeat = -Double.infinity
+        while !Task.isCancelled {
+            guard let grid = bus.read().lofiTakeGrid else {
+                try? await Task.sleep(for: .milliseconds(15))
+                continue
+            }
+            let cue = LofiImageReveal.next(on: grid, after: max(now(), lastDownbeat + 0.01))
+            ArchiveFootageService.shared.expectNextImage(after: max(0, cue.downbeat - now()))
+            // Give live generation most of the phrase, with six seconds left for
+            // a local decode, crop, colour analysis and both platforms' GPU upload.
+            do { try await Task.sleep(for: .seconds(max(0, cue.start - now() - 6))) } catch { return }
+            let cacheEpoch = imageQueue.store.clearGeneration
+            let currentID = imageBuffer.displayedID()
+            let prefetch = Task {
+                guard !isClearing, let item = await imageQueue.reserveForFill(excluding: currentID),
+                      !Task.isCancelled, imageQueue.store.clearGeneration == cacheEpoch,
+                      now() < cue.start - 2 else { return }
+                stagedImage = item
+                ArchiveFootageService.shared.queuedImage(item.metadata)
+            }
+            defer { prefetch.cancel() }
+            do { try await Task.sleep(for: .seconds(max(0, cue.start - now() - 2))) } catch { return }
+            // A slow cache read or image generation never owns the deadline.
+            if stagedImage == nil, !isClearing {
+                stagedImage = imageQueue.standbyImage(index: standbyIndex)
+            }
+            do { try await Task.sleep(for: .seconds(max(0, cue.start - now()))) } catch { return }
+            if let item = stagedImage, !isClearing, imageQueue.store.clearGeneration == cacheEpoch {
+                reveal = cue
+                imageQueue.showReserved(item)
+                standbyIndex += 1
+                LMLog.visual.info("Lo-Fi image reveal at downbeat \(cue.downbeat, format: .fixed(precision: 3)); start error \((now() - cue.start) * 1000, format: .fixed(precision: 1)) ms")
+            }
+            stagedImage = nil
+            lastDownbeat = cue.downbeat
+            // The outgoing grid may still be published in the output latency window
+            // at a take switch. Read the committed new grid after its first tick.
+            do { try await Task.sleep(for: .seconds(max(0, cue.downbeat + 0.25 - now()))) } catch { return }
+        }
+    }
 
     private func startScheduledAdvances() {
         let interval = scheduledInterval

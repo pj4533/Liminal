@@ -32,6 +32,7 @@ struct CGImageTransitionState {
     var currentImage: CGImage?
     var previousImage: CGImage?
     var transitionStartTime: Date?
+    var beatReveal: LofiImageReveal?
     var lastGeneration: UInt64 = 0
 
     /// The running (or last) transition; its duration drives the progress (docs/plans/transitions.md 7).
@@ -40,6 +41,7 @@ struct CGImageTransitionState {
     /// Raw linear transition progress (0-1)
     var transitionProgress: Float {
         guard let startTime = transitionStartTime else { return 0 }
+        if let beatReveal { return max(0.000001, Float(beatReveal.progress(at: ArchiveFootageService.uptime()))) }
         let elapsed = Date().timeIntervalSince(startTime)
         let progress = min(elapsed / Double(max(spec.duration, 0.1)), 1.0)
         return Float(progress)
@@ -64,7 +66,8 @@ struct CGImageTransitionState {
         transitionStartTime = nil
     }
 
-    mutating func transitionTo(_ image: CGImage) {
+    mutating func transitionTo(_ image: CGImage, reveal: LofiImageReveal? = nil) {
+        beatReveal = reveal
         previousImage = currentImage
         currentImage = image
         transitionStartTime = Date()
@@ -441,7 +444,6 @@ struct ImmersiveDomeView: View {
         // 3. Explicit Task.yield() after each frame
         renderTask = Task { @MainActor in
             var frameCount = 0
-            let startTime = Date()
 
             // Performance tracking
             var lastFrameTime = Date()
@@ -481,10 +483,12 @@ struct ImmersiveDomeView: View {
             // Image change: prepared off the main actor, applied when ready (no long frame).
             var preparingGeneration: UInt64 = 0
             let preparedSlot = PreparedImageSlot()
+            var stagedRaw: CGImage?
+            var stagedSlot = PreparedImageSlot()
             // Archive footage (docs/plans/archive-video.md): prefetch and the footage pieces run off the main actor;
             // this loop only reads the current frame and reports what the weaver listens to.
             let footage = ArchiveFootageService.shared
-            footage.start()
+            var playbackEpoch: Date?
             var lastVideoMix: Float = 0
             var lastVideoMixes: (Float, Float) = (0, 0)
 
@@ -516,7 +520,15 @@ struct ImmersiveDomeView: View {
                 }
 
                 // Update effect time (DEBUG: -LiminalFreezeTime pins it for deterministic captures)
-                effectTime = DebugLaunchOptions.effectTime(Float(Date().timeIntervalSince(startTime)))
+                if music.isPlaybackReady, playbackEpoch == nil {
+                    playbackEpoch = frameStartTime
+                    footage.start()
+                } else if !music.isPlaybackReady, playbackEpoch != nil {
+                    playbackEpoch = nil
+                    footage.stop()
+                }
+                effectTime = DebugLaunchOptions.effectTime(
+                    playbackEpoch.map { Float(frameStartTime.timeIntervalSince($0)) } ?? 0)
 
                 // Tag this frame's command buffers (eyes) for GPU timing
                 effectsRenderer?.gpuStats.beginFrame()
@@ -531,13 +543,27 @@ struct ImmersiveDomeView: View {
                     LMLog.visual.info("🧪 DEBUG: shell cycle -> image \(cycleIndex)")
                 }
                 let (rawImage, metadata, newGeneration) = visualEngine.imageBuffer.loadCurrentWithMetadata()
-                if let rawImage = rawImage, newGeneration != transitionState.lastGeneration, newGeneration != preparingGeneration {
-                    // Crop, colour stats and the 2048² texture upload (40-90 ms) run off the main actor.
-                    preparingGeneration = newGeneration
+                if let staged = visualEngine.stagedImage, stagedRaw !== staged.cgImage {
+                    stagedRaw = staged.cgImage
+                    stagedSlot = PreparedImageSlot()
+                    let slot = stagedSlot
                     let uploader = effectsRenderer?.textureUploader
-                    let slot = preparedSlot
                     Task.detached(priority: .userInitiated) {
-                        slot.store(Self.prepareImage(rawImage, metadata: metadata, generation: newGeneration, uploader: uploader))
+                        slot.store(Self.prepareImage(staged.cgImage, metadata: staged.metadata,
+                                                     generation: newGeneration &+ 1, uploader: uploader))
+                    }
+                }
+                if let rawImage, newGeneration != transitionState.lastGeneration, newGeneration != preparingGeneration {
+                    preparingGeneration = newGeneration
+                    if stagedRaw === rawImage, let ready = stagedSlot.take(), ready.generation == newGeneration {
+                        preparedSlot.store(ready)
+                        stagedRaw = nil
+                    } else {
+                        let uploader = effectsRenderer?.textureUploader
+                        let slot = preparedSlot
+                        Task.detached(priority: .userInitiated) {
+                            slot.store(Self.prepareImage(rawImage, metadata: metadata, generation: newGeneration, uploader: uploader))
+                        }
                     }
                 }
                 // A result for an older generation (superseded while preparing) is dropped.
@@ -558,7 +584,7 @@ struct ImmersiveDomeView: View {
                             energy: lastEnergy,
                             hasDepth: lastDepthGeneration > 0 && !DebugLaunchOptions.forceStereoFlatDepth)
                     }
-                    transitionState.transitionTo(framedImage)
+                    transitionState.transitionTo(framedImage, reveal: visualEngine.reveal)
                     relief.imageChanged(generation: generation)
                     if !wasFirst { transitionStartEffectTime = effectTime }
                     let zoomStart = wasFirst && DebugLaunchOptions.freezeTime != nil ? 0 : effectTime

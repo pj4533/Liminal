@@ -20,12 +20,28 @@ struct ArchiveAudioCueTests {
         let c = try #require(ArchiveAudioCuePlan(piece: p, clipDuration: 1000))
         #expect(c.beginAt == 100.75)
         #expect(c.endAt == 125.25)
-        #expect(c.fadeIn == 4 && c.fadeIn == c.fadeOut)
+        #expect(c.fadeIn == 2.2 && c.fadeIn == c.fadeOut)
         #expect(c.fadeOutAt > c.beginAt + c.fadeIn)
         #expect(abs(c.sourceStart - (200 + 0.75 * 0.7)) < 1e-5)
         #expect(abs(c.sourceLength - (c.endAt + 1 - c.beginAt) * 0.7) < 1e-5)
         let short = try #require(ArchiveAudioCuePlan(piece: Self.piece(length: 12), clipDuration: 1000))
-        #expect(abs(short.fadeIn - 11.5 * 0.22) < 1e-9)
+        #expect(abs(short.fadeIn - 11.5 * 0.17) < 1e-9)
+    }
+
+    @Test func catchUpSkipsElapsedAudioAndFadesTheNewEdge() throws {
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 8_000, channels: 2))
+        let buffer = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 8_000))
+        buffer.frameLength = 8_000
+        let input = try #require(buffer.floatChannelData)
+        for i in 0..<8_000 {
+            input[0][i] = Float(i) / 8_000
+            input[1][i] = -input[0][i]
+        }
+        let trimmed = try #require(ArchiveAudioMath.catchUp(buffer, late: 0.25))
+        let output = try #require(trimmed.floatChannelData)
+        #expect(trimmed.frameLength == 6_000 && output[0][0] == 0)
+        #expect(output[0][400] == input[0][2_400] && output[1][400] == input[1][2_400])
+        #expect(ArchiveAudioMath.catchUp(buffer, late: 1.1) == nil)
     }
 
     @Test func originalSpeedUsesTheSameAnchorAndSlowsOnlyAsNeededNearClipEnd() throws {
@@ -49,8 +65,8 @@ struct ArchiveAudioCueTests {
     }
 
     @Test func shortPiecesAndClipEnds() throws {
-        // Too short to be worth starting (sound span under 7 s).
-        #expect(ArchiveAudioCuePlan(piece: Self.piece(length: 6), clipDuration: 1000) == nil)
+        // Too short to be worth starting (sound span under 5 s).
+        #expect(ArchiveAudioCuePlan(piece: Self.piece(length: 5), clipDuration: 1000) == nil)
         #expect(ArchiveAudioCuePlan(piece: Self.piece(length: 8), clipDuration: 1000) != nil)
         // The clip ends before the sound would: no cue (a sound is never cut off).
         #expect(ArchiveAudioCuePlan(piece: Self.piece(segment: 220), clipDuration: 235) == nil)
@@ -113,7 +129,7 @@ struct ArchiveAudioMathTests {
 @MainActor
 struct ArchiveVoiceRenderTests {
 
-    @Test(arguments: [63.0, 78.0]) func footageEchoFollowsTheBeatGrid(bpm: Double) throws {
+    @Test(arguments: [58.0, 63.0, 78.0, 82.0]) func footageEchoFollowsTheBeatGrid(bpm: Double) throws {
         let engine = GenerativeEngine(seed: 3)
         let format = engine.archiveFormat
         let rate = format.sampleRate

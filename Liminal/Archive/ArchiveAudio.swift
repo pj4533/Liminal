@@ -11,11 +11,11 @@ import AVFoundation
 import Foundation
 
 /// When a piece's sound plays (decision A27): it comes in a little after the piece starts to fade in and
-/// leaves around the piece's change, with slow smoothstep fades of up to 4 s each. Pure.
+/// leaves around the piece's change, with slow smoothstep fades of up to 2.2 s each. Pure.
 nonisolated struct ArchiveAudioCuePlan: Sendable, Equatable {
-    static let maxFade: Double = 4
+    static let maxFade: Double = 2.2
     /// Each fade takes this share of the sound's span (the rest is the hold).
-    static let fadeShare: Double = 0.22
+    static let fadeShare: Double = 0.17
     /// A sound shorter than this (begin to end) is not worth starting.
     static let minimumAudible: Double = FootageWeaver.soundMinSpan
 
@@ -34,7 +34,7 @@ nonisolated struct ArchiveAudioCuePlan: Sendable, Equatable {
     var endAt: Double { fadeOutAt + fadeOut }
 
     init?(piece: FootagePiece, clipDuration: Double) {
-        let begin = piece.origin + FootageWeaver.soundDelay
+        let begin = piece.origin + (piece.fill == nil ? FootageWeaver.soundDelay : 0)
         let end = piece.origin + piece.length + FootageWeaver.soundTail
         let span = end - begin
         guard span >= Self.minimumAudible else { return nil }
@@ -57,7 +57,7 @@ nonisolated struct ArchiveAudioCuePlan: Sendable, Equatable {
         guard length >= span * rate else { return nil }
         let fade = min(Self.maxFade, span * Self.fadeShare)
         beginAt = begin
-        fadeIn = fade
+        fadeIn = piece.fill == nil ? fade : min(fade, piece.fadeIn)
         fadeOutAt = end - fade
         fadeOut = fade
         sourceStart = start
@@ -142,6 +142,28 @@ nonisolated enum ArchiveAudioMath {
             }
         }
         return y
+    }
+
+    /// Drop elapsed playback samples when a cue misses its start. Soften the new edge.
+    static func catchUp(_ buffer: AVAudioPCMBuffer, late: Double) -> AVAudioPCMBuffer? {
+        guard late.isFinite else { return nil }
+        let rate = buffer.format.sampleRate
+        let offset = Int(min(Double(buffer.frameLength), max(0, late) * rate))
+        guard offset > Int(rate * 0.035) else { return buffer }
+        let count = Int(buffer.frameLength) - offset
+        guard count > 0, let input = buffer.floatChannelData,
+              let result = AVAudioPCMBuffer(pcmFormat: buffer.format, frameCapacity: AVAudioFrameCount(count)),
+              let output = result.floatChannelData else { return nil }
+        result.frameLength = AVAudioFrameCount(count)
+        let fade = max(1, min(count, Int(rate * 0.045)))
+        for channel in 0..<Int(buffer.format.channelCount) {
+            output[channel].update(from: input[channel].advanced(by: offset), count: count)
+            for i in 0..<fade {
+                let u = Float(i) / Float(fade)
+                output[channel][i] *= u * u * (3 - 2 * u)
+            }
+        }
+        return result
     }
 
     /// RMS from the speech band, read by the music mixer at 10 Hz.

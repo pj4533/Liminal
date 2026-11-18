@@ -26,18 +26,6 @@ struct LofiProductionTests {
         #expect(bright.minimum > 0.97)
     }
 
-    @Test func archiveReducesTheReturnsMoreThanTheDryInstrumentAndRecoversSlowly() {
-        var ducker = LofiForegroundDucker()
-        #expect(ducker.update(activity: 0, interval: 0.04).wet == 1)
-        let entering = ducker.update(activity: 1, interval: 0.04)
-        let active = ducker.update(activity: 1, interval: 0.2)
-        #expect(entering.dry < 1 && entering.wet < entering.dry)
-        #expect(active.wet < entering.wet && active.wet > 0.60)
-        let immediate = ducker.update(activity: 0, interval: 0.04)
-        #expect(immediate.wet > active.wet && immediate.wet < 0.73)
-        #expect(ducker.update(activity: 0, interval: 2).wet > 0.98)
-    }
-
     @Test(arguments: [44_100.0, 48_000.0])
     func stereoLoudnessEpochGatesSilenceAndTracksCalibratedTone(rate: Double) throws {
         var meter = LofiMasterMeter(sampleRate: rate, epochSeconds: 1)
@@ -86,6 +74,51 @@ struct LofiProductionTests {
         #expect(try #require(firstRoom) >= Int(clock.sampleRate * 0.034))
         #expect(firstColor == 0)
         #expect(finalPeak < 0.002)
+    }
+
+    @Test func capturedReturnFeedsOnlyTheThreeLaterReplayWindows() {
+        let clock = LofiClock(tempo: 70, sampleRate: 8_000)
+        var replay = LofiEffects.ReturnReplay(lastBeat: 10, clock: clock, gesture: .cloud)
+        let silence = [Float](repeating: 0, count: clock.frameCount)
+        var grains = (left: silence, right: silence)
+        for frame in replay.window {
+            replay.capture((0.2, -0.1), at: frame, into: &grains)
+        }
+        let starts = [12.0, 12.625, 13.625].map { clock.frame(at: $0) }
+        let runs = grains.left.indices.filter { $0 > 0 && grains.left[$0] > 0 && grains.left[$0 - 1] == 0 }
+        #expect(runs == starts.map { $0 + 1 })
+        #expect(grains.right.min() ?? 0 < 0)
+    }
+
+    @Test func reverseAndPitchShiftFollowTheScheduledGridAndScale() {
+        let clock = LofiClock(tempo: 70, sampleRate: 8_000)
+        let start = clock.frame(at: 0.75)
+        let length = 2_401
+        let input = (0..<(length + 1)).map { Float(sin(2 * .pi * 220 * Double($0) / clock.sampleRate)) }
+        let silent = [Float](repeating: 0, count: start + length)
+        var output = (left: silent, right: silent)
+        let target = LofiEffects.targetPitch(source: 57, interval: 7, scale: .minor, tonic: 9)
+        #expect(target == 64)
+        let rate = pow(2, Double(target - 57) / 12)
+        LofiEffects.replay((input, input), sourceStart: 0, sourceCount: length, into: &output,
+                           destination: start, rate: rate, reverse: true, gain: 1, pan: 0)
+        #expect(output.left.prefix(start).allSatisfy { $0 == 0 })
+        #expect(output.left[start] == 0)
+        let crossing = (200..<1_200).count { i in output.left[start + i - 1] < 0 && output.left[start + i] >= 0 }
+        #expect(abs(Double(crossing) * 8 - 329.63) < 9)
+        let travel = 300 * rate
+        let reversed = Double(length - 1) - travel
+        let i = Int(reversed)
+        let expectedSign = input[i] + Float(reversed - Double(i)) * (input[i + 1] - input[i])
+        #expect(output.left[start + 300] * expectedSign > 0)
+        for scale in ScaleType.allCases {
+            for source in 53...72 where scale.intervals.contains(source % 12) {
+                for shift in [-12, -7, -5, 0, 5, 7, 12] {
+                    let note = LofiEffects.targetPitch(source: source, interval: shift, scale: scale, tonic: 0)
+                    #expect(scale.intervals.contains(note % 12))
+                }
+            }
+        }
     }
 
     @Test func tapeColorDropsThirdHarmonicAliasAndHandlesNearEqualInputs() {
@@ -155,6 +188,25 @@ struct LofiArchiveRetimeTests {
         }
         #expect(peakL > 0.2 && peakL < 0.85)
         #expect(peakR > 0.2 && peakR < 0.85)
+    }
+
+    @Test func archiveSwellsCycleThroughDistinctTempoDivisions() {
+        let patterns = (0..<10).map { MixBus.ArchiveEchoPattern.choose(seed: 16, phrase: $0) }
+        #expect(Set(patterns.prefix(5).map(\.main)).count == 5)
+        #expect(zip(patterns, patterns.dropFirst()).allSatisfy { $0 != $1 })
+        for pattern in patterns {
+            #expect(pattern.main != pattern.answer)
+            #expect(pattern.spread != 0 && pattern.swell > 0)
+            for division in [pattern.main, pattern.answer, pattern.room] {
+                #expect(division > 0 && (division * 8).rounded() == division * 8)
+            }
+        }
+    }
+
+    @Test func futurePlaybackOriginHoldsAtZero() {
+        let bus = MusicStateBus()
+        bus.setStartUptime(DispatchTime.now().uptimeNanoseconds + 1_000_000_000)
+        #expect(bus.now() == 0)
     }
 
     @Test func preparedTapKeepsOldRepeatAndNewInputUsesTheNewTempo() throws {

@@ -5,6 +5,7 @@ cd "$(dirname "$0")/.."
 exec python3 - "$@" <<'PY'
 import argparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -20,11 +21,14 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--out", type=Path)
 parser.add_argument("--seed", default=1042, type=int)
 parser.add_argument("--bpm", default=70.0, type=float)
-parser.add_argument("--bars", default=16, choices=(4, 8, 12, 16), type=int)
+parser.add_argument("--bars", default=16, choices=(4, 8, 12, 16, 32, 64), type=int)
+parser.add_argument("--scale", help="Pin the same C-rooted scale as the app, e.g. Dorian (default: Auto)")
 parser.add_argument("--block", default=1024, type=int)
-parser.add_argument("--postroll-beats", default=0, choices=range(0, 9), type=int)
+parser.add_argument("--postroll-beats", default=0, choices=range(0, 17), type=int)
 parser.add_argument("--limiter", help="Debug comparison only, use apple-peak-limiter or a qualified FourCC/version")
 parser.add_argument("--private-drums", action="store_true")
+parser.add_argument("--drum-name", help="Pin an installed take by its filename stem when using --private-drums")
+parser.add_argument("--next-drum-name", help="Use a second installed performance at the 16-bar switch")
 source = parser.add_mutually_exclusive_group()
 source.add_argument("--footage", type=Path)
 source.add_argument("--cached-footage", action="store_true")
@@ -32,8 +36,12 @@ source.add_argument("--no-footage", action="store_true")
 args = parser.parse_args()
 if not 58 <= args.bpm <= 82 or not 128 <= args.block <= 4096 or not 0 <= args.seed < 2**64:
     parser.error("use BPM 58–82, block 128–4096, and an unsigned 64-bit seed")
-if args.postroll_beats and args.bars != 16:
-    parser.error("capture all 16 recorded bars to measure postroll")
+if args.postroll_beats and args.bars % 16 != 0:
+    parser.error("capture complete 16-bar takes to measure postroll")
+if args.next_drum_name and (not args.private_drums or args.bars < 32):
+    parser.error("--next-drum-name requires --private-drums and at least 32 bars")
+if args.drum_name and not args.private_drums:
+    parser.error("--drum-name requires --private-drums")
 if args.footage and not args.footage.is_file():
     parser.error("footage path does not exist")
 out = args.out.resolve() if args.out else Path(tempfile.mkdtemp(prefix="liminal-lofi-")).resolve()
@@ -71,7 +79,7 @@ class Receiver(BaseHTTPRequestHandler):
             return self.send_error(404)
         try:
             length = int(self.headers.get("Content-Length", ""))
-            if not 0 < length <= 80 * 1024 * 1024:
+            if not 0 < length <= 128 * 1024 * 1024:
                 return self.send_error(413)
             temp = out / (name + ".partial")
             with temp.open("xb") as file:
@@ -91,8 +99,10 @@ class Receiver(BaseHTTPRequestHandler):
 config_path = Path(f"/private/tmp/liminal-lofi-audio-config-{os.getuid()}.json")
 configuration = dict(runToken=secrets.token_hex(16),
                      revision=subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
-                     seed=args.seed, tempo=args.bpm, bars=args.bars, noFootage=args.no_footage,
-                     cachedFootage=args.cached_footage, privateDrums=args.private_drums, block=args.block,
+                     trackedDiffSHA256=hashlib.sha256(subprocess.check_output(
+                         ["git", "diff", "--binary", "HEAD"])).hexdigest(),
+                     seed=args.seed, tempo=args.bpm, scale=args.scale, bars=args.bars, noFootage=args.no_footage,
+                     cachedFootage=args.cached_footage, privateDrums=args.private_drums, drumName=args.drum_name, nextDrumName=args.next_drum_name, block=args.block,
                      postrollBeats=args.postroll_beats, limiter=args.limiter,
                      explicitFootageSuffix=args.footage.suffix if args.footage else None)
 with ThreadingHTTPServer(("127.0.0.1", 0), Receiver) as server:

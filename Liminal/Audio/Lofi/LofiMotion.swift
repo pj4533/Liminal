@@ -21,7 +21,7 @@ nonisolated struct LofiMotion {
     private let colors: [Float]
     private let gesture: (diffusion: Float, ringing: Float, folding: Float, texture: Float)
 
-    init(clock: LofiClock, tonic: Int, seed: UInt64, gesture: LofiEffects.Gesture) {
+    init(clock: LofiClock, tonic: Int, scale: ScaleType, seed: UInt64, gesture: LofiEffects.Gesture) {
         self.gesture = gesture.colors
         let rate = clock.sampleRate
         leftA = Allpass(rate, 0.0073)
@@ -30,8 +30,9 @@ nonisolated struct LofiMotion {
         rightB = Allpass(rate, 0.0239)
         let root = 130.813 * pow(2, Double(tonic) / 12)
         fundamental = Resonance(hz: root, decay: 0.85, rate: rate)
-        fifth = Resonance(hz: root * 1.5, decay: 0.57, rate: rate)
-        upper = Resonance(hz: root * 2.02, decay: 0.33, rate: rate)
+        let degree = scale.intervals.filter { $0 != 0 }.min { abs($0 - 7) < abs($1 - 7) } ?? 0
+        fifth = Resonance(hz: root * pow(2, Double(degree) / 12), decay: 0.57, rate: rate)
+        upper = Resonance(hz: root * 2, decay: 0.33, rate: rate)
         step = 1 / Float(clock.framesPerBeat)
         var rng = MusicRNG(seed: seed).fork(872)
         beat = rng.rangeF(0...20)

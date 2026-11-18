@@ -1,3 +1,4 @@
+import Accelerate
 import AVFoundation
 import Foundation
 
@@ -96,10 +97,8 @@ nonisolated enum LofiDrumLibrary {
         let n = entry.frameCount
         let left = Array(UnsafeBufferPointer(start: pcm.1[0], count: n))
         let right = entry.channels == 1 ? left : Array(UnsafeBufferPointer(start: pcm.1[1], count: n))
-        let energy = zip(left, right).reduce(Double(0)) { energy, pair in
-            energy + Double(pair.0) * Double(pair.0) + Double(pair.1) * Double(pair.1)
-        } / (2 * Double(n))
-        let gain = Float(min(2.6, 0.11 / max(0.025, energy.squareRoot())))
+        let energy = 0.5 * (vDSP.meanSquare(left) + vDSP.meanSquare(right))
+        let gain = min(2.6, 0.11 / max(0.025, energy.squareRoot()))
         return Break(entry: entry, left: left, right: right, gain: gain)
     }
 

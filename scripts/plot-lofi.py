@@ -103,7 +103,7 @@ def advisory(run, manifest, master, dry, wet, drum, target, background):
     rests, joins = [], []
     for phrase in score:
         start, end = phrase["range"]
-        rest_start, rest_end = phrase["foregroundRest"]
+        rest_start, rest_end = phrase.get("endingRest", phrase.get("foregroundRest"))
         attack_overlap = [note["on"] for note in phrase["notes"]
                           if note["role"] != "bass" and note["on"] < rest_end and note["off"] > rest_start]
         rests.append({"section": phrase["section"], "intervalFrames": [rest_start, rest_end],
@@ -140,11 +140,11 @@ def space_plot(run, rate, dry, wet, target):
         axis.plot(np.arange(len(values)) * window / rate, values, label=name, linewidth=1)
     score = json.loads((run / "score.json").read_text())
     for index, phrase in enumerate(score):
-        start, end = phrase["foregroundRest"]
+        start, end = phrase.get("endingRest", phrase.get("foregroundRest"))
         axis.axvspan(start / rate, end / rate, color="steelblue", alpha=0.11,
-                     label="Arranged openings" if index == 0 else None)
+                     label="Phrase ending rests" if index == 0 else None)
     axis.set(ylim=(-85, 0), xlabel="Seconds on the capture clock", ylabel="50 ms RMS (dBFS)",
-             title="Accompaniment and footage through planned rests")
+             title="Accompaniment and footage across the phrase")
     axis.grid(alpha=0.2)
     axis.legend(loc="lower left", ncol=2)
     figure.savefig(run / "foreground-space.png", dpi=140)

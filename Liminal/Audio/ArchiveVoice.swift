@@ -86,6 +86,15 @@ nonisolated final class ArchiveVoice {
         }
     }
 
+    // A separate trim for the drum-and-effects mix, with a clearer center under its wet returns.
+    private var beatLocked = false
+    private var cueGain: Float = 1
+
+    func setBeatLocked(_ enabled: Bool) {
+        beatLocked = enabled
+        if playing { setGain(cueGain) }
+    }
+
     private var cueStart = 0.0
     private var cueDuration = 1.0
     private var cueMix: CueMix?
@@ -122,7 +131,7 @@ nonisolated final class ArchiveVoice {
         for n in [highpass, lowpass, lowpass2, spectralSweep] as [Node] { if running { n.start() } else { n.stop() } }
     }
 
-    /// Start a segment. If another one is still audible it fades out over 0.4 s first.
+    /// Start a segment. If another one is still audible it fades out briefly first.
     func begin(_ cue: Cue, now: Double) {
         guard cue.buffer.format.isEqual(format) || (cue.buffer.format.sampleRate == format.sampleRate
                                                     && cue.buffer.format.channelCount == format.channelCount) else {
@@ -131,8 +140,8 @@ nonisolated final class ArchiveVoice {
         }
         if playing && strip.fadeValue > 0.001 {
             pending = cue
-            strip.fade(to: 0, over: 0.4, now: now)
-            stopAt = now + 0.45
+            strip.fade(to: 0, over: 0.24, now: now)
+            stopAt = min(stopAt ?? .greatestFiniteMagnitude, now + 0.27)
             return
         }
         start(cue, now: now)
@@ -142,7 +151,8 @@ nonisolated final class ArchiveVoice {
         let p = source.player
         if playing { p.stop() }
         setFilters(running: true)
-        strip.trim = Self.baseTrim * cue.gain
+        cueGain = cue.gain
+        strip.trim = Self.baseTrim * cueGain * (beatLocked ? 1.78 : 1)
         let seconds = Double(cue.buffer.frameLength) / cue.buffer.format.sampleRate
         cueStart = now
         cueDuration = max(1, seconds - 1)
@@ -171,7 +181,8 @@ nonisolated final class ArchiveVoice {
     /// "Footage audio" changed while a segment plays.
     func setGain(_ gain: Float) {
         guard playing else { return }
-        strip.trim = Self.baseTrim * gain
+        cueGain = gain
+        strip.trim = Self.baseTrim * cueGain * (beatLocked ? 1.78 : 1)
     }
 
     /// Stop at once (engine stop, conductor restart).
@@ -224,7 +235,7 @@ nonisolated final class ArchiveVoice {
         let wetScale = 1 - 0.18 * value
         let reverb = cueMix.room.value(at: progress) * wetScale
         let echo = cueMix.echo.value(at: progress) * wetScale
-        let cutoff = Self.lowpassHz + 1650 * value
+        let cutoff = Self.lowpassHz + (beatLocked ? 280 : 0) + 1650 * value
         let motion = cueMix.movement.value(at: progress)
         ParamRamp.set(spectralSweep.$notchMaximumFrequency, 900 + 970 * motion, over: 0.13)
         ParamRamp.set(spectralSweep.$dryWetMix, 0.05 + 0.49 * motion * (1 - 0.55 * value), over: 0.13)
@@ -232,7 +243,8 @@ nonisolated final class ArchiveVoice {
         ParamRamp.set(lowpass.$cutoffFrequency, cutoff, over: 0.12)
         ParamRamp.set(lowpass2.$cutoffFrequency, cutoff, over: 0.12)
         if let dry = strip.dryGain {
-            ParamRamp.setGain(dry, Self.dryGain + (Self.clearDryGain - Self.dryGain) * value, over: 0.12)
+            let articulation = beatLocked ? 0.30 + 0.70 * value : value
+            ParamRamp.setGain(dry, Self.dryGain + (Self.clearDryGain - Self.dryGain) * articulation, over: 0.12)
         }
         strip.setSends(reverb: reverb, delay: echo, over: 0.12)
     }

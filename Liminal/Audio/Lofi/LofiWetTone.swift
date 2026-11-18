@@ -4,6 +4,7 @@ import Foundation
 nonisolated struct LofiWetTone {
     private let crossover: Float
     private let lowCrossover: Float
+    private let airCrossover: Float
     private let attack: Float
     private let release: Float
     private var midL: Float = 0
@@ -11,10 +12,13 @@ nonisolated struct LofiWetTone {
     private var lowL: Float = 0
     private var lowR: Float = 0
     private var level: Float = 0
+    private var airMemoryL: Float = 0
+    private var airMemoryR: Float = 0
 
     init(sampleRate: Double) {
         crossover = Float(1 - exp(-2 * .pi * 1_650 / sampleRate))
         lowCrossover = Float(1 - exp(-2 * .pi * 185 / sampleRate))
+        airCrossover = Float(1 - exp(-2 * .pi * 2_950 / sampleRate))
         attack = Float(1 - exp(-1 / (0.003 * sampleRate)))
         release = Float(1 - exp(-1 / (0.115 * sampleRate)))
     }
@@ -33,10 +37,12 @@ nonisolated struct LofiWetTone {
         let airL = sample.left - midL, airR = sample.right - midR
         let peak = max(abs(airL), abs(airR))
         level += (peak - level) * (peak > level ? attack : release)
-        let gain = max(0.10, (0.33 + 0.05 * sweep) / (1 + 14 * level))
+        airMemoryL += airCrossover * (airL - airMemoryL)
+        airMemoryR += airCrossover * (airR - airMemoryR)
+        let gain = max(0.07, (0.31 + 0.04 * sweep) / (1 + 18 * level))
         let body = 1.02 + 0.13 * space + 0.05 * pressure
         let warmth = 0.44 + 0.09 * space
-        return (body * (midL - lowL) + warmth * lowL + airL * gain,
-                body * (midR - lowR) + warmth * lowR + airR * gain)
+        return (body * (midL - lowL) + warmth * lowL + airMemoryL * gain,
+                body * (midR - lowR) + warmth * lowR + airMemoryR * gain)
     }
 }

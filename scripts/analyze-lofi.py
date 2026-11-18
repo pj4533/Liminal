@@ -217,6 +217,8 @@ def analyze(run, true_peak_limit, report):
     stats = {name: BusStats(rate) for name in BUSES}
     routing_peak = 0.0
     first_bad_frame = None
+    stem_peak = 0.0
+    first_bad_stem_frame = None
     nonfinite_routing_samples = 0
     with ExitStack() as files:
         taps = {name: FloatWave(run / f"{name}.wav", files) for name in BUSES}
@@ -231,6 +233,14 @@ def analyze(run, true_peak_limit, report):
             buffers = {name: tap.read(count) for name, tap in taps.items()}
             for name, samples in buffers.items():
                 stats[name].add(samples)
+            # The five explicitly captured music lanes enter the unity Lo-Fi bus.
+            for index, (drums, bass, dry, texture, wet, music) in enumerate(zip(
+                    *(buffers[name] for name in ("drums", "bass", "dry", "texture", "wet", "lofi")))):
+                residual = abs(drums + bass + dry + texture + wet - music)
+                if math.isfinite(residual):
+                    stem_peak = max(stem_peak, residual)
+                    if first_bad_stem_frame is None and residual > ROUTING_TOLERANCE:
+                        first_bad_stem_frame = offset + index // 2
             for index, (combined, music, footage) in enumerate(zip(
                     buffers["pre-master"], buffers["lofi"], buffers["footage"])):
                 residual = abs((music + footage) - combined)
@@ -244,6 +254,8 @@ def analyze(run, true_peak_limit, report):
     report["buses"] = {name: bus.summary() for name, bus in stats.items()}
     report["routing"] = {
         "preMasterSumPeakResidual": routing_peak,
+        "musicStemSumPeakResidual": stem_peak,
+        "firstMusicFrameOutsideTolerance": first_bad_stem_frame,
         "tolerance": ROUTING_TOLERANCE,
         "firstFrameOutsideTolerance": first_bad_frame,
         "nonfiniteSamples": nonfinite_routing_samples,
@@ -253,6 +265,8 @@ def analyze(run, true_peak_limit, report):
     for name, bus in stats.items():
         if bus.nonfinite:
             failures.append(f"{name}: {bus.nonfinite} nonfinite samples")
+    if first_bad_stem_frame is not None:
+        failures.append(f"lofi differs from the five music stems at frame {first_bad_stem_frame}")
     if first_bad_frame is not None:
         failures.append(f"pre-master differs from the lofi + footage sum at frame {first_bad_frame}")
     if not has_footage:
@@ -341,6 +355,12 @@ def self_test():
         require(abs(good["masterMeter"]["samplePeakDbfs"] + 12.04) < 0.11,
                 "known transient sample peak was not detected")
         require(good["buses"]["footage"]["samplePeakDbfs"] is None, "silence generated a sample peak")
+
+        write_fixture_wave(run / "drums.wav", silence, rate)
+        disconnected = measure(run, -1.5)
+        require(not disconnected["passed"] and disconnected["routing"]["firstMusicFrameOutsideTolerance"] == 24000,
+                "a missing drum stem passed while the pre-master sum remained valid")
+        write_fixture_wave(run / "drums.wav", transient, rate)
 
         write_fixture_wave(run / "footage.wav", transient, rate)
         bad = measure(run, -1.5)
@@ -459,7 +479,7 @@ def ebu_subset():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("capture", type=Path, nargs="?", help="directory containing manifest.json and synchronized WAVs")
-    parser.add_argument("--max-true-peak", type=float, default=0.0, help="dBTP ceiling, defaults to 0")
+    parser.add_argument("--max-true-peak", type=float, default=-1.5, help="dBTP ceiling, defaults to -1.5")
     parser.add_argument("--self-test", action="store_true", help="exercise known and deliberately invalid fixtures")
     parser.add_argument("--ebu-subset", "--ebu-stereo-subset", action="store_true",
                         help="run selected analytic EBU 3341 and 3342 meter fixtures")

@@ -329,6 +329,67 @@ struct FootageWeaverTests {
     typealias C = FootageWeaver.Conditions
     static let calm = C(transitionRunning: false, imageAge: 20, musicIntensity: 0.3, effectIntensity: 0.5)
 
+    @Test func filmCutsCenterOnBothFillDownbeatsAcrossTempoChanges() throws {
+        let first = LofiClock(tempo: 58, sampleRate: 48_000)
+        let second = LofiClock(tempo: 82, sampleRate: 48_000)
+        // Footage can be enabled partway through an already running drum take.
+        let origin = -3.713
+        let turn = origin + 64 * first.beatDuration
+        var w = FootageWeaver(seed: 12, timing: .speed(.fast))
+        var cuts: [Double] = []
+        var conditions = Self.calm
+        conditions.transitionRunning = true
+        for step in 0..<240 {
+            let t = Double(step) * 0.5
+            let grid = t < turn ? LofiTakeGrid(origin: origin, beatDuration: first.beatDuration,
+                                                nextBeatDuration: t >= turn - 4 ? second.beatDuration : nil)
+                                : LofiTakeGrid(origin: turn, beatDuration: second.beatDuration, takeIndex: 1)
+            let action = w.tick(elapsed: t, conditions: conditions, hasClip: true, grid: grid) { _ in true }
+            if case .prepare(let r) = action {
+                if let fill = r.fill {
+                    let center = r.start + r.fadeIn / 2
+                    cuts.append(center)
+                    if abs(center - turn) < 1e-8 {
+                        #expect(abs(r.start + r.length - (turn + 32 * second.beatDuration)) < 1e-8)
+                    }
+                    #expect(t < r.start)
+                    #expect(fill == (cuts.count.isMultiple(of: 2) ? .turnaround : .halfway))
+                    #expect(abs(grid.accent(at: center) - (fill == .turnaround ? 1 : 0.65)) < 0.00001)
+                }
+                w.didPrepare(r.piece(clipID: "clip-\(r.index)", segmentStart: 0))
+            }
+        }
+        let expected = [origin + 32 * first.beatDuration, turn, turn + 32 * second.beatDuration,
+                        turn + 64 * second.beatDuration]
+        #expect(cuts.count == expected.count)
+        for (cut, beat) in zip(cuts, expected) { #expect(abs(cut - beat) < 1e-8) }
+    }
+
+    @Test func missedFillKeepsTheOldFilmUntilTheNextDownbeat() throws {
+        let grid = LofiTakeGrid(origin: 0, beatDuration: 0.8)
+        var weaver = FootageWeaver(seed: 14, timing: .speed(.medium))
+        var dropped = false
+        var fills: [LofiFill] = []
+        for step in 0...108 {
+            let t = Double(step) / 2
+            let decision = weaver.tick(elapsed: t, conditions: Self.calm, hasClip: true,
+                                       grid: grid) { slot in slot == 0 || dropped }
+            switch decision {
+            case .prepare(let request):
+                if let fill = request.fill { fills.append(fill) }
+                weaver.didPrepare(request.piece(clipID: "film-\(request.index)", segmentStart: 0))
+            case .drop:
+                dropped = true
+                let retained = try #require(weaver.current)
+                #expect(retained.index == 0 && retained.envelope(at: t) == 1)
+            default: break
+            }
+        }
+        #expect(dropped)
+        #expect(fills == [.halfway, .turnaround])
+        #expect(weaver.current?.index == 2)
+    }
+
     struct Run {
         /// Every piece, in its final state (fade out set once the next was placed).
         var pieces: [FootagePiece] = []
@@ -430,22 +491,28 @@ struct FootageWeaverTests {
         }
     }
 
-    @Test func audioCoversMostPiecesWithoutDirectCueOverlap() {
-        var sounding = 0, total = 0
+    @Test func mostPiecesRequestSoundAndMayPrepareBeforeTheOldCueEnds() {
+        var sounding = 0, total = 0, overlaps = 0
         for seed in UInt64(0)..<100 {
             let r = Self.run(seed: seed, timing: .speed(.medium), seconds: 900)
             total += r.pieces.count
             let withSound = r.pieces.filter(\.sound)
             sounding += withSound.count
-            // Direct cues stay separate so the shared effects can bridge the handoff.
+            let preparationTimes = Dictionary(uniqueKeysWithValues: r.decisions.compactMap { time, decision -> (Int, Double)? in
+                guard case .prepare(let request) = decision else { return nil }
+                return (request.index, time)
+            })
+            // The scheduler can prepare the next cue while the first one still has audio.
             for (a, b) in zip(withSound, withSound.dropFirst()) {
                 let ca = ArchiveAudioCuePlan(piece: a, clipDuration: 10_000)!
                 let cb = ArchiveAudioCuePlan(piece: b, clipDuration: 10_000)!
-                #expect(cb.beginAt >= ca.endAt + FootageWeaver.soundGap - 1e-6)
+                #expect(cb.beginAt > ca.beginAt)
+                if let prepareAt = preparationTimes[b.index], prepareAt < ca.fadeOutAt { overlaps += 1 }
             }
         }
         let share = Double(sounding) / Double(total)
-        #expect(share > 0.75 && share < 0.98)
+        #expect(share > 0.90 && share < 0.99)
+        #expect(overlaps > 0)
     }
 
     @Test func coldStartWaitsForTheFirstClipOnly() {

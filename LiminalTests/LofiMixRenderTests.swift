@@ -16,6 +16,8 @@ struct LofiMixRenderTests {
             URL.cachesDirectory.appending(path: "Liminal/OfflineAudio/\(runToken)", directoryHint: .isDirectory)
         }
         let revision: String
+        let trackedDiffSHA256: String?
+        let scale: ScaleType?
         let seed: UInt64
         let tempo: Double
         let bars: Int
@@ -24,6 +26,8 @@ struct LofiMixRenderTests {
         let receiver: String
         let noFootage: Bool
         let privateDrums: Bool
+        let drumName: String?
+        let nextDrumName: String?
         let block: Int
         let postrollBeats: Int?
         let limiter: String?
@@ -63,7 +67,8 @@ struct LofiMixRenderTests {
         try FileManager.default.createDirectory(at: config.out, withIntermediateDirectories: true)
         let audio = AudioEngine()
         let format = AudioKit.Settings.audioFormat
-        let tempo = LofiOptions(tempo: config.tempo, scale: nil).safeTempo
+        let options = LofiOptions(tempo: config.tempo, scale: config.scale)
+        let tempo = options.safeTempo
         let clock = LofiClock(tempo: tempo, sampleRate: format.sampleRate)
         let bus = LofiBus(gain: 1)
         let archive = ArchiveVoice(format: format)
@@ -87,12 +92,14 @@ struct LofiMixRenderTests {
         try audio.avEngine.enableManualRenderingMode(.offline, format: format, maximumFrameCount: 4096)
 
         var sourceHash = "public-test-fixture-v1"
-        let drums: LofiDrumTake
+        var drums: LofiDrumTake
         if config.privateDrums {
-            let candidates = LofiDrumLibrary.assets().sorted {
-                abs($0.entry.bpm - tempo) < abs($1.entry.bpm - tempo)
+            let eligible = LofiDrumLibrary.assets().filter { config.drumName == nil || $0.entry.name == config.drumName }
+            let candidates = eligible.sorted {
+                let a = abs($0.entry.bpm - tempo), b = abs($1.entry.bpm - tempo)
+                return a == b ? $0.entry.name < $1.entry.name : a < b
             }
-            let asset = try #require(candidates.first)
+            let asset = try #require(candidates.first, "Install the requested private drum take before capturing")
             let recording = try LofiDrumLibrary.load(asset)
             drums = try LofiDrumTake(recording: recording, clock: clock)
             sourceHash = SHA256.hash(data: try Data(contentsOf: asset.url, options: .mappedIfSafe)).description
@@ -125,7 +132,8 @@ struct LofiMixRenderTests {
                     break
                 }
             }
-            cue = try #require(selected, "No playable audio in the local archive clip cache")
+            let decoded: AVAudioPCMBuffer = try #require(selected, "No playable audio in the local archive clip cache")
+            cue = decoded
         } else {
             cue = try voiceFixture(clock: clock)
         }
@@ -138,9 +146,22 @@ struct LofiMixRenderTests {
         var auxiliary = try ["echo", "room", "color"].map {
             try Self.file("fx-\($0)-raw", format: format, directory: config.out)
         }
-        bus.schedule(drums)
+        let takeFrames = Int(drums.buffer.frameLength)
+        var kicks: [[String: Any]] = []
         for i in 0..<phrases {
-            let request = LofiPlayback.Request(seed: config.seed, index: i, options: .init(tempo: tempo))
+            if i == LofiDrumTake.phraseCount, let name = config.nextDrumName {
+                let asset = try #require(LofiDrumLibrary.assets().first { $0.entry.name == name })
+                drums = try LofiDrumTake(recording: LofiDrumLibrary.load(asset), clock: clock)
+                sourceHash += "/" + SHA256.hash(data: try Data(contentsOf: asset.url, options: .mappedIfSafe)).description
+            }
+            if i.isMultiple(of: LofiDrumTake.phraseCount) {
+                bus.schedule(drums)
+                kicks += drums.kicks.compactMap { hit in
+                    let frame = i * clock.frameCount + hit.frame
+                    return frame < scoreFrames ? ["frame": frame, "strength": hit.strength] : nil
+                }
+            }
+            let request = LofiPlayback.Request(seed: config.seed, index: i, options: options)
             let phrase = try LofiRenderer.render(seed: request.compositionSeed, section: request.section,
                                                  options: request.options, sampleRate: format.sampleRate,
                                                  drift: .init(seed: request.seed), startBeat: Double(i) * LofiClock.beats,
@@ -157,8 +178,8 @@ struct LofiMixRenderTests {
                 "program": phrase.score.preset.name,
                 "tonic": phrase.score.tonic, "scale": phrase.score.scale.rawValue,
                 "range": [i * clock.frameCount, (i + 1) * clock.frameCount],
-                "foregroundRest": [clock.frame(at: phrase.score.foregroundSpace.lowerBound) + i * clock.frameCount,
-                                   clock.frame(at: phrase.score.foregroundSpace.upperBound) + i * clock.frameCount],
+                "endingRest": [clock.frame(at: phrase.score.endingRest.lowerBound) + i * clock.frameCount,
+                                   clock.frame(at: phrase.score.endingRest.upperBound) + i * clock.frameCount],
                 "notes": phrase.score.notes.map {
                     ["role": String(describing: $0.part), "midi": $0.midi, "velocity": $0.velocity,
                      "on": clock.frame(at: $0.beat) + i * clock.frameCount,
@@ -195,31 +216,37 @@ struct LofiMixRenderTests {
         let finalFile = try Self.file("master", format: format, directory: config.out)
         let work = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4096))
 
-        mix.syncDelay(toBeatDuration: clock.beatDuration)
-        mix.setMaster(1, over: 0)
+        let conductor = MusicConductor(layers: [], mix: mix, seed: config.seed, pinned: config.scale, archive: archive)
+        conductor.beginOffline(archiveBeatDuration: clock.beatDuration, pattern: .choose(seed: config.seed, phrase: 0))
         for player in bus.players { player.play() }
-        let ducker = OfflineDucker(bus: bus)
-        var cueStarted = false
-        let cueFrame = clock.frame(at: 5)
+        // In the two-take audition the film is audible through each drum fill.
+        let cueBeats: [Double] = config.nextDrumName == nil ? [5] : [5] + stride(from: 26, to: config.bars * 4, by: 32).map(Double.init)
+        let cueFrames = cue == nil ? [] : cueBeats.map { clock.frame(at: $0) }.filter { $0 < scoreFrames }
+        var cueIndex = 0
         var cursor = 0
         var noProgress = 0
-        let controlFrames = Int((format.sampleRate * 0.04).rounded())
+        let controlFrames = Int((format.sampleRate * 0.02).rounded())
         var nextControl = 0
         let t0 = Date()
         while cursor < frames {
             let time = Double(cursor) / format.sampleRate
-            if let cue, !cueStarted, cursor == cueFrame {
+            if let cue, cueIndex < cueFrames.count, cursor == cueFrames[cueIndex] {
                 archive.begin(.init(buffer: cue, gain: 0.9, fadeIn: 0.5, label: "offline fixture",
                                     activity: ArchiveAudioMath.activity(cue)), now: time)
-                cueStarted = true
+                cueIndex += 1
+            }
+            if cursor > 0 && cursor < scoreFrames && cursor.isMultiple(of: clock.frameCount) {
+                mix.syncDelay(toBeatDuration: clock.beatDuration,
+                              pattern: .choose(seed: config.seed, phrase: cursor / clock.frameCount), now: time)
             }
             if cursor == nextControl {
-                archive.modulate(t: time)
-                ducker.update(archive.speechActivity, interval: Double(controlFrames) / format.sampleRate)
+                conductor.advance(to: time)
                 nextControl += controlFrames
             }
-            let remaining = cueStarted || cue == nil ? frames - cursor : min(cueFrame - cursor, frames - cursor)
-            let size = min(config.block, remaining, nextControl - cursor)
+            let nextCue = cueIndex < cueFrames.count ? cueFrames[cueIndex] : frames
+            let remaining = nextCue - cursor
+            let phraseBoundary = (cursor / clock.frameCount + 1) * clock.frameCount
+            let size = min(config.block, remaining, nextControl - cursor, phraseBoundary - cursor)
             let status = try audio.avEngine.renderOffline(AVAudioFrameCount(size), to: work)
             if status == .success {
                 let written = Int(work.frameLength)
@@ -244,18 +271,21 @@ struct LofiMixRenderTests {
         let manifest: [String: Any] = [
             "schema": "liminal-lofi-capture-v1", "frames": frames, "sampleRate": format.sampleRate,
             "block": config.block, "seed": String(config.seed), "bpm": tempo, "beatsPerBar": 4,
+            "masterCalibration": "fixed-nominal", "archiveMix": "conductor",
             "clockOriginFrame": 0, "postrollFrames": postroll, "scoredFrames": scoreFrames,
-            "hasFootage": cue != nil, "footageStartFrame": cueFrame,
+            "hasFootage": cue != nil, "footageStartFrame": clock.frame(at: 5), "footageStartFrames": cueFrames,
             "privateSources": config.privateDrums || config.cachedFootage || config.explicitFootageSuffix != nil,
             "drumSourceHash": sourceHash, "footageSourceHash": footageHash, "gitRevision": config.revision,
             "renderedSeconds": Double(frames) / format.sampleRate, "mixWallSeconds": wall,
             "providers": ["kit": "full-take-linked-varispeed", "acoustic": "native-resampled-wav-v2",
                           "room": "native-parallel-rack-v2", "master": limiterID],
             "system": ProcessInfo.processInfo.operatingSystemVersionString,
+            "trackedDiffSHA256": config.trackedDiffSHA256 ?? "unknown",
+            "scaleSetting": config.scale?.rawValue ?? "Auto", "drumTakeFrames": takeFrames,
             "topology": nodes.map(\.0) + ["master"],
             "latencySamples": ["reportedGlue": master.glue.avAudioNode.latency * format.sampleRate,
                                "reportedLimiter": limiterNode.latency * format.sampleRate],
-            "kickCandidates": drums.kicks.filter { $0.frame < frames }.map { ["frame": $0.frame, "strength": $0.strength] },
+            "kickCandidates": kicks,
         ]
         try Self.write(manifest, file: "manifest.json", in: config.out)
         try Self.write(score, file: "score.json", in: config.out)
@@ -363,25 +393,6 @@ struct LofiMixRenderTests {
             file = nil
             if let failure { throw failure }
             try #require(frames == required, "tap \(name): \(frames)/\(required) samples, offset \(firstSample ?? -1)")
-        }
-    }
-
-    @MainActor private final class OfflineDucker {
-        let bus: LofiBus
-        var ducker = LofiForegroundDucker()
-        private var last = (dry: Float(1), wet: Float(1))
-        init(bus: LofiBus) { self.bus = bus }
-        func update(_ activity: Float, interval: Double) {
-            let gains = ducker.update(activity: activity, interval: interval)
-            if abs(gains.dry - last.dry) > 0.004 {
-                ParamRamp.setGain(bus.dryFader, gains.dry, over: 0.075)
-                ParamRamp.setGain(bus.textureFader, gains.dry, over: 0.075)
-                last.dry = gains.dry
-            }
-            if abs(gains.wet - last.wet) > 0.004 {
-                ParamRamp.setGain(bus.wetFader, gains.wet, over: 0.075)
-                last.wet = gains.wet
-            }
         }
     }
 }

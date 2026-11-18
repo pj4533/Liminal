@@ -51,6 +51,8 @@ nonisolated struct FootagePiece: Sendable, Equatable {
     /// The film's sound plays with this piece.
     var sound: Bool
 
+    var fill: LofiFill?
+
     /// The carrier look (Window for the carrier-less recipes: their size and drift).
     var look: VideoLook { recipe.carrier ?? .window }
     var plannedChange: Double { start + length }
@@ -93,7 +95,7 @@ nonisolated struct FootageWeaver {
         var firstFade: Double = 5
         var rate: ClosedRange<Float> = 0.6...0.85
         var warp: ClosedRange<Float> = 0.35...0.85
-        /// Chance that a piece brings its sound (when the direct cue slot is free).
+        /// Chance that a piece brings its sound.
         var soundChance: Float
         /// Seconds the next piece's decoder (and its sound decode) get before its crossfade begins.
         var lead: Double = 3
@@ -104,9 +106,9 @@ nonisolated struct FootageWeaver {
 
         static func speed(_ s: FootageChangeSpeed) -> Timing {
             switch s {
-            case .slow: return Timing(pieceLength: 20...30, crossfade: 5...7, soundChance: 0.9)
-            case .medium: return Timing(pieceLength: 12...20, crossfade: 3.5...5, soundChance: 0.9)
-            case .fast: return Timing(pieceLength: 8...12, crossfade: 2.5...3.5, soundChance: 0.9)
+            case .slow: return Timing(pieceLength: 20...30, crossfade: 5...7, soundChance: 0.97)
+            case .medium: return Timing(pieceLength: 12...20, crossfade: 3.5...5, soundChance: 0.97)
+            case .fast: return Timing(pieceLength: 8...12, crossfade: 2.5...3.5, soundChance: 0.97)
             }
         }
         /// -LiminalVideoMix (stills): one piece for an hour, in 1 s.
@@ -127,10 +129,8 @@ nonisolated struct FootageWeaver {
     /// Sound: starts this long after the piece's fade in begins; ends this long after its planned change.
     static let soundDelay: Double = 0.75
     static let soundTail: Double = 0.25
-    /// Minimum separation between direct cues. Their room and echo tails can overlap.
-    static let soundGap: Double = 0.25
     /// A piece shorter than this (sound start to end) brings no sound.
-    static let soundMinSpan: Double = 7
+    static let soundMinSpan: Double = 5
 
     struct Conditions: Sendable, Equatable {
         var transitionRunning = false
@@ -159,12 +159,13 @@ nonisolated struct FootageWeaver {
         let swell: Float
         let sound: Bool
 
+        var fill: LofiFill?
         var look: VideoLook { recipe.carrier ?? .window }
 
         func piece(clipID: String, segmentStart: Double, length: Double? = nil, sound: Bool? = nil) -> FootagePiece {
             FootagePiece(index: index, slot: slot, clipID: clipID, segmentStart: segmentStart, rate: rate, recipe: recipe,
                          seed: seed, warp: warp, level: level, swell: swell, start: start, origin: start, fadeIn: fadeIn,
-                         length: length ?? self.length, fadeOutStart: nil, fadeOut: nil, sound: sound ?? self.sound)
+                         length: length ?? self.length, fadeOutStart: nil, fadeOut: nil, sound: sound ?? self.sound, fill: fill)
         }
     }
 
@@ -187,7 +188,6 @@ nonisolated struct FootageWeaver {
     private(set) var lastRecipe: FootageRecipe?
     /// The recipes of the last `recentCount` pieces, newest last (down-weighted in the choice).
     private(set) var recent: [FootageRecipe] = []
-    private(set) var soundFreeAt: Double = 0
     private var holdSince: Double?
     private static let pinnedPiecesPerDiscovery = 4
     private var pinnedRun = 0
@@ -226,7 +226,6 @@ nonisolated struct FootageWeaver {
         if recent.count > Self.recentCount { recent.removeFirst(recent.count - Self.recentCount) }
         pieceCount += 1
         holdSince = nil
-        if piece.sound { soundFreeAt = piece.plannedChange + Self.soundTail + Self.soundGap }
     }
 
     /// No clip could be prepared (cache empty, file gone): ask again on a later tick.
@@ -240,7 +239,18 @@ nonisolated struct FootageWeaver {
     }
 
     mutating func tick(elapsed t: Double, conditions c: Conditions, hasClip: Bool,
-                       matchingImageTransition: Bool = false, ready: (Int) -> Bool) -> Decision {
+                       matchingImageTransition: Bool = false, grid: LofiTakeGrid? = nil, ready: (Int) -> Bool) -> Decision {
+        // A scheduled film edit is published in advance so the render loop can
+        // crossfade on its exact clock even though the weaver ticks at 2 Hz.
+        if let incoming = pieces.last, incoming.fill != nil, pieces.count == 2,
+           !ready(incoming.slot), t >= incoming.start {
+            pieces.removeLast()
+            pinnedRun = pinnedRunBeforePrepare
+            pieces[0].fadeOutStart = nil
+            pieces[0].fadeOut = nil
+            holdSince = nil
+            return .drop(slot: incoming.slot)
+        }
         // 1. A piece that has fully faded out is retired.
         if let i = pieces.firstIndex(where: { ($0.end ?? .infinity) <= t }) {
             let p = pieces.remove(at: i)
@@ -252,11 +262,12 @@ nonisolated struct FootageWeaver {
             guard hasClip else { return .none }
             awaiting = true
             return .prepare(makeRequest(slot: 0, start: t + Self.firstLead, fadeIn: timing.firstFade,
-                                        conditions: c))
+                                        conditions: c, grid: grid))
         }
         // 3. A piece close to its fade in: hold it (and the outgoing piece) while its decoder has no frame
         //    yet or an image transition runs; give up on a decoder that never delivers.
         if t < last.start {
+            if last.fill != nil { return .none }
             guard t >= last.start - 0.75 else { return .none }
             let isReady = ready(last.slot)
             let since = holdSince ?? t
@@ -285,6 +296,15 @@ nonisolated struct FootageWeaver {
             return .none
         }
         if pieces.count == 2 { return .none }
+        if let grid {
+            let boundary = grid.nextBoundary(after: max(last.start + last.fadeIn, t + 0.5))
+            let fade = boundary.fill.dissolveBeats * grid.beatDuration
+            let start = boundary.time - fade * 0.5
+            guard hasClip, t >= start - timing.lead else { return .none }
+            awaiting = true
+            return .prepare(makeRequest(slot: 1 - last.slot, start: start, fadeIn: fade, conditions: c,
+                                        grid: grid, fill: boundary.fill))
+        }
         // 4. One piece showing: prepare the next `lead` seconds before the planned change.
         guard hasClip, t >= last.plannedChange - timing.lead else { return .none }
         awaiting = true
@@ -304,24 +324,24 @@ nonisolated struct FootageWeaver {
         }
     }
 
-    private mutating func makeRequest(slot: Int, start: Double, fadeIn: Double, conditions c: Conditions) -> Request {
+    private mutating func makeRequest(slot: Int, start: Double, fadeIn: Double, conditions c: Conditions,
+                                      grid: LofiTakeGrid? = nil, fill: LofiFill? = nil) -> Request {
+        let gridLength = grid.map { $0.nextBoundary(after: start + fadeIn).time - start }
         let recipe = pinnedRecipe ?? Self.chooseRecipe(last: lastRecipe, recent: recent, intensity: c.effectIntensity,
-                                                       hasDepth: c.hasDepth, rng: &rng)
-        var length = rng.range(timing.pieceLength)
-        if let cap = recipe.maxLength { length = min(length, cap) }
-        length = max(length, fadeIn + 4)
+                                                       hasDepth: c.hasDepth, minimumLength: gridLength ?? 0, rng: &rng)
+        let length = gridLength ?? max(fadeIn + 4, min(rng.range(timing.pieceLength), recipe.maxLength ?? .infinity))
         let level = rng.rangeF(Self.floor...Self.bandTop)
         // Swells are slow: only on pieces of 14 s or more (and never on the capped recipes, which take the
         // frame or its tones).
         let swells = rng.chance(Self.swellChance)
         let swell = swells && recipe.maxLength == nil && length >= Self.swellMinLength ? rng.rangeF(Self.swellRange) : 0
         let soundSpan = length + Self.soundTail - Self.soundDelay
-        let sound = start + Self.soundDelay >= soundFreeAt && soundSpan >= Self.soundMinSpan
+        let sound = soundSpan >= Self.soundMinSpan
             && rng.chance(timing.soundChance)
         let index = pieceCount
         return Request(index: index, slot: slot, start: start, fadeIn: fadeIn, length: length, recipe: recipe,
                        seed: rng.unit(), rate: rng.rangeF(timing.rate), warp: rng.rangeF(timing.warp),
-                       level: level, swell: swell, sound: sound)
+                       level: level, swell: swell, sound: sound, fill: fill)
     }
 
     /// Pieces remembered for the recent-use down-weighting.
@@ -351,9 +371,9 @@ nonisolated struct FootageWeaver {
     /// recipes at half weight, the water family halved at low intensity, and the plain looks at least
     /// `plainShareAfterMode` of the weight after a mode.
     static func chooseRecipe(last: FootageRecipe?, recent: [FootageRecipe], intensity: Float, hasDepth: Bool,
-                             rng: inout MusicRNG) -> FootageRecipe {
+                             minimumLength: Double = 0, rng: inout MusicRNG) -> FootageRecipe {
         var options = eligible(intensity: intensity, hasDepth: hasDepth)
-            .filter { $0 != last && $0.family != last?.family && compatible(last, $0) }
+            .filter { ($0.maxLength ?? .infinity) >= minimumLength && $0.family != last?.family && compatible(last, $0) }
         if options.isEmpty { options = [last == .window ? .phantom : .window] }
         var weights = options.map { r -> Float in
             var w = r.weight

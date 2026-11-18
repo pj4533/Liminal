@@ -50,13 +50,16 @@ nonisolated final class AtomicImageBuffer: @unchecked Sendable {
     /// The current depth map CGImage (grayscale, 0=far, 1=near). Protected by lock.
     nonisolated(unsafe) private var _currentDepth: CGImage?
 
+    private var currentID: UUID?
+    func displayedID() -> UUID? { lock.withLock { currentID } }
+
     /// Generation counter for depth maps - independent from image generation.
     nonisolated(unsafe) private var _depthGeneration: UInt64 = 0
 
     /// Pending queue for visionOS - generated images wait here until advance() is called.
     /// This ensures visionOS respects the same timing as macOS.
     /// Each entry carries its metadata so advanceFromQueue() moves both together.
-    nonisolated(unsafe) private var _pendingQueue: [(image: CGImage, metadata: ImageMetadata?)] = []
+    nonisolated(unsafe) private var _pendingQueue: [(image: CGImage, metadata: ImageMetadata?, id: UUID?)] = []
 
     /// Metadata for `_current` (style, palette, moods, measured colors). Protected by lock.
     nonisolated(unsafe) private var _currentMetadata: ImageMetadata?
@@ -77,11 +80,12 @@ nonisolated final class AtomicImageBuffer: @unchecked Sendable {
 
     /// Store a new current CGImage. Called from background pipeline.
     /// This is O(1), fully thread-safe, and does NOT require MainActor.
-    func storeCurrent(_ image: CGImage, metadata: ImageMetadata? = nil) {
+    func storeCurrent(_ image: CGImage, metadata: ImageMetadata? = nil, id: UUID? = nil) {
         let (gen, wasEmpty, _) = lock.withLock {
             let wasEmpty = self._current == nil
             self._current = image
             self._currentMetadata = metadata
+            self.currentID = id ?? metadata?.id
             self._generation &+= 1
             self._storeCount += 1
             return (self._generation, wasEmpty, self._storeCount)
@@ -102,11 +106,12 @@ nonisolated final class AtomicImageBuffer: @unchecked Sendable {
     }
 
     /// Store both current and next atomically.
-    func store(current: CGImage, next: CGImage?, metadata: ImageMetadata? = nil) {
+    func store(current: CGImage, next: CGImage?, metadata: ImageMetadata? = nil, id: UUID? = nil) {
         lock.withLock {
             let wasEmpty = self._current == nil
             self._current = current
             self._currentMetadata = metadata
+            self.currentID = id ?? metadata?.id
             self._next = next
             self._generation &+= 1
             self._storeCount += 1
@@ -171,6 +176,7 @@ nonisolated final class AtomicImageBuffer: @unchecked Sendable {
             _next = nil
             _currentDepth = nil
             _currentMetadata = nil
+            currentID = nil
             _pendingQueue.removeAll()
             _generation &+= 1
             _depthGeneration &+= 1
@@ -207,12 +213,16 @@ nonisolated final class AtomicImageBuffer: @unchecked Sendable {
 
     /// Queue an image for later display. Used by visionOS generation pipeline.
     /// Images wait here until advanceFromQueue() is called by the timer.
-    func queuePending(_ image: CGImage, metadata: ImageMetadata? = nil) {
+    func queuePending(_ image: CGImage, metadata: ImageMetadata? = nil, id: UUID? = nil) {
         let count = lock.withLock {
-            self._pendingQueue.append((image, metadata))
+            self._pendingQueue.append((image, metadata, id ?? metadata?.id))
             return self._pendingQueue.count
         }
         LMLog.visual.info("📦 AtomicBuffer QUEUE: \(image.width)x\(image.height), pending=\(count)")
+    }
+
+    func takePending() -> (image: CGImage, metadata: ImageMetadata?, id: UUID?)? {
+        lock.withLock { _pendingQueue.isEmpty ? nil : _pendingQueue.removeFirst() }
     }
 
     /// Advance from pending queue to current display.
@@ -225,9 +235,10 @@ nonisolated final class AtomicImageBuffer: @unchecked Sendable {
                 return (false, nil, 0, 0)
             }
 
-            let (image, metadata) = self._pendingQueue.removeFirst()
+            let (image, metadata, id) = self._pendingQueue.removeFirst()
             self._current = image
             self._currentMetadata = metadata
+            self.currentID = id ?? metadata?.id
             self._generation &+= 1
 
             return (true, image, self._generation, self._pendingQueue.count)

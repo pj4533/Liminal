@@ -9,10 +9,6 @@ import OSLog
 @MainActor
 final class LofiPlayback {
     private let bus = LofiBus(gain: 0)
-    private var speechDucker = LofiForegroundDucker()
-    private var lastDryGain: Float = 1
-    private var lastWetGain: Float = 1
-    var archiveActivity: (() -> Float)?
     var output: Fader { bus.output }
     nonisolated let stateBus = MusicStateBus()
     private let sampleRate: Double
@@ -26,15 +22,14 @@ final class LofiPlayback {
     private var prepared: (Request, LofiPhraseBank.Prepared)?
     private var rendered: [PlayingPhrase] = []
     private var queuedFrames: AVAudioFramePosition = 0
+    private var transportOrigin: Double = 0
     private var audibleStartSample: AVAudioFramePosition?
-    private var audibleBeatDuration: Double?
     private var onset: (time: Double, velocity: Float) = (-1000, 0)
     private var nextKickIndex = 0
-    private var previousTick: AVAudioFramePosition?
     private var rng: MusicRNG
     private var seed: UInt64 = 0
     var options = LofiOptions()
-    var onBeatDurationChange: ((Double) -> Void)?
+    var onPhrase: ((Double, Int, UInt64) -> Void)?
 
     private struct PlayingPhrase {
         let request: Request
@@ -69,7 +64,7 @@ final class LofiPlayback {
         self.sampleRate = sampleRate
     }
 
-    func start(onReady: @escaping () -> Void) {
+    func start(onReady: @escaping (LofiClock, UInt64) -> Void, onFailure: @escaping () -> Void) {
         stop(immediately: true)
         let token = epoch
         seed = rng.next()
@@ -80,12 +75,16 @@ final class LofiPlayback {
                 let next = try await bank.prepare(first, sampleRate: sampleRate)
                 guard !Task.isCancelled, epoch == token else { return }
                 enqueue(next.phrase, take: next.take, request: first)
-                reportTempo(next.take.drums.clock)
-                let start = AVAudioTime(hostTime: mach_absolute_time() + AVAudioTime.hostTime(forSeconds: 0.075))
+                let lead = max(0.09, bus.drums.player.outputPresentationLatency + 0.025)
+                let start = AVAudioTime(hostTime: mach_absolute_time() + AVAudioTime.hostTime(forSeconds: lead))
+                let startNs = DispatchTime.now().uptimeNanoseconds + UInt64(lead * 1e9)
+                transportOrigin = Double(startNs) / 1e9
+                stateBus.setStartUptime(startNs)
+                ParamRamp.setGain(output, 1, over: 0.035)
                 for player in bus.players { player.play(at: start) }
-                stateBus.setStartUptime(DispatchTime.now().uptimeNanoseconds)
-                onReady()
-                ParamRamp.setGain(output, 1, over: 0.35)
+                try await Task.sleep(for: .seconds(lead))
+                guard !Task.isCancelled, epoch == token else { return }
+                onReady(next.take.drums.clock, first.seed)
                 LMLog.audio.info("Lo-Fi started at \(first.options.safeTempo) BPM, recorded drums=\(next.take.drums.name != nil)")
                 #if DEBUG
                 Self.trace("started BPM=\(first.options.safeTempo) recorded=\(next.take.drums.name != nil)")
@@ -100,6 +99,7 @@ final class LofiPlayback {
             } catch {
                 guard epoch == token else { return }
                 LMLog.audio.error("Lo-Fi preparation failed: \(error.localizedDescription)")
+                onFailure()
             }
         }
     }
@@ -115,16 +115,8 @@ final class LofiPlayback {
         rendered.removeAll(keepingCapacity: true)
         queuedFrames = 0
         audibleStartSample = nil
-        audibleBeatDuration = nil
-        speechDucker = LofiForegroundDucker()
-        lastDryGain = 1
-        lastWetGain = 1
-        ParamRamp.setGain(bus.dryFader, 1, over: 0.20)
-        ParamRamp.setGain(bus.textureFader, 1, over: 0.20)
-        ParamRamp.setGain(bus.wetFader, 1, over: 0.20)
         onset = (-1000, 0)
         nextKickIndex = 0
-        previousTick = nil
         stateBus.setStartUptime(0)
         stateBus.publish(MusicState())
         ParamRamp.setGain(output, 0, over: immediately ? 0 : 0.16)
@@ -214,7 +206,9 @@ final class LofiPlayback {
         guard let current = rendered.first else { return }
         if current.start != audibleStartSample {
             audibleStartSample = current.start
-            reportTempo(current.breakAudio.drums.clock)
+            if current.request.index > 0 {
+                onPhrase?(current.breakAudio.drums.clock.beatDuration, current.request.index, current.request.seed)
+            }
             if let score = current.music?.score {
                 LMLog.audio.info("Lo-Fi lead: \(score.preset.name, privacy: .public), sampled notes=\(current.music?.leadSampleCount ?? 0)")
             }
@@ -226,9 +220,6 @@ final class LofiPlayback {
                 #endif
             }
         }
-        let interval = previousTick.map { Double(max(0, frame - $0)) / sampleRate } ?? 0.04
-        previousTick = frame
-        updateDucking(interval: interval)
         publish(current, frame: frame, outputLatency: player.outputPresentationLatency)
     }
 
@@ -239,25 +230,6 @@ final class LofiPlayback {
     }
     #endif
 
-    private func updateDucking(interval: Double) {
-        let gains = speechDucker.update(activity: archiveActivity?() ?? 0, interval: interval)
-        if abs(gains.dry - lastDryGain) > 0.004 {
-            ParamRamp.setGain(bus.dryFader, gains.dry, over: 0.075)
-            ParamRamp.setGain(bus.textureFader, gains.dry, over: 0.075)
-            lastDryGain = gains.dry
-        }
-        if abs(gains.wet - lastWetGain) > 0.004 {
-            ParamRamp.setGain(bus.wetFader, gains.wet, over: 0.075)
-            lastWetGain = gains.wet
-        }
-    }
-
-    private func reportTempo(_ clock: LofiClock) {
-        guard clock.beatDuration != audibleBeatDuration else { return }
-        audibleBeatDuration = clock.beatDuration
-        onBeatDurationChange?(clock.beatDuration)
-    }
-
     private func publish(_ current: PlayingPhrase, frame: AVAudioFramePosition, outputLatency: Double) {
         let now = stateBus.now()
         let take = current.breakAudio.drums
@@ -267,11 +239,18 @@ final class LofiPlayback {
         while nextKickIndex < take.kicks.count, take.kicks[nextKickIndex].frame <= takeFrame {
             let kick = take.kicks[nextKickIndex]
             let age = Double(takeFrame - kick.frame) / sampleRate
-            if age < 0.14 { onset = (max(0, now + outputLatency - age), kick.strength * 0.65) }
+            if age < 0.14 {
+                // The bus clock starts at player sample zero. Polling discovers a hit, but
+                // its audible time belongs to that sample even if the main actor wakes late.
+                let phraseStartInTake = current.request.drumPhraseIndex * take.clock.frameCount
+                let sample = current.start + Int64(kick.frame - phraseStartInTake)
+                onset = (Double(sample) / sampleRate + outputLatency, kick.strength * 0.65)
+            }
             nextKickIndex += 1
         }
         var state = MusicState()
         let section = current.request.section
+        state.startUptime = UInt64(transportOrigin * 1e9)
         state.time = now
         state.sceneIndex = UInt32(truncatingIfNeeded: current.request.index)
         state.sceneKind = section == .breakdown ? .stillness : .drift
@@ -283,6 +262,7 @@ final class LofiPlayback {
         state.density = LofiDrift(seed: current.request.seed).at(absoluteBeat).density * 0.65
         if let score = current.music?.score {
             state.tonic = UInt8(score.tonic)
+            state.chordRoot = UInt8(score.chordRoot)
             state.scaleMask = score.scale.pitchClassMask(tonic: score.tonic)
             let notes = score.notes.filter { $0.beat <= beat && beat < $0.beat + $0.length }
             state.chordMask = notes.reduce(0) { $0 | (UInt16(1) << ($1.midi % 12)) }
@@ -290,6 +270,11 @@ final class LofiPlayback {
             state.setLevel(.drone, notes.contains { $0.part == .bass } ? 0.40 : 0)
             state.setLevel(.lead, notes.contains { $0.part == .lead } ? 0.26 : 0)
         }
+        let takeStart = current.start - Int64(current.request.drumPhraseIndex * take.clock.frameCount)
+        let nextTake = rendered.last.flatMap { $0.request.drumBreakIndex > current.request.drumBreakIndex ? $0.breakAudio : nil }
+        state.lofiTakeGrid = LofiTakeGrid(origin: transportOrigin + Double(takeStart) / sampleRate + outputLatency,
+                                          beatDuration: take.clock.beatDuration, takeIndex: current.request.drumBreakIndex,
+                                          nextBeatDuration: nextTake?.drums.clock.beatDuration)
         state.recordedBeatDuration = take.name == nil ? 0 : take.clock.beatDuration
         state.lastOnsetTime = onset.time
         state.lastOnsetVelocity = onset.velocity

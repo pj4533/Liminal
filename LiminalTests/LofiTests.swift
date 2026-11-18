@@ -21,12 +21,12 @@ struct LofiTests {
         let theme = LofiScore.make(seed: 21, section: .theme, drift: drift, startBeat: 0)
         #expect(theme == LofiScore.make(seed: 21, section: .theme, drift: drift, startBeat: 0))
         let reprise = LofiScore.make(seed: 21, section: .returnTheme, drift: drift, startBeat: 48)
-        #expect(theme.notes.filter { $0.part == .lead } == reprise.notes.filter { $0.part == .lead })
+        #expect(theme.notes.filter { $0.part == .lead }.map(\.midi) == reprise.notes.filter { $0.part == .lead }.map(\.midi))
         let later = LofiScore.make(seed: 21, section: .theme, drift: drift, startBeat: 16)
         #expect(later.tonic == theme.tonic && later.notes != theme.notes)
         #expect(theme.notes != LofiScore.make(seed: 22, section: .theme, drift: drift, startBeat: 0).notes)
         #expect((0..<8).map { LofiScore.section(at: $0) } ==
-                [.theme, .breakdown, .variation, .returnTheme, .theme, .answer, .breakdown, .returnTheme])
+                [.theme, .variation, .breakdown, .returnTheme, .theme, .answer, .breakdown, .returnTheme])
         let evolved = LofiPlayback.Request(seed: 21, index: 8, options: LofiOptions())
         #expect(evolved.compositionSeed != 21)
     }
@@ -37,8 +37,8 @@ struct LofiTests {
                 let score = LofiScore.make(seed: seed, section: LofiScore.section(at: phrase),
                                            drift: .init(seed: seed), startBeat: Double(phrase) * LofiClock.beats)
                 let melody = score.notes.filter { $0.part == .lead }
-                #expect(melody.count <= 5)
-                #expect(melody.allSatisfy { $0.beat + $0.length <= score.foregroundSpace.lowerBound })
+                #expect((3...6).contains(melody.count))
+                #expect(melody.allSatisfy { $0.beat + $0.length <= score.endingRest.lowerBound })
                 #expect(score.notes.filter { $0.part == .bass }.allSatisfy { (27...43).contains($0.midi) })
                 #expect(score.notes.allSatisfy { $0.beat + $0.length <= LofiClock.beats })
             }
@@ -112,8 +112,32 @@ struct LofiTests {
                                                  sampleRate: 8_000, drift: drift,
                                                  startBeat: Double(index) * LofiClock.beats)
             #expect(phrase.leadSampleCount == phrase.score.notes.filter { $0.part == .lead }.count)
-            #expect((phrase.leadSampleCount == 0) == (phrase.score.section == .breakdown))
+            #expect(phrase.leadSampleCount >= 3)
         }
+    }
+
+    @Test func sustainedOrganAndItsReturnsStayInsideTheInstrumentMix() throws {
+        let phrase = try LofiRenderer.render(seed: 1042, section: .variation, options: .init(tempo: 70),
+                                             sampleRate: 48_000, drift: .init(seed: 1042), startBeat: 16)
+        let dry = try #require(phrase.dry.floatChannelData)
+        let wet = try #require(phrase.wet.floatChannelData)
+        let texture = try #require(phrase.texture.floatChannelData)
+        #expect(phrase.score.preset.family == .organ)
+        let window = 19_200
+        var energy = [Double](repeating: 0, count: window)
+        var sum = 0.0
+        var strongest = 0.0
+        for i in 0..<phrase.clock.frameCount {
+            let l = dry[0][i] + texture[0][i] + wet[0][i]
+            let r = dry[1][i] + texture[1][i] + wet[1][i]
+            let power = Double(l * l + r * r) * 0.5
+            let slot = i % window
+            sum += power - energy[slot]
+            energy[slot] = power
+            strongest = max(strongest, sum / Double(window))
+        }
+        #expect(sqrt(strongest) < 0.15)
+        #expect(sqrt(strongest) > 0.09)
     }
 
     @Test func roomAndEchoTailCarryIntoTheNextPhrase() throws {
@@ -138,6 +162,18 @@ struct LofiTests {
         #expect(abs(wet[audible] - dry[audible] - carry.left) < 0.00000002)
     }
 
+    @Test func outgoingTailRetainsItsPitchWhenTheNextTakeChangesTempo() {
+        let slow = LofiClock(tempo: 58, sampleRate: 8_000)
+        let fast = LofiClock(tempo: 82, sampleRate: 8_000)
+        let left = (0..<1024).map { Float(sin(2 * .pi * 220 * Double($0) / slow.sampleRate)) }
+        let tail = LofiRenderer.Tail(clock: slow, left: left, right: left.map { -$0 })
+        for frame in left.indices {
+            let value = tail.sample(frame, at: fast)
+            #expect(value.left == left[frame] && value.right == -left[frame])
+        }
+        #expect(tail.sample(left.count, at: fast).left == 0)
+    }
+
     @Test func firstStereoRepeatsAreOnTheirBeatDivisions() {
         let clock = LofiClock(tempo: 74, sampleRate: 4_000)
         var fx = LofiEffects(clock: clock)
@@ -146,7 +182,7 @@ struct LofiTests {
         var firstRight: Int?
         for i in 0...clock.frame(at: taps.right) {
             let pulse: Float = i == 0 ? 1 : 0
-            let wet = fx.process(lead: (pulse, pulse), texture: (0, 0), grains: (0, 0), space: 0.5)
+            let wet = fx.processReturns(lead: (pulse, pulse), texture: (0, 0), grains: (0, 0), space: 0.5).echo
             if firstLeft == nil && abs(wet.left) > 0.052 { firstLeft = i }
             if firstRight == nil && abs(wet.right) > 0.052 { firstRight = i }
         }
@@ -179,6 +215,34 @@ struct LofiTests {
             #expect(channels[0][frame] == ramp[frame] * 0.5)
             #expect(channels[1][frame] == ramp[frame] * -0.5)
         }
+    }
+
+    @Test func recordedKicksAnchorTheCorrectFourBarsOfAnIntactTake() throws {
+        let clock = LofiClock(tempo: 70, sampleRate: 8_000)
+        let total = clock.frameCount * LofiDrumTake.phraseCount
+        var channel = [Float](repeating: 0, count: total)
+        // Start the take at a transient and lay the next four-bar downbeat slightly late.
+        for start in [0, clock.frame(at: 16.05)] {
+            for i in 0..<960 {
+                let t = Double(i) / clock.sampleRate
+                channel[start + i] = Float(0.8 * cos(2 * .pi * 72 * t) * exp(-36 * t))
+            }
+        }
+        let entry = LofiDrumLibrary.Entry(name: "groove fixture", sha256: "", bpm: 70, beats: 64,
+                                          sampleRate: clock.sampleRate, channels: 2, frameCount: total,
+                                          framesPerBeat: clock.framesPerBeat, onsetPhaseMilliseconds: 0, beatSupport: 1)
+        let take = try LofiDrumTake(recording: .init(entry: entry, left: channel, right: channel.map { -$0 },
+                                                    gain: 1), clock: clock)
+        let first = take.bassAnchors(startBeat: 0)
+        #expect(first.count == 1 && first.first == 0)
+        let second = take.bassAnchors(startBeat: 16)
+        let played = try #require(second.first)
+        #expect(second.count == 1 && abs(played - 0.05) < 0.015)
+        #expect(take.bassAnchors(startBeat: 32).isEmpty)
+        let phrase = try LofiRenderer.render(seed: 3, section: .answer, options: .init(tempo: 70),
+                                             sampleRate: clock.sampleRate, drift: .init(seed: 3), startBeat: 16,
+                                             drums: take, drumStartBeat: 16)
+        #expect(phrase.score.notes.first { $0.part == .bass }?.beat == played)
     }
 
     @Test func aTempoRequestWaitsForTheFollowingFullBreak() {

@@ -1,3 +1,4 @@
+import Accelerate
 import AVFoundation
 import Foundation
 
@@ -39,6 +40,16 @@ nonisolated struct LofiDrumTake: @unchecked Sendable {
         kicks = try Self.detectKicks(channels, count: count, sampleRate: clock.sampleRate)
     }
 
+    /// Phrase-local performance times for placing bass attacks. Keep the original take intact.
+    func bassAnchors(startBeat: Int) -> [Double] {
+        let start = clock.frame(at: Double(startBeat))
+        let end = start + clock.frameCount
+        return kicks.compactMap { hit in
+            guard hit.strength >= 0.55, (start..<end).contains(hit.frame) else { return nil }
+            return Double(hit.frame - start) / clock.framesPerBeat
+        }
+    }
+
     /// Short windowed-sinc interpolation. Both channels use one position and coefficient
     /// table. The kernel narrows when speeding up enough to cross the output Nyquist limit.
     private static func resample(_ recording: LofiDrumLibrary.Break,
@@ -73,11 +84,8 @@ nonisolated struct LofiDrumTake: @unchecked Sendable {
                         let start = whole - halfWidth + 1
                         var left: Float = 0, right: Float = 0
                         if start >= 0, start + taps <= last + 1 {
-                            let leftInput = x + start, rightInput = y + start
-                            for tap in 0..<taps {
-                                left += leftInput[tap] * weights[tap]
-                                right += rightInput[tap] * weights[tap]
-                            }
+                            vDSP_dotpr(x + start, 1, weights, 1, &left, vDSP_Length(taps))
+                            vDSP_dotpr(y + start, 1, weights, 1, &right, vDSP_Length(taps))
                         } else {
                             for tap in 0..<taps {
                                 let sample = min(last, max(0, start + tap))
@@ -123,10 +131,11 @@ nonisolated struct LofiDrumTake: @unchecked Sendable {
         guard bins.count > 2, let peak = bins.map(\.novelty).max(), peak > 0.008 else { return [] }
         let separation = Int(sampleRate * 0.11)
         var hits: [Kick] = []
-        for i in 1..<(bins.count - 1) {
+        for i in bins.indices {
             let bin = bins[i]
             guard bin.novelty >= max(0.006, peak * 0.185),
-                  bin.novelty > bins[i - 1].novelty, bin.novelty >= bins[i + 1].novelty else { continue }
+                  (i == 0 || bin.novelty > bins[i - 1].novelty),
+                  (i == bins.count - 1 || bin.novelty >= bins[i + 1].novelty) else { continue }
             let kick = Kick(frame: max(0, bin.frame - hop), strength: min(1, bin.novelty / (peak * 0.58)))
             if let last = hits.last, kick.frame - last.frame < separation {
                 if kick.strength > last.strength { hits[hits.count - 1] = kick }

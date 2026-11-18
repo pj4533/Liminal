@@ -52,6 +52,8 @@ nonisolated final class MixBus {
     private let ambientReflectionOutput: Fader
     private let beatEchoes: [BeatEcho]
     private var activeBeatEcho: Int?
+    private var activeEchoPattern = ArchiveEchoPattern.straight
+    private var echoPhaseStart = 0.0
     private var lastBeatEcho = 1
     private var delaySettings = (feedback: Float(0.4), gain: dbToGain(-10), cutoff: Float(2400), input: Float(2000))
     /// Shimmer return (linear) before the bloom envelope; published as `MusicState.shimmerLevel`.
@@ -183,14 +185,39 @@ nonisolated final class MixBus {
     /// Current shimmer return (linear), for MusicState.
     private(set) var shimmerOut: Float = 0
 
-    /// Tempo lands on an unused pair of lines. Retire the previous feed and let its existing
+    struct ArchiveEchoPattern: Equatable, Sendable {
+        let main: Double
+        let answer: Double
+        let room: Double
+        let spread: Float
+        let swell: Float
+        var endingFill: LofiFill?
+
+        static let straight = Self(main: 1, answer: 0, room: 0.5, spread: 0, swell: 0)
+        private static let palette: [Self] = [
+            .init(main: 0.75, answer: 1.75, room: 0.375, spread: 0.64, swell: 0.80),
+            .init(main: 1.5, answer: 0.625, room: 0.75, spread: -0.73, swell: 0.67),
+            .init(main: 0.5, answer: 2.25, room: 0.875, spread: 0.55, swell: 0.94),
+            .init(main: 1.25, answer: 0.375, room: 0.625, spread: -0.58, swell: 0.56),
+            .init(main: 2, answer: 0.875, room: 0.5, spread: 0.72, swell: 0.87)
+        ]
+
+        static func choose(seed: UInt64, phrase: Int) -> Self {
+            var pattern = MusicRNG(seed: seed).fork(3156).shuffledCycle(palette, index: phrase)
+            pattern.endingFill = LofiFill.ending(phrase: phrase)
+            return pattern
+        }
+    }
+
+    /// Tempo lands on an unused bank of lines. Retire the previous feed and let its existing
     /// return dissolve instead of modulating the read point in the middle of a spoken echo.
-    func syncDelay(toBeatDuration beatDuration: Double?) {
+    func syncDelay(toBeatDuration beatDuration: Double?, pattern: ArchiveEchoPattern = .straight, now: Double = 0) {
         let seconds = beatDuration.flatMap { $0.isFinite && (0.55...1.25).contains($0) ? Float($0) : nil }
-        guard seconds != syncedDelayTime else { return }
-        let retirement = Double(syncedDelayTime ?? baseDelayTime) * 1.8
+        guard seconds != syncedDelayTime || (seconds != nil && pattern != activeEchoPattern) else { return }
+        let retirementBeats = activeEchoPattern.answer > 0 ? 3.25 : 1.8
+        let retirement = Double(syncedDelayTime ?? baseDelayTime) * retirementBeats
         if let activeBeatEcho {
-            beatEchoes[activeBeatEcho].set(active: false, outputRamp: min(2.1, retirement))
+            beatEchoes[activeBeatEcho].set(active: false, outputRamp: min(3.5, retirement))
         } else {
             ParamRamp.setGain(ambientDelayFeed, 0, over: 0.035)
             ParamRamp.setGain(ambientDelayOutput, 0, over: min(2.1, retirement))
@@ -200,8 +227,10 @@ nonisolated final class MixBus {
         if let seconds {
             let next = 1 - lastBeatEcho
             let echo = beatEchoes[next]
-            echo.prepare(beatDuration: seconds)
-            echo.set(active: true, outputRamp: 0.10)
+            echo.prepare(beatDuration: seconds, pattern: pattern)
+            echo.set(active: true, outputRamp: 0.24, answer: pattern.answer > 0)
+            activeEchoPattern = pattern
+            echoPhaseStart = now
             activeBeatEcho = next
             lastBeatEcho = next
         } else {
@@ -219,31 +248,57 @@ nonisolated final class MixBus {
         let delay: VariableDelay
         let filter: LowPassButterworthFilter
         let echoOutput: Fader
+        let mainPan: Panner
+        let answer: VariableDelay
+        let answerGain: Fader
+        let answerPan: Panner
         let reflection: VariableDelay
         let reflectionOutput: Fader
 
         init(_ input: Node) {
             feed = Fader(input, gain: 0)
-            delay = VariableDelay(feed, time: 0.85, feedback: 0.32, maximumTime: 2, dryWetMix: 1)
+            delay = VariableDelay(feed, time: 0.85, feedback: 0.32, maximumTime: 3.5, dryWetMix: 1)
             filter = LowPassButterworthFilter(delay, cutoffFrequency: 2640)
-            echoOutput = Fader(filter, gain: 0)
+            mainPan = Panner(filter)
+            answer = VariableDelay(feed, time: 1.2, feedback: 0.21, maximumTime: 3.5, dryWetMix: 1)
+            answerGain = Fader(LowPassButterworthFilter(answer, cutoffFrequency: 1_680), gain: 0)
+            answerPan = Panner(answerGain)
+            echoOutput = Fader(Mixer(mainPan, answerPan), gain: 0)
             reflection = VariableDelay(feed, time: 0.425, feedback: 0.19, maximumTime: 2, dryWetMix: 1)
             reflectionOutput = Fader(reflection, gain: 0)
         }
 
-        func prepare(beatDuration: Float) {
+        func prepare(beatDuration: Float, pattern: ArchiveEchoPattern) {
             // The line's return is silent while the two read positions are assigned.
             // Use the AU parameter tree directly. AudioKit's property wrapper also writes
             // these AUv3 addresses through the legacy API, which reports an invalid address.
-            delay.$time.parameter?.value = beatDuration * Float(LofiClock.footageEchoBeats)
-            reflection.$time.parameter?.value = beatDuration * Float(LofiClock.footageReflectionBeats)
+            delay.$time.parameter?.value = beatDuration * Float(pattern.main)
+            answer.$time.parameter?.value = beatDuration * Float(max(0.25, pattern.answer))
+            reflection.$time.parameter?.value = beatDuration * Float(pattern.room)
+            motion(pattern: pattern, beat: 0)
         }
 
-        func set(active: Bool, outputRamp: Double) {
+        func set(active: Bool, outputRamp: Double, answer: Bool = false) {
             let gain: Float = active ? 1 : 0
             ParamRamp.setGain(feed, gain, over: 0.035)
             ParamRamp.setGain(echoOutput, gain, over: outputRamp)
             ParamRamp.setGain(reflectionOutput, gain, over: outputRamp)
+            if active && !answer { ParamRamp.setGain(answerGain, 0, over: 0.035) }
+        }
+
+        func motion(pattern: ArchiveEchoPattern, beat: Double) {
+            guard pattern.answer > 0 else {
+                ParamRamp.set(mainPan.$pan, 0, over: 0.16)
+                return
+            }
+            let u = Float(beat)
+            let sweep = 0.7 + 0.3 * sinf(u * .pi / 4)
+            let bloom = powf(0.5 - 0.5 * cosf(u * .pi / 3), 2)
+            let crest = pattern.endingFill?.accent(beatsFromBoundary: beat - LofiClock.beats) ?? 0
+            ParamRamp.set(mainPan.$pan, pattern.spread * min(1.18, sweep + 0.35 * crest), over: 0.17)
+            ParamRamp.set(answerPan.$pan, -pattern.spread * (1 - 0.28 * bloom), over: 0.17)
+            ParamRamp.setGain(answerGain, 0.23 + pattern.swell * 0.64 * max(bloom, crest) + 0.18 * crest, over: 0.18)
+            ParamRamp.setGain(reflectionOutput, 0.55 + 0.45 * max(bloom, crest), over: 0.18)
         }
     }
 
@@ -258,7 +313,9 @@ nonisolated final class MixBus {
         ParamRamp.set(spacePhaser.$notchMaximumFrequency, 960 + 320 * color, over: 0.15)
         ParamRamp.set(spacePhaser.$depth, 0.48 + 0.22 * width, over: 0.15)
         ParamRamp.setGain(spaceMovement, 0.14 + 0.10 * color, over: 0.15)
-        if syncedDelayTime == nil {
+        if let seconds = syncedDelayTime, let lane = activeBeatEcho {
+            beatEchoes[lane].motion(pattern: activeEchoPattern, beat: max(0, t - echoPhaseStart) / Double(seconds))
+        } else {
             wowPhase += dt * 2 * .pi * 0.41
             flutterPhase += dt * 2 * .pi * 0.13
             let wow = 0.002 * sin(wowPhase) + 0.0006 * sin(flutterPhase + 1)

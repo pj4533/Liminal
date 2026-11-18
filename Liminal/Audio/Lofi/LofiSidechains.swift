@@ -52,16 +52,3 @@ nonisolated struct LofiKickDuck {
         }
     }
 }
-
-/// Runtime footage sidechain. It lowers circulating wet energy more than the dry instrument.
-nonisolated struct LofiForegroundDucker {
-    private var amount: Float = 0
-
-    mutating func update(activity: Float, interval: Double) -> (dry: Float, wet: Float) {
-        let target = activity.isFinite ? min(1, max(0, activity)) : 0
-        let timeConstant = target > amount ? 0.035 : 0.48
-        let step = Float(1 - exp(-max(0, interval) / timeConstant))
-        amount += step * (target - amount)
-        return (dbToGain(-1.8 * amount), dbToGain(-4.1 * amount))
-    }
-}

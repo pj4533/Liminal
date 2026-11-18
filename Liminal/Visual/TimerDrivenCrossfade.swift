@@ -38,6 +38,7 @@ final class TimerDrivenCrossfade: ObservableObject {
     private var fromImage: PlatformImage?
     private var toImage: PlatformImage?
     private var crossfadeStartTime: Date?
+    private(set) var beatReveal: LofiImageReveal?
     private var displayLink: Timer?
 
     private var imageHistory: [PlatformImage] = []
@@ -70,7 +71,7 @@ final class TimerDrivenCrossfade: ObservableObject {
     /// - Returns: true when a crossfade started (false for the first image and for the same image).
     @discardableResult
     /// - Parameter duration: asked only when a crossfade actually starts (the caller picks the transition there).
-    func transitionTo(_ newImage: PlatformImage, duration: () -> Double = { VisualMoodBuilder.crossfadeDuration }) -> Bool {
+    func transitionTo(_ newImage: PlatformImage, reveal: LofiImageReveal? = nil, duration: () -> Double = { VisualMoodBuilder.crossfadeDuration }) -> Bool {
         guard let current = currentFrame else {
             currentFrame = newImage
             addToHistory(newImage)
@@ -101,6 +102,7 @@ final class TimerDrivenCrossfade: ObservableObject {
         addToHistory(newImage)
         poolSize = imageHistory.count
         crossfadeDuration = max(duration(), 0.1)
+        beatReveal = reveal
         startCrossfade()
 
         Task {
@@ -128,6 +130,7 @@ final class TimerDrivenCrossfade: ObservableObject {
         fromImage = nil
         toImage = nil
         crossfadeStartTime = nil
+        beatReveal = nil
         imageHistory.removeAll()
         LMLog.visual.info("TimerDrivenCrossfade reset")
     }
@@ -152,7 +155,7 @@ final class TimerDrivenCrossfade: ObservableObject {
 
     private func startCrossfade() {
         isMorphing = true
-        transitionProgress = 0
+        transitionProgress = beatReveal.map { max(0.000001, $0.progress(at: ArchiveFootageService.uptime())) } ?? 0
         crossfadeStartTime = Date()
 
         // Set previousFrame for GPU shader blending
@@ -174,7 +177,7 @@ final class TimerDrivenCrossfade: ObservableObject {
         }
 
         let elapsed = Date().timeIntervalSince(startTime)
-        let progress = min(elapsed / crossfadeDuration, 1.0)
+        let progress = beatReveal?.progress(at: ArchiveFootageService.uptime()) ?? min(elapsed / crossfadeDuration, 1.0)
 
         // Update progress for GPU shader blending
         transitionProgress = progress

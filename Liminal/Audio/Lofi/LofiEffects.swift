@@ -34,10 +34,10 @@ nonisolated struct LofiEffects {
 
         var roomDecay: Double {
             switch self {
-            case .cloud: 4.7
-            case .resonance: 1.6
-            case .tape: 2.45
-            case .freeze: 3.65
+            case .cloud: 7.2
+            case .resonance: 4.8
+            case .tape: 5.6
+            case .freeze: 7.8
             }
         }
 
@@ -64,6 +64,7 @@ nonisolated struct LofiEffects {
     private var echoL: Delay
     private var echoR: Delay
     private var particleTap: Delay
+    private var plate: Room
     private var room: Room
     private var motion: LofiMotion
     private var ensemble: Ensemble
@@ -76,7 +77,7 @@ nonisolated struct LofiEffects {
     private var orbit: Float = 0
 
     init(clock: LofiClock, profile: LofiPreset.Space = .standard, tonic: Int = 0, seed: UInt64 = 0,
-         gesture: Gesture = .cloud) {
+         gesture: Gesture = .cloud, scale: ScaleType = .minor) {
         self.profile = profile
         self.gesture = gesture
         beatStep = 1 / Float(clock.framesPerBeat)
@@ -84,13 +85,10 @@ nonisolated struct LofiEffects {
         echoL = Delay(frames: clock.frame(at: taps.left), damping: 0.23)
         echoR = Delay(frames: clock.frame(at: taps.right), damping: 0.18)
         particleTap = Delay(frames: clock.frame(at: taps.right + 0.5), damping: 0.14)
-        room = Room(rate: clock.sampleRate, decay: gesture.roomDecay)
+        plate = Room(rate: clock.sampleRate, decay: 2.5, size: 0.63)
+        room = Room(rate: clock.sampleRate, decay: gesture.roomDecay, size: 1.28)
         ensemble = Ensemble(rate: clock.sampleRate)
-        motion = LofiMotion(clock: clock, tonic: tonic, seed: seed, gesture: gesture)
-    }
-
-    mutating func process(lead: Stereo, texture: Stereo, grains: Stereo, space: Float) -> Stereo {
-        processReturns(lead: lead, texture: texture, grains: grains, space: space).mix
+        motion = LofiMotion(clock: clock, tonic: tonic, scale: scale, seed: seed, gesture: gesture)
     }
 
     mutating func processReturns(lead: Stereo, texture: Stereo, grains: Stereo, space: Float) -> Returns {
@@ -99,43 +97,46 @@ nonisolated struct LofiEffects {
         let presence = min(1, 13 * leadPresence)
         let echoA = echoL.read()
         let echoB = echoR.read()
-        let feedback = min(0.59, profile.feedback * 0.75 + 0.15 * space)
+        let feedback = min(0.58, profile.feedback * 0.82 + 0.13 * space)
         let scatter = particleTap.read()
         let grainL = grains.left * profile.particles
         let grainR = grains.right * profile.particles
-        echoL.write(tape(lead.left * 0.76 + grainR * 0.32 + echoB * feedback))
-        echoR.write(tape(lead.right * 0.76 + grainL * 0.32 + echoA * feedback))
-        particleTap.write(tape(0.36 * (grainL - grainR) + 0.28 * scatter))
-        let animated = motion.process(lead: lead, texture: texture, grain: (grainL, grainR))
+        echoL.write(tape(0.76 * lead.left + 0.37 * texture.right + 0.47 * grainR + echoB * feedback))
+        echoR.write(tape(0.76 * lead.right + 0.37 * texture.left + 0.47 * grainL + echoA * feedback))
+        particleTap.write(tape(0.27 * (grainL - grainR) + 0.24 * (echoA - echoB) + 0.30 * scatter))
+        let animated = motion.process(lead: lead, texture: texture, grain: (grainL + 0.29 * echoA, grainR + 0.29 * echoB))
         orbit += beatStep
-        let cloud = ensemble.process(left: 0.72 * grainL + 0.55 * animated.left,
-                                     right: 0.72 * grainR + 0.55 * animated.right, beat: orbit)
-        // Two slow rhythmic swells trade places, leaving the dry instrument centered.
-        let pulseL = 0.74 + 0.26 * cosf(2 * .pi * orbit / 1.5)
-        let pulseR = 0.74 + 0.26 * cosf(2 * .pi * orbit - .pi * 0.5)
-        let bloomL = pulseL * cloud.left
-        let bloomR = pulseR * cloud.right
-        let wash = room.process(
-            0.72 * texture.left + 0.57 * lead.left + 0.47 * echoA + 0.61 * grainL + scatter + bloomL,
-            0.72 * texture.right + 0.57 * lead.right + 0.47 * echoB + 0.61 * grainR - scatter + bloomR
-        )
-        // Keep the attack legible, then let repeats and grains become the foreground.
+        let smear = ensemble.process(left: 0.55 * grainL + 0.54 * animated.left + 0.28 * texture.right,
+                                     right: 0.55 * grainR + 0.54 * animated.right + 0.28 * texture.left, beat: orbit)
+        let early = plate.process(1.05 * lead.left + 1.05 * texture.left + 0.27 * grainL,
+                                  1.05 * lead.right + 1.05 * texture.right + 0.27 * grainR)
+        let swell = 0.78 + 0.22 * cosf(orbit * .pi * 0.5)
+        let toneL = 0.48 * echoA + 0.64 * grainL + smear.left + scatter
+        let toneR = 0.48 * echoB + 0.64 * grainR + smear.right - scatter
+        let late = room.process(0.73 * early.left + swell * toneL + 0.58 * lead.left + 0.45 * texture.left,
+                                0.73 * early.right + swell * toneR + 0.58 * lead.right + 0.45 * texture.right)
+        // Briefly make room for the attack, then let the space and repeats carry the phrase.
         let gains = gesture.returnGains
-        let echoGain = gains.echo * (0.77 + 0.24 * space - 0.18 * presence)
-        let roomGain = gains.room * profile.diffusion * (1.03 + 0.70 * space - 0.30 * presence)
-        let pan = 0.21 * profile.stereo * (sinf(orbit * 0.73) + 0.42 * sinf(orbit * 2.39))
+        let echoGain = gains.echo * (0.96 + 0.23 * space - 0.12 * presence)
+        let roomGain = gains.room * profile.diffusion * (1.30 + 0.60 * space - 0.22 * presence)
         let echo = (echoGain * echoA, echoGain * echoB)
-        let classic = (roomGain * wash.left, roomGain * wash.right)
-        let colorL = gains.color * ((0.49 + pan) * grainL + scatter + animated.left + 0.25 * bloomL)
-        let colorR = gains.color * ((0.49 - pan) * grainR - scatter + animated.right + 0.25 * bloomR)
+        let classic = (roomGain * (0.83 * early.left + 1.25 * late.left),
+                       roomGain * (0.83 * early.right + 1.25 * late.right))
+        // Cross-modulate the replay and feedback lightly. Keep both carriers audible.
+        let colorL = gains.color * (0.74 * grainL + 0.75 * scatter + animated.left + 0.38 * smear.left
+                                    + 0.34 * grainL * echoB)
+        let colorR = gains.color * (0.74 * grainR - 0.75 * scatter + animated.right + 0.38 * smear.right
+                                    + 0.34 * grainR * echoA)
         if gesture == .tape {
             // The saturation is a parallel return. Its half-sample linear delay does not touch the dry attack.
             let drive = 1.25 + 0.40 * space
             let l = echo.0 + 0.55 * colorL
             let r = echo.1 + 0.55 * colorR
+            // Dark, alternating flutter on the color path leaves the beat taps stationary.
+            let flutter = 0.88 + 0.12 * sinf(orbit * 2 * .pi)
             return Returns(echo: (echo.0 * 0.88, echo.1 * 0.88), room: classic,
-                           color: (colorL + 0.18 * tapeL.process(l, drive: drive),
-                                   colorR + 0.18 * tapeR.process(r, drive: drive)))
+                           color: (flutter * colorL + 0.24 * tapeL.process(l, drive: drive),
+                                   (1.76 - flutter) * colorR + 0.24 * tapeR.process(r, drive: drive)))
         }
         return Returns(echo: echo, room: classic, color: (colorL, colorR))
     }
@@ -195,53 +196,132 @@ nonisolated struct LofiEffects {
         }
     }
 
-    /// Replay staggered pieces of the last note of each group. Reverse grains make a swell
-    /// and half-speed adds an octave-down answer without adding an unrelated melody.
-    static func granulate(_ lead: (left: [Float], right: [Float]), score: LofiScore,
-                          clock: LofiClock, frames: Int, seed: UInt64, gesture: Gesture) -> (left: [Float], right: [Float]) {
-        var left = [Float](repeating: 0, count: frames)
-        var right = left
-        var rng = MusicRNG(seed: seed).fork(110)
-        let notes = score.notes.filter { $0.part == .lead && $0.velocity > 0 && $0.send >= 0.34 }
-        let endings = notes.indices.filter { index in
-            index + 1 == notes.count || notes[index + 1].beat - notes[index].beat >= 2.6
+    /// Pick the closest legal target to an intended interval. Octaves remain available
+    /// even in sparse scales. Small upward moves are capped to keep the return mellow.
+    static func targetPitch(source: Int, interval: Int, scale: ScaleType, tonic: Int) -> Int {
+        guard interval != 0 else { return source }
+        let mask = scale.pitchClassMask(tonic: tonic)
+        let goal = source + interval
+        let candidates = (45...76).filter {
+            mask & (UInt16(1) << ($0 % 12)) != 0 && (interval > 0 ? $0 > source : $0 < source)
+                && abs($0 - source) <= 12
         }
-        for index in endings {
-            let note = notes[index]
-            let from = clock.frame(at: note.beat + 0.04)
-            let span = clock.frame(at: 0.4)
-            let answer = (note.beat * 4).rounded() / 4 + 0.75
-            let countPerAnswer = gesture == .cloud ? 7 : (gesture == .tape ? 3 : 5)
-            for grain in 0..<countPerAnswer {
-                let destination = clock.frame(at: answer + Double(grain) * 0.375)
-                let backwards = grain.isMultiple(of: 2)
-                let lifted = grain == 5 && gesture == .cloud && note.midi <= 61
-                let speed = backwards ? 0.5 : (lifted ? 1.5 : 1.0)
-                let count = min(frames - destination, clock.frame(at: rng.range(0.34...0.82)), Int(Double(span) / speed))
-                guard count > 1 else { continue }
-                let balance = rng.rangeF(0.16...0.84)
-                let gain = rng.rangeF(0.40...0.68) * (1 - 0.07 * Float(grain))
-                    * (lifted ? 0.40 : 1)
-                for i in 0..<count {
-                    let p = min(Double(span - 1), Double(i) * speed)
-                    let source = Double(from) + (backwards ? Double(span - 1) - p : p)
-                    let j = Int(source)
-                    guard j >= 0, j + 1 < lead.left.count else { continue }
-                    let u = Float(source - Double(j))
-                    let window = sinf(.pi * Float(i) / Float(count - 1))
-                    let a = lead.left[j] + (lead.left[j + 1] - lead.left[j]) * u
-                    let b = lead.right[j] + (lead.right[j + 1] - lead.right[j]) * u
-                    left[destination + i] += (balance * b + 0.35 * a) * gain * window * window
-                    right[destination + i] += ((1 - balance) * a + 0.35 * b) * gain * window * window
+        return candidates.min { abs($0 - goal) < abs($1 - goal) } ?? source
+    }
+
+    /// Replay timed fragments through a second lane. Shifted grains use an isolated note
+    /// when its sample is present. A polyphonic fallback moves only by octaves.
+    static func granulate(_ lead: (left: [Float], right: [Float]), score: LofiScore,
+                          clock: LofiClock, frames: Int, seed: UInt64, gesture: Gesture,
+                          texture: (left: [Float], right: [Float]), samples: LofiSampleBank) -> (left: [Float], right: [Float]) {
+        let silence = [Float](repeating: 0, count: frames)
+        var result = (left: silence, right: silence)
+        var rng = MusicRNG(seed: seed).fork(110)
+        let leadNotes = score.notes.filter { $0.part == .lead }
+        let mids = score.notes.filter { $0.part == .texture }
+        let anchors = [leadNotes.first, leadNotes.last, mids.first].compactMap { $0 }
+        for note in anchors {
+            let sustained = note.part == .texture
+            let duration = min(note.length * 0.68, sustained ? 0.64 : 0.53)
+            let count = max(3, clock.frame(at: duration))
+            let attack = clock.frame(at: 0.035)
+            let source: (left: [Float], right: [Float])
+            let offset: Int
+            let recorded = samples.sample(for: score.preset, midi: note.midi, velocity: note.velocity)
+            if let recorded {
+                var l = [Float](repeating: 0, count: attack + count + 2), r = l
+                let dryNote = LofiScore.Note(part: note.part, midi: note.midi, beat: 0, length: note.length,
+                                             velocity: note.velocity * (sustained ? 0.77 : 0.86), color: note.color)
+                l.withUnsafeMutableBufferPointer { left in
+                    r.withUnsafeMutableBufferPointer { right in
+                        LofiSampleBank.add(dryNote, from: recorded, preset: score.preset, clock: clock,
+                                           left: left, right: right)
+                    }
                 }
+                source = (l, r)
+                offset = attack
+            } else {
+                source = sustained ? texture : lead
+                offset = clock.frame(at: note.beat + 0.035)
+            }
+            let onGrid = (note.beat * 4).rounded() / 4
+            let taps: [(wait: Double, shift: Int, reverse: Bool, gain: Float)]
+            switch gesture {
+            case .cloud: taps = [(-0.55, 0, true, 0.66), (0.75, 5, false, 0.59), (1.5, -12, true, 0.44), (2.25, 12, false, 0.28)]
+            case .resonance: taps = [(0.5, -5, false, 0.63), (1, 0, true, 0.46), (1.75, 7, false, 0.50)]
+            case .tape: taps = [(-0.48, -12, true, 0.69), (0.75, 0, true, 0.73), (1, 0, false, 0.43), (2, -7, true, 0.43)]
+            case .freeze: taps = [(0.75, -12, false, 0.56), (1.25, 5, true, 0.63), (2.5, 12, false, 0.33)]
+            }
+            for tap in taps {
+                let target = recorded == nil
+                    ? note.midi + (abs(tap.shift) == 12 ? tap.shift : 0)
+                    : targetPitch(source: note.midi, interval: tap.shift, scale: score.scale, tonic: score.tonic)
+                let rate = pow(2, Double(target - note.midi) / 12)
+                let pan = rng.rangeF(-0.56...0.56)
+                let destination = clock.frame(at: max(0, onGrid + tap.wait))
+                let gain = tap.gain * (sustained ? 0.80 : 1)
+                replay(source, sourceStart: offset, sourceCount: count, into: &result,
+                       destination: destination, rate: rate, reverse: tap.reverse, gain: gain, pan: pan)
             }
         }
-        var result = (left: left, right: right)
-        if gesture.holdLevel > 0, let note = notes.max(by: { $0.send < $1.send }) {
+        if gesture.holdLevel > 0, let note = leadNotes.last {
             LofiSpectralHold.add(from: lead, note: note, clock: clock, gain: gesture.holdLevel,
                                  to: &result, rng: &rng)
         }
         return result
+    }
+
+    /// Record a single window of the toned, mixed return. All destinations follow the
+    /// capture window, so the replay can feed the rack without recording itself again.
+    struct ReturnReplay {
+        let window: Range<Int>
+        private let destinations: [Int]
+        private var captured: (left: [Float], right: [Float])
+
+        init(lastBeat: Double, clock: LofiClock, gesture: Gesture) {
+            let firstReplay = (lastBeat * 4).rounded() / 4 + 0.75
+            let start = clock.frame(at: firstReplay + 0.12)
+            let count = clock.frame(at: gesture == .freeze ? 0.37 : 0.22)
+            window = start..<(start + count)
+            destinations = [0.0, 0.625, 1.625].map { clock.frame(at: firstReplay + 1.25 + $0) }
+            let empty = [Float](repeating: 0, count: count)
+            captured = (empty, empty)
+        }
+
+        mutating func capture(_ sample: Stereo, at frame: Int, into grains: inout (left: [Float], right: [Float])) {
+            let index = frame - window.lowerBound
+            captured.left[index] = sample.left
+            captured.right[index] = sample.right
+            guard frame + 1 == window.upperBound else { return }
+            for (i, destination) in destinations.enumerated() {
+                LofiEffects.replay(captured, sourceStart: 0, sourceCount: window.count - 1, into: &grains,
+                                   destination: destination, rate: i == 1 ? 1 : 0.5, reverse: i != 1,
+                                   gain: 0.60 - 0.11 * Float(i), pan: i == 1 ? -0.64 : 0.62)
+            }
+        }
+    }
+
+    static func replay(_ source: (left: [Float], right: [Float]), sourceStart: Int, sourceCount: Int,
+                       into output: inout (left: [Float], right: [Float]), destination: Int,
+                       rate: Double, reverse: Bool, gain: Float, pan: Float) {
+        guard sourceStart >= 0, destination >= 0, sourceCount >= 3,
+              sourceStart + sourceCount < min(source.left.count, source.right.count) else { return }
+        let length = Int(Double(sourceCount - 1) / rate) + 1
+        let writable = min(length, min(output.left.count, output.right.count) - destination)
+        guard writable > 2 else { return }
+        let leftGain = gain * (0.84 - 0.48 * pan), rightGain = gain * (0.84 + 0.48 * pan)
+        for i in 0..<writable {
+            let travel = min(Double(sourceCount - 1), Double(i) * rate)
+            let position = reverse ? Double(sourceCount - 1) - travel : travel
+            let j = Int(position)
+            let fraction = Float(position - Double(j))
+            let base = sourceStart + j
+            let window = sinf(.pi * Float(i) / Float(writable - 1))
+            let l = source.left[base] + fraction * (source.left[base + 1] - source.left[base])
+            let r = source.right[base] + fraction * (source.right[base + 1] - source.right[base])
+            output.left[destination + i] += (0.82 * l + 0.18 * r) * leftGain * window * window
+            output.right[destination + i] += (0.82 * r + 0.18 * l) * rightGain * window * window
+        }
     }
 
     private struct Delay {
@@ -274,12 +354,12 @@ nonisolated struct LofiEffects {
         private var a: Delay, b: Delay, c: Delay, d: Delay
         private let ga: Float, gb: Float, gc: Float, gd: Float
 
-        init(rate: Double, decay: Double = 7.5) {
+        init(rate: Double, decay: Double = 7.5, size: Double = 1) {
             preL = Delay(frames: Int(rate * 0.034), damping: 0.62)
             preR = Delay(frames: Int(rate * 0.041), damping: 0.62)
             diffuseL = Delay(frames: Int(rate * 0.0119), damping: 1)
             diffuseR = Delay(frames: Int(rate * 0.0167), damping: 1)
-            let lengths = (0.0511, 0.0677, 0.0839, 0.1061)
+            let lengths = (0.0511 * size, 0.0677 * size, 0.0839 * size, 0.1061 * size)
             a = Delay(frames: Int(lengths.0 * rate), damping: 0.47)
             b = Delay(frames: Int(lengths.1 * rate), damping: 0.42)
             c = Delay(frames: Int(lengths.2 * rate), damping: 0.45)

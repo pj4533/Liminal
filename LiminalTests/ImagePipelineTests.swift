@@ -179,6 +179,34 @@ struct ImageStoreTests {
         return (ImageStore(root: root, defaults: defaults), root, defaults)
     }
 
+    @Test func imageAndFilmCrossTheirMidpointsOnTheSameDrumSample() {
+        for tempo in [58.0, 69, 82] {
+            let beat = LofiClock(tempo: tempo, sampleRate: 48_000).beatDuration
+            let grid = LofiTakeGrid(origin: 91.37, beatDuration: beat)
+            for count in [32, 64] {
+                let downbeat = grid.origin + Double(count) * beat
+                let cue = LofiImageReveal.next(on: grid, after: downbeat - 6)
+                let film = grid.nextBoundary(after: downbeat - 6)
+                #expect(abs(cue.start + cue.duration / 2 - film.time) < 1e-9)
+                #expect(abs(cue.duration - film.fill.dissolveBeats * beat) < 1e-9)
+                #expect(abs(cue.spec.swap(Float(cue.progress(at: downbeat))) - 0.5) < 1e-6)
+                #expect(cue.progress(at: downbeat - 2) == 0)
+                #expect(cue.progress(at: downbeat + 2) == 1)
+            }
+        }
+    }
+
+    @Test func emptyImageStoreHasTwoDistinctBundledPicturesForFills() async throws {
+        let (store, root, _) = makeStore()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let queue = ImageQueue(store: store)
+        #expect(await queue.reserveForFill(excluding: nil) == nil)
+        let first = try #require(queue.standbyImage(index: 0))
+        let second = try #require(queue.standbyImage(index: 1))
+        #expect(first.cgImage.width != second.cgImage.width)
+        #expect(store.imageFiles().isEmpty)
+    }
+
     private func generated() -> GeneratedImageData {
         let image = makeImage(width: 60, height: 40) { ctx in
             ctx.setFillColor(CGColor(red: 0.9, green: 0.2, blue: 0.4, alpha: 1))

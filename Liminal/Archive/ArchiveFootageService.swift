@@ -36,6 +36,7 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
         var pieces: [FootagePiece] = []
         var aspects: [Float] = [4.0 / 3.0, 4.0 / 3.0]
         var conditions = FootageWeaver.Conditions()
+        var grid: LofiTakeGrid?
         // Tint eased toward the current picture's colours.
         var tint = SIMD3<Float>(0.9, 0.85, 0.75)
         var shade = SIMD3<Float>(0.06, 0.05, 0.05)
@@ -62,6 +63,8 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
         var disabling = false
         var disablingSince: Double?
         var audio: AudioState?
+        var pendingAudio: AudioState?
+        var attemptedAudioPiece: Int?
         var preparedImage: ImagePairing?
         var displayedImage: ImagePairing?
         var nextImageUptime: Double?
@@ -88,8 +91,10 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
     final class MusicSink: @unchecked Sendable {
         let post: @Sendable (MusicControl) -> Void
         let format: AVAudioFormat
-        init(format: AVAudioFormat, post: @escaping @Sendable (MusicControl) -> Void) {
+        let takeGrid: @Sendable () -> LofiTakeGrid?
+        init(format: AVAudioFormat, takeGrid: @escaping @Sendable () -> LofiTakeGrid?, post: @escaping @Sendable (MusicControl) -> Void) {
             self.format = format
+            self.takeGrid = takeGrid
             self.post = post
         }
     }
@@ -121,7 +126,9 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
 
     /// The music engine that plays the pieces' sound (called once by each app on appear).
     func attachMusic(_ engine: GenerativeEngine) {
-        let sink = MusicSink(format: engine.archiveFormat) { [weak engine] c in engine?.post(c) }
+        let sink = MusicSink(format: engine.archiveFormat, takeGrid: { [weak engine] in
+            engine?.musicState.read().lofiTakeGrid
+        }) { [weak engine] c in engine?.post(c) }
         music.withLock { $0 = sink }
     }
 
@@ -153,6 +160,10 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
                 let playing = shared.withLock { $0.audio.map { $0.begun && !$0.ended } ?? false }
                 if playing { music.withLock { $0 }?.post(.archiveGain(g)) }
             } else {
+                shared.withLock { s in
+                    s.pendingAudio = nil
+                    s.attemptedAudioPiece = nil
+                }
                 endAudio(fade: 2)
             }
         }
@@ -179,7 +190,10 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
             s.master = 1
             s.startUptime = Self.uptime()
             s.pieces = []
+            s.grid = nil
             s.audio = nil
+            s.pendingAudio = nil
+            s.attemptedAudioPiece = nil
             s.pairedPieces.removeAll()
             return true
         }
@@ -209,6 +223,7 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
         let wasRunning = shared.withLock { s -> Bool in
             defer {
                 s.running = false; s.pieces = []; s.disabling = false; s.disablingSince = nil; s.audio = nil
+                s.pendingAudio = nil; s.attemptedAudioPiece = nil
             }
             return s.running
         }
@@ -240,16 +255,21 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
 
     /// Decodes a piece's sound off the main actor and posts it to the music at the cue's start.
     private func scheduleAudio(piece: FootagePiece, cue: ArchiveAudioCuePlan, clip: ArchiveClip, url: URL) {
-        let (level, start, busy) = shared.withLock { s in
-            (s.audioLevel, s.startUptime, s.audio.map { !$0.ended || $0.pieceIndex == piece.index } ?? false)
-        }
-        guard let sink = music.withLock({ $0 }), !busy,
-              let gain = ArchiveAudioCuePlan.gain(level: level) else { return }
+        guard let sink = music.withLock({ $0 }) else { return }
         let token = audioTokenSeed.withLock { $0 += 1; return $0 }
-        shared.withLock { $0.audio = AudioState(cue: cue, token: token, pieceIndex: piece.index) }
+        guard let (gain, start) = shared.withLock({ s -> (Float, Double)? in
+            guard s.running, !s.disabling, s.attemptedAudioPiece != piece.index,
+                  let gain = ArchiveAudioCuePlan.gain(level: s.audioLevel) else { return nil }
+            s.attemptedAudioPiece = piece.index
+            s.pendingAudio = AudioState(cue: cue, token: token, pieceIndex: piece.index)
+            return (gain, s.startUptime)
+        }) else { return }
         let title = clip.title
         LMLog.audio.info("📼🔊 sound cue piece #\(piece.index) at \(String(format: "%.1f", cue.beginAt), privacy: .public)s fade \(String(format: "%.1f", cue.fadeIn), privacy: .public)s, out at \(String(format: "%.1f", cue.fadeOutAt), privacy: .public)s over \(String(format: "%.1f", cue.fadeOut), privacy: .public)s, source \(String(format: "%.1f", cue.sourceStart), privacy: .public)s+\(String(format: "%.1f", cue.sourceLength), privacy: .public)s rate \(String(format: "%.2f", cue.rate), privacy: .public) gain \(String(format: "%.2f", gain), privacy: .public)")
         Task.detached(priority: .utility) { [weak self] in
+            defer {
+                self?.shared.withLock { s in if s.pendingAudio?.token == token { s.pendingAudio = nil } }
+            }
             let t0 = Self.uptime()
             let buffer: AVAudioPCMBuffer
             do {
@@ -258,40 +278,55 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
                                                               format: sink.format)
             } catch {
                 LMLog.audio.warning("📼🔊 no sound: decode failed (\(String(describing: error), privacy: .public))")
-                self?.shared.withLock { s in if s.audio?.token == token { s.audio?.ended = true } }
                 return
             }
-            let activity = ArchiveAudioMath.activity(buffer)
             let seconds = Double(buffer.frameLength) / buffer.format.sampleRate
             LMLog.audio.info("📼🔊 decoded \(String(format: "%.1f", seconds), privacy: .public)s in \(String(format: "%.0f", (Self.uptime() - t0) * 1000), privacy: .public) ms")
             let due = start + cue.beginAt
-            let wait = due - Self.uptime()
-            if wait > 0 { try? await Task.sleep(nanoseconds: UInt64(wait * 1e9)) }
             guard let self else { return }
-            let late = Self.uptime() - due
-            let g = self.shared.withLock { s -> Float? in
-                guard s.running, !s.disabling, var a = s.audio, a.token == token, !a.ended,
-                      let g = ArchiveAudioCuePlan.gain(level: s.audioLevel) else { return nil }
-                a.begun = true
-                s.audio = a
-                return g
+            let deadline = start + cue.fadeOutAt
+            while true {
+                let time = Self.uptime()
+                guard time < deadline, !Task.isCancelled else { return }
+                let visibleAt = self.shared.withLock { s -> Double? in
+                    guard s.running, s.wantsRun, !s.disabling, s.pendingAudio?.token == token,
+                          let current = s.pieces.last, current.index == piece.index else { return nil }
+                    return start + current.start
+                }
+                guard let visibleAt else { return }
+                if time >= max(due, visibleAt), self.sources[piece.slot].latest() != nil { break }
+                let wait = min(0.12, max(0.025, max(due, visibleAt) - time))
+                try? await Task.sleep(for: .seconds(wait))
             }
-            guard let g else { return }
-            sink.post(.archiveBegin(ArchiveVoice.Cue(buffer: buffer, gain: g, fadeIn: max(1, cue.fadeIn - max(late, 0)),
-                                                     label: title, claritySeed: piece.seed, activity: activity)))
-            if late > 0.1 { LMLog.audio.warning("📼🔊 sound started \(String(format: "%.2f", late), privacy: .public)s late") }
+            let late = Self.uptime() - due
+            guard let ready = ArchiveAudioMath.catchUp(buffer, late: late) else { return }
+            let activity = ArchiveAudioMath.activity(ready)
+            let posted = self.shared.withLock { s -> Bool in
+                guard s.pendingAudio?.token == token else { return false }
+                s.pendingAudio = nil
+                guard s.running, s.wantsRun, !s.disabling, late < cue.fadeOutAt - cue.beginAt,
+                      let g = ArchiveAudioCuePlan.gain(level: s.audioLevel) else { return false }
+                s.audio = AudioState(cue: cue, token: token, pieceIndex: piece.index, begun: true)
+                sink.post(.archiveBegin(ArchiveVoice.Cue(buffer: ready, gain: g,
+                    fadeIn: max(0.35, cue.fadeIn - max(late, 0)),
+                    label: title, claritySeed: piece.seed, activity: activity)))
+                return true
+            }
+            if posted && late > 0.1 {
+                LMLog.audio.warning("📼🔊 sound started \(String(format: "%.2f", late), privacy: .public)s late")
+            }
         }
     }
 
     /// Fades the current sound out (once).
-    private func endAudio(fade: Double) {
-        let post = shared.withLock { s -> Bool in
-            guard var a = s.audio, !a.ended else { return false }
+    private func endAudio(fade: Double, matching token: Int? = nil) {
+        let sink = music.withLock { $0 }
+        shared.withLock { s in
+            guard var a = s.audio, !a.ended, token == nil || a.token == token else { return }
             a.ended = true
             s.audio = a
-            return a.begun
+            if a.begun { sink?.post(.archiveEnd(fade: fade)) }
         }
-        if post { music.withLock { $0 }?.post(.archiveEnd(fade: fade)) }
     }
 
     struct ImageReference: Sendable {
@@ -451,7 +486,10 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
             let masterTarget: Float = s.disabling ? 0 : 1
             let step = Float(dt) / 2
             s.master = masterTarget < s.master ? max(s.master - step, 0) : min(s.master + step, 1)
-            let gain = s.calm * Self.smooth01(s.master)
+            var gain = s.calm * Self.smooth01(s.master)
+            if let grid = s.grid {
+                gain *= 1 + 0.5 * grid.accent(at: now - s.startUptime)
+            }
             return (s.running ? s.pieces : [], now - s.startUptime, s.aspects, s.tint, s.shade, s.polarity, s.coverage, gain, measure)
         }
         let measure = snap.measure ? image() : nil
@@ -474,11 +512,14 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
         state.keyPolarity = snap.polarity
         state.keyCoverage = snap.coverage
         var texA: MTLTexture?, texB: MTLTexture?
+        let awaitingFrame = snap.pieces.count == 2 && snap.pieces[1].fill != nil
+            && sources[snap.pieces[1].slot].latest() == nil
         for p in snap.pieces {
-            let w = p.weight(at: snap.elapsed) * snap.gain
+            let time = awaitingFrame ? min(snap.elapsed, snap.pieces[1].start) : snap.elapsed
+            let w = p.weight(at: time) * snap.gain
             guard w > 0, let tex = sources[p.slot].latest() else { continue }
             let layer = VideoLayer(weight: w, look: p.look, seed: p.seed, aspect: snap.aspects[p.slot], warp: p.warp,
-                                   recipe: p.recipe, envelope: p.driveEnvelope(at: snap.elapsed) * snap.gain)
+                                   recipe: p.recipe, envelope: p.driveEnvelope(at: time) * snap.gain)
             if p.slot == 0 { state.a = layer; texA = tex } else { state.b = layer; texB = tex }
         }
         guard !state.isOff else { return .off }
@@ -540,17 +581,29 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
                 continue
             }
             let clips = await availableClips()
-            if let cur = weaver.current, sources[cur.slot].ended { weaver.hurry(at: elapsed) }
+            let grid = music.withLock { $0 }?.takeGrid().map {
+                LofiTakeGrid(origin: $0.origin - start, beatDuration: $0.beatDuration, takeIndex: $0.takeIndex,
+                             nextBeatDuration: $0.nextBeatDuration)
+            }
+            if grid == nil, let cur = weaver.current, sources[cur.slot].ended { weaver.hurry(at: elapsed) }
             // The sound fades out on its own schedule (A27).
-            if let a = shared.withLock({ $0.audio }), !a.ended, elapsed >= a.cue.fadeOutAt {
-                endAudio(fade: a.cue.fadeOut)
+            if let a = shared.withLock({ $0.audio }), !a.ended {
+                // Finish the old direct sound before the incoming fill edit needs the
+                // voice. Its echoes continue. Compensate for the 2 Hz polling interval.
+                var end = a.cue.endAt
+                if let edit = weaver.current, edit.fill != nil, edit.index > a.pieceIndex {
+                    end = min(end, edit.start)
+                }
+                if elapsed >= end - a.cue.fadeOut {
+                    endAudio(fade: max(0.035, end - elapsed), matching: a.token)
+                }
             }
             let pairings = availableImagePairings(now: now, clips: clips, weaver: weaver)
-            if !pairings.isEmpty { weaver.hurry(at: elapsed) }
+            if grid == nil, !pairings.isEmpty { weaver.hurry(at: elapsed) }
             let incoming = weaver.current?.index
             let matchesSwap = shared.withLock { s in incoming.map { s.pairedPieces.values.contains($0) } ?? false }
             let decision = weaver.tick(elapsed: elapsed, conditions: cond, hasClip: !clips.isEmpty,
-                                       matchingImageTransition: matchesSwap) { [sources] slot in
+                                       matchingImageTransition: matchesSwap, grid: grid) { [sources] slot in
                 sources[slot].latest() != nil
             }
             switch decision {
@@ -563,18 +616,25 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
                 sources[slot].stop()
                 let dropped = weaver.pieceCount - 1
                 shared.withLock { $0.pairedPieces = $0.pairedPieces.filter { $0.value != dropped } }
-                let silence = shared.withLock { s -> Bool in s.audio.map { $0.pieceIndex == dropped && !$0.ended } ?? false }
-                if silence { endAudio(fade: 2) }
+                let droppedToken = shared.withLock { s -> Int? in
+                    if s.pendingAudio?.pieceIndex == dropped { s.pendingAudio = nil }
+                    if s.attemptedAudioPiece == dropped { s.attemptedAudioPiece = nil }
+                    return s.audio.flatMap { $0.pieceIndex == dropped ? $0.token : nil }
+                }
+                if let droppedToken { endAudio(fade: 2, matching: droppedToken) }
                 LMLog.visual.warning("📼 piece dropped slot=\(slot) (no frame); the current piece holds")
             case .prepare(let r):
                 _ = prepare(r, clips: clips, pairings: pairings, weaver: &weaver,
-                            rng: &rng, elapsed: elapsed, startUptime: start)
+                            rng: &rng, elapsed: elapsed, startUptime: start, followsFills: grid != nil)
             }
             let pieces = weaver.pieces
-            shared.withLock { $0.pieces = pieces }
+            shared.withLock { $0.pieces = pieces; $0.grid = grid }
             if let piece = weaver.current, piece.index > recordedPieceIndex,
                elapsed >= piece.start, sources[piece.slot].latest() != nil {
                 recordedPieceIndex = piece.index
+                if let clip = clips.first(where: { $0.id == piece.clipID }) {
+                    shared.withLock { $0.status = "Showing: \(clip.title)\(clip.year.map { " (\($0))" } ?? "")" }
+                }
                 if piece.clipID.hasPrefix("local:") {
                     localClip.withLock { $0?.clip.shownStarts.append(piece.segmentStart) }
                 } else {
@@ -623,19 +683,28 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
     /// source and start time, but a missing match uses the regular picker immediately.
     private func prepare(_ r: FootageWeaver.Request, clips: [ArchiveClip], pairings: [(ImagePairing, ArchiveClip)],
                          weaver: inout FootageWeaver, rng: inout MusicRNG,
-                         elapsed: Double, startUptime: Double) -> FootagePiece? {
+                         elapsed: Double, startUptime: Double, followsFills: Bool) -> FootagePiece? {
         let rate = Double(r.rate)
         let preroll = max(r.start - elapsed + 0.5, 0) * rate
         func segment(for clip: ArchiveClip) -> (length: Double, sourceLength: Double) {
             let usable = max(clip.duration - 1, 1)
             let visible = (usable - preroll) / rate
-            let length = visible < r.length + 12 ? max(min(r.length, visible - 10), r.fadeIn + 2) : r.length
+            let length: Double
+            if followsFills {
+                length = min(r.length, max(r.fadeIn + 2, visible - 1))
+            } else {
+                length = visible < r.length + 12 ? max(min(r.length, visible - 10), r.fadeIn + 2) : r.length
+            }
             let margin = min(27, max(visible - length, 2))
             return (length, min(preroll + (length + margin) * rate, usable))
         }
 
         var match: (imageID: UUID, clip: ArchiveClip, start: Double, kind: String)?
-        for (pairing, clip) in pairings {
+        let different = clips.filter { $0.id != weaver.current?.clipID }
+        let pool = r.fill != nil && !different.isEmpty ? different : clips
+        let sufficient = pool.filter { $0.duration >= (r.length + 2) * rate + preroll + 1 }
+        let candidates = followsFills && !sufficient.isEmpty ? sufficient : pool
+        for (pairing, clip) in pairings where candidates.contains(where: { $0.id == clip.id }) {
             let ref = pairing.reference
             let plan = segment(for: clip)
             let required = min(plan.sourceLength, preroll + (plan.length + 8) * rate)
@@ -648,7 +717,9 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
             break
         }
 
-        guard let clip = match?.clip ?? weaver.chooseClipForPlayback(clips, rng: &rng) else {
+        let audioClips = r.sound ? candidates.filter(\.hasAudio) : []
+        let eligible = audioClips.isEmpty ? candidates : audioClips
+        guard let clip = match?.clip ?? weaver.chooseClipForPlayback(eligible, rng: &rng) else {
             weaver.prepareFailed()
             return nil
         }
@@ -674,10 +745,7 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
                                    black: clip.black, white: clip.white,
                                    anchorUptime: startUptime + r.start - preroll / rate, pieceIndex: r.index))
         let aspect = Float(clip.width) / Float(max(clip.height, 1))
-        shared.withLock {
-            $0.aspects[r.slot] = aspect
-            $0.status = "Showing: \(clip.title)\(clip.year.map { " (\($0))" } ?? "")"
-        }
+        shared.withLock { $0.aspects[r.slot] = aspect }
         LMLog.visual.info("📼 piece #\(r.index) slot=\(r.slot) recipe=\(r.recipe.name, privacy: .public) id=\(clip.id, privacy: .public) title=\"\(clip.title, privacy: .public)\" segment=\(String(format: "%.1f", segStart), privacy: .public)s rate=\(String(format: "%.2f", r.rate), privacy: .public) warp=\(String(format: "%.2f", r.warp), privacy: .public) level=\(String(format: "%.2f", r.level), privacy: .public)+\(String(format: "%.2f", r.swell), privacy: .public) length=\(String(format: "%.1f", length), privacy: .public)s fade=\(String(format: "%.1f", r.fadeIn), privacy: .public)s sound=\(piece.sound) (wanted \(r.sound), audio=\(clip.hasAudio)) starts \(String(format: "%.1f", r.start), privacy: .public)s at \(String(format: "%.1f", elapsed), privacy: .public)s")
         return piece
     }

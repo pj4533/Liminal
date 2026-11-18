@@ -131,6 +131,7 @@ struct ScalePicker: View {
 /// "Playing", cached image count and generation queue, as wrapping text.
 struct PlaybackStatus: View {
     let isPlaying: Bool
+    var isPreparing = false
     let cachedCount: Int
     let queuedCount: Int
 
@@ -140,7 +141,7 @@ struct PlaybackStatus: View {
                 Circle()
                     .fill(isPlaying ? Color.green : Color.gray)
                     .frame(width: 10, height: 10)
-                Text(isPlaying ? "Playing" : "Stopped")
+                Text(isPlaying ? "Playing" : (isPreparing ? "Preparing beat…" : "Stopped"))
                     .fontWeight(.medium)
                     .wrapping()
             }

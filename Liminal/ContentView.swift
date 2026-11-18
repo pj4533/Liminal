@@ -82,7 +82,7 @@ struct ContentView: View {
     var body: some View {
         HStack(spacing: 0) {
             // Visual display area
-            VisualDisplayView(visualEngine: visualEngine, settings: settings, isPlaying: audioEngine.isRunning,
+            VisualDisplayView(visualEngine: visualEngine, settings: settings, isPlaying: audioEngine.isPlaybackReady,
                               music: audioEngine)
                 .frame(minWidth: 400, minHeight: 400)
 
@@ -102,13 +102,15 @@ struct ContentView: View {
             DebugLaunchOptions.logApplied()
             if DebugLaunchOptions.autoPlay, !audioEngine.isRunning {
                 audioEngine.start()
-                visualEngine.start()
                 LMLog.general.info("🧪 DEBUG: auto-play started")
             }
         }
         // Settings -> AudioEngine: propagate changes immediately
         .onChange(of: settings.style) { _, newValue in audioEngine.style = newValue }
         .onChange(of: settings.pinnedScale) { _, newValue in audioEngine.pinnedScale = newValue }
+        .onChange(of: audioEngine.isPlaybackReady ? audioEngine.musicMode : nil, initial: true) { _, playingMode in
+            if playingMode != nil { visualEngine.start(music: audioEngine) } else { visualEngine.stop() }
+        }
         .archiveFootageSettings(settings, audioEngine: audioEngine)
         .sheet(isPresented: $showingSettings) {
             SettingsSheetView(audioEngine: audioEngine, visualEngine: visualEngine)
@@ -135,14 +137,15 @@ extension ContentView {
 
                 ControlSection(title: "Playback", systemImage: "play.circle") {
                     Button(action: togglePlayback) {
-                        Label(audioEngine.isRunning ? "Stop" : "Play",
+                        Label(audioEngine.isRunning ? (audioEngine.isPlaybackReady ? "Stop" : "Cancel") : "Play",
                               systemImage: audioEngine.isRunning ? "stop.fill" : "play.fill")
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
 
-                    PlaybackStatus(isPlaying: audioEngine.isRunning,
+                    PlaybackStatus(isPlaying: audioEngine.isPlaybackReady,
+                           isPreparing: audioEngine.isRunning && !audioEngine.isPlaybackReady,
                                    cachedCount: visualEngine.totalCachedCount,
                                    queuedCount: visualEngine.queuedCount)
                     if let status = visualEngine.statusMessage {
@@ -199,10 +202,8 @@ extension ContentView {
     private func togglePlayback() {
         if audioEngine.isRunning {
             audioEngine.stop()
-            visualEngine.stop()
         } else {
             audioEngine.start()
-            visualEngine.start()
         }
     }
 }
@@ -404,6 +405,8 @@ struct VisualDisplayView: View {
                     let params = frameParams()
                     EffectsMetalViewRepresentable(
                         sourceImage: transitionManager.currentFrame,
+                        stagedImage: visualEngine.stagedImage?.image,
+                        beatReveal: transitionManager.isMorphing ? transitionManager.beatReveal : nil,
                         previousImage: transitionManager.previousFrame,  // GPU crossfade blending
                         saliencyMap: transitionManager.currentSaliencyMap,
                         uniforms: params.uniforms,
@@ -460,7 +463,7 @@ struct VisualDisplayView: View {
         .onChange(of: visualEngine.currentImage) { _, newImage in
             if let image = newImage {
                 let hadFrame = transitionManager.currentFrame != nil
-                let started = transitionManager.transitionTo(image, duration: {
+                let started = transitionManager.transitionTo(image, reveal: visualEngine.reveal, duration: {
                     sync.transition = pickTransition()
                     return Double(sync.transition.duration)
                 })

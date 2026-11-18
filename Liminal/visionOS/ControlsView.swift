@@ -68,6 +68,9 @@ struct ControlsView: View {
         .onDisappear { controlsVisible = false }
         .onChange(of: settings.style) { _, newValue in audioEngine.style = newValue }
         .onChange(of: settings.pinnedScale) { _, newValue in audioEngine.pinnedScale = newValue }
+        .onChange(of: audioEngine.isPlaybackReady ? audioEngine.musicMode : nil, initial: true) { _, playingMode in
+            if playingMode != nil { visualEngine.start(music: audioEngine) } else { visualEngine.stop() }
+        }
         .archiveFootageSettings(settings, audioEngine: audioEngine)
     }
 
@@ -89,7 +92,7 @@ struct ControlsView: View {
     private var playbackSection: some View {
         ControlSection(title: "Playback", systemImage: "play.circle") {
             Button(action: togglePlayback) {
-                Label(audioEngine.isRunning ? "Stop" : "Play",
+                Label(audioEngine.isRunning ? (audioEngine.isPlaybackReady ? "Stop" : "Cancel") : "Play",
                       systemImage: audioEngine.isRunning ? "stop.fill" : "play.fill")
                     .font(.title3.weight(.semibold))
                     .frame(maxWidth: .infinity, minHeight: ControlMetrics.buttonHeight)
@@ -101,7 +104,8 @@ struct ControlsView: View {
 
             immersiveButton
 
-            PlaybackStatus(isPlaying: audioEngine.isRunning,
+            PlaybackStatus(isPlaying: audioEngine.isPlaybackReady,
+                           isPreparing: audioEngine.isRunning && !audioEngine.isPlaybackReady,
                            cachedCount: visualEngine.totalCachedCount,
                            queuedCount: visualEngine.queuedCount)
             if let status = visualEngine.statusMessage {
@@ -199,10 +203,8 @@ struct ControlsView: View {
     private func togglePlayback() {
         if audioEngine.isRunning {
             audioEngine.stop()
-            visualEngine.stop()
         } else {
             audioEngine.start()
-            visualEngine.start()
         }
     }
 
@@ -230,7 +232,6 @@ extension ControlsView {
         DebugLaunchOptions.logApplied()
         if DebugLaunchOptions.autoPlay, !audioEngine.isRunning {
             audioEngine.start()
-            visualEngine.start()
             LMLog.general.info("🧪 DEBUG: auto-play started")
         }
         if DebugLaunchOptions.openDome, !isImmersed {

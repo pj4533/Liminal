@@ -60,6 +60,7 @@ nonisolated struct MusicState: Sendable {
     var shimmerLevel: Float = 0
     var lastOnsetTime: Double = -1000
     var lastOnsetVelocity: Float = 0
+    var lofiTakeGrid: LofiTakeGrid?
     var recordedBeatDuration: Double = 0  // Lo-Fi runs on the sample clock of a real recording
     var events: MusicEventRing = (MusicEvent(), MusicEvent(), MusicEvent(), MusicEvent(),
                                   MusicEvent(), MusicEvent(), MusicEvent(), MusicEvent())
@@ -148,7 +149,8 @@ nonisolated final class MusicStateBus: @unchecked Sendable {
     /// Conductor seconds on the same monotonic clock the realtime conductor uses (0 before start).
     func now() -> Double {
         let start = startUptimeNs.load(ordering: .acquiring)
-        guard start > 0 else { return 0 }
-        return Double(DispatchTime.now().uptimeNanoseconds &- start) / 1e9
+        let now = DispatchTime.now().uptimeNanoseconds
+        guard start > 0, now >= start else { return 0 }
+        return Double(now - start) / 1e9
     }
 }

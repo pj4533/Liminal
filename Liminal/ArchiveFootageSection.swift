@@ -35,21 +35,28 @@ struct ArchiveFootageSection: View {
                             explanation: "Old film from the Internet Archive, always woven subtly into the scene.",
                             isOn: $settings.archiveEnabled)
 
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Change speed").wrapping()
-                Picker("Change speed", selection: $settings.archiveChangeSpeed) {
-                    ForEach(FootageChangeSpeed.allCases, id: \.self) { s in
-                        Text(s.title).tag(s)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                Text(settings.archiveChangeSpeed.explanation)
+            if settings.musicMode == .lofi {
+                Text("Footage changes with the drum fills every eight bars. The cut is quicker at sixteen.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .wrapping()
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Change speed").wrapping()
+                    Picker("Change speed", selection: $settings.archiveChangeSpeed) {
+                        ForEach(FootageChangeSpeed.allCases, id: \.self) { s in
+                            Text(s.title).tag(s)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    Text(settings.archiveChangeSpeed.explanation)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .wrapping()
+                }
+                .disabled(!settings.archiveEnabled)
             }
-            .disabled(!settings.archiveEnabled)
 
             ValueSlider(title: "Footage audio", value: $settings.archiveAudioLevel,
                         minimumLabel: "Off", maximumLabel: "Louder",

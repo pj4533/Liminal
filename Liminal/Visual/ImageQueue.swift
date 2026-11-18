@@ -56,7 +56,7 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
     // MARK: - Internal state
 
     /// One image ready to show (macOS keeps PlatformImages for the SwiftUI crossfade).
-    private struct DisplayItem: @unchecked Sendable {
+    struct DisplayItem: @unchecked Sendable {
         let id: UUID?
         let cgImage: CGImage
         let image: PlatformImage?      // nil on visionOS: no UIImage in the pipeline (MainActor starvation)
@@ -174,7 +174,7 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
         let entry = store.entry(id: pick.id, url: pick.url)
         guard let item = await makeDisplayItem(entry) else { return }
         guard !imageBuffer.hasCurrent() else { return }
-        imageBuffer.storeCurrent(item.cgImage, metadata: item.metadata)
+        imageBuffer.storeCurrent(item.cgImage, metadata: item.metadata, id: item.id)
         await state.noteShown(item.id)
         await MainActor.run {
             self.currentImage = item.image
@@ -194,7 +194,7 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
     /// Cache Only setting, or a DEBUG automation launch (which must never spend API budget).
     @MainActor
     private var generationDisabled: Bool {
-        SettingsService.shared.cacheOnly || DebugLaunchOptions.blocksImageGeneration
+        SettingsService.shared.cacheOnly || DebugLaunchOptions.blocksImageGeneration || !EnvironmentService.shared.hasValidCredentials
     }
 
     @MainActor
@@ -288,6 +288,54 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
 
     // MARK: - Advance
 
+    /// Reserve a distinct picture well ahead of the audio deadline. A slow generator
+    /// can finish normally while the local cache or bundled art covers this edit.
+    func reserveForFill(excluding currentID: UUID?) async -> DisplayItem? {
+        #if DEBUG
+        if DebugLaunchOptions.testPattern || (DebugLaunchOptions.testImagePath != nil && DebugLaunchOptions.testImageDirectoryFiles == nil) { return nil }
+        #endif
+        #if os(visionOS)
+        while let item = imageBuffer.takePending() {
+            if currentID == nil || item.id != currentID {
+                return DisplayItem(id: item.id, cgImage: item.image, image: nil, metadata: item.metadata)
+            }
+        }
+        #else
+        while let item = await state.removeFirst() {
+            if currentID == nil || item.id != currentID { return item }
+        }
+        #endif
+        let recent = await state.recent()
+        let files = store.imageFiles().filter { $0.id != currentID }
+        let fresh = files.filter { !recent.suffix(4).contains($0.id) }
+        for file in (fresh.isEmpty ? files : fresh).shuffled().prefix(3) {
+            if let item = await makeDisplayItem(store.entry(id: file.id, url: file.url)) { return item }
+        }
+        return nil
+    }
+
+    func standbyImage(index: Int) -> DisplayItem? {
+        #if DEBUG
+        if DebugLaunchOptions.testPattern || DebugLaunchOptions.testImagePath != nil { return nil }
+        #endif
+        let name = index.isMultiple(of: 2) ? "LiminalLightning" : "LiminalMushrooms"
+        guard let url = Bundle.main.url(forResource: name, withExtension: "jpg"),
+              let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let cg = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
+        return DisplayItem(id: nil, cgImage: cg, image: Self.platformImage(cg), metadata: nil)
+    }
+
+    @MainActor
+    func showReserved(_ item: DisplayItem) {
+        imageBuffer.storeCurrent(item.cgImage, metadata: item.metadata, id: item.id)
+        currentMetadata = item.metadata
+        currentImage = item.image
+        Task {
+            await state.noteShown(item.id)
+            queuedCount = await pendingCount()
+        }
+    }
+
     private func advanceAsync() async {
         #if os(visionOS)
         let advanced = imageBuffer.advanceFromQueue()
@@ -306,7 +354,7 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
         await state.noteShown(item.id)
         let following = await state.first()
         let remaining = await state.count()
-        imageBuffer.store(current: item.cgImage, next: following?.cgImage, metadata: item.metadata)
+        imageBuffer.store(current: item.cgImage, next: following?.cgImage, metadata: item.metadata, id: item.id)
         await MainActor.run {
             self.currentImage = item.image
             self.nextImage = following?.image
@@ -330,9 +378,9 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
     private func enqueue(_ item: DisplayItem) async {
         #if os(visionOS)
         if imageBuffer.hasCurrent() {
-            imageBuffer.queuePending(item.cgImage, metadata: item.metadata)
+            imageBuffer.queuePending(item.cgImage, metadata: item.metadata, id: item.id)
         } else {
-            imageBuffer.storeCurrent(item.cgImage, metadata: item.metadata)
+            imageBuffer.storeCurrent(item.cgImage, metadata: item.metadata, id: item.id)
             await state.noteShown(item.id)
             await MainActor.run { self.currentMetadata = item.metadata }
         }
@@ -341,7 +389,7 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
         await MainActor.run { self.queuedCount = pending }
         #else
         if imageBuffer.loadCurrent() == nil {
-            imageBuffer.storeCurrent(item.cgImage, metadata: item.metadata)
+            imageBuffer.storeCurrent(item.cgImage, metadata: item.metadata, id: item.id)
             await state.noteShown(item.id)
             await MainActor.run {
                 self.currentImage = item.image

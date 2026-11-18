@@ -17,6 +17,7 @@ nonisolated struct MusicModulation: Sendable, Equatable {
     var energy: Float = 0.4
     /// Onset envelope, fast follower (90 ms attack, 450 ms release): colour and glow.
     var pulseColor: Float = 0
+    var fillAccent: Float = 0
     /// Onset envelope, slow follower (180 ms attack, 900 ms release): geometry.
     var pulseMotion: Float = 0
     /// Smoothed shimmer return level 0...1.

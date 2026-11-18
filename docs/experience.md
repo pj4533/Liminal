@@ -36,15 +36,15 @@ If Gemini reports a billing error, Liminal cycles through cached images while it
 
 ## Lo-Fi
 
-Choose **Lo-Fi** in the Music section. Set the **BPM** and optionally pin a **Scale**. Changes wait for a 16-bar boundary. Each installed drum take plays in its original order for all 16 bars, with tempo and pitch changing together to fit the selected BPM. The next take is selected around that tempo.
+Choose **Lo-Fi** in the Music section. Set the **BPM** and optionally pin a **Scale**. Changes wait for a 16-bar boundary. Each installed drum take plays in its original order for all 16 bars, with tempo and pitch changing together to fit the selected BPM. The next take is selected around that tempo. Lo-Fi gets the next picture ready ahead of each eight-bar boundary. If the queue and cache have no different image ready, two bundled Liminal pictures can alternate offline. When you press Play, **Preparing beat…** is shown until the music is ready. The image effects and archival footage start with the music clock.
 
-A short piano, pipe organ, or plucked-string idea comes back after a variation and a stretch of space for the film. Deep bass and occasional chord swells mark the changes. The acoustic program stays with the drum take, while beat-synced echoes, rooms, grains, and softer tape and shimmer colors evolve across it. The music leaves room for footage, and the mix gently lowers the accompaniment when the film’s speech band becomes active. See [instrument recordings](lofi-samples.md) for sources.
+A piano hook opens each take. A plucked instrument and a sustained pipe organ take turns answering it before the piano returns. A two-beat pickup swells into the drummer’s eight-bar fill. Both the main image and the film dissolve across the following downbeat as the accompaniment drops away. The last bar of the take builds for four beats, then a quicker change of both pictures, a brief lift in bloom and color, and the returning piano mark the next drum take. Melody and midrange accompaniment feed crossed beat echoes, a short plate and a longer hall, reversed fragments, and pitched replays that follow the scale. Some phrases replay soft fragments of their own effects. The character shifts between grain clouds, resonance, tape color, and spectral holds, with long tails and a softened upper range.
 
 For a private build with the Slow Burn Vol. 3 pack, copy the original `AJ_HALL_DRUM_BREAK_*.wav` files from the pack’s `DRUM BREAKS!` folder into `Liminal/SlowBurnDrums/` before building. Xcode copies those local files into the app, and playback checks the labeled tempo against each recording’s length to recover its beat grid. The recordings and any local beat-grid catalog are ignored by Git. A build without sample files can also use the verified library from an earlier install on that device, or play the generated accompaniment without drums.
 
 The 25 verified recordings each span 16 bars. Liminal plays each break in its original order at a nearby tempo and chooses the next break after one pass.
 
-Ambient and the footage soundtrack share slowly changing phasing and a second echo that feeds the reverb. In Lo-Fi, both footage echo taps follow the beat. Activity in the film’s speech band gently lowers the pitched music and effects while the bass and drums keep their level. The bass makes a little room for strong kicks. The film, instruments, and rhythm share light compression and bounded loudness adjustment at the output.
+Ambient and the footage soundtrack share slowly changing phasing and a second echo that feeds the reverb. In Lo-Fi, the footage voices sit a little further forward. Echo patterns change every four bars, with a main echo, a darker stereo answer, and a reflection that opens into the room. The spacing follows the drums and the taps swell and fade as the pattern changes. The bass makes a little room for strong kicks. The film, instruments, and rhythm share light compression and bounded loudness adjustment at the output.
 
 An excerpt whose audio falls below the silence threshold can play with visuals alone. The music continues while Liminal waits for the next footage cue.
 
@@ -64,7 +64,7 @@ An excerpt whose audio falls below the silence threshold can play with visuals a
 | **Reset Generation Counts** | Starts the rolling hourly and daily usage counts at zero. Future generations still count toward the configured limits. |
 | **Clear All Images** | Wipes every cached image after confirmation and restarts generation |
 | **Archive footage** | Old film always woven subtly into the scene (on by default); turning it off fades picture and sound out in 2 s |
-| **Change speed** | Slow / Medium / Fast: a new piece of film drifts in every 20-30 / 12-20 / 8-12 s (default Medium) |
+| **Change speed** | Ambient changes film every 20–30, 12–20, or 8–12 seconds (Slow, Medium, Fast). Lo-Fi follows the eight-bar drum fills. |
 | **Footage audio** | Level of the film's own sound when a piece brings it, 0 = silent, 50% = the tuned default, 100% = +6 dB |
 | **Clear Footage** | Deletes the cached films (keeps the ones on screen) |
 | **Reset All Settings** | Restores defaults |

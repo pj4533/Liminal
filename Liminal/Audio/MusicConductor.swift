@@ -129,13 +129,14 @@ nonisolated final class MusicConductor: @unchecked Sendable {
 
     // MARK: - Realtime
 
-    func start(archiveBeatDuration: Double? = nil) {
+    func start(archiveBeatDuration: Double? = nil, pattern: MixBus.ArchiveEchoPattern = .straight) {
         queue.async { [self] in
             runToken += 1
             let token = runToken
             let wasArchiveOnly = archiveOnly
             archiveOnly = archiveBeatDuration != nil
-            mix.syncDelay(toBeatDuration: archiveBeatDuration)
+            archive?.setBeatLocked(archiveOnly)
+            mix.syncDelay(toBeatDuration: archiveBeatDuration, pattern: pattern, now: scheduler.now)
             if began, !stopping {
                 if archiveOnly && !wasArchiveOnly {
                     scheduler.cancelAll()
@@ -168,10 +169,10 @@ nonisolated final class MusicConductor: @unchecked Sendable {
         }
     }
 
-    func updateArchiveTempo(beatDuration: Double) {
+    func updateArchiveTempo(beatDuration: Double, phrase: Int, seed: UInt64) {
         queue.async { [self] in
             guard archiveOnly, began, !stopping else { return }
-            mix.syncDelay(toBeatDuration: beatDuration)
+            mix.syncDelay(toBeatDuration: beatDuration, pattern: .choose(seed: seed, phrase: phrase), now: scheduler.now)
         }
     }
 
@@ -203,10 +204,11 @@ nonisolated final class MusicConductor: @unchecked Sendable {
     // MARK: - Offline
 
     /// Offline start at conductor time 0 on the calling thread (no timer, no queue).
-    func beginOffline(archiveBeatDuration: Double? = nil) {
+    func beginOffline(archiveBeatDuration: Double? = nil, pattern: MixBus.ArchiveEchoPattern = .straight) {
         realtime = false
         archiveOnly = archiveBeatDuration != nil
-        mix.syncDelay(toBeatDuration: archiveBeatDuration)
+        archive?.setBeatLocked(archiveOnly)
+        mix.syncDelay(toBeatDuration: archiveBeatDuration, pattern: pattern)
         begin(at: 0)
     }
 

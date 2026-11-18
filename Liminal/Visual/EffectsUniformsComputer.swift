@@ -146,7 +146,7 @@ enum EffectsUniformsComputer {
             feedbackWarpAmount: min(max(0.03 + a * 0.01 * music.air, 0.03), Caps.feedbackWarp) * tb.feedbackWarpMul,
             feedbackMix: feedback,
             bloomRadius: 0.04 * tb.bloomRadiusMul,
-            bloomAmount: min(max(bloomBase + a * (0.12 * music.pulseColor + 0.10 * music.shimmer), bloomBase),
+            bloomAmount: min(max(bloomBase + a * (0.12 * music.pulseColor + 0.10 * music.shimmer + 0.18 * music.fillAccent), bloomBase),
                              Caps.bloom * bloomBase / 0.5) + tb.bloomAdd,
             stereoOffset: 0,
             logSphereAmount: logSphere,
@@ -156,7 +156,7 @@ enum EffectsUniformsComputer {
         uniforms.tunnelStrength = tunnelStrength
         uniforms.outgoingZoomScale = outgoingZoomScale
         let vib = computeVibrance(time: time, imageFactor: vibrance.amount)
-            + a * 0.06 * music.pulseColor * vibrance.amount
+            + a * (0.06 * music.pulseColor + 0.07 * music.fillAccent) * vibrance.amount
         uniforms.vibranceAmount = min(max(vib, 0), Caps.vibrance * vibrance.amount)
         uniforms.blackPoint = baseBlackPoint * vibrance.dark
         if inTransition {
