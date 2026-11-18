@@ -154,8 +154,7 @@ extension ContentView {
                 }
 
                 ControlSection(title: "Music", systemImage: "music.note") {
-                    StylePicker(style: $settings.style)
-                    ScalePicker(selection: settings.scaleSelection)
+                    MusicModeControls(settings: settings, audio: audioEngine)
                 }
 
                 ControlSection(title: "Visuals", systemImage: "sparkles") {

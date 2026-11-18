@@ -12,10 +12,11 @@ extension GenerativeEngine {
     ///   - configure: optional hook run before the render starts (set sliders, scale, etc.)
     ///   - onStep: optional hook called with the render time before every 20 ms step (timed controls, e.g.
     ///     the archive footage sound in `MusicRenderTests`).
-    func renderOffline(seconds: Double, to url: URL, limiterBypassed: Bool = false,
+    func renderOffline(seconds: Double, to url: URL, limiterBypassed: Bool = false, archiveBeatDuration: Double? = nil,
                        configure: ((GenerativeEngine) -> Void)? = nil,
                        onStep: ((Double) -> Void)? = nil) throws {
         configure?(self)
+        outputCeiling.avAudioNode.auAudioUnit.shouldBypassEffect = limiterBypassed
         conductor.post(.limiterBypass(limiterBypassed))
         let log = ScoreLog()
         conductor.scoreLog = log
@@ -27,7 +28,7 @@ extension GenerativeEngine {
         try av.enableManualRenderingMode(.offline, format: format, maximumFrameCount: 4096)
         av.reset()
         try engine.start()
-        conductor.beginOffline()
+        conductor.beginOffline(archiveBeatDuration: archiveBeatDuration)
         log.key(0, conductor.field)
 
         let settings: [String: Any] = [

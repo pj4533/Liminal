@@ -467,7 +467,6 @@ struct ImmersiveDomeView: View {
             var reactor = MusicReactor(strength: DebugLaunchOptions.syncStrength)
             var activityThrottle = VisualActivityThrottle()
             var lastSyncLogTime = Date.distantPast
-            let musicBus = music.musicState
             // Effect look (docs/plans/effects-balance.md 7.3): intensity eased toward the setting,
             // image age from the start of the current crossfade.
             var intensitySmoother = EffectIntensitySmoother()
@@ -626,6 +625,7 @@ struct ImmersiveDomeView: View {
                 let transitionProgress = transitionState.isTransitioning ? transitionState.transitionProgress : 0
                 // Music -> visuals: one seqlock read and ~10 one-pole updates. visionOS has no un-synced
                 // hue drift (baseHueRate 0). Frozen time bypasses the reactor (deterministic captures).
+                let musicBus = music.musicState
                 let modulation: MusicModulation
                 if DebugLaunchOptions.freezeTime != nil {
                     modulation = .neutral

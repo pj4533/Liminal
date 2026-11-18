@@ -143,6 +143,32 @@ nonisolated enum ArchiveAudioMath {
         }
         return y
     }
+
+    /// RMS from the speech band, read by the music mixer at 10 Hz.
+    static let activityWindow = 0.08
+
+    static func activity(_ buffer: AVAudioPCMBuffer) -> [Float] {
+        guard let mono = buffer.floatChannelData?[0] else { return [] }
+        let rate = buffer.format.sampleRate
+        let block = max(1, Int(activityWindow * rate))
+        let slow = Float(1 - exp(-2 * .pi * 230 / rate))
+        let fast = Float(1 - exp(-2 * .pi * 3_300 / rate))
+        var lower: Float = 0
+        var upper: Float = 0
+        let frames = Int(buffer.frameLength)
+        return stride(from: 0, to: frames, by: block).map { start in
+            let end = min(start + block, frames)
+            var energy: Float = 0
+            for i in start..<end {
+                lower += slow * (mono[i] - lower)
+                upper += fast * (mono[i] - upper)
+                let speech = upper - lower
+                energy += speech * speech
+            }
+            let rms = sqrtf(energy / Float(end - start))
+            return min(1, max(0, (rms - 0.007) * 30))
+        }
+    }
 }
 
 /// Reads a segment's audio track into one buffer in the engine's format (plan 4). Off the main actor.

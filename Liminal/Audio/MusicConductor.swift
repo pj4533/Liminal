@@ -1,6 +1,7 @@
 import AudioKit
 import Foundation
 import OSLog
+import Synchronization
 
 /// Controls posted from any thread; drained at the start of every `advance`.
 nonisolated enum MusicControl {
@@ -36,6 +37,8 @@ nonisolated final class MusicConductor: @unchecked Sendable {
     private let rare: RareEventDirector
     /// The archive film's sound (nil in harnesses that build a conductor without it).
     private let archive: ArchiveVoice?
+    private let archiveActivityBits = Atomic<UInt32>(0)
+    var archiveActivity: Float { Float(bitPattern: archiveActivityBits.load(ordering: .relaxed)) }
     private let accentStrips: [LayerStrip]
     private var archiveDuck: Float = 0
 
@@ -73,6 +76,8 @@ nonisolated final class MusicConductor: @unchecked Sendable {
     private var modulateCount = 0
     private(set) var began = false
     private var realtime = false
+    private var archiveOnly = false
+    private var stopping = false
 
     // Perf
     private var tickCount = 0
@@ -124,9 +129,27 @@ nonisolated final class MusicConductor: @unchecked Sendable {
 
     // MARK: - Realtime
 
-    func start() {
+    func start(archiveBeatDuration: Double? = nil) {
         queue.async { [self] in
             runToken += 1
+            let token = runToken
+            let wasArchiveOnly = archiveOnly
+            archiveOnly = archiveBeatDuration != nil
+            mix.syncDelay(toBeatDuration: archiveBeatDuration)
+            if began, !stopping {
+                if archiveOnly && !wasArchiveOnly {
+                    scheduler.cancelAll()
+                    for layer in layers { layer.silence(fade: 0.38, ctx: ctx) }
+                    queue.asyncAfter(deadline: .now() + 0.45) { [self] in
+                        guard runToken == token else { return }
+                        for layer in layers { layer.powerDown() }
+                    }
+                } else if wasArchiveOnly && !archiveOnly {
+                    begin(at: scheduler.now, preservingArchive: true)
+                }
+                return
+            }
+            stopping = false
             timer?.cancel(); timer = nil
             realtime = true
             timeOffset = scheduler.now
@@ -145,12 +168,21 @@ nonisolated final class MusicConductor: @unchecked Sendable {
         }
     }
 
+    func updateArchiveTempo(beatDuration: Double) {
+        queue.async { [self] in
+            guard archiveOnly, began, !stopping else { return }
+            mix.syncDelay(toBeatDuration: beatDuration)
+        }
+    }
+
     func stop(fade: Double = 2.0) {
         queue.async { [self] in
             runToken += 1
             let token = runToken
+            stopping = true
             for l in layers { l.silence(fade: fade, ctx: ctx) }
             archive?.end(fade: fade, now: scheduler.now)
+            archiveActivityBits.store(0, ordering: .relaxed)
             mix.setMaster(0, over: fade)
             queue.asyncAfter(deadline: .now() + fade + 0.5) { [self] in
                 guard token == runToken else { return }
@@ -171,15 +203,19 @@ nonisolated final class MusicConductor: @unchecked Sendable {
     // MARK: - Offline
 
     /// Offline start at conductor time 0 on the calling thread (no timer, no queue).
-    func beginOffline() {
+    func beginOffline(archiveBeatDuration: Double? = nil) {
         realtime = false
+        archiveOnly = archiveBeatDuration != nil
+        mix.syncDelay(toBeatDuration: archiveBeatDuration)
         begin(at: 0)
     }
 
     // MARK: - Core
 
-    private func begin(at t: Double) {
+    private func begin(at t: Double, preservingArchive: Bool = false) {
         scheduler.reset(to: t)
+        if !preservingArchive { archive?.reset(now: t) }
+        began = true
         drainInbox()
         scenes.removeAll()
         hysteresis.removeAll()
@@ -188,19 +224,18 @@ nonisolated final class MusicConductor: @unchecked Sendable {
             for st in l.allStrips { st.swell(to: 1, over: 0, now: t) }
         }
         rare.reset(at: t)
-        archive?.reset(now: t)
         archiveDuck = 0
         updateMixAutomation(at: 0)
         mix.setSpace(space, delayAmount: delayAmount, brightness: 0.5, shimmerScale: shimmerScale, over: 0.05)
         ctx.delayScale = mix.delaySendScale
-        mix.setMaster(MusicConductor.masterGain, over: 3)
+        mix.setMaster(MusicConductor.masterGain, over: preservingArchive ? 0 : 3)
+        lastModulate = -1
+        if archiveOnly { return }
         lastKeyMove = t
         sessionStart = t
         keyInterval = rng.range(180...360)
-        began = true
         startScene(at: t)
         scheduleChord(from: t)
-        lastModulate = -1
         modulate(t)
     }
 
@@ -212,6 +247,16 @@ nonisolated final class MusicConductor: @unchecked Sendable {
         drainInbox()
         guard began else { return }
         scheduler.advance(to: time)
+        if archiveOnly {
+            if time - lastModulate >= 0.0999 {
+                let dt = lastModulate < 0 ? 0.1 : time - lastModulate
+                lastModulate = time
+                modulateArchive(at: time)
+                mix.modulate(t: time, dt: dt)
+                for layer in layers { for strip in layer.allStrips { strip.tick(now: time) } }
+            }
+            return
+        }
         if time - lastModulate >= 0.0999 { modulate(time) }
         let dt = DispatchTime.now().uptimeNanoseconds &- t0
         tickCount += 1; tickTotalNs &+= dt
@@ -250,11 +295,11 @@ nonisolated final class MusicConductor: @unchecked Sendable {
             if let change = harmony.setPinned(s) { broadcast(change); logKey() }
             if s != nil { keyInterval = .infinity } else if keyInterval == .infinity { keyInterval = rng.range(180...360); lastKeyMove = scheduler.now }
         case .visualMood(let m): ctx.coupling.setTarget(m)
-        case .imageDidChange(let d): imageDidChange(transition: d)
+        case .imageDidChange(let d): if !archiveOnly { imageDidChange(transition: d) }
         case .visualActivity(let a): activityTarget = min(max(a, 0), 1)
         case .limiterBypass(let b): mix.limiterBypassed = b
         case .forceLayers(let ids): forced = ids
-        case .archiveBegin(let cue): if began { archive?.begin(cue, now: scheduler.now) }
+        case .archiveBegin(let cue): if began && !stopping { archive?.begin(cue, now: scheduler.now) }
         case .archiveEnd(let fade): archive?.end(fade: fade, now: scheduler.now)
         case .archiveGain(let g): archive?.setGain(g)
         }
@@ -437,7 +482,7 @@ nonisolated final class MusicConductor: @unchecked Sendable {
             emit(.rareEvent, layer: .drone, midi: Int(k.rawValue), velocity: 1)
             scoreLog?.rare(t, k)
         }
-        archive?.modulate(t: t)
+        modulateArchive(at: t)
         // Leave the bass and sustained beds in place. Make room in the midrange while a film speaks.
         let targetDuck = archive?.presence ?? 0
         let duckTime = targetDuck > archiveDuck ? 0.8 : 2.8
@@ -458,6 +503,11 @@ nonisolated final class MusicConductor: @unchecked Sendable {
 
         publish(t)
         if modulateCount % 10 == 0 { scoreLog?.sample(t, intensity: intensity, brightness: ctx.brightness, layers: layers) }
+    }
+
+    private func modulateArchive(at t: Double) {
+        archive?.modulate(t: t)
+        archiveActivityBits.store((archive?.speechActivity ?? 0).bitPattern, ordering: .relaxed)
     }
 
     /// Soften the upper part of the brightness range for the accent filters and reverb.

@@ -53,7 +53,8 @@ struct ArchiveFootageSection: View {
 
             ValueSlider(title: "Footage audio", value: $settings.archiveAudioLevel,
                         minimumLabel: "Off", maximumLabel: "Louder",
-                        explanation: "The film’s sound drifts between echo, reverb, and clearer voices at original or slowed speed. 0% is silent.")
+                        explanation: settings.musicMode == .lofi ? "A clear echo repeats on the Lo-Fi beat, with a softer offbeat reflection."
+                            : "The film’s sound drifts between echo, reverb, and clearer voices at original or slowed speed. 0% is silent.")
                 .disabled(!settings.archiveEnabled)
 
             Label(status, systemImage: "info.circle")

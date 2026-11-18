@@ -18,6 +18,7 @@ nonisolated final class ArchiveVoice {
         let label: String
         /// Seeded by the footage piece so successive cues vary in how clearly they emerge.
         var claritySeed: Float = 0.75
+        var activity: [Float] = []
     }
 
     /// Node wrapper for an `AVAudioPlayerNode` (AudioKit's `AudioPlayer` adds a mixer and file handling we
@@ -32,6 +33,7 @@ nonisolated final class ArchiveVoice {
     let highpass: HighPassButterworthFilter
     let lowpass: LowPassButterworthFilter
     let lowpass2: LowPassButterworthFilter
+    private let spectralSweep: Phaser
     let strip: LayerStrip
     /// The format every cue buffer must have (the engine's format when the graph was built).
     let format: AVAudioFormat
@@ -72,6 +74,7 @@ nonisolated final class ArchiveVoice {
         let clarity: Contour
         let room: Contour
         let echo: Contour
+        let movement: Contour
 
         init(seed: Float, duration: Double) {
             var rng = MusicRNG(seed: UInt64(seed.bitPattern))
@@ -79,12 +82,15 @@ nonisolated final class ArchiveVoice {
             clarity = Contour(segments: segments + rng.int(0...2), range: 0.42...1, rng: &rng)
             room = Contour(segments: segments + rng.int(0...2), range: 0.95...1.85, rng: &rng)
             echo = Contour(segments: segments + rng.int(0...2), range: 0.95...1.95, rng: &rng)
+            movement = Contour(segments: segments + rng.int(0...2), range: 0.12...0.86, rng: &rng)
         }
     }
 
     private var cueStart = 0.0
     private var cueDuration = 1.0
     private var cueMix: CueMix?
+    private var activityEnvelope: [Float] = []
+    private(set) var speechActivity: Float = 0
 
     private var playing = false
     private var stopAt: Double?
@@ -103,14 +109,17 @@ nonisolated final class ArchiveVoice {
         highpass = HighPassButterworthFilter(source, cutoffFrequency: Self.highpassHz)
         lowpass = LowPassButterworthFilter(highpass, cutoffFrequency: Self.lowpassHz)
         lowpass2 = LowPassButterworthFilter(lowpass, cutoffFrequency: Self.lowpassHz)
-        strip = LayerStrip(source: source, filter: lowpass2, trim: Self.baseTrim, reverb: Self.reverbSend,
+        spectralSweep = Phaser(lowpass2, notchMinimumFrequency: 200, notchMaximumFrequency: 1300,
+                               notchWidth: 510, vibratoMode: 0, depth: 0.52, feedback: 0.12,
+                               lfoBPM: 28, dryWetMix: 0.12)
+        strip = LayerStrip(source: source, filter: spectralSweep, trim: Self.baseTrim, reverb: Self.reverbSend,
                            delay: Self.delaySend, pan: 0, dry: Self.dryGain)
         setFilters(running: false)
     }
 
     /// The filters are bypassed (no DSP) while nothing plays.
     private func setFilters(running: Bool) {
-        for n in [highpass, lowpass, lowpass2] as [Node] { if running { n.start() } else { n.stop() } }
+        for n in [highpass, lowpass, lowpass2, spectralSweep] as [Node] { if running { n.start() } else { n.stop() } }
     }
 
     /// Start a segment. If another one is still audible it fades out over 0.4 s first.
@@ -138,6 +147,7 @@ nonisolated final class ArchiveVoice {
         cueStart = now
         cueDuration = max(1, seconds - 1)
         cueMix = CueMix(seed: cue.claritySeed, duration: cueDuration)
+        activityEnvelope = cue.activity
         updateMix(progress: 0)
         p.scheduleBuffer(cue.buffer, at: nil, options: [], completionHandler: nil)
         p.play()
@@ -178,6 +188,7 @@ nonisolated final class ArchiveVoice {
         stopAt = nil
         endAt = nil
         label = nil
+        speechActivity = 0
         setFilters(running: false)
     }
 
@@ -201,6 +212,8 @@ nonisolated final class ArchiveVoice {
             }
         }
         strip.tick(now: t)
+        let window = Int(max(0, t - cueStart) / ArchiveAudioMath.activityWindow)
+        speechActivity = playing && activityEnvelope.indices.contains(window) ? presence * activityEnvelope[window] : 0
     }
 
     private func updateMix(progress: Double) {
@@ -211,7 +224,10 @@ nonisolated final class ArchiveVoice {
         let wetScale = 1 - 0.18 * value
         let reverb = cueMix.room.value(at: progress) * wetScale
         let echo = cueMix.echo.value(at: progress) * wetScale
-        let cutoff = Self.lowpassHz + 2100 * value
+        let cutoff = Self.lowpassHz + 1650 * value
+        let motion = cueMix.movement.value(at: progress)
+        ParamRamp.set(spectralSweep.$notchMaximumFrequency, 900 + 970 * motion, over: 0.13)
+        ParamRamp.set(spectralSweep.$dryWetMix, 0.05 + 0.49 * motion * (1 - 0.55 * value), over: 0.13)
         ParamRamp.set(highpass.$cutoffFrequency, Self.highpassHz - 110 * value, over: 0.12)
         ParamRamp.set(lowpass.$cutoffFrequency, cutoff, over: 0.12)
         ParamRamp.set(lowpass2.$cutoffFrequency, cutoff, over: 0.12)

@@ -15,6 +15,8 @@ final class SettingsService: ObservableObject {
     private enum Keys {
         static let scale = "audio.scale"
         static let style = "audio.style"
+        static let musicMode = "audio.musicMode"
+        static let lofi = "audio.lofi"
         static let scaleAuto = "audio.scaleAuto"
         static let imageInterval = "visual.imageInterval"
         static let cacheOnly = "visual.cacheOnly"
@@ -55,6 +57,14 @@ final class SettingsService: ObservableObject {
     /// Music style (Drift, Glass, Deep, Garden).
     @Published var style: MusicStyle.ID {
         didSet { defaults.set(style.rawValue, forKey: Keys.style) }
+    }
+
+    @Published var musicMode: MusicMode {
+        didSet { defaults.set(musicMode.rawValue, forKey: Keys.musicMode) }
+    }
+
+    @Published var lofi: LofiOptions {
+        didSet { defaults.set(try? JSONEncoder().encode(lofi), forKey: Keys.lofi) }
     }
 
     /// true = "Auto (evolving)" harmony; false = `currentScale` is pinned.
@@ -135,6 +145,8 @@ final class SettingsService: ObservableObject {
         self.currentScale = ScaleType.allCases.first { $0.rawValue == savedScaleName } ?? Self.defaultScale
 
         self.style = MusicStyle.ID(rawValue: defaults.string(forKey: Keys.style) ?? "") ?? Self.defaultStyle
+        self.musicMode = MusicMode(rawValue: defaults.string(forKey: Keys.musicMode) ?? "") ?? .ambient
+        self.lofi = defaults.data(forKey: Keys.lofi).flatMap { try? JSONDecoder().decode(LofiOptions.self, from: $0) } ?? LofiOptions()
         self.scaleAuto = defaults.object(forKey: Keys.scaleAuto) as? Bool ?? Self.defaultScaleAuto
 
         // -LiminalImageInterval (DEBUG) wins; assigning in init does not run didSet, so it is not saved.
@@ -164,6 +176,8 @@ final class SettingsService: ObservableObject {
     func resetToDefaults() {
         currentScale = Self.defaultScale
         style = Self.defaultStyle
+        musicMode = .ambient
+        lofi = LofiOptions()
         scaleAuto = Self.defaultScaleAuto
         imageInterval = Self.defaultImageInterval
         cacheOnly = Self.defaultCacheOnly

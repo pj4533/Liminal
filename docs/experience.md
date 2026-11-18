@@ -4,7 +4,7 @@
 
 ## Features
 
-- **Generative Audio**: eight-layer synthesized ambient engine (drone, pad, lead, keys, drips, air, grains, pluck) with evolving scenes, key drift, rare events and four styles (Drift, Glass, Deep, Garden); no samples. See `decisions/music.md`
+- **Generative audio**: Ambient has eight synthesis layers, evolving harmony and four styles. Lo-Fi composes keys, bass and melodies around recordings from AJ Hall’s Slow Burn Vol. 3 when available. See `decisions/music.md` for the Ambient engine.
 - **AI Visuals**: Gemini image generation (gemini-nano-banana-2.1, the configured primary model, 3:2 at 2K; hourly and daily spending cap) driven by a style/subject/transformation/palette prompt system for varied, photoreal-but-surreal imagery. See `decisions/images.md`
 - **GPU Effects**: one Metal fragment shader with Ken Burns motion, turbulence distortion, chromatic aberration, a family of 12 image transitions that hide the swap inside a surge of the live effects (picked without repeats, docs/decisions/transitions.md), hue shifts, ghost taps, stochastic bloom, feedback warping and a final vibrance stage that keeps colors vivid; a slow clarity cycle and a strain budget keep the image recognisable, scaled by the Effect intensity setting
 - **Audio-visual coupling**: the music drives the visuals (note glow, scene intensity, chord-tied hue, ghost-tap burst on scene change) and each new image sends a mood (brightness, warmth, saturation, energy, mood words) back to the music. A "Sync visuals to music" switch turns the music-to-visuals direction off. See `decisions/av-coupling.md`
@@ -34,10 +34,24 @@ Liminal can sample a fresh excerpt from a cached film before generating the next
 
 If Gemini reports a billing error, Liminal cycles through cached images while it waits to retry. The first retry is after about a minute, with longer pauses if billing errors continue. Restarting Liminal clears the pause.
 
+## Lo-Fi
+
+Choose **Lo-Fi** in the Music section. **BPM** is the only Lo-Fi setting and takes effect at a phrase boundary. Groove, note density, tape texture, ambience, and drum level drift across beats. Archive footage keeps its visual effects and evolving audio treatment. A clear echo repeats once per beat, with a softer half-beat reflection feeding the reverb. Clarity and slowdown continue to vary.
+
+Slow swells and deep bass surround isolated notes and small melodic figures. Every four bars the lead changes pattern and instrument, rotating through 12 sampled organs, pianos, strings, winds, brass, and pitched mallets. The order reshuffles without repeating an instrument family back to back. The effects shuffle independently, taking turns emphasizing grain clouds, tuned resonances, tape textures, and held notes. Brief beat-synced echoes and effects tails carry into the next phrase. See [instrument recordings](lofi-samples.md) for sources.
+
+For a private build with the Slow Burn Vol. 3 pack, copy the original `AJ_HALL_DRUM_BREAK_*.wav` files from the pack’s `DRUM BREAKS!` folder into `Liminal/SlowBurnDrums/` before building. Xcode copies those local files into the app, and playback checks the labeled tempo against each recording’s length to recover its beat grid. The recordings and any local beat-grid catalog are ignored by Git. A build without sample files can also use the verified library from an earlier install on that device, or play with keys, bass, and melody alone.
+
+The 25 verified recordings each span 16 bars. Liminal plays each break in its original order at a nearby tempo and chooses the next break after one pass.
+
+Ambient and the footage soundtrack share slowly changing phasing and a second echo that feeds the reverb. In Lo-Fi, both footage echo taps follow the beat. Activity in the film’s speech band gently lowers the pitched music and effects while the bass and drums keep their level. The voices, music, and rhythm share light compression at the output.
+
 ## Controls
 
 | Control | Effect |
 |--------|--------|
+| **Music mode** | Ambient or Lo-Fi |
+| **BPM** | Lo-Fi playback tempo |
 | **Style** | Drift, Glass, Deep or Garden music palette |
 | **Scale** | "Auto (evolving)" lets key and mode drift; choosing a scale pins it |
 | **Effect intensity** | How far the effects bend the picture, Subtle to Wild (default 50%). The effects breathe between clear and wild stretches over minutes, and each new image starts clear. See `decisions/effects-balance.md` |

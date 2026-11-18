@@ -82,6 +82,10 @@ Secrets.xcconfig
 # External binaries (RIFE, etc) - too large for git
 External/
 
+# AJ Hall's locally owned drum recordings for private builds
+/Liminal/SlowBurnDrums/
+/Liminal/Audio/Lofi/SlowBurnBeatGrid.json
+
 ## Claude Code local state
 .claude/
 

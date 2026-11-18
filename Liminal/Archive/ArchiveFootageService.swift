@@ -261,6 +261,7 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
                 self?.shared.withLock { s in if s.audio?.token == token { s.audio?.ended = true } }
                 return
             }
+            let activity = ArchiveAudioMath.activity(buffer)
             let seconds = Double(buffer.frameLength) / buffer.format.sampleRate
             LMLog.audio.info("📼🔊 decoded \(String(format: "%.1f", seconds), privacy: .public)s in \(String(format: "%.0f", (Self.uptime() - t0) * 1000), privacy: .public) ms")
             let due = start + cue.beginAt
@@ -277,7 +278,7 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
             }
             guard let g else { return }
             sink.post(.archiveBegin(ArchiveVoice.Cue(buffer: buffer, gain: g, fadeIn: max(1, cue.fadeIn - max(late, 0)),
-                                                     label: title, claritySeed: piece.seed)))
+                                                     label: title, claritySeed: piece.seed, activity: activity)))
             if late > 0.1 { LMLog.audio.warning("📼🔊 sound started \(String(format: "%.2f", late), privacy: .public)s late") }
         }
     }

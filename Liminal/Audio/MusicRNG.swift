@@ -46,6 +46,22 @@ nonisolated struct MusicRNG: RandomNumberGenerator {
         return weights.count - 1
     }
     mutating func pick<T>(_ items: [T]) -> T { items[int(0...(items.count - 1))] }
+
+    /// Each cycle visits every choice. Reshuffle on wrap without repeating the boundary item.
+    func shuffledCycle<T: Equatable>(_ choices: [T], index: Int) -> T {
+        precondition(choices.count >= 3 && index >= 0)
+        let cycle = index / choices.count
+        let offset = index % choices.count
+        var rng = fork(UInt64(cycle))
+        var items = choices.shuffled(using: &rng)
+        if cycle > 0 {
+            var previous = fork(UInt64(cycle - 1))
+            let last = choices.shuffled(using: &previous).last
+            // Only the first two slots are swapped, so the last slot is always reproducible.
+            if last == items[0] { items.swapAt(0, 1) }
+        }
+        return items[offset]
+    }
     /// Symmetric jitter: value * (1 +- amount)
     mutating func jitter(_ value: Double, _ amount: Double) -> Double { value * (1 + range(-amount...amount)) }
 }

@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 import AVFoundation
+import AudioKit
 @testable import Liminal
 
 /// Archive footage sound (docs/plans/archive-video.md 4, A27): the cue timing against its piece, the level
@@ -112,7 +113,51 @@ struct ArchiveAudioMathTests {
 @MainActor
 struct ArchiveVoiceRenderTests {
 
-    @Test func cuePlaysFadesAndStops() throws {
+    @Test(arguments: [63.0, 78.0]) func footageEchoFollowsTheBeatGrid(bpm: Double) throws {
+        let engine = GenerativeEngine(seed: 3)
+        let format = engine.archiveFormat
+        let rate = format.sampleRate
+        let grid = LofiClock(tempo: bpm, sampleRate: rate)
+        let length = AVAudioFrameCount(rate * 4)
+        let buffer = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: length))
+        buffer.frameLength = length
+        for channel in 0..<Int(format.channelCount) {
+            for i in 0..<Int(length) {
+                let t = Double(i) / rate
+                buffer.floatChannelData![channel][i] = (0.5...0.56).contains(t)
+                    ? 0.20 * Float(sin(2 * .pi * 540 * t)) : 0
+            }
+        }
+        let cue = ArchiveVoice.Cue(buffer: buffer, gain: 1, fadeIn: 0.15, label: "echo probe")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("archive-echo-\(UUID()).wav")
+        defer {
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.removeItem(at: url.deletingPathExtension().appendingPathExtension("score.json"))
+        }
+        var posted = false
+        try engine.renderOffline(seconds: 6, to: url, archiveBeatDuration: grid.beatDuration, configure: { engine in
+            engine.mix.dryBus.volume = 0
+            engine.mix.mutedReturns = ["reverb", "shimmer"]
+        }, onStep: { t in
+            if !posted, t >= 1 { posted = true; engine.post(.archiveBegin(cue)) }
+        })
+        let file = try AVAudioFile(forReading: url)
+        let pcm = try #require(AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)))
+        try file.read(into: pcm)
+        let channel = try #require(pcm.floatChannelData)[0]
+        func peak(from: Double, to: Double) -> Float {
+            (Int(from * rate)..<Int(to * rate)).reduce(0) { max($0, abs(channel[$1])) }
+        }
+        let repeatTime = 1.5 + grid.beatDuration * LofiClock.footageEchoBeats
+        let earlier = peak(from: 1.4, to: repeatTime - 0.08)
+        let firstEcho = peak(from: repeatTime - 0.04, to: repeatTime + 0.09)
+        let secondEcho = peak(from: repeatTime * 2 - 1.55, to: repeatTime * 2 - 1.40)
+        #expect(earlier < 0.0001)
+        #expect(firstEcho > 0.001)
+        #expect(secondEcho > 0.0005 && secondEcho < firstEcho)
+    }
+
+    @Test(arguments: [false, true]) func cuePlaysFadesAndStops(syncedToLofi: Bool) throws {
         let engine = GenerativeEngine(seed: 3)
         let fmt = engine.archiveFormat
         let sr = fmt.sampleRate
@@ -122,7 +167,8 @@ struct ArchiveVoiceRenderTests {
         for c in 0..<Int(fmt.channelCount) {
             for i in 0..<Int(n) { buf.floatChannelData![c][i] = 0.05 * sinf(2 * .pi * 400 * Float(i) / Float(sr)) }
         }
-        let cue = ArchiveVoice.Cue(buffer: buf, gain: 1, fadeIn: 1, label: "tone")
+        let cue = ArchiveVoice.Cue(buffer: buf, gain: 1, fadeIn: 1, label: "tone",
+                                   activity: ArchiveAudioMath.activity(buf))
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("archive-voice-\(UUID().uuidString).wav")
         defer {
             try? FileManager.default.removeItem(at: url)
@@ -130,14 +176,21 @@ struct ArchiveVoiceRenderTests {
         }
         var begun = false, ended = false
         var playingAt5 = false
-        try engine.renderOffline(seconds: 14, to: url, configure: { e in
-            for l in e.layers { l.allStrips.forEach { $0.trim = 0 } }   // the archive stem only
+        var speechDetected = false
+        let grid = LofiClock(tempo: 74, sampleRate: sr)
+        try engine.renderOffline(seconds: 14, to: url, archiveBeatDuration: syncedToLofi ? grid.beatDuration : nil, configure: { e in
+            if !syncedToLofi {
+                for l in e.layers { l.allStrips.forEach { $0.trim = 0 } }
+            }
         }, onStep: { t in
             if !begun, t >= 1 { begun = true; engine.post(.archiveBegin(cue)) }
             if t >= 5, !playingAt5 { playingAt5 = engine.archive.isPlaying && engine.archive.level > 0.99 }
+            if t >= 5, engine.conductor.archiveActivity > 0.3 { speechDetected = true }
             if !ended, t >= 6 { ended = true; engine.post(.archiveEnd(fade: 1)) }
         })
         #expect(playingAt5)
+        #expect(speechDetected)
+        #expect(engine.conductor.archiveActivity == 0)
         #expect(!engine.archive.isPlaying)          // stopped after its fade
         let file = try AVAudioFile(forReading: url)
         let pcm = try #require(AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)))

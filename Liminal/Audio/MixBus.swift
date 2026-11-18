@@ -21,6 +21,10 @@ nonisolated final class MixBus {
     let delayFilter: LowPassButterworthFilter
     let delayReturn: Fader
     let delayToReverb: Fader
+    let reflection: VariableDelay
+    let reflectionToReverb: Fader
+    let spacePhaser: Phaser
+    let spaceMovement: Fader
     let shimmerHP: HighPassButterworthFilter
     let shimmerLP: LowPassButterworthFilter
     let shimmerVerb: CostelloReverb
@@ -42,10 +46,14 @@ nonisolated final class MixBus {
     private(set) var delayAmount: Float = 0.5
 
     private let baseDelayTime: Float
+    private var syncedDelayTime: Float?
+    private var delaySettings = (feedback: Float(0.4), gain: dbToGain(-10), cutoff: Float(2400), input: Float(2000))
     /// Shimmer return (linear) before the bloom envelope; published as `MusicState.shimmerLevel`.
     private(set) var shimmerLevel: Float = 0
     private var shimmerBloom = SoftEnv(0)
     private var wowPhase = 0.0, flutterPhase = 0.0
+    private let spaceDrift = ParameterDrift.Channel(period: 47, phase: 0.6)
+    private let widthDrift = ParameterDrift.Channel(period: 71, phase: 2.1)
 
     init(layers: [LayerStrip], delayTime: Float) {
         baseDelayTime = delayTime
@@ -64,18 +72,26 @@ nonisolated final class MixBus {
         delayReturn = Fader(delayFilter, gain: dbToGain(-10))
         delayToReverb = Fader(delayReturn, gain: 0.5)
         reverbBus.addInput(delayToReverb)
+        reflection = VariableDelay(delayPreFilter, time: delayTime * 0.61, feedback: 0.19,
+                                   maximumTime: 10, dryWetMix: 1)
+        reflectionToReverb = Fader(reflection, gain: 0.22)
+        reverbBus.addInput(reflectionToReverb)
         reverb = ZitaReverb(reverbBus, predelay: 60, crossoverFrequency: 200, lowReleaseTime: 4.8,
                             midReleaseTime: 8, dampingFrequency: 2400, dryWetMix: 1)
         // Filter the late tail so short accents leave a soft wash behind.
         reverbLP = LowPassButterworthFilter(reverb, cutoffFrequency: 2900)
         reverbReturn = Fader(reverbLP, gain: dbToGain(-5))
+        spacePhaser = Phaser(reverbReturn, notchMinimumFrequency: 190, notchMaximumFrequency: 940,
+                             notchWidth: 440, vibratoMode: 0, depth: 0.45, feedback: 0.1,
+                             lfoBPM: 28, dryWetMix: 1)
+        spaceMovement = Fader(spacePhaser, gain: 0.12)
         // Halo (D92, was the octave-up shimmer of D12/D57): the reverb send, band-limited to 300 Hz-1.8 kHz,
         // into its own long Costello tail. No pitch shifter: an octave up of every note was the opposite of calm.
         shimmerHP = HighPassButterworthFilter(reverbBus, cutoffFrequency: 300)
         shimmerLP = LowPassButterworthFilter(shimmerHP, cutoffFrequency: 1800)
         shimmerVerb = CostelloReverb(shimmerLP, balance: 1, feedback: 0.93, cutoffFrequency: 2500)
         shimmerReturn = Fader(shimmerVerb, gain: 0)
-        master = Mixer(dryBus, reverbReturn, delayReturn, shimmerReturn)
+        master = Mixer(dryBus, reverbReturn, delayReturn, shimmerReturn, spaceMovement)
         highpass = HighPassButterworthFilter(master, cutoffFrequency: 28)
         lowpass = LowPassButterworthFilter(highpass, cutoffFrequency: 5400)
         masterTrim = Fader(lowpass, gain: 0)
@@ -119,10 +135,21 @@ nonisolated final class MixBus {
     }
 
     func setDelay(feedback: Float, returnGain: Float, cutoff: Float, preCutoff: Float, over: Double) {
-        ParamRamp.set(delay.$feedback, feedback, over: over)
-        ParamRamp.set(delayPreFilter.$cutoffFrequency, preCutoff, over: over)
-        ParamRamp.setGain(delayReturn, mutedReturns.contains("delay") ? 0 : returnGain, over: over)
-        ParamRamp.set(delayFilter.$cutoffFrequency, cutoff, over: over)
+        delaySettings = (feedback, returnGain, cutoff, preCutoff)
+        applyDelaySettings(over: over)
+    }
+
+    private func applyDelaySettings(over: Double) {
+        let synced = syncedDelayTime != nil
+        let settings = delaySettings
+        let gain = mutedReturns.contains("delay") ? 0 : settings.gain
+        // Lead with the quarter-note repeat. Keep its later repeats and the offbeat wash softer.
+        ParamRamp.set(delay.$feedback, settings.feedback * (synced ? 0.78 : 1), over: over)
+        ParamRamp.set(delayPreFilter.$cutoffFrequency, settings.input * (synced ? 1.36 : 1), over: over)
+        ParamRamp.set(delayFilter.$cutoffFrequency, settings.cutoff * (synced ? 1.11 : 1), over: over)
+        ParamRamp.setGain(delayReturn, gain * (synced ? 1.52 : 1), over: over)
+        ParamRamp.setGain(delayToReverb, synced ? 0.38 : 0.50, over: over)
+        ParamRamp.setGain(reflectionToReverb, gain * (synced ? 0.54 : 0.66), over: over)
     }
 
     /// Halo return target (linear), at or below -14 dB except during a bloom (up to -10 dB).
@@ -142,6 +169,16 @@ nonisolated final class MixBus {
     /// Current shimmer return (linear), for MusicState.
     private(set) var shimmerOut: Float = 0
 
+    /// Lo-Fi uses a quarter-note echo. Tape wow only moves the Ambient delay.
+    func syncDelay(toBeatDuration beatDuration: Double?) {
+        let time = beatDuration.map { Float($0 * LofiClock.footageEchoBeats) }
+        guard time != syncedDelayTime else { return }
+        syncedDelayTime = time
+        ParamRamp.set(delay.$time, time ?? baseDelayTime, over: 0)
+        ParamRamp.set(reflection.$time, beatDuration.map { Float($0 * LofiClock.footageReflectionBeats) } ?? baseDelayTime * 0.61, over: 0)
+        applyDelaySettings(over: 0.09)
+    }
+
     /// 10 Hz: tape wow on the delay time (0.2 % at 0.41 Hz plus 0.06 % at 0.13 Hz), and the
     /// shimmer return with its bloom envelope.
     func modulate(t: Double, dt: Double) {
@@ -149,10 +186,16 @@ nonisolated final class MixBus {
         let b = shimmerBloom.tick(t)
         let g = mutedReturns.contains("shimmer") ? 0 : shimmerLevel + (dbToGain(-10) - shimmerLevel) * b
         if abs(g - shimmerOut) > 1e-5 { ParamRamp.setGain(shimmerReturn, g, over: 0.12); shimmerOut = g }
-        wowPhase += dt * 2 * .pi * 0.41
-        flutterPhase += dt * 2 * .pi * 0.13
-        let wow = 0.002 * sin(wowPhase) + 0.0006 * sin(flutterPhase + 1)
-        ParamRamp.set(delay.$time, baseDelayTime * Float(1 + wow), over: 0.11)
+        let color = spaceDrift.value(at: t), width = widthDrift.value(at: t)
+        ParamRamp.set(spacePhaser.$notchMaximumFrequency, 960 + 320 * color, over: 0.15)
+        ParamRamp.set(spacePhaser.$depth, 0.48 + 0.22 * width, over: 0.15)
+        ParamRamp.setGain(spaceMovement, 0.14 + 0.10 * color, over: 0.15)
+        if syncedDelayTime == nil {
+            wowPhase += dt * 2 * .pi * 0.41
+            flutterPhase += dt * 2 * .pi * 0.13
+            let wow = 0.002 * sin(wowPhase) + 0.0006 * sin(flutterPhase + 1)
+            ParamRamp.set(delay.$time, baseDelayTime * Float(1 + wow), over: 0.11)
+        }
     }
 
     /// Start/stop fades.

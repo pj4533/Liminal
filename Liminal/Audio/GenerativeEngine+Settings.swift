@@ -5,5 +5,7 @@ extension GenerativeEngine {
     func apply(_ settings: SettingsService) {
         style = settings.style
         pinnedScale = settings.pinnedScale
+        applyLofi(settings.lofi)
+        musicMode = settings.musicMode
     }
 }
