@@ -54,7 +54,7 @@ nonisolated struct LofiEffects {
         let presence = min(1, 13 * leadPresence)
         let echoA = echoL.read()
         let echoB = echoR.read()
-        let feedback = min(0.56, profile.feedback * 0.68 + 0.14 * space)
+        let feedback = min(0.64, profile.feedback * 0.79 + 0.17 * space)
         let scatter = particleTap.read()
         let grainL = grains.left * profile.particles
         let grainR = grains.right * profile.particles
@@ -71,12 +71,12 @@ nonisolated struct LofiEffects {
         let bloomL = pulseL * cloud.left
         let bloomR = pulseR * cloud.right
         let wash = room.process(
-            texture.left + 0.18 * lead.left + 0.39 * echoA + 0.45 * grainL + scatter + bloomL,
-            texture.right + 0.18 * lead.right + 0.39 * echoB + 0.45 * grainR - scatter + bloomR
+            0.72 * texture.left + 0.57 * lead.left + 0.47 * echoA + 0.61 * grainL + scatter + bloomL,
+            0.72 * texture.right + 0.57 * lead.right + 0.47 * echoB + 0.61 * grainR - scatter + bloomR
         )
         // Keep the attack legible, then let repeats and grains become the foreground.
-        let echoGain = 0.57 + 0.19 * space - 0.15 * presence
-        let roomGain = profile.diffusion * (0.78 + 0.74 * space - 0.28 * presence)
+        let echoGain = 0.72 + 0.24 * space - 0.19 * presence
+        let roomGain = profile.diffusion * (1.06 + 0.79 * space - 0.28 * presence)
         let pan = 0.21 * profile.stereo * (sinf(orbit * 0.73) + 0.42 * sinf(orbit * 2.39))
         return (echoGain * echoA + roomGain * wash.left + (0.49 + pan) * grainL + scatter + animated.left + 0.25 * bloomL,
                 echoGain * echoB + roomGain * wash.right + (0.49 - pan) * grainR - scatter + animated.right + 0.25 * bloomR)
@@ -194,31 +194,43 @@ nonisolated struct LofiEffects {
         }
     }
 
-    /// A four-line Hadamard feedback delay network. Independent decay gains give the
-    /// unequal paths the same nominal reverb time and the dampers soften each pass.
-    private struct Room {
+    /// Predelay leaves the piano attack exposed before the diffused four-line tail blooms.
+    struct Room {
+        private var preL: Delay, preR: Delay
+        private var diffuseL: Delay, diffuseR: Delay
         private var a: Delay, b: Delay, c: Delay, d: Delay
         private let ga: Float, gb: Float, gc: Float, gd: Float
 
         init(rate: Double) {
-            let lengths = (0.0383, 0.0537, 0.0679, 0.0881)
-            a = Delay(frames: Int(lengths.0 * rate), damping: 0.24)
-            b = Delay(frames: Int(lengths.1 * rate), damping: 0.20)
-            c = Delay(frames: Int(lengths.2 * rate), damping: 0.23)
-            d = Delay(frames: Int(lengths.3 * rate), damping: 0.19)
-            ga = Float(pow(0.001, lengths.0 / 6.6))
-            gb = Float(pow(0.001, lengths.1 / 6.6))
-            gc = Float(pow(0.001, lengths.2 / 6.6))
-            gd = Float(pow(0.001, lengths.3 / 6.6))
+            preL = Delay(frames: Int(rate * 0.034), damping: 0.62)
+            preR = Delay(frames: Int(rate * 0.041), damping: 0.62)
+            diffuseL = Delay(frames: Int(rate * 0.0119), damping: 1)
+            diffuseR = Delay(frames: Int(rate * 0.0167), damping: 1)
+            let lengths = (0.0511, 0.0677, 0.0839, 0.1061)
+            a = Delay(frames: Int(lengths.0 * rate), damping: 0.47)
+            b = Delay(frames: Int(lengths.1 * rate), damping: 0.42)
+            c = Delay(frames: Int(lengths.2 * rate), damping: 0.45)
+            d = Delay(frames: Int(lengths.3 * rate), damping: 0.39)
+            ga = Float(pow(0.001, lengths.0 / 8.2))
+            gb = Float(pow(0.001, lengths.1 / 8.2))
+            gc = Float(pow(0.001, lengths.2 / 8.2))
+            gd = Float(pow(0.001, lengths.3 / 8.2))
         }
 
         mutating func process(_ left: Float, _ right: Float) -> Stereo {
+            let inputL = preL.read(), inputR = preR.read()
+            preL.write(left)
+            preR.write(right)
+            let l = diffuseL.read() - 0.61 * inputL
+            let r = diffuseR.read() - 0.61 * inputR
+            diffuseL.write(inputL + 0.61 * l)
+            diffuseR.write(inputR + 0.61 * r)
             let w = a.read(), x = b.read(), y = c.read(), z = d.read()
-            a.write(0.31 * left + 0.5 * ga * (w + x + y + z))
-            b.write(0.31 * right + 0.5 * gb * (w - x + y - z))
-            c.write(0.24 * left + 0.5 * gc * (w + x - y - z))
-            d.write(-0.24 * right + 0.5 * gd * (w - x - y + z))
-            return (0.4 * (w + x - 0.65 * y), 0.4 * (y - z + 0.65 * x))
+            a.write(0.36 * l + 0.5 * ga * (w + x + y + z))
+            b.write(0.36 * r + 0.5 * gb * (w - x + y - z))
+            c.write(0.29 * (l + 0.2 * r) + 0.5 * gc * (w + x - y - z))
+            d.write(-0.29 * (r + 0.2 * l) + 0.5 * gd * (w - x - y + z))
+            return (0.48 * (w + x - 0.62 * y), 0.48 * (y - z + 0.64 * x))
         }
     }
 }

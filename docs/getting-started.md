@@ -26,6 +26,10 @@
 
 4. Build and run (Cmd-R). Pick the macOS or visionOS destination.
 
+## Play Lo-Fi
+
+Choose **Lo-Fi** in the Music section and set the BPM. The app bundles the acoustic instruments and generates the melodies and bass. For a private build with your own Slow Burn Vol. 3 recordings, follow the [optional drum setup](experience.md#lo-fi) before building.
+
 
 ## Build from the command line
 

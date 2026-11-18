@@ -38,8 +38,10 @@ nonisolated enum LofiSpectralHold {
                 let window = sin(.pi * u)
                 let bend = sin(u * (7 + Double(partial))) * 0.22
                 let wave = Float(sin(omega * (1 + detune) * Double(i) + phase + bend) * window * window)
-                result.left[start + i] += strength * wave * pan
-                result.right[start + i] += strength * wave * (1 - pan)
+                let shimmer = frequency < 750
+                    ? 0.34 * Float(sin(2 * omega * (1 - detune) * Double(i) - phase + bend) * window * window * window) : 0
+                result.left[start + i] += strength * (wave * pan + shimmer * (1 - pan))
+                result.right[start + i] += strength * (wave * (1 - pan) + shimmer * pan)
             }
         }
     }

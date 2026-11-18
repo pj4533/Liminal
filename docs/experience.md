@@ -4,7 +4,7 @@
 
 ## Features
 
-- **Generative audio**: Ambient has eight synthesis layers, evolving harmony and four styles. Lo-Fi composes keys, bass and melodies around recordings from AJ Hall’s Slow Burn Vol. 3 when available. See `decisions/music.md` for the Ambient engine.
+- **Generative audio** includes Ambient with eight synthesis layers and four styles, and [Lo-Fi](#lo-fi) with sampled acoustic pianos and plucked strings, deep bass, and optional local drum recordings. The [music decision record](decisions/music.md) covers the Ambient engine.
 - **AI Visuals**: Gemini image generation (gemini-nano-banana-2.1, the configured primary model, 3:2 at 2K; hourly and daily spending cap) driven by a style/subject/transformation/palette prompt system for varied, photoreal-but-surreal imagery. See `decisions/images.md`
 - **GPU Effects**: one Metal fragment shader with Ken Burns motion, turbulence distortion, chromatic aberration, a family of 12 image transitions that hide the swap inside a surge of the live effects (picked without repeats, docs/decisions/transitions.md), hue shifts, ghost taps, stochastic bloom, feedback warping and a final vibrance stage that keeps colors vivid; a slow clarity cycle and a strain budget keep the image recognisable, scaled by the Effect intensity setting
 - **Audio-visual coupling**: the music drives the visuals (note glow, scene intensity, chord-tied hue, ghost-tap burst on scene change) and each new image sends a mood (brightness, warmth, saturation, energy, mood words) back to the music. A "Sync visuals to music" switch turns the music-to-visuals direction off. See `decisions/av-coupling.md`
@@ -38,7 +38,7 @@ If Gemini reports a billing error, Liminal cycles through cached images while it
 
 Choose **Lo-Fi** in the Music section. **BPM** is the only Lo-Fi setting and takes effect at a phrase boundary. Groove, note density, tape texture, ambience, and drum level drift across beats. Archive footage keeps its visual effects and evolving audio treatment. A clear echo repeats once per beat, with a softer half-beat reflection feeding the reverb. Clarity and slowdown continue to vary.
 
-Slow swells and deep bass surround clear, softly voiced melodic figures. Every four bars the lead changes pattern and instrument, rotating through sampled grand, upright, and electric pianos, two organs, cello, and pizzicato viola. The order reshuffles without repeating an instrument family back to back. The effects shuffle independently. Crossed echoes and grain clouds feed a stereo ensemble and a long reverb, with overlapping one-beat and beat-and-a-half swells. Resonance, tape textures, and held notes drift in and out, and tails carry between phrases. See [instrument recordings](lofi-samples.md) for sources.
+Slow swells and deep bass surround short acoustic phrases. Every four bars the lead alternates between Steinway grand, Knight upright, or Yamaha upright piano and plucked cello, viola, or harp. The recordings shuffle within each family. The dry melody stays audible under a fuller effects layer. Crossed beat-synced echoes and grain clouds feed a stereo ensemble and long, diffused reverb. The attacks come through before the room blooms, and soft octave shimmer carries into the next phrase. Two filters shift the tail’s midrange together and narrow around bright peaks. See [instrument recordings](lofi-samples.md) for sources.
 
 For a private build with the Slow Burn Vol. 3 pack, copy the original `AJ_HALL_DRUM_BREAK_*.wav` files from the pack’s `DRUM BREAKS!` folder into `Liminal/SlowBurnDrums/` before building. Xcode copies those local files into the app, and playback checks the labeled tempo against each recording’s length to recover its beat grid. The recordings and any local beat-grid catalog are ignored by Git. A build without sample files can also use the verified library from an earlier install on that device, or play with keys, bass, and melody alone.
 
@@ -46,14 +46,16 @@ The 25 verified recordings each span 16 bars. Liminal plays each break in its or
 
 Ambient and the footage soundtrack share slowly changing phasing and a second echo that feeds the reverb. In Lo-Fi, both footage echo taps follow the beat. Activity in the film’s speech band gently lowers the pitched music and effects while the bass and drums keep their level. The voices, music, and rhythm share light compression at the output.
 
+An excerpt whose audio falls below the silence threshold can play with visuals alone. The music continues while Liminal waits for the next footage cue.
+
 ## Controls
 
 | Control | Effect |
 |--------|--------|
 | **Music mode** | Ambient or Lo-Fi |
 | **BPM** | Lo-Fi playback tempo |
-| **Style** | Drift, Glass, Deep or Garden music palette |
-| **Scale** | "Auto (evolving)" lets key and mode drift; choosing a scale pins it |
+| **Style** | Ambient palette. Choose Drift, Glass, Deep, or Garden. |
+| **Scale** | Ambient harmony. Auto lets key and mode drift. Choosing a scale pins it. |
 | **Effect intensity** | How far the effects bend the picture, Subtle to Wild (default 50%). The effects breathe between clear and wild stretches over minutes, and each new image starts clear. See `decisions/effects-balance.md` |
 | **Sync visuals to music** | Music drives hue, motion, bloom and ghost bursts (on by default) |
 | **Debug effect** | Debug visualization of the effect (macOS panel) |

@@ -3,7 +3,9 @@ import Foundation
 
 /// Builds the dry rhythm and the wet instruments off the audio thread.
 nonisolated enum LofiRenderer {
-    static let leadGain: Float = 1.38
+    private static let dryLeadGain: Float = 1.31
+    private static let wetGain: Float = 1.76
+
     struct Tail: Sendable {
         let clock: LofiClock
         let left: [Float]
@@ -47,7 +49,8 @@ nonisolated enum LofiRenderer {
         left.initialize(repeating: 0)
         right.initialize(repeating: 0)
 
-        let tailCount = clock.frame(at: 6)
+        let tailBeats = 8.0
+        let tailCount = clock.frame(at: tailBeats)
         let frames = n + tailCount
         let quiet = [Float](repeating: 0, count: frames)
         var lead = (left: quiet, right: quiet)
@@ -78,9 +81,11 @@ nonisolated enum LofiRenderer {
         let gesture = LofiEffects.Gesture.selection(seed: drift.seed, phrase: phrase)
         var effectRNG = MusicRNG(seed: drift.seed).fork(UInt64(phrase) + 450)
         let effectSeed = effectRNG.next()
+        let filterPhase = effectRNG.rangeF(0...(2 * .pi))
+        let filterRate = effectRNG.pick([Float.pi / 4, Float.pi / 6, Float.pi / 8])
         let grains = LofiEffects.granulate(lead, score: score, clock: clock, frames: frames, seed: effectSeed,
                                            gesture: gesture)
-        let automation = (0...Int(LofiClock.beats + 6)).map { drift.at(startBeat + Double($0)) }
+        let automation = (0...Int(LofiClock.beats + tailBeats)).map { drift.at(startBeat + Double($0)) }
         if let recording {
             addDrums(recording, clock: clock, startBeat: drumStartBeat, levels: automation.map(\.drums),
                      left: left, right: right)
@@ -103,24 +108,26 @@ nonisolated enum LofiRenderer {
             let space = lerp(automation[beat].space, automation[beat + 1].space, u)
             let dryLead = (lead.left[frame], lead.right[frame])
             let dryTexture = (texture.left[frame], texture.right[frame])
-            let wet = wetTone.process(effects.process(lead: dryLead, texture: dryTexture,
-                                                      grains: (grains.left[frame], grains.right[frame]), space: space))
+            let wash = effects.process(lead: dryLead, texture: dryTexture,
+                                       grains: (grains.left[frame], grains.right[frame]), space: space)
+            let sweep = 0.5 + 0.5 * sinf(Float(position) * filterRate + filterPhase)
+            let wet = wetTone.process(wash, sweep: sweep, space: space)
             if frame < n {
                 let dust = lerp(automation[beat].dust, automation[beat + 1].dust, u)
                 hiss += 0.10 * (rng.rangeF(-1...1) - hiss)
                 let previous: LofiEffects.Stereo = carry?.sample(frame, at: clock) ?? (0, 0)
                 let envelope = min(1, Float(min(frame, n - 1 - frame)) / Float(edge))
                 let musicScale: Float = 0.92
-                music[0][frame] = musicScale * headroom(Self.leadGain * dryLead.0 + 0.37 * dryTexture.0
-                                       + wet.left + previous.left + hiss * 0.007 * dust) * envelope
-                music[1][frame] = musicScale * headroom(Self.leadGain * dryLead.1 + 0.37 * dryTexture.1
-                                        + wet.right + previous.right + hiss * 0.007 * dust) * envelope
+                music[0][frame] = musicScale * headroom(Self.dryLeadGain * dryLead.0 + 0.37 * dryTexture.0
+                                       + Self.wetGain * wet.left + previous.left + hiss * 0.007 * dust) * envelope
+                music[1][frame] = musicScale * headroom(Self.dryLeadGain * dryLead.1 + 0.37 * dryTexture.1
+                                        + Self.wetGain * wet.right + previous.right + hiss * 0.007 * dust) * envelope
                 left[frame] = headroom(left[frame]) * envelope
                 right[frame] = headroom(right[frame]) * envelope
             } else {
                 let fade = min(1, Float(frames - 1 - frame) / tailFade)
-                tailL[frame - n] = wet.left * fade
-                tailR[frame - n] = wet.right * fade
+                tailL[frame - n] = Self.wetGain * wet.left * fade
+                tailR[frame - n] = Self.wetGain * wet.right * fade
             }
         }
         return Phrase(buffer: buffer, musicBuffer: musicBuffer, clock: clock, score: score, drumName: recording?.entry.name,

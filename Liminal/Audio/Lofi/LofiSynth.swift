@@ -11,7 +11,7 @@ nonisolated enum LofiSynth {
         let omega = 2 * Double.pi * frequency / rate
         let attack: Double, release: Double, gain: Float, pan: Float
         switch note.part {
-        case .bass: (attack, release, gain, pan) = (0.075, 0.55, 0.26, 0)
+        case .bass: (attack, release, gain, pan) = (0.075, 0.55, 0.326, 0)
         case .texture: (attack, release, gain, pan) = (1.35, 2.7, 0.076, Float(note.midi % 5 - 2) * 0.28)
         case .lead: return
         }

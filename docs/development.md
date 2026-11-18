@@ -2,6 +2,10 @@
 
 [← Project overview](../README.md) · [Documentation index](README.md)
 
+## Lo-Fi checks
+
+Run `xcodebuild test -scheme Liminal -destination 'platform=macOS' -only-testing:LiminalTests/LofiTests` for sample selection, beat-grid reading, phrase joins, and effect tails. `ArchiveVoiceRenderTests` measures footage echo timing and checks playback and fades. Start with `-audio.musicMode lofi -LiminalAutoPlay YES -LiminalVideoOffline YES` for a cached-footage test. The audio log lists the active lead preset and drum break as they change.
+
 ## Debug launch flags (DEBUG builds only, compiled out of Release)
 
 Pass as launch arguments, for example `-LiminalAutoPlay YES`. Defined in `Liminal/Utils/DebugLaunchOptions.swift`.

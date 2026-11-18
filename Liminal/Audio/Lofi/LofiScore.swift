@@ -147,9 +147,15 @@ nonisolated struct LofiScore: Sendable, Equatable {
         let leadPhrase = Int(startBeat / LofiClock.beats)
         let preset = LofiPreset.selection(seed: drift.seed, phrase: leadPhrase)
         var melody = MusicRNG(seed: seed).fork(UInt64(leadPhrase) + 808)
-        let contour = melody.pick([[0, 2, 1, 4, 2], [4, 2, 3, 0, 1], [1, 3, 4, 2, 0], [0, 4, 2, 1, 3]])
-        let call = melody.pick([[1.5, 3], [0.75, 2.25, 3.75], [1, 2.5], [2.25]])
-        let reply = melody.pick([[8.5, 10.25], [9.25], [8.25, 10.5], [9.5]])
+        let strings = preset.family == .strings
+        let contour = melody.pick(strings
+            ? [[0, 4, 2], [2, 0, 1], [4, 2, 0], [0, 2, 4]]
+            : [[0, 2, 1, 4, 2], [4, 2, 3, 0, 1], [1, 3, 4, 2, 0], [0, 4, 2, 1, 3]])
+        let call = melody.pick(strings
+            ? [[0.5, 2, 4], [1, 2.75, 4.75], [1.5, 3.5], [2]]
+            : [[1.5, 3], [0.75, 2.25, 3.75], [1, 2.5], [2.25]])
+        let reply = melody.pick(strings ? [[8.5, 10.25], [9.0], [8.25, 10.0], [9.75]]
+                                        : [[8.5, 10.25], [9.25], [8.25, 10.5], [9.5]])
         let groups = breakdown ? [[6.75, 9.0]] : (melody.chance(0.80) ? [call, reply] : [call])
         for (group, events) in groups.enumerated() {
             let degree = scale.firstIndex(of: group == 0 ? root : nextRoot) ?? 0
@@ -158,7 +164,7 @@ nonisolated struct LofiScore: Sendable, Equatable {
                 let pitch = center + scale[(degree + offset) % 7] + 12 * ((degree + offset) / 7)
                 let midi = pitch > 68 ? pitch - 12 : pitch
                 let feel = drift.at(startBeat + beat)
-                let length = melody.range(0.32...0.68)
+                let length = melody.range(strings ? 0.23...0.48 : 0.32...0.68)
                 let color = Double(feel.space * 0.70 + feel.density * 0.30)
                 notes.append(.init(part: .lead, midi: midi, beat: beat + Double(feel.groove) * 0.042,
                                    length: length, velocity: (step == 0 ? 0.61 : 0.51) + 0.14 * feel.density,

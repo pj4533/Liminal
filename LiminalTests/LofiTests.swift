@@ -46,14 +46,14 @@ struct LofiTests {
     }
 
     @Test func wetTonePreservesMidsAndTamesSharpPeaks() {
-        func transfer(_ frequency: Double, amplitude: Float) -> Float {
+        func transfer(_ frequency: Double, amplitude: Float, sweep: Float = 0.5) -> Float {
             let rate = 48_000.0
             var tone = LofiWetTone(sampleRate: rate)
             var energy: Float = 0
             var source: Float = 0
             for i in 0..<Int(rate * 0.14) {
                 let input = amplitude * Float(sin(Double(i) * 2 * .pi * frequency / rate))
-                let output = tone.process((input, input)).left
+                let output = tone.process((input, input), sweep: sweep).left
                 if i > 1500 {
                     energy += output * output
                     source += input * input
@@ -67,12 +67,15 @@ struct LofiTests {
         #expect(mids > 0.85)
         #expect(loudAir < 0.5 * mids)
         #expect(softAir > loudAir)
+        #expect(transfer(5_500, amplitude: 0.20, sweep: 1) < 0.5 * mids)
+        #expect(transfer(1_450, amplitude: 0.05, sweep: 1) >
+                transfer(1_450, amplitude: 0.05, sweep: 0))
     }
 
     @Test func everyFourBarsGetsANewSampledInstrumentFamily() throws {
         let drift = LofiDrift(seed: 312)
-        let presets = (0..<9).map { LofiPreset.selection(seed: drift.seed, phrase: $0) }
-        #expect(Set(presets.map(\.name)).count == 7)
+        let presets = (0..<6).map { LofiPreset.selection(seed: drift.seed, phrase: $0) }
+        #expect(Set(presets.map(\.name)).count == 6)
         #expect(zip(presets, presets.dropFirst()).allSatisfy { $0.family != $1.family })
         let bank = LofiSampleBank.bundled
         var signatures = Set<[Float]>()
@@ -85,7 +88,7 @@ struct LofiTests {
             #expect(sample.pcm.contains { abs($0) >= 0.05 })
             signatures.insert(Array(sample.pcm[400..<440]))
         }
-        #expect(signatures.count == 7)
+        #expect(signatures.count == 6)
     }
 
     @Test func instrumentAndEffectCyclesReshuffleWithoutBackToBackRepeats() {
@@ -97,11 +100,11 @@ struct LofiTests {
         }
         let families = instruments(19)
         let gestures = effects(19)
-        #expect(families != instruments(20))
         #expect(gestures != effects(20))
+        let presets = (0..<48).map { LofiPreset.selection(seed: 19, phrase: $0).name }
+        #expect(presets != (0..<48).map { LofiPreset.selection(seed: 20, phrase: $0).name })
+        #expect(Array(presets.prefix(6)) != Array(presets[6..<12]))
         let size = LofiPreset.Family.allCases.count
-        let familyOrders = stride(from: 0, to: families.count, by: size).map { Array(families[$0..<($0 + size)]) }
-        #expect(Set(familyOrders).count > 1)
         #expect(Array(gestures.prefix(4)) != Array(gestures[4..<8]))
         for seed in 0..<20 as Range<UInt64> {
             let f = instruments(seed), e = effects(seed)
@@ -114,6 +117,23 @@ struct LofiTests {
                 #expect(Set(e[start..<(start + 4)]).count == 4)
             }
         }
+    }
+
+    @Test func roomBloomsAfterTheAttackAndHasASustainedTail() {
+        let rate = 8_000.0
+        var room = LofiEffects.Room(rate: rate)
+        var lateEnergy: Float = 0
+        var heardBeforePredelay = false
+        for frame in 0..<Int(rate * 3.0) {
+            let signal = frame < 640 ? sinf(2 * .pi * 420 * Float(frame) / Float(rate)) * 0.1 : 0
+            let wet = room.process(signal, signal * 0.6)
+            if frame < Int(rate * 0.034) && (wet.left != 0 || wet.right != 0) {
+                heardBeforePredelay = true
+            }
+            if frame >= Int(rate * 1.5) { lateEnergy += wet.left * wet.left + wet.right * wet.right }
+        }
+        #expect(!heardBeforePredelay)
+        #expect(lateEnergy > 0.00001)
     }
 
     @Test func aRenderedPhraseActuallyUsesTheSelectedSamples() throws {

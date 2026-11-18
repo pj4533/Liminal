@@ -26,11 +26,11 @@ Liminal pairs evolving ambient music with surreal AI imagery, flowing visual eff
 
 ## An atmosphere that keeps changing
 
-- **Evolving soundscapes** — slow Ambient scenes or original Lo-Fi arrangements with automatic mix variation and support for AJ Hall drum breaks.
+- **Two music modes** — slow Ambient scenes, or Lo-Fi with sampled acoustic pianos and plucked strings, deep bass, and optional locally supplied drum breaks. In Lo-Fi, layered echoes, reverb, and octave shimmer follow the music, and the film soundtrack echoes in time with the beat.
 - **Living imagery** — generated scenes blend through fluid effects that respond to the music.
 - **Immersive space** — depth gives the imagery relief as it wraps around you on Vision Pro.
 - **Traces of old film** — Vintage films from the Internet Archive weave texture, movement, and occasional sound into the scene.
-- **Make it yours** — choose a music style and scale, adjust footage volume and visual intensity, and set image-generation limits.
+- **Make it yours** — choose an Ambient style and scale or set the Lo-Fi BPM. Adjust footage volume, visual intensity, and image-generation limits.
 
 <details>
 <summary>See the macOS app</summary>
@@ -59,6 +59,7 @@ See the [setup guide](docs/getting-started.md) for environment-key configuration
 | Guide | What you’ll find |
 | --- | --- |
 | [Experience & controls](docs/experience.md) | Features, settings, and playback behavior |
+| [Lo-Fi instrument recordings](docs/lofi-samples.md) | Acoustic sample sources and credits |
 | [Architecture](docs/architecture.md) | Music, image and rendering pipelines; dependencies |
 | [Development](docs/development.md) | Tests, launch flags, scripts, and contribution guidance |
 | [Design decisions](docs/decisions/README.md) | The reasoning behind the experience |

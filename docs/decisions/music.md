@@ -1,5 +1,7 @@
 # Music workstream: summary for review
 
+This record covers the Ambient engine. See [Lo-Fi audio](../architecture.md#lo-fi-audio) for the sampled-instrument playback path.
+
 Read this section first; the numbered decisions (D1-D106) below it are the full record (what / why / alternatives).
 
 ## Current direction: calm (D91-D106)
