@@ -1,0 +1,139 @@
+import AVFoundation
+import Foundation
+
+/// One continuous recording on the session grid. Backing rhythms stay on their original
+/// timeline. The detector supplies evidence for other parts and never moves a drum hit.
+nonisolated struct LofiDrumTake: @unchecked Sendable {
+    static let phraseCount = 4
+    let buffer: AVAudioPCMBuffer
+    let clock: LofiClock
+    let name: String?
+    let kicks: [Kick]
+
+    struct Kick: Equatable, Sendable {
+        let frame: Int
+        let strength: Float
+    }
+
+    init(recording: LofiDrumLibrary.Break?, clock: LofiClock) throws {
+        let count = clock.frameCount * Self.phraseCount
+        buffer = try LofiRenderer.stereoBuffer(clock: clock, frames: count)
+        self.clock = clock
+        name = recording?.entry.name
+        guard let recording, let channels = buffer.floatChannelData else {
+            kicks = []
+            return
+        }
+        let sourceCount = recording.left.count
+        guard sourceCount > 0, recording.right.count == sourceCount else { throw LofiDrumLibrary.LibraryError.badRecording }
+        let rate = Double(sourceCount) / Double(count)
+        if sourceCount == count {
+            for frame in 0..<count {
+                if frame.isMultiple(of: 8192) { try Task.checkCancellation() }
+                channels[0][frame] = recording.left[frame] * recording.gain
+                channels[1][frame] = recording.right[frame] * recording.gain
+            }
+        } else {
+            try Self.resample(recording, into: channels, count: count, rate: rate)
+        }
+        kicks = try Self.detectKicks(channels, count: count, sampleRate: clock.sampleRate)
+    }
+
+    /// Short windowed-sinc interpolation. Both channels use one position and coefficient
+    /// table. The kernel narrows when speeding up enough to cross the output Nyquist limit.
+    private static func resample(_ recording: LofiDrumLibrary.Break,
+                                 into channels: UnsafePointer<UnsafeMutablePointer<Float>>,
+                                 count: Int, rate: Double) throws {
+        let halfWidth = 7, phases = 256
+        let taps = 2 * halfWidth
+        let cutoff = min(1, 1 / rate) * 0.94
+        let last = recording.left.count - 1
+        func sinc(_ x: Double) -> Double { abs(x) < 0.00001 ? 1 : sin(.pi * x) / (.pi * x) }
+        let table = (0..<phases).flatMap { phase -> [Float] in
+            let fraction = Double(phase) / Double(phases)
+            let weights = (0..<taps).map { tap -> Double in
+                let distance = Double(tap - halfWidth + 1) - fraction
+                return cutoff * sinc(distance * cutoff) * sinc(distance / Double(halfWidth))
+            }
+            let sum = weights.reduce(0, +)
+            return weights.map { Float($0 / sum) }
+        }
+        try recording.left.withUnsafeBufferPointer { x in
+            try recording.right.withUnsafeBufferPointer { y in
+                try table.withUnsafeBufferPointer { kernel in
+                    guard let x = x.baseAddress, let y = y.baseAddress, let kernel = kernel.baseAddress else { return }
+                    let outL = channels[0], outR = channels[1]
+                    let gain = recording.gain
+                    for frame in 0..<count {
+                        if frame.isMultiple(of: 8192) { try Task.checkCancellation() }
+                        let position = Double(frame) * rate
+                        let whole = Int(position)
+                        let phase = Int((position - Double(whole)) * Double(phases))
+                        let weights = kernel + phase * taps
+                        let start = whole - halfWidth + 1
+                        var left: Float = 0, right: Float = 0
+                        if start >= 0, start + taps <= last + 1 {
+                            let leftInput = x + start, rightInput = y + start
+                            for tap in 0..<taps {
+                                left += leftInput[tap] * weights[tap]
+                                right += rightInput[tap] * weights[tap]
+                            }
+                        } else {
+                            for tap in 0..<taps {
+                                let sample = min(last, max(0, start + tap))
+                                left += x[sample] * weights[tap]
+                                right += y[sample] * weights[tap]
+                            }
+                        }
+                        outL[frame] = gain * left
+                        outR[frame] = gain * right
+                    }
+                }
+            }
+        }
+    }
+
+    /// Low-band flux gated by its share of the attack energy. Snare bleed and quiet hits make
+    /// these candidates, so the sidechain uses a small depth and never hard-mutes bass.
+    private static func detectKicks(_ channels: UnsafePointer<UnsafeMutablePointer<Float>>,
+                                    count: Int, sampleRate: Double) throws -> [Kick] {
+        let hop = max(1, Int(sampleRate * 0.005))
+        let low = Float(1 - exp(-2 * .pi * 105 / sampleRate))
+        let dc = Float(1 - exp(-2 * .pi * 32 / sampleRate))
+        var lp = SIMD2<Float>.zero
+        var hp = SIMD2<Float>.zero
+        var previous: Float = 0
+        var bins: [(frame: Int, novelty: Float)] = []
+        for start in stride(from: 0, to: count, by: hop) {
+            if (start / hop).isMultiple(of: 128) { try Task.checkCancellation() }
+            var body: Float = 0, total: Float = 0
+            for i in start..<min(start + hop, count) {
+                let x = SIMD2(channels[0][i], channels[1][i])
+                lp += (x - lp) * low
+                hp += (lp - hp) * dc
+                let kick = lp - hp
+                body += kick.x * kick.x + kick.y * kick.y
+                total += x.x * x.x + x.y * x.y
+            }
+            let energy = sqrtf(body / Float(hop))
+            let novelty = energy - previous
+            bins.append((start, total > 1e-8 && body / total > 0.19 ? max(0, novelty) : 0))
+            previous += (energy - previous) * 0.60
+        }
+        guard bins.count > 2, let peak = bins.map(\.novelty).max(), peak > 0.008 else { return [] }
+        let separation = Int(sampleRate * 0.11)
+        var hits: [Kick] = []
+        for i in 1..<(bins.count - 1) {
+            let bin = bins[i]
+            guard bin.novelty >= max(0.006, peak * 0.185),
+                  bin.novelty > bins[i - 1].novelty, bin.novelty >= bins[i + 1].novelty else { continue }
+            let kick = Kick(frame: max(0, bin.frame - hop), strength: min(1, bin.novelty / (peak * 0.58)))
+            if let last = hits.last, kick.frame - last.frame < separation {
+                if kick.strength > last.strength { hits[hits.count - 1] = kick }
+            } else {
+                hits.append(kick)
+            }
+        }
+        return hits
+    }
+}

@@ -7,8 +7,8 @@ import Foundation
 /// Buses, shared effects and master chain (section 3, decisions D10-D14, D57, D58; calm retune D92).
 ///
 ///     strips -> dryBus --------------------------------------------------------------------------+
-///     strips -> delayBus -> LPF (pre) -> VariableDelay (wow) -> LPF -> delayReturn ----------------+--> master
-///                                                                       +-> Fader(0.5) -> reverbBus
+///     strips -> delayBus -> LPF -> Ambient wow / two prepared Lo-Fi tempo lanes -> delayReturn --+--> master
+///                                                         reflections and repeats -> reverbBus
 ///     strips -> reverbBus -> ZitaReverb (wet) -> LPF 2.9 kHz -> reverbReturn -------------------------+
 ///               reverbBus -> HPF 300 -> LPF 1.8k -> Costello (halo) -> shimmerReturn ----------------+
 ///     master -> HPF 28 Hz -> LPF 5.4 kHz -> masterTrim -> PeakLimiter -> -1.5 dB -> output
@@ -47,6 +47,12 @@ nonisolated final class MixBus {
 
     private let baseDelayTime: Float
     private var syncedDelayTime: Float?
+    private let ambientDelayFeed: Fader
+    private let ambientDelayOutput: Fader
+    private let ambientReflectionOutput: Fader
+    private let beatEchoes: [BeatEcho]
+    private var activeBeatEcho: Int?
+    private var lastBeatEcho = 1
     private var delaySettings = (feedback: Float(0.4), gain: dbToGain(-10), cutoff: Float(2400), input: Float(2000))
     /// Shimmer return (linear) before the bloom envelope; published as `MusicState.shimmerLevel`.
     private(set) var shimmerLevel: Float = 0
@@ -65,16 +71,20 @@ nonisolated final class MixBus {
         // Calm (decision D92): the delay input is low-passed before the loop so every repeat is dark (the
         // filter after the delay only darkened the output, the loop itself kept the attack's top end).
         delayPreFilter = LowPassButterworthFilter(delayBus, cutoffFrequency: 2000)
-        delay = VariableDelay(delayPreFilter, time: delayTime, feedback: 0.4, maximumTime: 10, dryWetMix: 1)
+        ambientDelayFeed = Fader(delayPreFilter, gain: 1)
+        delay = VariableDelay(ambientDelayFeed, time: delayTime, feedback: 0.4, maximumTime: 10, dryWetMix: 1)
         delayFilter = LowPassButterworthFilter(delay, cutoffFrequency: 2400)
+        ambientDelayOutput = Fader(delayFilter, gain: 1)
+        beatEchoes = [BeatEcho(delayPreFilter), BeatEcho(delayPreFilter)]
         // Tape character is wow on the delay time only; TanhDistortion was measured at 5 % of the render
         // budget for no audible effect at the -20 dBFS levels the delay runs at (decision D58).
-        delayReturn = Fader(delayFilter, gain: dbToGain(-10))
+        delayReturn = Fader(Mixer([ambientDelayOutput] + beatEchoes.map(\.echoOutput)), gain: dbToGain(-10))
         delayToReverb = Fader(delayReturn, gain: 0.5)
         reverbBus.addInput(delayToReverb)
-        reflection = VariableDelay(delayPreFilter, time: delayTime * 0.61, feedback: 0.19,
+        reflection = VariableDelay(ambientDelayFeed, time: delayTime * 0.61, feedback: 0.19,
                                    maximumTime: 10, dryWetMix: 1)
-        reflectionToReverb = Fader(reflection, gain: 0.22)
+        ambientReflectionOutput = Fader(reflection, gain: 1)
+        reflectionToReverb = Fader(Mixer([ambientReflectionOutput] + beatEchoes.map(\.reflectionOutput)), gain: 0.22)
         reverbBus.addInput(reflectionToReverb)
         reverb = ZitaReverb(reverbBus, predelay: 60, crossoverFrequency: 200, lowReleaseTime: 4.8,
                             midReleaseTime: 8, dampingFrequency: 2400, dryWetMix: 1)
@@ -147,6 +157,10 @@ nonisolated final class MixBus {
         ParamRamp.set(delay.$feedback, settings.feedback * (synced ? 0.78 : 1), over: over)
         ParamRamp.set(delayPreFilter.$cutoffFrequency, settings.input * (synced ? 1.36 : 1), over: over)
         ParamRamp.set(delayFilter.$cutoffFrequency, settings.cutoff * (synced ? 1.11 : 1), over: over)
+        for echo in beatEchoes {
+            ParamRamp.set(echo.delay.$feedback, min(0.55, settings.feedback * 0.78), over: over)
+            ParamRamp.set(echo.filter.$cutoffFrequency, settings.cutoff * 1.11, over: over)
+        }
         ParamRamp.setGain(delayReturn, gain * (synced ? 1.52 : 1), over: over)
         ParamRamp.setGain(delayToReverb, synced ? 0.38 : 0.50, over: over)
         ParamRamp.setGain(reflectionToReverb, gain * (synced ? 0.54 : 0.66), over: over)
@@ -169,14 +183,68 @@ nonisolated final class MixBus {
     /// Current shimmer return (linear), for MusicState.
     private(set) var shimmerOut: Float = 0
 
-    /// Lo-Fi uses a quarter-note echo. Tape wow only moves the Ambient delay.
+    /// Tempo lands on an unused pair of lines. Retire the previous feed and let its existing
+    /// return dissolve instead of modulating the read point in the middle of a spoken echo.
     func syncDelay(toBeatDuration beatDuration: Double?) {
-        let time = beatDuration.map { Float($0 * LofiClock.footageEchoBeats) }
-        guard time != syncedDelayTime else { return }
-        syncedDelayTime = time
-        ParamRamp.set(delay.$time, time ?? baseDelayTime, over: 0)
-        ParamRamp.set(reflection.$time, beatDuration.map { Float($0 * LofiClock.footageReflectionBeats) } ?? baseDelayTime * 0.61, over: 0)
+        let seconds = beatDuration.flatMap { $0.isFinite && (0.55...1.25).contains($0) ? Float($0) : nil }
+        guard seconds != syncedDelayTime else { return }
+        let retirement = Double(syncedDelayTime ?? baseDelayTime) * 1.8
+        if let activeBeatEcho {
+            beatEchoes[activeBeatEcho].set(active: false, outputRamp: min(2.1, retirement))
+        } else {
+            ParamRamp.setGain(ambientDelayFeed, 0, over: 0.035)
+            ParamRamp.setGain(ambientDelayOutput, 0, over: min(2.1, retirement))
+            ParamRamp.setGain(ambientReflectionOutput, 0, over: min(2.1, retirement))
+        }
+        syncedDelayTime = seconds
+        if let seconds {
+            let next = 1 - lastBeatEcho
+            let echo = beatEchoes[next]
+            echo.prepare(beatDuration: seconds)
+            echo.set(active: true, outputRamp: 0.10)
+            activeBeatEcho = next
+            lastBeatEcho = next
+        } else {
+            ParamRamp.setGain(ambientDelayFeed, 1, over: 0.035)
+            ParamRamp.setGain(ambientDelayOutput, 1, over: 0.10)
+            ParamRamp.setGain(ambientReflectionOutput, 1, over: 0.10)
+            activeBeatEcho = nil
+        }
         applyDelaySettings(over: 0.09)
+    }
+
+    /// Each lane keeps an independent feedback state and runs with no input between tempo assignments.
+    private struct BeatEcho {
+        let feed: Fader
+        let delay: VariableDelay
+        let filter: LowPassButterworthFilter
+        let echoOutput: Fader
+        let reflection: VariableDelay
+        let reflectionOutput: Fader
+
+        init(_ input: Node) {
+            feed = Fader(input, gain: 0)
+            delay = VariableDelay(feed, time: 0.85, feedback: 0.32, maximumTime: 2, dryWetMix: 1)
+            filter = LowPassButterworthFilter(delay, cutoffFrequency: 2640)
+            echoOutput = Fader(filter, gain: 0)
+            reflection = VariableDelay(feed, time: 0.425, feedback: 0.19, maximumTime: 2, dryWetMix: 1)
+            reflectionOutput = Fader(reflection, gain: 0)
+        }
+
+        func prepare(beatDuration: Float) {
+            // The line's return is silent while the two read positions are assigned.
+            // Use the AU parameter tree directly. AudioKit's property wrapper also writes
+            // these AUv3 addresses through the legacy API, which reports an invalid address.
+            delay.$time.parameter?.value = beatDuration * Float(LofiClock.footageEchoBeats)
+            reflection.$time.parameter?.value = beatDuration * Float(LofiClock.footageReflectionBeats)
+        }
+
+        func set(active: Bool, outputRamp: Double) {
+            let gain: Float = active ? 1 : 0
+            ParamRamp.setGain(feed, gain, over: 0.035)
+            ParamRamp.setGain(echoOutput, gain, over: outputRamp)
+            ParamRamp.setGain(reflectionOutput, gain, over: outputRamp)
+        }
     }
 
     /// 10 Hz: tape wow on the delay time (0.2 % at 0.41 Hz plus 0.06 % at 0.13 Hz), and the

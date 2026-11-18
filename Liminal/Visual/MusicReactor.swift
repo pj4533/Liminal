@@ -36,6 +36,10 @@ nonisolated struct MusicReactor {
     /// DEBUG -LiminalSyncStrength: multiplies `amount` (caps in the computer still apply).
     var strength: Float = 1
 
+    private var lastRhythmOnset = -1000.0
+    private var lastRhythmTrail = -1000.0
+    private var pendingRhythmTrail: Double?
+
     private(set) var modulation = MusicModulation.neutral
     /// Last aliveness verdict (for the sync log).
     private(set) var alive = false
@@ -120,7 +124,27 @@ nonisolated struct MusicReactor {
                 reachHoldLeft = Self.reachHold
             }
             lastScene = state.sceneIndex
+            // Sample-timed kick candidates can seed an occasional trail in Lo-Fi. Use
+            // the audible timestamp, as a rendered sample can still be in the output path.
+            if state.recordedBeatDuration > 0, a > 0.5 {
+                if state.lastOnsetTime != lastRhythmOnset {
+                    lastRhythmOnset = state.lastOnsetTime
+                    if state.lastOnsetVelocity > 0.29, pendingRhythmTrail == nil, now - lastRhythmTrail >= 6 {
+                        pendingRhythmTrail = state.lastOnsetTime + 0.75 * state.recordedBeatDuration
+                    }
+                }
+                if let due = pendingRhythmTrail, now >= due {
+                    if now - due < 0.16 {
+                        ghostSerial &+= 1
+                        lastRhythmTrail = now
+                    }
+                    pendingRhythmTrail = nil
+                }
+            } else {
+                pendingRhythmTrail = nil
+            }
         } else {
+            pendingRhythmTrail = nil
             pulseColor = Self.follow(pulseColor, 0, dt, Self.pulseColorAttack, Self.pulseColorRelease)
             pulseMotion = Self.follow(pulseMotion, 0, dt, Self.pulseMotionAttack, Self.pulseMotionRelease)
         }

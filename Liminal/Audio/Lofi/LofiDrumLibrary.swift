@@ -89,14 +89,16 @@ nonisolated enum LofiDrumLibrary {
 
     static func load(_ asset: Asset) throws -> Break {
         let entry = asset.entry
-        guard entry.bpm.isFinite, (45...120).contains(entry.bpm), [4, 8, 16, 32, 64].contains(entry.beats),
+        guard entry.bpm.isFinite, (45...120).contains(entry.bpm), entry.beats == 64, entry.frameCount > 0,
            entry.framesPerBeat.isFinite, entry.framesPerBeat > 0 else { throw LibraryError.invalidManifest }
         let pcm = try read(asset.url)
         guard Int(pcm.0.frameLength) == entry.frameCount, pcm.0.format.sampleRate == entry.sampleRate, Int(pcm.0.format.channelCount) == entry.channels else { throw LibraryError.invalidManifest }
         let n = entry.frameCount
         let left = Array(UnsafeBufferPointer(start: pcm.1[0], count: n))
         let right = entry.channels == 1 ? left : Array(UnsafeBufferPointer(start: pcm.1[1], count: n))
-        let energy = left.reduce(Double(0)) { $0 + Double($1) * Double($1) } / Double(n)
+        let energy = zip(left, right).reduce(Double(0)) { energy, pair in
+            energy + Double(pair.0) * Double(pair.0) + Double(pair.1) * Double(pair.1)
+        } / (2 * Double(n))
         let gain = Float(min(2.6, 0.11 / max(0.025, energy.squareRoot())))
         return Break(entry: entry, left: left, right: right, gain: gain)
     }

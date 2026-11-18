@@ -60,6 +60,7 @@ nonisolated struct MusicState: Sendable {
     var shimmerLevel: Float = 0
     var lastOnsetTime: Double = -1000
     var lastOnsetVelocity: Float = 0
+    var recordedBeatDuration: Double = 0  // Lo-Fi runs on the sample clock of a real recording
     var events: MusicEventRing = (MusicEvent(), MusicEvent(), MusicEvent(), MusicEvent(),
                                   MusicEvent(), MusicEvent(), MusicEvent(), MusicEvent())
     /// Total events pushed; the newest is in slot (eventCount - 1) % 8.

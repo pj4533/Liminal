@@ -4,7 +4,21 @@
 
 ## Lo-Fi checks
 
-Run `xcodebuild test -scheme Liminal -destination 'platform=macOS' -only-testing:LiminalTests/LofiTests` for sample selection, beat-grid reading, phrase joins, and effect tails. `ArchiveVoiceRenderTests` measures footage echo timing and checks playback and fades. Start with `-audio.musicMode lofi -LiminalAutoPlay YES -LiminalVideoOffline YES` for a cached-footage test. The audio log lists the active lead preset and drum break as they change.
+Run the macOS score, transport, DSP, and archive timing tests with an explicit destination.
+
+```sh
+xcodebuild test -scheme Liminal -destination 'platform=macOS' \
+  -only-testing:LiminalTests/LofiTests \
+  -only-testing:LiminalTests/LofiCompositionTests \
+  -only-testing:LiminalTests/LofiProductionTests \
+  -only-testing:LiminalTests/ArchiveVoiceRenderTests
+```
+
+Run `scripts/check-lofi.sh` with FFmpeg and Python 3 installed for a headless, reproducible 16-bar capture. It writes float stereo WAVs, the exact score and clock, and independent LUFS, true-peak, routing, and energy metrics outside the repository. The default cue is a repeatable test signal. `--no-footage` exercises silence routing, `--footage /path/to/clip.mov` uses a local soundtrack, `--cached-footage` uses an audio-bearing clip from the app cache, and `--private-drums` requires an installed drum pack and keeps its captures local. `--block`, `--bpm` and `--seed` vary a run. Add `--postroll-beats 8` to a 16-bar capture to measure the remaining effects tail. Debug runs can use `--limiter apple-peak-limiter` for an isolated reference, or a fully qualified provider identity from the AU probe. The live app uses its built-in master. `python3 scripts/analyze-lofi.py --self-test` checks that the analyzer rejects known failures. `--ebu-subset` runs 17 synthetic cases from EBU Tech 3341 and 3342.
+
+Use `python3 scripts/plot-lofi.py /path/to/capture --auditions` with NumPy, SciPy, and Matplotlib for three spectrogram resolutions, an overlay of planned rests and measured levels, reconstructed peaks at 4×, 8×, and 16×, and copies for listening near −20, −18, and −16 LUFS within headroom. Its JSON and NPZ files retain the energy and spectral measurements. For a paired comparison, add `--against /path/to/reference --comparison-out /path/to/new/directory` and optionally `--candidate-lag-frames <measured>` to override the graph's reported latency. It checks that both captures used the same score and sources, preserves the originals, and writes matched audio and difference plots. These signals expose overlap and decay. Listening still determines whether the speech or music has enough room.
+
+Start with `-audio.musicMode lofi -LiminalAutoPlay YES -LiminalVideoOffline YES` for a cached-footage smoke test. The audio log reports instrument choices, 16-bar take starts, and any preparation misses. `-LiminalTraceLofi YES` also prints exact take sample ranges for a Debug launch. Add `-LiminalProbeLofiProviders YES` to a native Debug launch to log whether the host can discover Pro-C 2, Pro-L 2, and Animoog Z metadata. The probe does not instantiate or route audio to an extension. Physical headset listening and sustained profiling have their own acceptance checks in the [research notes](research/lofi-studio.md).
 
 ## Debug launch flags (DEBUG builds only, compiled out of Release)
 

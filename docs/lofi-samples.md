@@ -1,6 +1,6 @@
 # Lo-Fi instrument recordings
 
-These mono samples are adapted from the [Versilian Community Sample Library](https://versilian-studios.com/vcsl/) and [VSCO 2 Community Edition](https://versilian-studios.com/vsco-community/), released under [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/). They were trimmed, resampled to 32 kHz, and level matched. Filenames end in the MIDI root note.
+These mono samples are adapted from the [Versilian Community Sample Library](https://versilian-studios.com/vcsl/) and [VSCO 2 Community Edition](https://versilian-studios.com/vsco-community/), released under [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/). They were trimmed, resampled to 32 kHz, and level matched. Filenames identify the MIDI root note and, when present, its velocity layer.
 
 | Asset | Original recording |
 |---|---|
@@ -28,3 +28,26 @@ These mono samples are adapted from the [Versilian Community Sample Library](htt
 | `LofiLead-harp-55.wav` | [KSHarp_G3_mf.wav](https://github.com/sgossner/VSCO-2-CE/blob/440300901dfe9275fd84e0b7763af1f8443ae62e/Strings/Harp/KSHarp_G3_mf.wav) |
 | `LofiLead-harp-62.wav` | [KSHarp_D4_mf.wav](https://github.com/sgossner/VSCO-2-CE/blob/440300901dfe9275fd84e0b7763af1f8443ae62e/Strings/Harp/KSHarp_D4_mf.wav) |
 | `LofiLead-harp-69.wav` | [KSHarp_A4_mf.wav](https://github.com/sgossner/VSCO-2-CE/blob/440300901dfe9275fd84e0b7763af1f8443ae62e/Strings/Harp/KSHarp_A4_mf.wav) |
+| `LofiLead-grand-48-3.wav` | [JHPiano_NoSus_Close_C3_vl3_rr1.wav](https://github.com/sgossner/VCSL/blob/c1ea7bcc3c7309650ab0da9d15c9cd1fbc4a4c7e/Chordophones/Zithers/Grand%20Piano%2C%20Steinway%20B/NoSus/JHPiano_NoSus_Close_C3_vl3_rr1.wav) |
+| `LofiLead-grand-54.wav` | [JHPiano_NoSus_Close_F#3_vl2_rr1.wav](https://github.com/sgossner/VCSL/blob/c1ea7bcc3c7309650ab0da9d15c9cd1fbc4a4c7e/Chordophones/Zithers/Grand%20Piano%2C%20Steinway%20B/NoSus/JHPiano_NoSus_Close_F%233_vl2_rr1.wav) |
+| `LofiLead-grand-54-3.wav` | [JHPiano_NoSus_Close_F#3_vl3_rr1.wav](https://github.com/sgossner/VCSL/blob/c1ea7bcc3c7309650ab0da9d15c9cd1fbc4a4c7e/Chordophones/Zithers/Grand%20Piano%2C%20Steinway%20B/NoSus/JHPiano_NoSus_Close_F%233_vl3_rr1.wav) |
+| `LofiLead-grand-58-3.wav` | [JHPiano_NoSus_Close_A#3_vl3_rr1.wav](https://github.com/sgossner/VCSL/blob/c1ea7bcc3c7309650ab0da9d15c9cd1fbc4a4c7e/Chordophones/Zithers/Grand%20Piano%2C%20Steinway%20B/NoSus/JHPiano_NoSus_Close_A%233_vl3_rr1.wav) |
+| `LofiLead-grand-62.wav` | [JHPiano_NoSus_Close_D4_vl2_rr1.wav](https://github.com/sgossner/VCSL/blob/c1ea7bcc3c7309650ab0da9d15c9cd1fbc4a4c7e/Chordophones/Zithers/Grand%20Piano%2C%20Steinway%20B/NoSus/JHPiano_NoSus_Close_D4_vl2_rr1.wav) |
+| `LofiLead-grand-62-3.wav` | [JHPiano_NoSus_Close_D4_vl3_rr1.wav](https://github.com/sgossner/VCSL/blob/c1ea7bcc3c7309650ab0da9d15c9cd1fbc4a4c7e/Chordophones/Zithers/Grand%20Piano%2C%20Steinway%20B/NoSus/JHPiano_NoSus_Close_D4_vl3_rr1.wav) |
+| `LofiLead-grand-64-3.wav` | [JHPiano_NoSus_Close_E4_vl3_rr1.wav](https://github.com/sgossner/VCSL/blob/c1ea7bcc3c7309650ab0da9d15c9cd1fbc4a4c7e/Chordophones/Zithers/Grand%20Piano%2C%20Steinway%20B/NoSus/JHPiano_NoSus_Close_E4_vl3_rr1.wav) |
+| `LofiLead-grand-70.wav` | [JHPiano_NoSus_Close_A#4_vl2_rr1.wav](https://github.com/sgossner/VCSL/blob/c1ea7bcc3c7309650ab0da9d15c9cd1fbc4a4c7e/Chordophones/Zithers/Grand%20Piano%2C%20Steinway%20B/NoSus/JHPiano_NoSus_Close_A%234_vl2_rr1.wav) |
+| `LofiLead-grand-70-3.wav` | [JHPiano_NoSus_Close_A#4_vl3_rr1.wav](https://github.com/sgossner/VCSL/blob/c1ea7bcc3c7309650ab0da9d15c9cd1fbc4a4c7e/Chordophones/Zithers/Grand%20Piano%2C%20Steinway%20B/NoSus/JHPiano_NoSus_Close_A%234_vl3_rr1.wav) |
+| `LofiLead-grand-72-3.wav` | [JHPiano_NoSus_Close_C5_vl3_rr1.wav](https://github.com/sgossner/VCSL/blob/c1ea7bcc3c7309650ab0da9d15c9cd1fbc4a4c7e/Chordophones/Zithers/Grand%20Piano%2C%20Steinway%20B/NoSus/JHPiano_NoSus_Close_C5_vl3_rr1.wav) |
+| `LofiLead-organ-48.wav` | [NT5_Man3Quiet_C3_rr1.wav](https://github.com/sgossner/VCSL/blob/c1ea7bcc3c7309650ab0da9d15c9cd1fbc4a4c7e/Aerophones/Edge-blown%20Aerophones/Pipe%20Organ/Quiet/NT5_Man3Quiet_C3_rr1.wav) |
+| `LofiLead-organ-54.wav` | [NT5_Man3Quiet_F#3_rr1.wav](https://github.com/sgossner/VCSL/blob/c1ea7bcc3c7309650ab0da9d15c9cd1fbc4a4c7e/Aerophones/Edge-blown%20Aerophones/Pipe%20Organ/Quiet/NT5_Man3Quiet_F%233_rr1.wav) |
+| `LofiLead-organ-60.wav` | [NT5_Man3Quiet_C4_rr1.wav](https://github.com/sgossner/VCSL/blob/c1ea7bcc3c7309650ab0da9d15c9cd1fbc4a4c7e/Aerophones/Edge-blown%20Aerophones/Pipe%20Organ/Quiet/NT5_Man3Quiet_C4_rr1.wav) |
+| `LofiLead-organ-66.wav` | [NT5_Man3Quiet_F#4_rr1.wav](https://github.com/sgossner/VCSL/blob/c1ea7bcc3c7309650ab0da9d15c9cd1fbc4a4c7e/Aerophones/Edge-blown%20Aerophones/Pipe%20Organ/Quiet/NT5_Man3Quiet_F%234_rr1.wav) |
+| `LofiLead-organ-72.wav` | [NT5_Man3Quiet_C5_rr1.wav](https://github.com/sgossner/VCSL/blob/c1ea7bcc3c7309650ab0da9d15c9cd1fbc4a4c7e/Aerophones/Edge-blown%20Aerophones/Pipe%20Organ/Quiet/NT5_Man3Quiet_C5_rr1.wav) |
+| `LofiLead-psaltery-58.wav` | [BowedPsaltery_A#3_Main_Pluck_rr1.wav](https://github.com/sgossner/VCSL/blob/c1ea7bcc3c7309650ab0da9d15c9cd1fbc4a4c7e/Chordophones/Zithers/Psaltery%2C%20Bowed%20and%20Plucked/Pluck/BowedPsaltery_A%233_Main_Pluck_rr1.wav) |
+| `LofiLead-psaltery-62.wav` | [BowedPsaltery_D4_Main_Pluck_rr1.wav](https://github.com/sgossner/VCSL/blob/c1ea7bcc3c7309650ab0da9d15c9cd1fbc4a4c7e/Chordophones/Zithers/Psaltery%2C%20Bowed%20and%20Plucked/Pluck/BowedPsaltery_D4_Main_Pluck_rr1.wav) |
+| `LofiLead-psaltery-66.wav` | [BowedPsaltery_F#4_Main_Pluck_rr1.wav](https://github.com/sgossner/VCSL/blob/c1ea7bcc3c7309650ab0da9d15c9cd1fbc4a4c7e/Chordophones/Zithers/Psaltery%2C%20Bowed%20and%20Plucked/Pluck/BowedPsaltery_F%234_Main_Pluck_rr1.wav) |
+| `LofiLead-psaltery-72.wav` | [BowedPsaltery_C5_Main_Pluck_rr1.wav](https://github.com/sgossner/VCSL/blob/c1ea7bcc3c7309650ab0da9d15c9cd1fbc4a4c7e/Chordophones/Zithers/Psaltery%2C%20Bowed%20and%20Plucked/Pluck/BowedPsaltery_C5_Main_Pluck_rr1.wav) |
+
+The recorded Steinway uses seven root positions and velocity layers 2 and 3. The optional fourth filename field identifies an alternate layer. Quiet pipe organ and plucked psaltery use their original acoustic recordings. Tone shaping and stereo effects occur at render time.
+
+Recorded octave and playback register are calibrated independently. FFT and period checks found that the upright pianos, pizzicato strings, organ and psaltery recordings sound an octave above their source labels. The sampler compensates on playback while using the filename roots to preserve the intended warm register and spacing. The Steinway and concert harp already match their labeled roots.

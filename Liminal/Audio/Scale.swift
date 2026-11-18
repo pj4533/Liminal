@@ -2,7 +2,7 @@ import Foundation
 
 /// Musical scale definitions for generative composition.
 /// Scales constrain note selection to musically coherent sets.
-nonisolated enum ScaleType: String, CaseIterable {
+nonisolated enum ScaleType: String, CaseIterable, Codable, Sendable {
     // MARK: - Western Modes
     case major = "Major (Ionian)"
     case dorian = "Dorian"

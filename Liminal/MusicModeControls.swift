@@ -13,7 +13,6 @@ struct MusicModeControls: View {
             .accessibilityIdentifier("musicMode")
             if settings.musicMode == .ambient {
                 StylePicker(style: $settings.style)
-                ScalePicker(selection: settings.scaleSelection)
             } else {
                 HStack {
                     Text("Tempo")
@@ -24,6 +23,7 @@ struct MusicModeControls: View {
                 Slider(value: $settings.lofi.tempo, in: LofiOptions.tempos, step: 1) { Text("Tempo") }
                     .labelsHidden().accessibilityLabel("Tempo")
             }
+            ScalePicker(selection: settings.scaleSelection)
         }
         .onChange(of: settings.musicMode) { _, mode in audio.musicMode = mode }
         .onChange(of: settings.lofi) { _, options in audio.applyLofi(options) }

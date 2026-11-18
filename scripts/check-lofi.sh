@@ -1,0 +1,128 @@
+#!/bin/bash
+# Capture a synchronized sample-clock render and measure it with an independent meter.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+exec python3 - "$@" <<'PY'
+import argparse
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import json
+import os
+from pathlib import Path
+import re
+import secrets
+import shutil
+import subprocess
+import sys
+import tempfile
+from threading import Thread
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--out", type=Path)
+parser.add_argument("--seed", default=1042, type=int)
+parser.add_argument("--bpm", default=70.0, type=float)
+parser.add_argument("--bars", default=16, choices=(4, 8, 12, 16), type=int)
+parser.add_argument("--block", default=1024, type=int)
+parser.add_argument("--postroll-beats", default=0, choices=range(0, 9), type=int)
+parser.add_argument("--limiter", help="Debug comparison only, use apple-peak-limiter or a qualified FourCC/version")
+parser.add_argument("--private-drums", action="store_true")
+source = parser.add_mutually_exclusive_group()
+source.add_argument("--footage", type=Path)
+source.add_argument("--cached-footage", action="store_true")
+source.add_argument("--no-footage", action="store_true")
+args = parser.parse_args()
+if not 58 <= args.bpm <= 82 or not 128 <= args.block <= 4096 or not 0 <= args.seed < 2**64:
+    parser.error("use BPM 58–82, block 128–4096, and an unsigned 64-bit seed")
+if args.postroll_beats and args.bars != 16:
+    parser.error("capture all 16 recorded bars to measure postroll")
+if args.footage and not args.footage.is_file():
+    parser.error("footage path does not exist")
+out = args.out.resolve() if args.out else Path(tempfile.mkdtemp(prefix="liminal-lofi-")).resolve()
+if out.is_relative_to(Path.cwd()) or (out.exists() and any(out.iterdir())):
+    parser.error("use an empty output directory outside the repository")
+out.mkdir(parents=True, exist_ok=True)
+print(f"Lo-Fi capture directory {out}", flush=True)
+
+# A sandboxed test host can authenticate to this loopback receiver without exposing its
+# container or changing app entitlements. Nothing listens beyond the lifetime of the test.
+token = secrets.token_urlsafe(24)
+prefix = "/" + token + "/"
+artifacts = {"manifest.json", "score.json", "master.wav", "drums.wav", "bass.wav",
+             "dry.wav", "texture.wav", "wet.wav", "footage-dry.wav", "footage-delay.wav",
+             "footage-room.wav", "lofi.wav", "footage.wav", "pre-master.wav", "glue.wav",
+             "fx-echo-raw.wav", "fx-room-raw.wav", "fx-color-raw.wav"}
+
+
+class Receiver(BaseHTTPRequestHandler):
+    def log_message(self, *_):
+        pass
+
+    def do_GET(self):
+        if self.path != prefix + "input" or not args.footage:
+            return self.send_error(404)
+        self.send_response(200)
+        self.send_header("Content-Length", str(args.footage.stat().st_size))
+        self.end_headers()
+        with args.footage.open("rb") as file:
+            shutil.copyfileobj(file, self.wfile)
+
+    def do_PUT(self):
+        name = self.path.removeprefix(prefix)
+        if name == self.path or name not in artifacts:
+            return self.send_error(404)
+        try:
+            length = int(self.headers.get("Content-Length", ""))
+            if not 0 < length <= 80 * 1024 * 1024:
+                return self.send_error(413)
+            temp = out / (name + ".partial")
+            with temp.open("xb") as file:
+                while length:
+                    data = self.rfile.read(min(length, 1 << 20))
+                    if not data:
+                        raise OSError("incomplete capture upload")
+                    file.write(data)
+                    length -= len(data)
+            temp.replace(out / name)
+        except (OSError, ValueError):
+            return self.send_error(422)
+        self.send_response(201)
+        self.end_headers()
+
+
+config_path = Path(f"/private/tmp/liminal-lofi-audio-config-{os.getuid()}.json")
+configuration = dict(runToken=secrets.token_hex(16),
+                     revision=subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+                     seed=args.seed, tempo=args.bpm, bars=args.bars, noFootage=args.no_footage,
+                     cachedFootage=args.cached_footage, privateDrums=args.private_drums, block=args.block,
+                     postrollBeats=args.postroll_beats, limiter=args.limiter,
+                     explicitFootageSuffix=args.footage.suffix if args.footage else None)
+with ThreadingHTTPServer(("127.0.0.1", 0), Receiver) as server:
+    configuration["receiver"] = f"http://127.0.0.1:{server.server_port}{prefix}"
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        descriptor = os.open(config_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        config_file = os.fdopen(descriptor, "w")
+    except FileExistsError:
+        parser.error(f"another Lo-Fi capture owns {config_path}")
+    try:
+        with config_file:
+            json.dump(configuration, config_file)
+        log_path = out / "xcodebuild.log"
+        with log_path.open("w") as log:
+            xcode = subprocess.run([
+                "xcodebuild", "test", "-scheme", "Liminal", "-destination", "platform=macOS",
+                "-derivedDataPath", os.environ.get("DD", "/private/tmp/liminal-overhaul-mac"),
+                "-parallel-testing-enabled", "NO", "-only-testing:LiminalTests/LofiMixRenderTests",
+            ], stdout=log, stderr=subprocess.STDOUT)
+        if xcode.returncode:
+            for line in log_path.read_text(errors="replace").splitlines():
+                if re.search(r"error:|recorded an issue|tap .*samples|TEST FAILED", line):
+                    print(line, file=sys.stderr)
+            sys.exit(xcode.returncode)
+    finally:
+        config_path.unlink()
+        server.shutdown()
+if not (out / "manifest.json").is_file():
+    sys.exit(f"The test did not export a manifest. See {out / 'xcodebuild.log'}")
+sys.exit(subprocess.run([sys.executable, "scripts/analyze-lofi.py", str(out)]).returncode)
+PY

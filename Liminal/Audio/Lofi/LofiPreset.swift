@@ -1,9 +1,9 @@
 import Foundation
 
-/// Hidden instrument programs. Families rotate in a seeded order and all registrations
-/// within a family are heard before they repeat.
+/// Hidden instrument programs keep a consistent recorded voice across an entire break.
+/// Acoustic pianos and plucks predominate, with an occasional quiet organ registration.
 nonisolated struct LofiPreset: Equatable, Sendable {
-    enum Family: Int, CaseIterable, Sendable { case piano, strings }
+    enum Family: Int, CaseIterable, Sendable { case piano, strings, organ }
 
     struct Space: Sendable {
         let taps: (left: Double, right: Double)
@@ -28,10 +28,17 @@ nonisolated struct LofiPreset: Equatable, Sendable {
 
     static func selection(seed: UInt64, phrase: Int) -> Self {
         var start = MusicRNG(seed: seed).fork(253)
-        let families = Family.allCases
-        let family = families[(phrase + start.int(0...1)) % families.count]
+        let record = phrase / 4
+        let palette: [Family] = [.piano, .strings, .piano, .strings, .organ, .strings]
+        let position = record + start.int(0...(palette.count - 1))
+        let family = palette[position % palette.count]
         let programs = bank.filter { $0.family == family }
-        return start.fork(UInt64(family.rawValue) + 100).shuffledCycle(programs, index: phrase / families.count)
+        if programs.count == 1 { return programs[0] }
+        let completedCycles = position / palette.count
+        let earlierInCycle = palette.prefix(position % palette.count)
+        let visit = completedCycles * palette.count(where: { $0 == family })
+            + earlierInCycle.count(where: { $0 == family })
+        return start.fork(UInt64(family.rawValue) + 100).shuffledCycle(programs, index: visit)
     }
 
     private init(_ name: String, _ sampleGroup: String, _ family: Family, _ brightness: Double, _ movement: Double,
@@ -56,6 +63,8 @@ nonisolated struct LofiPreset: Equatable, Sendable {
         .init("Yamaha Upright", "yamaha", .piano, 0.47, 0.20, 0.006, 0.30, 0.52, (1, 1.5), 0.48, 1.13, 0.80, 0.52),
         .init("Pizzicato Viola", "pizz", .strings, 0.61, 0.26, 0.004, 0.22, 0.54, (0.75, 1.75), 0.61, 1.06, 0.87, 0.73),
         .init("Pizzicato Cello", "cellopluck", .strings, 0.50, 0.19, 0.006, 0.29, 0.55, (0.75, 1.5), 0.53, 1.12, 0.86, 0.60),
-        .init("Concert Harp", "harp", .strings, 0.51, 0.16, 0.004, 0.29, 0.51, (1, 1.75), 0.51, 1.18, 0.88, 0.61)
+        .init("Concert Harp", "harp", .strings, 0.51, 0.16, 0.004, 0.29, 0.51, (1, 1.75), 0.51, 1.18, 0.88, 0.61),
+        .init("Plucked Psaltery", "psaltery", .strings, 0.40, 0.14, 0.004, 0.27, 0.46, (0.75, 1.25), 0.42, 0.99, 0.69, 0.46),
+        .init("Quiet Pipe Organ", "organ", .organ, 0.38, 0.09, 0.021, 0.24, 0.34, (0.5, 1.5), 0.39, 0.91, 0.59, 0.34)
     ]
 }

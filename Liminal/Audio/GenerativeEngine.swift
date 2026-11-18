@@ -18,7 +18,8 @@ final class GenerativeEngine: ObservableObject {
     let engine = AudioEngine()
     let conductor: MusicConductor
     let mix: MixBus
-    let outputCeiling: PeakLimiter
+    let master: LofiMasterBus
+    var outputCeiling: PeakLimiter { master.limiter }
     let layers: [MusicLayer]
     /// The archive film's sound strip (docs/plans/archive-video.md 4).
     let archive: ArchiveVoice
@@ -39,7 +40,10 @@ final class GenerativeEngine: ObservableObject {
         didSet { if isRunning && oldValue != musicMode { activateMusicMode() } }
     }
 
-    func applyLofi(_ options: LofiOptions) { lofi.options = options }
+    func applyLofi(_ options: LofiOptions) {
+        lofi.options.tempo = options.tempo
+        lofi.options.scale = pinnedScale
+    }
 
     @Published var style: MusicStyle.ID = .drift {
         didSet { conductor.post(.style(style)) }
@@ -51,6 +55,7 @@ final class GenerativeEngine: ObservableObject {
         didSet {
             guard pinnedScale != oldValue else { return }
             conductor.post(.pinScale(pinnedScale))
+            lofi.options.scale = pinnedScale
             LMLog.audio.debug("🎼 Scale: \(self.pinnedScale?.rawValue ?? "auto")")
         }
     }
@@ -87,6 +92,9 @@ final class GenerativeEngine: ObservableObject {
 
     /// - Parameter seed: nil = random per launch; offline renders pass a fixed seed.
     init(seed: UInt64? = nil) {
+        #if DEBUG
+        LofiProviderProbe.runIfRequested()
+        #endif
         let t0 = Date()
         let seed = seed ?? UInt64.random(in: 1...UInt64.max)
         self.seed = seed
@@ -100,13 +108,13 @@ final class GenerativeEngine: ObservableObject {
         mix = MixBus(layers: layers.flatMap(\.allStrips) + [archive.strip], delayTime: Float(r.range(1.3...2.1)))   // slow, dark echoes (D92)
         conductor = MusicConductor(layers: layers, mix: mix, seed: seed, pinned: nil, archive: archive)
         lofi = LofiPlayback(seed: initialLofiSeed, sampleRate: archive.format.sampleRate)
-        lofi.onBeatDurationChange = { [weak conductor] duration in conductor?.updateArchiveTempo(beatDuration: duration) }
+        master = LofiMasterBus(archiveAndAmbient: mix.output, lofi: lofi.output)
+        lofi.onBeatDurationChange = { [weak conductor, weak master] duration in
+            conductor?.updateArchiveTempo(beatDuration: duration)
+            master?.setCalibrationBeatDuration(duration)
+        }
         lofi.archiveActivity = { [weak conductor] in conductor?.archiveActivity ?? 0 }
-        // The archive, drums and pitched stems share one gentle compressor and final peak ceiling.
-        let sum = Mixer(mix.output, lofi.output)
-        let glue = Compressor(sum, threshold: -15, headRoom: 9, attackTime: 0.027, releaseTime: 0.27, masterGain: 0)
-        outputCeiling = PeakLimiter(glue, attackTime: 0.005, decayTime: 0.08, preGain: 0)
-        engine.output = Fader(outputCeiling, gain: dbToGain(-1))
+        engine.output = master.output
         conductor.onNote = GenerativeEngine.noteForwarder(shimmerNotePlayed)
         let ms = Date().timeIntervalSince(t0) * 1000
         LMLog.audio.info("🎛️ Music graph built in \(String(format: "%.0f", ms)) ms, seed \(seed)")
@@ -165,6 +173,7 @@ final class GenerativeEngine: ObservableObject {
         guard isRunning else { return }
         conductor.stop(fade: 2.0)
         lofi.stop()
+        master.stopCalibration()
         lofiActive.store(false, ordering: .relaxed)
         isRunning = false
         LMLog.audio.info("🛑 Engine stopped")
@@ -173,6 +182,7 @@ final class GenerativeEngine: ObservableObject {
     func shutdown() {
         conductor.stop(fade: 0.05)
         lofi.stop(immediately: true)
+        master.stopCalibration()
         lofiActive.store(false, ordering: .relaxed)
         isRunning = false
         engine.stop()
@@ -181,6 +191,7 @@ final class GenerativeEngine: ObservableObject {
     private func activateMusicMode() {
         if musicMode == .ambient {
             lofi.stop()
+            master.stopCalibration()
             lofiActive.store(false, ordering: .relaxed)
             conductor.start()
         } else {
@@ -189,6 +200,7 @@ final class GenerativeEngine: ObservableObject {
             lofi.start { [weak self] in
                 guard let self, isRunning, musicMode == .lofi else { return }
                 lofiActive.store(true, ordering: .relaxed)
+                master.startCalibration()
             }
         }
     }

@@ -14,7 +14,7 @@ nonisolated struct LofiWetTone {
 
     init(sampleRate: Double) {
         crossover = Float(1 - exp(-2 * .pi * 1_650 / sampleRate))
-        lowCrossover = Float(1 - exp(-2 * .pi * 300 / sampleRate))
+        lowCrossover = Float(1 - exp(-2 * .pi * 185 / sampleRate))
         attack = Float(1 - exp(-1 / (0.003 * sampleRate)))
         release = Float(1 - exp(-1 / (0.115 * sampleRate)))
     }
@@ -24,8 +24,8 @@ nonisolated struct LofiWetTone {
         // The lower edge moves against the upper edge. Bright transients narrow both
         // edges toward the mids, and the air shelf below follows the same detector.
         let pressure = min(1, level * 9)
-        let upper = crossover * (0.82 + 0.37 * sweep - 0.13 * pressure)
-        let lower = lowCrossover * (1.32 - 0.54 * sweep + 0.20 * pressure)
+        let upper = crossover * (0.78 + 0.42 * sweep - 0.17 * pressure)
+        let lower = lowCrossover * (1.32 - 0.44 * sweep + 0.22 * pressure)
         midL += upper * (sample.left - midL)
         midR += upper * (sample.right - midR)
         lowL += lower * (midL - lowL)
@@ -34,8 +34,9 @@ nonisolated struct LofiWetTone {
         let peak = max(abs(airL), abs(airR))
         level += (peak - level) * (peak > level ? attack : release)
         let gain = max(0.10, (0.33 + 0.05 * sweep) / (1 + 14 * level))
-        let body = 0.08 + 0.16 * space + 0.07 * pressure
-        return (midL + body * (midL - lowL) + airL * gain,
-                midR + body * (midR - lowR) + airR * gain)
+        let body = 1.02 + 0.13 * space + 0.05 * pressure
+        let warmth = 0.44 + 0.09 * space
+        return (body * (midL - lowL) + warmth * lowL + airL * gain,
+                body * (midR - lowR) + warmth * lowR + airR * gain)
     }
 }

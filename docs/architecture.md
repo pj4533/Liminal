@@ -22,9 +22,11 @@ Shader pipeline order (`Liminal/Shaders/EffectsRenderer.metal`): Ken Burns, dist
 
 ### Lo-Fi audio
 
-`LofiScore` generates four-bar phrases and alternates piano and plucked-string families. `LofiRenderer` prepares the drum and bass stem and the separate pitched music and effects stem off the audio thread. The renderer balances dry melody against a louder wet return with crossed beat-synced delays, granular resampling, diffusion, reverb, and soft octave shimmer. It carries the filtered tail into the next phrase. `LofiPlayback` starts both stems on the same audio clock and publishes its own music state for the visuals.
+The drum player queues one complete, stereo-linked 64-beat recording per take. The bass, dry acoustic instruments, texture, and wet rack have independently scheduled buffers on the same sample grid. If the accompaniment misses a render deadline, playback schedules a timed rest with the prepared effect tail while the current recording continues.
 
-The archive voice keeps its place in the shared mix with a one-beat echo and a half-beat reflection in Lo-Fi. Speech-band activity lowers the pitched stem, and light compression combines the rhythm, melody, and soundtrack at the output. [Experience and controls](experience.md#lo-fi)
+`LofiScore` builds 32-bar forms with remembered four-bar motifs and deliberate openings. The instrument program holds for 16 bars. `LofiRenderer` uses recorded acoustic sources, separate note sends, and independent echo, room, and color returns. It renders off the audio thread and keeps the audible wet tail at phrase joins. Kick candidates from the unchanged drum waveform feed visual modulation. A linked low-band detector ducks only the bass.
+
+The archive echo follows a quarter-note and a half-beat reflection, with two delay lanes that let the old tail fade when BPM changes. Speech-band activity has separate dry and wet ducking envelopes. The combined final path uses light compression, slowly adjusts gain within bounded limits, and protects sample peaks with a conservative output trim. [Research and verification](research/lofi-studio.md) · [Headless capture](development.md#lo-fi-checks)
 
 ## Dependencies
 
