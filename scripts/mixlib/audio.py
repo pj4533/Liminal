@@ -192,11 +192,15 @@ class Capture:
     def chops(self):
         return list(self.manifest.get("dialogueChops") or [])
 
-    def chop_intervals(self):
-        """Merged (start, end) frame intervals of scheduled dialogue (gaps up to 0.1 s merged)."""
+    def chop_intervals(self, dry=False):
+        """Merged (start, end) frame intervals of scheduled dialogue (gaps up to 0.1 s merged). `dry` uses
+        each chop's dry length when the manifest records one (a motif echo throw renders its tail into the
+        chop buffer; the tail is an effect, measured with the returns, not speech)."""
         raw = []
         for c in self.chops():
             f, d = c.get("frame"), chop_duration_frames(c)
+            if dry and c.get("dryFrames"):
+                d = min(d, int(c["dryFrames"]))
             if f is not None and d:
                 raw.append((int(f), int(f) + int(d)))
         if not raw and self.has_section("dialogue"):

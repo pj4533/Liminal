@@ -63,6 +63,8 @@ nonisolated enum DialogueCueCoordinator {
         let earliestStart: Double
         /// `DialogueEngine.log(plan, bank:)`, the `diagnostics.dialoguePlans` element.
         let log: [String: Any]
+        /// The loop's motif when the plan came from the motif layer (its bank is `played`).
+        var motif: DialogueMotif? = nil
 
         var firstStart: Double? { chops.map(\.event.startTime).min() }
     }
@@ -87,6 +89,9 @@ nonisolated enum DialogueCueCoordinator {
                                                  beatDuration: info.beatDuration, nextBeatDuration: info.nextBeatDuration,
                                                  phraseAtOrigin: info.phraseAtTakeStart, kicks: kicks, snares: snares)
         snapshot.leadNotes = leadNotes(info, blocks: blocks(snapshot, window: window))
+        if let timing = info.timing {
+            snapshot.grooveOffsets = (0..<DialogueTransportSnapshot.takeSixteenths).map { timing.offset(atBeat: Double($0) / 4) }
+        }
         return snapshot
     }
 
@@ -143,6 +148,20 @@ nonisolated enum DialogueCueCoordinator {
         t = clock.now
         let snapshot = snapshot(transport, window: window)
         var memory = memory
+        // The motif layer plays the loop's line in pieces; the grammar's fallback order covers a
+        // session that has no line at all yet.
+        if let motif = DialogueMotif.plan(source: source, analysis: analysis, bank: bank,
+                                          transcript: transcript ?? reuse?.transcript, snapshot: snapshot, window: window,
+                                          earliestStart: earliestStart, memory: &memory, seed: seed,
+                                          cueToken: source.cueToken, revision: revision) {
+            timings.planMs = ms(clock.now - t)
+            t = clock.now
+            let chops = motif.render()
+            timings.renderMs = ms(clock.now - t)
+            return Built(analysis: analysis, bank: bank, played: motif.motif.bank, plan: motif.plan, chops: chops, memory: memory,
+                         timings: timings, snapshot: snapshot, window: window, earliestStart: earliestStart,
+                         log: motif.log, motif: motif.motif)
+        }
         let played = DialoguePerformer.bankForPiece(bank, snapshot: snapshot, window: window, memory: memory)
         let plan = DialogueEngine.perform(played, snapshot: snapshot, window: window, earliestStart: earliestStart,
                                           memory: &memory, seed: seed, cueToken: source.cueToken, revision: revision)
@@ -166,6 +185,30 @@ nonisolated enum DialogueCueCoordinator {
         timings.bankMs = ms(clock.now - t)
         t = clock.now
         var memory = memoryBefore
+        if acoustic.motif != nil {
+            // Motif mode: the blocks before `from` replay on the memory before the cue, then the rest of the
+            // window plans with the transcript (the loop keeps its line; its own source is re-cut by words).
+            if from > acoustic.window.lowerBound {
+                _ = DialogueMotif.plan(source: source, analysis: acoustic.analysis, bank: acoustic.bank, transcript: nil,
+                                       snapshot: acoustic.snapshot, window: acoustic.window.lowerBound..<from,
+                                       earliestStart: acoustic.earliestStart, memory: &memory, seed: seed,
+                                       cueToken: source.cueToken, revision: 0)
+                memory.pieceCounter -= 1
+            }
+            let window = from..<acoustic.window.upperBound
+            let earliest = max(acoustic.earliestStart, from)
+            guard let motif = DialogueMotif.plan(source: source, analysis: acoustic.analysis, bank: refined, transcript: transcript,
+                                                 snapshot: acoustic.snapshot, window: window, earliestStart: earliest,
+                                                 memory: &memory, seed: seed, cueToken: source.cueToken, revision: revision)
+            else { return nil }
+            timings.planMs = ms(clock.now - t)
+            t = clock.now
+            let chops = motif.render()
+            timings.renderMs = ms(clock.now - t)
+            return Built(analysis: acoustic.analysis, bank: refined, played: motif.motif.bank, plan: motif.plan, chops: chops,
+                         memory: memory, timings: timings, snapshot: acoustic.snapshot, window: window, earliestStart: earliest,
+                         log: motif.log, motif: motif.motif)
+        }
         // The piece keeps the anchor choice it started with (decided on the memory before the cue).
         let rotated = DialoguePerformer.bankForPiece(refined, snapshot: acoustic.snapshot, window: acoustic.window, memory: memoryBefore) ?? refined
         if from > acoustic.window.lowerBound {

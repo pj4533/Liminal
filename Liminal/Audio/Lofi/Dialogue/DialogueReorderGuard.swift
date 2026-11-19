@@ -34,6 +34,18 @@ nonisolated enum DialogueReorderGuard {
     static let numberWords: Set<String> = ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
                                            "ten", "eleven", "twelve", "twenty", "thirty", "hundred", "thousand", "million"]
 
+    // MARK: Motif pieces
+
+    /// Whether the word pieces of one transcribed motif line may play out of order. Pieces of one
+    /// line are rhythmic fragments, so the guard only refuses what changes meaning when moved: a
+    /// negation, a number or a contraction with "not" anywhere in the line.
+    static func allowsPieceReorder(_ words: [String]) -> Bool {
+        let normalized = words.map { $0.lowercased().filter { $0.isLetter || $0.isNumber || $0 == "'" } }
+        return !normalized.contains { w in
+            negations.contains(w) || numberWords.contains(w) || w.hasSuffix("n't") || w.allSatisfy(\.isNumber) && !w.isEmpty
+        }
+    }
+
     // MARK: Tagging
 
     static func tag(_ words: [DialogueWordSpan]) -> [TaggedWord] {

@@ -25,6 +25,8 @@ nonisolated enum DialogueEngine {
         let plan: DialoguePerformancePlan
         let chops: [DialogueChop]
         let timings: Timings
+        /// Motif mode: the loop motifs the plan played (`bank` is the last one's bank).
+        var motifs: [DialogueMotif] = []
     }
 
     static func analyze(_ source: DialogueSource, speech: [LofiSpeechFocus.Window]) -> DialogueAnalysis {
@@ -81,6 +83,16 @@ nonisolated enum DialogueEngine {
         let bank = bank(analysis, transcript: transcript, seed: seed) ?? (transcript == nil ? nil : bank(analysis, transcript: nil, seed: seed))
         timings.bankMs = ms(clock.now - t)
         t = clock.now
+        if let motif = DialogueMotif.plan(source: source, analysis: analysis, bank: bank, transcript: transcript,
+                                          snapshot: snapshot, window: window, earliestStart: earliestStart, memory: &memory,
+                                          seed: seed, cueToken: source.cueToken, revision: 0) {
+            timings.planMs = ms(clock.now - t)
+            t = clock.now
+            let chops = motif.render()
+            timings.renderMs = ms(clock.now - t)
+            return Prepared(analysis: analysis, bank: motif.motif.bank, plan: motif.plan, chops: chops, timings: timings,
+                            motifs: motif.motifs)
+        }
         let played = DialoguePerformer.bankForPiece(bank, snapshot: snapshot, window: window, memory: memory)
         let plan = DialoguePerformer.perform(played, snapshot: snapshot, window: window, earliestStart: earliestStart,
                                              memory: &memory, seed: seed, cueToken: source.cueToken, revision: 0)
@@ -94,6 +106,12 @@ nonisolated enum DialogueEngine {
     // MARK: Logging
 
     /// The `diagnostics.dialoguePlans` element of the capture manifest (plan 3.2).
+    static func log(_ plan: DialoguePerformancePlan, bank: DialoguePadBank?, motif: DialogueMotif?) -> [String: Any] {
+        var result = log(plan, bank: bank)
+        if let motif { result["motif"] = motif.log() }
+        return result
+    }
+
     static func log(_ plan: DialoguePerformancePlan, bank: DialoguePadBank?) -> [String: Any] {
         func r3(_ x: Double) -> Double { (x * 1000).rounded() / 1000 }
         var result: [String: Any] = [
@@ -136,6 +154,9 @@ nonisolated enum DialogueEngine {
                     ]
                     if let choke = e.chokeAt { entry["chokeAt"] = r3(choke) }
                     if let text = e.text { entry["text"] = text }
+                    if let cell = e.cell { entry["cell"] = cell.rawValue }
+                    if let piece = e.piece { entry["piece"] = piece }
+                    if e.effect != .none { entry["effect"] = e.effect.name }
                     return entry
                 },
             ]

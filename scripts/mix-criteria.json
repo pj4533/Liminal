@@ -61,7 +61,7 @@
      "cases": ["ref", "long", "fast", "same"], "requires": ["footage", "dialogue"], "bounds": {"runBarsMax": 8}},
     {"id": "C-D3", "description": "Consecutive blocks are not identical apart from declared repeats", "level": "warn",
      "cases": ["ref", "long", "fast", "same"], "requires": ["footage", "dialogue"], "bounds": {}},
-    {"id": "C-D4", "description": "An empty bar in every 8; nothing in the last 2 beats before an 8-bar boundary; occupancy at most 0.55 per 8 bars", "level": "fail",
+    {"id": "C-D4", "description": "An empty bar in every 8; nothing in the last 2 beats before an 8-bar boundary; occupancy at most 0.55 per 8 bars (grammar mode only; skipped in motif mode, see C-D9)", "level": "fail",
      "cases": ["ref", "long", "fast", "same"], "requires": ["footage", "dialogue"], "bounds": {"emptyBarsMin": 1, "occupancyMax": 0.55}},
     {"id": "C-D5", "description": "No overlapping dry events", "level": "fail",
      "cases": ["ref", "long", "fast", "same"], "requires": ["footage", "dialogue"], "bounds": {}},
@@ -71,6 +71,9 @@
     {"id": "C-D7", "description": "The first two statements of a hook are the same pad and transform", "level": "warn",
      "cases": ["ref", "long", "fast", "same"], "requires": ["footage", "dialogue"], "bounds": {}},
     {"id": "C-D8", "description": "At least 90 percent of accents are 50 ms or more from a kick attack", "level": "warn",
-     "cases": ["ref", "long", "fast", "same"], "requires": ["footage", "dialogue"], "bounds": {"fractionMin": 0.9}}
+     "cases": ["ref", "long", "fast", "same"], "requires": ["footage", "dialogue"], "bounds": {"fractionMin": 0.9}},
+    {"id": "C-D9", "description": "Motif mode: every bar of every 16-bar loop has a chop onset; the full line plays at most twice per loop; at least 60 percent of events are sub-line pieces; every loop has repeat-stutter and split-with-pause cells; occupancy 0.30 to 0.62", "level": "fail",
+     "cases": ["ref", "long", "fast", "same"], "requires": ["footage", "dialogue"],
+     "bounds": {"emptyBarsMax": 0, "fullLineMax": 2, "subLineShareMin": 0.6, "cellsEveryLoop": ["stutter", "splitPause"], "occupancy": [0.30, 0.62]}}
   ]
 }

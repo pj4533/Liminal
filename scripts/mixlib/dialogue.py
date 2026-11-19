@@ -49,7 +49,7 @@ def measure_dialogue(cap, grid, grids):
         return {"skipped": "no dialogue"}
     d = grids.get("dialogue")
     others = [g for s, g in grids.items() if s != "dialogue" and g is not None]
-    chops = [(a, b) for a, b in cap.chop_intervals() if b - a >= MIN_CHOP_SECONDS * cap.rate]
+    chops = [(a, b) for a, b in cap.chop_intervals(dry=True) if b - a >= MIN_CHOP_SECONDS * cap.rate]
     if not chops:
         return {"skipped": "no dialogue chops of at least 0.5 s"}
     nfr = len(d["PL"])

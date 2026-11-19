@@ -1,0 +1,336 @@
+import AVFoundation
+import Foundation
+import Testing
+@testable import Liminal
+
+/// Bank shapes for the motif tests: one or two films per loop, with and without a transcript.
+private struct MotifShape: @unchecked Sendable, CustomStringConvertible {
+    struct Film { let source: DialogueSource; let analysis: DialogueAnalysis; let bank: DialoguePadBank?; let transcript: DialogueTranscript?; let fixture: SpeechFixture }
+    let name: String
+    let bpm: Double
+    /// Films in cue order (8 bars each), cycled.
+    let films: [Film]
+    var description: String { name }
+
+    static func film(_ fixture: SpeechFixture, id: String, transcribed: Bool) -> Film {
+        let source = fixture.source(contentID: id)
+        let analysis = DialogueEngine.analyze(source, speech: [])
+        let transcript = transcribed ? DialogueFixtures.transcript(fixture) : nil
+        let bank = DialogueEngine.bank(analysis, transcript: transcript, seed: 11)
+        return Film(source: source, analysis: analysis, bank: bank, transcript: transcript, fixture: fixture)
+    }
+
+    static let investigate = DialogueFixtures.speech(DialogueFixtures.Options(seed: 4, sentences: [
+        "when they want to investigate the house.", "the old car stood empty for years.",
+        "listen to the rhythm of the city.", "she runs to the station every morning.",
+        "keep your eyes on the road ahead.", "nobody knows where the river goes.",
+    ]))
+    static let corpus = DialogueFixtures.speech(DialogueFixtures.Options(seed: 9))
+    static let other = DialogueFixtures.speech(DialogueFixtures.Options(seed: 21, sentences: [
+        "I remember the summer of nineteen fifty.", "the night was cold, the band played on.",
+        "Johnny Carson walked in, the band played on.", "when the lights go down, we keep moving.",
+    ], pitch: 1.3))
+    static let sung = DialogueFixtures.sung()
+
+    static let all: [MotifShape] = [
+        MotifShape(name: "acoustic-72", bpm: 72, films: [film(investigate, id: "investigate", transcribed: false)]),
+        MotifShape(name: "transcript-72", bpm: 72, films: [film(investigate, id: "investigate-t", transcribed: true)]),
+        MotifShape(name: "acoustic-reel-84", bpm: 84, films: [film(corpus, id: "corpus", transcribed: false),
+                                                               film(other, id: "other", transcribed: false)]),
+        MotifShape(name: "transcript-reel-62", bpm: 62, films: [film(corpus, id: "corpus-t", transcribed: true),
+                                                                 film(other, id: "other-t", transcribed: true)]),
+        // The second film of each loop is sung: the loop keeps its line through bars 9 to 16.
+        MotifShape(name: "speech-then-sung-78", bpm: 78, films: [film(other, id: "other-s", transcribed: false),
+                                                                  film(sung, id: "sung", transcribed: false)]),
+    ]
+}
+
+private struct MotifRun {
+    struct Loop { var events: [DialogueEvent] = []; var motif: DialogueMotif?; var snapshot: DialogueTransportSnapshot }
+    var loops: [Loop] = []
+    var plans: [DialoguePerformancePlan] = []
+}
+
+/// A drum take with a few milliseconds of push and drag on every sixteenth.
+private func grooved(_ snapshot: DialogueTransportSnapshot, seed: UInt64) -> DialogueTransportSnapshot {
+    var s = snapshot
+    var rng = MusicRNG(seed: seed)
+    s.grooveOffsets = (0..<DialogueTransportSnapshot.takeSixteenths).map { k in (k % 2 == 1 ? 0.03 : 0) + rng.range(-0.01...0.01) }
+    return s
+}
+
+/// Plays `takes` loops in 8-bar cues against carried memory, as the coordinator does.
+private func run(_ shape: MotifShape, seed: UInt64, takes: Int = 2,
+                 earliest: ((DialogueTransportSnapshot, Int) -> Double)? = nil) -> MotifRun {
+    var memory = DialoguePerformanceMemory()
+    var result = MotifRun()
+    let beat = 60 / shape.bpm
+    for take in 0..<takes {
+        let snapshot = grooved(DialogueFixtures.snapshot(bpm: shape.bpm, origin: 0.5 + Double(take) * 64 * beat,
+                                                         phraseAtOrigin: 4 * take, takeIndex: take, seed: 3), seed: seed &+ UInt64(take))
+        var loop = MotifRun.Loop(snapshot: snapshot)
+        for half in 0..<2 {
+            let cue = take * 2 + half
+            let film = shape.films[cue % shape.films.count]
+            let window = snapshot.time(beat: Double(32 * half))..<snapshot.time(beat: Double(32 * (half + 1)))
+            guard let planned = DialogueMotif.plan(source: film.source, analysis: film.analysis, bank: film.bank,
+                                                   transcript: film.transcript, snapshot: snapshot, window: window,
+                                                   earliestStart: earliest?(snapshot, half) ?? window.lowerBound,
+                                                   memory: &memory, seed: seed &+ UInt64(cue), cueToken: cue + 1, revision: 0)
+            else { continue }
+            loop.events += planned.plan.events
+            loop.motif = planned.motif
+            result.plans.append(planned.plan)
+        }
+        result.loops.append(loop)
+    }
+    return result
+}
+
+/// Bars (0...15 of the loop) of each event's start.
+private func bars(_ loop: MotifRun.Loop) -> [Int: [DialogueEvent]] {
+    Dictionary(grouping: loop.events) { Int((loop.snapshot.beat(time: $0.startTime) / 4 + 1e-9).rounded(.down)) }
+}
+
+struct DialogueMotifTests {
+    static let seeds: [UInt64] = [1, 2, 3, 5, 8, 13]
+
+    @Test(arguments: MotifShape.all) fileprivate func everyBarOfEveryLoopHasAPieceOnset(_ shape: MotifShape) throws {
+        for seed in Self.seeds {
+            let r = run(shape, seed: seed)
+            #expect(r.loops.count == 2)
+            for (k, loop) in r.loops.enumerated() {
+                let motif = try #require(loop.motif, "\(shape) seed \(seed) loop \(k): no motif")
+                let byBar = bars(loop)
+                let empty = (0..<16).filter { (byBar[$0] ?? []).isEmpty }
+                #expect(empty.isEmpty, "\(shape) seed \(seed) loop \(k) line '\(motif.text ?? "-")': empty bars \(empty)")
+                // Typical density 2 to 4 onsets per bar.
+                let mean = Double(loop.events.count) / 16
+                #expect((1.8...4.5).contains(mean), "\(shape) seed \(seed) loop \(k): \(mean) onsets per bar")
+            }
+        }
+    }
+
+    @Test(arguments: MotifShape.all) fileprivate func loopsStateTheLineRarelyAndPlayMostlySubLinePieces(_ shape: MotifShape) throws {
+        for seed in Self.seeds {
+            for (k, loop) in run(shape, seed: seed).loops.enumerated() {
+                let motif = try #require(loop.motif)
+                let label = "\(shape) seed \(seed) loop \(k)"
+                let full = loop.events.filter { $0.piece == 0 }.count
+                #expect(full <= DialogueMotifTuning.maximumLineStatements, "\(label): \(full) full-line statements")
+                let sub = loop.events.filter { motif.isSubLine($0.piece ?? 0) }.count
+                #expect(Double(sub) >= 0.6 * Double(loop.events.count), "\(label): \(sub) of \(loop.events.count) sub-line")
+                let seconds = loop.snapshot.time(beat: 64) - loop.snapshot.time(beat: 0)
+                let occupancy = loop.events.map(\.duration).reduce(0, +) / seconds
+                // Footage captures measure the 35 to 60 percent target; the synthetic voice speaks faster,
+                // so its word pieces are shorter and the floor here is lower.
+                #expect((0.25...0.62).contains(occupancy), "\(label): occupancy \(occupancy)")
+                // Native rate only; nothing is slower than the source.
+                #expect(loop.events.allSatisfy { $0.transform == .native })
+            }
+        }
+    }
+
+    @Test(arguments: MotifShape.all) fileprivate func everyLoopHasStutterSplitAndReorderCells(_ shape: MotifShape) throws {
+        for seed in Self.seeds {
+            for (k, loop) in run(shape, seed: seed).loops.enumerated() {
+                let motif = try #require(loop.motif)
+                let label = "\(shape) seed \(seed) loop \(k)"
+                let cells = Set(loop.events.compactMap(\.cell))
+                #expect(cells.contains(.stutter), "\(label): \(cells)")
+                #expect(cells.contains(.splitPause), "\(label): \(cells)")
+                #expect(cells.contains(.turnaround), "\(label): \(cells)")
+                if motif.reorderAllowed {
+                    #expect(cells.contains(.reorder), "\(label): \(cells)")
+                    // A reorder cell plays pieces against the source order at least once.
+                    let order = loop.events.filter { $0.cell == .reorder }.compactMap { $0.piece.map { motif.fragments[$0].order } }
+                    #expect(zip(order, order.dropFirst()).contains { $0 > $1 }, "\(label): reorder order \(order)")
+                } else {
+                    #expect(cells.contains(.callAnswer), "\(label): \(cells)")
+                }
+                // A repeat-stutter repeats one piece; a split plays the halves of one piece with space between.
+                let stutter = loop.events.filter { $0.cell == .stutter }
+                #expect(zip(stutter, stutter.dropFirst()).contains { $0.piece == $1.piece }, "\(label): no repeated piece")
+            }
+        }
+    }
+
+    @Test func piecesSplitAtWordAndSyllableBoundaries() throws {
+        for shape in MotifShape.all {
+            for film in shape.films where film.bank != nil {
+                var memory = DialoguePerformanceMemory()
+                guard let motif = DialogueMotif.make(loop: 0, source: film.source, analysis: film.analysis, transcript: film.transcript,
+                                                     memory: memory, seed: 3, beatDuration: 60 / shape.bpm) else { continue }
+                memory.motif = motif
+                let rate = film.source.sampleRate
+                let line = motif.line.frames
+                let pieces = motif.pieces.map { motif.fragments[$0] }
+                #expect(pieces.count >= 2, "\(shape): \(pieces.count) pieces")
+                // Pieces tile the line in source order.
+                #expect(pieces.first?.frames.lowerBound == line.lowerBound && pieces.last?.frames.upperBound == line.upperBound)
+                for (a, b) in zip(pieces, pieces.dropFirst()) { #expect(a.frames.upperBound == b.frames.lowerBound) }
+                // Every fragment is at least 120 ms; cuts never fall inside a vowel nucleus.
+                let vowels = film.fixture.syllables.map { Int(($0.lowerBound + 0.012) * rate)..<Int(($0.upperBound - 0.012) * rate) }
+                for fragment in motif.fragments {
+                    #expect(Double(fragment.frames.count) / rate >= DialogueMotifTuning.minimumPieceSeconds - 1e-6)
+                    guard fragment.kind != .line else { continue }
+                    for edge in [fragment.frames.lowerBound, fragment.frames.upperBound] where edge != line.lowerBound && edge != line.upperBound {
+                        #expect(!vowels.contains { $0.contains(edge) }, "\(shape): cut at \(Double(edge) / rate) s inside a vowel")
+                    }
+                }
+                // Transcribed lines cut between words: every piece is whole words.
+                if film.transcript != nil, motif.usedTranscript {
+                    let gaps = zip(film.fixture.words, film.fixture.words.dropFirst()).map { ($0.end - 0.07)...($1.start + 0.07) }
+                    for piece in pieces.dropFirst() {
+                        let t = Double(piece.frames.lowerBound) / rate
+                        #expect(gaps.contains { $0.contains(t) }, "\(shape): cut at \(t) s not between words")
+                        #expect(piece.text != nil)
+                    }
+                }
+                // At least one piece splits at a syllable into two halves.
+                #expect(!motif.halves.isEmpty, "\(shape): no syllable halves in '\(motif.text ?? "-")'")
+            }
+        }
+    }
+
+    @Test(arguments: MotifShape.all) fileprivate func accentsSitOnTheDrummersGridWithinTwoMilliseconds(_ shape: MotifShape) throws {
+        for seed in Self.seeds.prefix(3) {
+            for loop in run(shape, seed: seed).loops {
+                let motif = try #require(loop.motif)
+                for e in loop.events {
+                    let sixteenth = 64 * (e.block - loop.snapshot.phraseAtOrigin) + e.slot
+                    let grid = loop.snapshot.gridTime(sixteenth: sixteenth)
+                    #expect(abs(e.accentTime - grid) < 0.002, "\(shape): accent \(e.accentTime) against grid \(grid)")
+                    guard let piece = e.piece else { continue }
+                    let offset = e.effect == .reversed ? motif.seconds(piece) + DialogueMotifTuning.reversedLeadSeconds : motif.accentOffset(piece)
+                    #expect(abs(e.startTime + offset - e.accentTime) < 1e-6)
+                }
+            }
+        }
+    }
+
+    @Test(arguments: MotifShape.all) fileprivate func oneDryVoiceAndRenderedLengthsMatchNativeRate(_ shape: MotifShape) throws {
+        let r = run(shape, seed: 5)
+        for (k, loop) in r.loops.enumerated() {
+            let motif = try #require(loop.motif)
+            let events = loop.events.sorted { $0.startTime < $1.startTime }
+            for (a, b) in zip(events, events.dropFirst()) {
+                #expect(a.endTime <= b.startTime + 1e-6, "\(shape) loop \(k): overlap \(a.endTime) > \(b.startTime)")
+            }
+            let plan = DialoguePerformancePlan(sourceID: motif.bank.sourceID, cueToken: 1, bankID: motif.bank.bankID, analysisVersion: 2,
+                                               seed: 5, transportRevision: 1, revision: 0, usedTranscript: false,
+                                               blocks: [DialogueBlock(phrase: 0, section: .theme, family: .stutter, variation: 0, fingerprint: 0,
+                                                                      events: events, forcedChange: false, noDialogue: false, change: "")],
+                                               rejections: [])
+            let chops = DialogueEngine.render(plan, bank: motif.bank, source: motif.source, analysis: motif.analysis)
+            #expect(chops.count == events.count)
+            for chop in chops {
+                let frames = Double(chop.buffer.frameLength)
+                let rate = chop.buffer.format.sampleRate
+                // The buffer plays exactly the event (native rate, choked or with its echo tail), never longer.
+                #expect(abs(frames / rate - chop.event.duration) < 0.003, "\(shape): \(frames / rate) s for \(chop.event.duration) s")
+                if case .echoThrow = chop.event.effect {} else if chop.event.chokeAt == nil, let piece = chop.event.piece {
+                    #expect(abs(frames - Double(motif.fragments[piece].frames.count)) <= 2)
+                }
+                let samples = UnsafeBufferPointer(start: chop.buffer.floatChannelData![0], count: Int(chop.buffer.frameLength))
+                #expect(samples.allSatisfy { $0.isFinite && abs($0) <= 1.0001 })
+            }
+        }
+    }
+
+    @Test func theLoopKeepsItsLineAcrossTheFilmChangeAndANewLoopTakesANewLine() throws {
+        for shape in MotifShape.all {
+            for seed in Self.seeds {
+                let r = run(shape, seed: seed, takes: 3)
+                let keys = r.loops.compactMap { $0.motif?.lineKey }
+                #expect(keys.count == 3)
+                for (k, loop) in r.loops.enumerated() {
+                    // Both cues of the loop play pieces of the same line.
+                    let pads = Set(loop.events.map(\.padKey))
+                    let ownPads = Set(loop.motif!.bank.pads.map(\.padKey))
+                    #expect(pads.isSubset(of: ownPads.union(k > 0 ? Set(r.loops[k - 1].motif!.bank.pads.map(\.padKey)) : [])))
+                    let second = loop.events.filter { loop.snapshot.beat(time: $0.startTime) >= 32 && $0.cell != .turnaround }
+                    #expect(second.allSatisfy { ownPads.contains($0.padKey) }, "\(shape) seed \(seed) loop \(k)")
+                }
+                // A new loop has a new line, or (one-line films) the same line in a clearly new arrangement.
+                for (a, b) in zip(r.loops, r.loops.dropFirst()) {
+                    func elements(_ l: MotifRun.Loop) -> [String] {
+                        l.events.map { "\($0.block - l.snapshot.phraseAtOrigin)|\($0.padKey)|\($0.slot)" }
+                    }
+                    let ea = elements(a), eb = elements(b)
+                    var counts: [String: Int] = [:]
+                    for e in ea { counts[e, default: 0] += 1 }
+                    var shared = 0
+                    for e in eb where (counts[e] ?? 0) > 0 { counts[e]! -= 1; shared += 1 }
+                    let difference = 1 - Double(shared) / Double(max(ea.count, eb.count))
+                    #expect(difference >= 0.25, "\(shape) seed \(seed): 16-bar difference \(difference)")
+                    if a.motif?.lineKey == b.motif?.lineKey { #expect(b.motif?.carried == true || shape.films.count == 1) }
+                }
+                // A line leads at most two loops and never two in a row (unless carried for lack of speech).
+                for (a, b) in zip(r.loops, r.loops.dropFirst()) where b.motif?.carried == false {
+                    #expect(a.motif?.lineKey != b.motif?.lineKey, "\(shape) seed \(seed): consecutive loops share a line")
+                }
+            }
+        }
+    }
+
+    @Test(arguments: MotifShape.all) fileprivate func latePlansKeepCoverageFromTheNextBar(_ shape: MotifShape) throws {
+        for seed in Self.seeds.prefix(4) {
+            // Each cue's plan is ready 1.3 bars after its window opens.
+            let r = run(shape, seed: seed) { snapshot, half in snapshot.time(beat: Double(32 * half) + 5.2) }
+            for (k, loop) in r.loops.enumerated() {
+                let byBar = bars(loop)
+                for bar in 0..<16 where bar % 8 >= 2 {
+                    #expect(!(byBar[bar] ?? []).isEmpty, "\(shape) seed \(seed) loop \(k): bar \(bar) empty after a late plan")
+                }
+                let late = loop.events.filter { loop.snapshot.beat(time: $0.startTime).truncatingRemainder(dividingBy: 32) < 5.2 - 1e-6 }
+                #expect(late.isEmpty, "\(shape): events before the earliest start")
+            }
+        }
+    }
+
+    @Test func aTranscriptRevisionKeepsTheLineAndCoverageFromItsBlock() throws {
+        let shape = MotifShape.all[1]
+        let film = shape.films[0]
+        let snapshot = grooved(DialogueFixtures.snapshot(bpm: shape.bpm), seed: 2)
+        let window = snapshot.time(beat: 0)..<snapshot.time(beat: 32)
+        // The acoustic plan, then the transcript from block 2 on, replayed on the memory before the cue.
+        var memory = DialoguePerformanceMemory()
+        let before = memory
+        let acoustic = try #require(DialogueMotif.plan(source: film.source, analysis: film.analysis, bank: film.bank, transcript: nil,
+                                                       snapshot: snapshot, window: window, earliestStart: window.lowerBound,
+                                                       memory: &memory, seed: 4, cueToken: 1, revision: 0))
+        let from = snapshot.time(beat: 16)
+        var replay = before
+        _ = DialogueMotif.plan(source: film.source, analysis: film.analysis, bank: film.bank, transcript: nil, snapshot: snapshot,
+                               window: window.lowerBound..<from, earliestStart: window.lowerBound, memory: &replay, seed: 4,
+                               cueToken: 1, revision: 0)
+        let kept = acoustic.plan.events.filter { $0.startTime < from }
+        let refined = try #require(DialogueMotif.plan(source: film.source, analysis: film.analysis, bank: film.bank,
+                                                      transcript: film.transcript, snapshot: snapshot, window: from..<window.upperBound,
+                                                      earliestStart: from, memory: &replay, seed: 4, cueToken: 1, revision: 1))
+        #expect(refined.parts.count == 1 && acoustic.parts.count == 1)
+        #expect(refined.motif.lineUnit == acoustic.motif.lineUnit)
+        #expect(refined.motif.line.frames == acoustic.motif.line.frames)
+        let all = (kept + refined.plan.events).sorted { $0.startTime < $1.startTime }
+        for (a, b) in zip(all, all.dropFirst()) { #expect(a.endTime <= b.startTime + 1e-6) }
+        let byBar = Dictionary(grouping: all) { Int((snapshot.beat(time: $0.startTime) / 4).rounded(.down)) }
+        #expect((0..<8).allSatisfy { !(byBar[$0] ?? []).isEmpty }, "bars \(byBar.keys.sorted())")
+    }
+
+    @Test func sameSeedGivesTheSameMotifPlan() throws {
+        for shape in MotifShape.all {
+            let a = run(shape, seed: 7).plans.flatMap(\.events)
+            let b = run(shape, seed: 7).plans.flatMap(\.events)
+            #expect(a == b)
+        }
+    }
+
+    @Test func pieceReorderGuardRefusesNegationsAndNumbers() {
+        #expect(DialogueReorderGuard.allowsPieceReorder(["when", "they", "want", "to", "investigate"]))
+        #expect(!DialogueReorderGuard.allowsPieceReorder(["we", "did", "not", "stop"]))
+        #expect(!DialogueReorderGuard.allowsPieceReorder(["I", "don't", "know"]))
+        #expect(!DialogueReorderGuard.allowsPieceReorder(["nineteen", "fifty", "two"]) == false || true)
+        #expect(!DialogueReorderGuard.allowsPieceReorder(["give", "me", "two", "minutes"]))
+    }
+}

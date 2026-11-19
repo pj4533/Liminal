@@ -473,15 +473,24 @@ struct DialogueEngineTests {
 
     /// Invariants that hold for any input: one dry voice, a native protected anchor, events inside
     /// their pads, occupancy and a rest bar in every 8.
-    private func checkInvariants(_ blocks: [DialogueBlock], bank: DialoguePadBank?, bpm: Double = 70, _ label: String) {
+    private func checkInvariants(_ blocks: [DialogueBlock], bank: DialoguePadBank?, bpm: Double = 70, motifs: [DialogueMotif] = [],
+                                 _ label: String) {
         let events = blocks.flatMap(\.events).sorted { $0.startTime < $1.startTime }
         for (a, b) in zip(events, events.dropFirst()) {
             #expect(b.startTime >= a.endTime - 1e-9, "\(label): overlapping dry events")
         }
         let bar = 4 * 60 / bpm
+        // Echo-throw tails do not count as dry audio; motif chops may fill up to 0.62 of a section
+        // (user direction of 19 November 2026 overrides the grammar's 0.55).
+        func dry(_ e: DialogueEvent) -> Double {
+            if case .echoThrow(_, let tail) = e.effect { return e.duration - tail }
+            return e.duration
+        }
         for group in Dictionary(grouping: blocks, by: { $0.phrase / 2 }).values {
-            let seconds = group.flatMap(\.events).map(\.duration).reduce(0, +)
-            #expect(seconds <= DialogueTuning.maximumOccupancy * 8 * bar + 1e-6, "\(label): occupancy \(seconds / (8 * bar))")
+            let events = group.flatMap(\.events)
+            let seconds = events.map(dry).reduce(0, +)
+            let limit = events.contains { $0.cell != nil } ? 0.62 : DialogueTuning.maximumOccupancy
+            #expect(seconds <= limit * 8 * bar + 1e-6, "\(label): occupancy \(seconds / (8 * bar))")
         }
         guard let bank else {
             #expect(events.isEmpty, "\(label): events without a bank")
@@ -489,8 +498,10 @@ struct DialogueEngineTests {
         }
         #expect(bank.anchor.transform == .native && bank.anchor.protected, "\(label): anchor not native and protected")
         for e in events {
-            let pad = bank.pad(e.padID)
-            #expect(pad != nil && e.duration <= (pad?.duration ?? 0) + 1e-9, "\(label): event longer than its pad")
+            // A motif event's pad lives in its loop's motif bank.
+            let owner = e.cell == nil ? bank : motifs.first { $0.bank.pads.contains { $0.padKey == e.padKey } }?.bank
+            let pad = owner?.pad(e.padID)
+            #expect(pad != nil && dry(e) <= (pad?.duration ?? 0) + 1e-9, "\(label): event longer than its pad")
         }
     }
 
@@ -555,7 +566,7 @@ struct DialogueEngineTests {
                 let last = DialogueChopRenderer.readPosition(pad, outputFrame: DialogueChopRenderer.outputCount(pad) - 1)
                 #expect(pad.frames.lowerBound >= 0 && last < Double(source.frameCount - 1), "seed \(seed): read past the buffer")
             }
-            checkInvariants(prepared.plan.blocks, bank: prepared.bank, bpm: min(bpm, nextBPM ?? bpm), "seed \(seed)")
+            checkInvariants(prepared.plan.blocks, bank: prepared.bank, bpm: min(bpm, nextBPM ?? bpm), motifs: prepared.motifs, "seed \(seed)")
             for chop in prepared.chops {
                 let data = try #require(chop.buffer.floatChannelData)
                 var finite = true
