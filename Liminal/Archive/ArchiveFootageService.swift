@@ -284,6 +284,10 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
             LMLog.audio.info("📼🔊 decoded \(String(format: "%.1f", seconds), privacy: .public)s in \(String(format: "%.0f", (Self.uptime() - t0) * 1000), privacy: .public) ms")
             let due = start + cue.beginAt
             guard let self else { return }
+            let chops = sink.takeGrid().map { grid in
+                LofiDialogueSampler.prepare(buffer, grid: grid, cueStart: due, duration: cue.endAt - cue.beginAt,
+                                           seed: UInt64(piece.seed.bitPattern))
+            } ?? []
             let deadline = start + cue.fadeOutAt
             while true {
                 let time = Self.uptime()
@@ -309,7 +313,7 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
                 s.audio = AudioState(cue: cue, token: token, pieceIndex: piece.index, begun: true)
                 sink.post(.archiveBegin(ArchiveVoice.Cue(buffer: ready, gain: g,
                     fadeIn: max(0.35, cue.fadeIn - max(late, 0)),
-                    label: title, claritySeed: piece.seed, activity: activity)))
+                    label: title, claritySeed: piece.seed, activity: activity, chops: chops)))
                 return true
             }
             if posted && late > 0.1 {

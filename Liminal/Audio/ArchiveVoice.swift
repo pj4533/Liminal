@@ -19,6 +19,7 @@ nonisolated final class ArchiveVoice {
         /// Seeded by the footage piece so successive cues vary in how clearly they emerge.
         var claritySeed: Float = 0.75
         var activity: [Float] = []
+        var chops: [LofiDialogueSampler.Hit] = []
     }
 
     /// Node wrapper for an `AVAudioPlayerNode` (AudioKit's `AudioPlayer` adds a mixer and file handling we
@@ -30,6 +31,8 @@ nonisolated final class ArchiveVoice {
     }
 
     let source = BufferSource()
+    let chops = BufferSource()
+    private let bed: Fader
     let highpass: HighPassButterworthFilter
     let lowpass: LowPassButterworthFilter
     let lowpass2: LowPassButterworthFilter
@@ -91,6 +94,10 @@ nonisolated final class ArchiveVoice {
     private var cueGain: Float = 1
 
     func setBeatLocked(_ enabled: Bool) {
+        if !enabled {
+            chops.player.stop()
+            ParamRamp.setGain(bed, 1, over: 0.12)
+        }
         beatLocked = enabled
         if playing { setGain(cueGain) }
     }
@@ -115,7 +122,8 @@ nonisolated final class ArchiveVoice {
 
     init(format: AVAudioFormat = Settings.audioFormat) {
         self.format = format
-        highpass = HighPassButterworthFilter(source, cutoffFrequency: Self.highpassHz)
+        bed = Fader(source)
+        highpass = HighPassButterworthFilter(Mixer(bed, chops), cutoffFrequency: Self.highpassHz)
         lowpass = LowPassButterworthFilter(highpass, cutoffFrequency: Self.lowpassHz)
         lowpass2 = LowPassButterworthFilter(lowpass, cutoffFrequency: Self.lowpassHz)
         spectralSweep = Phaser(lowpass2, notchMinimumFrequency: 200, notchMaximumFrequency: 1300,
@@ -161,12 +169,35 @@ nonisolated final class ArchiveVoice {
         updateMix(progress: 0)
         p.scheduleBuffer(cue.buffer, at: nil, options: [], completionHandler: nil)
         p.play()
+        scheduleChops(cue.chops, now: now)
         playing = true
         label = cue.label
         stopAt = nil
         endAt = now + seconds
         strip.fade(to: 1, over: cue.fadeIn, now: now)
         LMLog.audio.info("📼🔊 archive audio begin \"\(cue.label, privacy: .public)\" \(String(format: "%.1f", seconds), privacy: .public)s gain=\(String(format: "%.1f", 20 * log10(max(cue.gain, 1e-6))), privacy: .public)dB fadeIn=\(String(format: "%.1f", cue.fadeIn), privacy: .public)s")
+    }
+
+    private func scheduleChops(_ hits: [LofiDialogueSampler.Hit], now: Double) {
+        let player = chops.player
+        player.stop()
+        let offline = player.engine?.isInManualRenderingMode == true
+        let latency = offline ? 0 : player.outputPresentationLatency
+        // All buffers use one player sample timeline. The live anchor is the same
+        // host clock as the drum player; compensate for the route's presentation latency.
+        let lead = max(0.06, latency + 0.025)
+        let host = mach_absolute_time()
+        let anchor = offline ? now : Double(DispatchTime.now().uptimeNanoseconds) / 1e9 + lead + latency
+        let valid = beatLocked ? hits.filter { $0.time >= anchor } : []
+        ParamRamp.setGain(bed, valid.isEmpty ? 1 : 0.48, over: 0.075)
+        guard !valid.isEmpty else { return }
+        for hit in valid {
+            let frame = AVAudioFramePosition(((hit.time - anchor) * format.sampleRate).rounded())
+            player.scheduleBuffer(hit.buffer, at: AVAudioTime(sampleTime: frame, atRate: format.sampleRate))
+        }
+        if offline { player.play() }
+        else { player.play(at: AVAudioTime(hostTime: host + AVAudioTime.hostTime(forSeconds: lead))) }
+        LMLog.audio.info("Lo-Fi film sampler scheduled \(valid.count) hits for this picture")
     }
 
     /// Fade out over `fade` seconds; the player stops once the fade is complete.
@@ -194,7 +225,10 @@ nonisolated final class ArchiveVoice {
     }
 
     func powerDown() {
-        if playing { source.player.stop() }
+        if playing {
+            source.player.stop()
+            chops.player.stop()
+        }
         playing = false
         stopAt = nil
         endAt = nil

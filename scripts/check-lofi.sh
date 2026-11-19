@@ -32,6 +32,7 @@ parser.add_argument("--next-drum-name", help="Use a second installed performance
 source = parser.add_mutually_exclusive_group()
 source.add_argument("--footage", type=Path)
 source.add_argument("--cached-footage", action="store_true")
+source.add_argument("--film-reel", action="store_true", help="Change to another locally cached film every eight bars")
 source.add_argument("--no-footage", action="store_true")
 args = parser.parse_args()
 if not 58 <= args.bpm <= 82 or not 128 <= args.block <= 4096 or not 0 <= args.seed < 2**64:
@@ -57,7 +58,7 @@ prefix = "/" + token + "/"
 artifacts = {"manifest.json", "score.json", "master.wav", "drums.wav", "bass.wav",
              "dry.wav", "texture.wav", "wet.wav", "footage-dry.wav", "footage-delay.wav",
              "footage-room.wav", "lofi.wav", "footage.wav", "pre-master.wav", "glue.wav",
-             "fx-echo-raw.wav", "fx-room-raw.wav", "fx-color-raw.wav"}
+             "dialogue-chops.wav", "fx-echo-raw.wav", "fx-room-raw.wav", "fx-color-raw.wav"}
 
 
 class Receiver(BaseHTTPRequestHandler):
@@ -102,7 +103,7 @@ configuration = dict(runToken=secrets.token_hex(16),
                      trackedDiffSHA256=hashlib.sha256(subprocess.check_output(
                          ["git", "diff", "--binary", "HEAD"])).hexdigest(),
                      seed=args.seed, tempo=args.bpm, scale=args.scale, bars=args.bars, noFootage=args.no_footage,
-                     cachedFootage=args.cached_footage, privateDrums=args.private_drums, drumName=args.drum_name, nextDrumName=args.next_drum_name, block=args.block,
+                     cachedFootage=args.cached_footage, filmReel=args.film_reel, privateDrums=args.private_drums, drumName=args.drum_name, nextDrumName=args.next_drum_name, block=args.block,
                      postrollBeats=args.postroll_beats, limiter=args.limiter,
                      explicitFootageSuffix=args.footage.suffix if args.footage else None)
 with ThreadingHTTPServer(("127.0.0.1", 0), Receiver) as server:

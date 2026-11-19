@@ -337,7 +337,7 @@ nonisolated struct FootageWeaver {
         let swell = swells && recipe.maxLength == nil && length >= Self.swellMinLength ? rng.rangeF(Self.swellRange) : 0
         let soundSpan = length + Self.soundTail - Self.soundDelay
         let sound = soundSpan >= Self.soundMinSpan
-            && rng.chance(timing.soundChance)
+            && (rng.chance(timing.soundChance) || (grid != nil && timing.soundChance > 0))
         let index = pieceCount
         return Request(index: index, slot: slot, start: start, fadeIn: fadeIn, length: length, recipe: recipe,
                        seed: rng.unit(), rate: rng.rangeF(timing.rate), warp: rng.rangeF(timing.warp),

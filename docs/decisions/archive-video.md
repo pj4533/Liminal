@@ -9,7 +9,11 @@ timing of A12, the sound timing of A15 and the "Footage amount" setting of A20-A
 sound (A14-A19) and the "Archive Footage" settings card (A20-A22). Phase 6 (floating screen) is not built
 (A23).
 
-## Summary (what was built)
+## A28 (2026-11-18) Film dialogue as a Lo-Fi instrument
+
+The same decoded film cue supplies both the continuous soundtrack and short rhythmic drops. On the footage worker, a three-band background estimate helps locate syllable attacks and quiet cut points. Using the cue already queued for the picture lets Liminal repeat a line on the drum grid without a transcription service, model download, or separate library of quotations. The sampler can borrow a later phrase from the shot to cover a quiet opening. The music queue schedules prepared samples and follows the shared footage gain and fade. The film and still image change together at the eight- and sixteen-bar fills. [Current playback behavior](../experience.md#lo-fi) · [Listening measurements](../research/lofi-handoff-checklist.md#film-sampler-listening-pass)
+
+## Original implementation summary (A1–A25)
 
 - Queries (all `collection:prelinger`, 1950-1969, `mediatype:movies`, weighted): newsreel / news magazine /
   telenews / screen magazine; abstract / experimental / kaleidoscope / optical / hypnosis / dream / surreal;

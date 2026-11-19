@@ -18,18 +18,18 @@ Liminal pairs evolving ambient music with surreal AI imagery, flowing visual eff
 
 ## See it in motion
 
-<p align="center">
-  <img src="docs/media/vision-pro-demo.gif" alt="Vision Pro capture: surreal pink forms ripple through chromatic effects" width="800">
-</p>
+[![Play the eight-second Lo-Fi preview with stereo sound](docs/media/lofi-preview.jpg)](https://cdn.jsdelivr.net/gh/pj4533/Liminal@main/docs/media/lofi-preview.mp4)
 
-*Captured on Apple Vision Pro. This silent loop offers a glimpse of the visuals; spatial depth and generative audio are experienced in the app.*
+**[Play with sound · 8 seconds · 1.4 MB](https://cdn.jsdelivr.net/gh/pj4533/Liminal@main/docs/media/lofi-preview.mp4)** · [MP4 in the repository](docs/media/lofi-preview.mp4)
+
+Captured from the macOS app at 69 BPM. Listen for the film dialogue over AJ Hall’s drums as the picture changes on the fill. Film excerpts come from the U.S. Air Force’s *UFO Interview* (1966). [Film source](https://archive.org/details/342-usaf-42990)
 
 ## An atmosphere that keeps changing
 
-- **Two music modes** — slow Ambient scenes, or Lo-Fi with returning acoustic or electric piano hooks, plucked strings, and replies from soft mallets, bass recorder, or pipe organ, deep bass, and optional local 16-bar drum breaks. Film echoes follow the beat.
+- **Two music modes** — slow Ambient scenes, or Lo-Fi with returning acoustic or electric piano hooks, plucked strings, and replies from soft mallets, bass recorder, or pipe organ, deep bass, and optional local 16-bar drum breaks. Lo-Fi chops short lines from the current film and repeats them on the beat.
 - **Living imagery** — generated scenes blend through fluid effects that respond to the music.
 - **Immersive space** — depth gives the imagery relief as it wraps around you on Vision Pro.
-- **Traces of old film** — Vintage films from the Internet Archive weave texture, movement, and occasional sound into the scene.
+- **Traces of old film** — Vintage films from the Internet Archive weave texture, movement, and voices into the scene.
 - **Make it yours** — choose an Ambient style, set the Lo-Fi BPM, or pin a scale in either mode. Adjust footage volume, visual intensity, and image-generation limits.
 
 <details>
@@ -59,7 +59,7 @@ See the [setup guide](docs/getting-started.md) for environment-key configuration
 | Guide | What you’ll find |
 | --- | --- |
 | [Experience & controls](docs/experience.md) | Features, settings, and playback behavior |
-| [Lo-Fi instrument recordings](docs/lofi-samples.md) | Acoustic sample sources and credits |
+| [Lo-Fi instrument recordings](docs/lofi-samples.md) | Sources and credits for all twelve sampled instruments |
 | [Architecture](docs/architecture.md) | Music, image and rendering pipelines; dependencies |
 | [Development](docs/development.md) | Tests, launch flags, scripts, and contribution guidance |
 | [Design decisions](docs/decisions/README.md) | The reasoning behind the experience |

@@ -46,6 +46,8 @@ The 25 verified recordings each span 16 bars. Liminal plays each break in its or
 
 Ambient and the footage soundtrack share slowly changing phasing and a second echo that feeds the reverb. In Lo-Fi, the footage voices sit a little further forward. Echo patterns change every four bars, with a main echo, a darker stereo answer, and a reflection that opens into the room. The spacing follows the drums and the taps swell and fade as the pattern changes. The bass makes a little room for strong kicks. The film, instruments, and rhythm share light compression and bounded loudness adjustment at the output.
 
+With **Footage audio** up, Lo-Fi listens for the rise and fall of syllables in the incoming shot. A few words can become a hook that lands two or three times over two bars. Sometimes the answer is just the last syllable, slowed or sped up. The sampler leaves space for the drummer’s eight-bar fill. It works from the current film locally, including when playback uses the cache offline.
+
 An excerpt whose audio falls below the silence threshold can play with visuals alone. The music continues while Liminal waits for the next footage cue.
 
 ## Controls
@@ -65,7 +67,7 @@ An excerpt whose audio falls below the silence threshold can play with visuals a
 | **Clear All Images** | Wipes every cached image after confirmation and restarts generation |
 | **Archive footage** | Old film always woven subtly into the scene (on by default); turning it off fades picture and sound out in 2 s |
 | **Change speed** | Ambient changes film every 20–30, 12–20, or 8–12 seconds (Slow, Medium, Fast). Lo-Fi follows the eight-bar drum fills. |
-| **Footage audio** | Level of the film's own sound when a piece brings it, 0 = silent, 50% = the tuned default, 100% = +6 dB |
+| **Footage audio** | Level of the film soundtrack and its sampled Lo-Fi drops, 0 = silent, 50% = the tuned default, 100% = +6 dB |
 | **Clear Footage** | Deletes the cached films (keeps the ones on screen) |
 | **Reset All Settings** | Restores defaults |
 

@@ -19,7 +19,7 @@ Use installed SDKs and available simulator names. Resolve Swift packages through
 - `Liminal/LiminalApp.swift`, `ContentView.swift`, shared control sections: macOS entry point and UI.
 - `Liminal/visionOS/`: visionOS entry point, control window, immersive depth-displaced shell, head pose, source upload, offscreen rendering and RealityKit materials.
 - `Liminal/Audio/`: GenerativeEngine facade, Ambient scheduler and synthesis layers, shared effects and mix, offline renders, and archive audio voices.
-- `Liminal/Audio/Lofi/`: Lo-Fi form and motifs, acoustic sample playback, full-take drum transport, and stereo effects. The score and DSP tests plus `scripts/check-lofi.sh` verify this path. Keep the private drum files and beat-grid catalog out of Git. See [instrument credits](docs/lofi-samples.md) for the bundled CC0 samples.
+- `Liminal/Audio/Lofi/`: Lo-Fi form and motifs, acoustic sample playback, full-take drum transport, footage-dialogue chopping, and stereo effects. The score and DSP tests plus `scripts/check-lofi.sh` verify this path. Keep the private drum files and beat-grid catalog out of Git. See [instrument credits](docs/lofi-samples.md) for the bundled CC0 samples.
 - `Liminal/Visual/`: Gemini client and model routing, prompt construction/history, generation budgets, image queue/store/framing/upscaling/depth, MusicReactor and computed effect uniforms.
 - `Liminal/Shaders/`: GPU effects. `EffectsUniforms.swift` is the CPU-side layout contract.
 - `Liminal/Archive/`: Internet Archive catalog/client, seed list, disk clip cache, frame source, FootageWeaver and compositing/audio.
@@ -38,7 +38,7 @@ Images use row zero at the top. Preserve consistent crop/orientation across plat
 
 Generation settings live in ImageGenerationConfig; budget caps live in GenerationBudget. Primary model is currently gemini-nano-banana-2.1, fallback gemini-3.1-flash-lite-image. Treat these as repository configuration, not independently verified provider availability. Cache reuse is the fallback when generation is unavailable or capped.
 
-Archive footage weaves changing segments, looks and interaction recipes into the still-image anchor. Archive audio is deliberately quiet and filtered. Preserve fades and cache limits. Retain individual archive source credits.
+Archive footage weaves changing segments, looks and interaction recipes into the still-image anchor. The continuous archive soundtrack is filtered. Lo-Fi brings short sampled phrases forward on the drum grid. Preserve fades and cache limits. Retain individual archive source credits.
 
 ## Safe validation and visual review
 

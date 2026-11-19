@@ -23,6 +23,7 @@ struct LofiMixRenderTests {
         let bars: Int
         let explicitFootageSuffix: String?
         let cachedFootage: Bool
+        let filmReel: Bool?
         let receiver: String
         let noFootage: Bool
         let privateDrums: Bool
@@ -107,6 +108,7 @@ struct LofiMixRenderTests {
             drums = try LofiDrumTake(recording: drumFixture(clock: clock), clock: clock)
         }
         var footageHash = config.noFootage ? "none" : "public-formant-fixture-v1"
+        var reel: [(buffer: AVAudioPCMBuffer, title: String, offset: Double)] = []
         let cue: AVAudioPCMBuffer?
         if config.noFootage {
             cue = nil
@@ -118,6 +120,26 @@ struct LofiMixRenderTests {
             footageHash = SHA256.hash(data: try Data(contentsOf: source, options: .mappedIfSafe)).description
             cue = try await ArchiveAudioDecoder.decode(url: source, sourceStart: 0, sourceLength: 13, rate: 1,
                                                         format: format)
+        } else if config.filmReel == true {
+            let directory = ArchiveClipStore.defaultDirectory()
+            struct Catalog: Decodable { let clips: [ArchiveClip] }
+            let catalog = try JSONDecoder().decode(Catalog.self, from: Data(contentsOf: directory.appending(path: "index.json")))
+            var rng = MusicRNG(seed: config.seed)
+            let clips = catalog.clips.filter { $0.hasAudio }.shuffled(using: &rng)
+            var hashes: [String] = []
+            for clip in clips {
+                let seconds = min(32 * clock.beatDuration, clip.duration)
+                guard seconds >= 5 else { continue }
+                let offset = max(0, clip.duration - seconds - 0.1) * rng.range(0.12...0.78)
+                let url = directory.appending(path: clip.fileName)
+                guard let buffer = try? await ArchiveAudioDecoder.decode(url: url, sourceStart: offset,
+                    sourceLength: seconds, rate: 1, format: format) else { continue }
+                hashes.append(SHA256.hash(data: try Data(contentsOf: url, options: .mappedIfSafe)).description)
+                reel.append((buffer, clip.title, offset))
+                if reel.count >= (config.bars + 7) / 8 { break }
+            }
+            cue = try #require(reel.first?.buffer, "No cached film reel with audio")
+            footageHash = hashes.joined(separator: "/")
         } else if config.cachedFootage {
             let directory = ArchiveClipStore.defaultDirectory()
             let sources = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
@@ -197,7 +219,7 @@ struct LofiMixRenderTests {
         let nodes: [(String, AVAudioNode)] = [
             ("drums", bus.drums.player), ("bass", bus.bass.player), ("dry", bus.dryFader.avAudioNode),
             ("texture", bus.textureFader.avAudioNode), ("wet", bus.wetFader.avAudioNode),
-            ("footage-dry", mix.dryBus.avAudioNode), ("footage-delay", mix.delayReturn.avAudioNode),
+            ("dialogue-chops", archive.chops.player), ("footage-dry", mix.dryBus.avAudioNode), ("footage-delay", mix.delayReturn.avAudioNode),
             ("footage-room", mix.reverbReturn.avAudioNode), ("lofi", bus.output.avAudioNode),
             ("footage", mix.output.avAudioNode), ("pre-master", master.input.avAudioNode),
             ("glue", master.glue.avAudioNode),
@@ -220,8 +242,11 @@ struct LofiMixRenderTests {
         conductor.beginOffline(archiveBeatDuration: clock.beatDuration, pattern: .choose(seed: config.seed, phrase: 0))
         for player in bus.players { player.play() }
         // In the two-take audition the film is audible through each drum fill.
-        let cueBeats: [Double] = config.nextDrumName == nil ? [5] : [5] + stride(from: 26, to: config.bars * 4, by: 32).map(Double.init)
+        let cueBeats: [Double]
+        if !reel.isEmpty { cueBeats = stride(from: 0, to: config.bars * 4, by: 32).map(Double.init) }
+        else { cueBeats = config.nextDrumName == nil ? [5] : [5] + stride(from: 26, to: config.bars * 4, by: 32).map(Double.init) }
         let cueFrames = cue == nil ? [] : cueBeats.map { clock.frame(at: $0) }.filter { $0 < scoreFrames }
+        var chopEvents: [[String: Any]] = []
         var cueIndex = 0
         var cursor = 0
         var noProgress = 0
@@ -230,9 +255,16 @@ struct LofiMixRenderTests {
         let t0 = Date()
         while cursor < frames {
             let time = Double(cursor) / format.sampleRate
-            if let cue, cueIndex < cueFrames.count, cursor == cueFrames[cueIndex] {
+            if cueIndex < cueFrames.count, cursor == cueFrames[cueIndex], let cue = reel.isEmpty ? cue : reel[cueIndex % reel.count].buffer {
+                let hits = LofiDialogueSampler.prepare(cue, grid: .init(origin: 0, beatDuration: clock.beatDuration),
+                    cueStart: time, duration: Double(cue.frameLength) / format.sampleRate,
+                    seed: config.seed &+ UInt64(cueIndex))
+                chopEvents += hits.map { hit in
+                    ["frame": Int((hit.time * format.sampleRate).rounded()), "sourceStart": hit.source.lowerBound,
+                     "sourceEnd": hit.source.upperBound, "speed": hit.speed, "cue": cueIndex]
+                }
                 archive.begin(.init(buffer: cue, gain: 0.9, fadeIn: 0.5, label: "offline fixture",
-                                    activity: ArchiveAudioMath.activity(cue)), now: time)
+                                    activity: ArchiveAudioMath.activity(cue), chops: hits), now: time)
                 cueIndex += 1
             }
             if cursor > 0 && cursor < scoreFrames && cursor.isMultiple(of: clock.frameCount) {
@@ -273,8 +305,9 @@ struct LofiMixRenderTests {
             "block": config.block, "seed": String(config.seed), "bpm": tempo, "beatsPerBar": 4,
             "masterCalibration": "fixed-nominal", "archiveMix": "conductor",
             "clockOriginFrame": 0, "postrollFrames": postroll, "scoredFrames": scoreFrames,
-            "hasFootage": cue != nil, "footageStartFrame": clock.frame(at: 5), "footageStartFrames": cueFrames,
-            "privateSources": config.privateDrums || config.cachedFootage || config.explicitFootageSuffix != nil,
+            "filmReel": reel.map { ["title": $0.title, "sourceSeconds": $0.offset] },
+            "hasFootage": cue != nil, "footageStartFrame": cueFrames.first ?? clock.frame(at: 5), "footageStartFrames": cueFrames,
+            "privateSources": config.privateDrums || config.cachedFootage || !reel.isEmpty || config.explicitFootageSuffix != nil,
             "drumSourceHash": sourceHash, "footageSourceHash": footageHash, "gitRevision": config.revision,
             "renderedSeconds": Double(frames) / format.sampleRate, "mixWallSeconds": wall,
             "providers": ["kit": "full-take-linked-varispeed", "acoustic": "native-resampled-wav-v2",
@@ -285,7 +318,7 @@ struct LofiMixRenderTests {
             "topology": nodes.map(\.0) + ["master"],
             "latencySamples": ["reportedGlue": master.glue.avAudioNode.latency * format.sampleRate,
                                "reportedLimiter": limiterNode.latency * format.sampleRate],
-            "kickCandidates": kicks,
+            "kickCandidates": kicks, "dialogueChops": chopEvents,
         ]
         try Self.write(manifest, file: "manifest.json", in: config.out)
         try Self.write(score, file: "score.json", in: config.out)

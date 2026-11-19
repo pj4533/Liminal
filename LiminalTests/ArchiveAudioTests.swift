@@ -224,3 +224,67 @@ struct ArchiveVoiceRenderTests {
         #expect(after < during - 25)                // the reverb tail is dying away
     }
 }
+
+struct LofiDialogueSamplerTests {
+    private func soundtrack(rate: Double, syllables: Bool, amplitude: Float = 0.12) throws -> AVAudioPCMBuffer {
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: rate, channels: 2))
+        let n = Int(12 * rate)
+        let buffer = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(n)))
+        buffer.frameLength = AVAudioFrameCount(n)
+        let ch = try #require(buffer.floatChannelData)
+        for i in 0..<n {
+            let t = Double(i) / rate
+            let p = t.truncatingRemainder(dividingBy: 1.4)
+            var envelope = 1.0
+            if syllables {
+                envelope = 0
+                for start in [0.12, 0.40, 0.63] where p >= start && p < start + 0.20 {
+                    envelope = sin(.pi * (p-start) / 0.20)
+                }
+            }
+            let carrier = sin(2 * .pi * 250 * t) + 0.65 * sin(2 * .pi * 750 * t)
+            ch[0][i] = amplitude * Float(envelope * carrier)
+            ch[1][i] = ch[0][i]
+        }
+        return buffer
+    }
+
+    @Test func syllablesRepeatOnTheTransportAcrossATempoChange() throws {
+        let rate = 16_000.0
+        let cue = try soundtrack(rate: rate, syllables: true)
+        let grid = LofiTakeGrid(origin: 10, beatDuration: 0.8, nextBeatDuration: 0.92)
+        let turn = grid.origin + 64 * grid.beatDuration
+        let start = turn - 4.35
+        let hits = LofiDialogueSampler.prepare(cue, grid: grid, cueStart: start, duration: 12, seed: 27)
+        #expect(hits.count >= 3)
+        #expect(Set(hits.map(\.source)).count < hits.count)
+        #expect(hits.contains { $0.time < turn } && hits.contains { $0.time >= turn })
+        for hit in hits {
+            let beat = hit.time < turn ? (hit.time - grid.origin) / 0.8 : (hit.time - turn) / 0.92
+            #expect(abs(beat * 2 - (beat * 2).rounded()) < 1e-8)
+            #expect(hit.time >= start && hit.time + Double(hit.buffer.frameLength) / rate <= start + 12)
+            let pcm = try #require(hit.buffer.floatChannelData?[0])
+            #expect(pcm[0] == 0 && pcm[Int(hit.buffer.frameLength)-1] == 0)
+        }
+    }
+
+    @Test func silenceAndSustainedTonesLeaveTheSoundtrackAlone() throws {
+        for amplitude: Float in [0, 0.15] {
+            let source = try soundtrack(rate: 16_000, syllables: false, amplitude: amplitude)
+            #expect(LofiDialogueSampler.prepare(source, grid: .init(origin: 0, beatDuration: 0.8),
+                                                 cueStart: 1.23, duration: 8, seed: 27).isEmpty)
+        }
+    }
+
+    @Test func aLateLineCanCarryTheQuietOpeningOfTheSameShot() throws {
+        let rate = 16_000.0
+        let source = try soundtrack(rate: rate, syllables: true)
+        let pcm = try #require(source.floatChannelData)
+        for c in 0..<2 { pcm[c].update(repeating: 0, count: Int(7 * rate)) }
+        let hits = LofiDialogueSampler.prepare(source, grid: .init(origin: 0, beatDuration: 0.8),
+                                               cueStart: 0, duration: 12, seed: 1042)
+        #expect(hits.count >= 4)
+        #expect(hits.first.map { $0.time < 3 && $0.source.upperBound > Int(7 * rate) } == true)
+        #expect(zip(hits, hits.dropFirst()).allSatisfy { $1.time - $0.time <= 6 * 0.8 })
+    }
+}

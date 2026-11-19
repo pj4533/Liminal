@@ -28,7 +28,7 @@
 
 ## Play Lo-Fi
 
-Choose **Lo-Fi** in the Music section to set the BPM and optionally pin a scale. Tempo and scale changes apply at a 16-bar boundary. The app bundles the acoustic instruments and generates new phrases and bass lines with each session. For a private build with your own Slow Burn Vol. 3 recordings, follow the [optional drum setup](experience.md#lo-fi) before building.
+Choose **Lo-Fi** in the Music section to set the BPM and optionally pin a scale. Tempo and scale changes apply at a 16-bar boundary. The app bundles twelve sampled instruments and generates new phrases and bass lines each session. Enable Archive footage and turn up Footage audio to hear sampled film dialogue repeat against the beat. For a private build with your own Slow Burn Vol. 3 recordings, follow the [optional drum setup](experience.md#lo-fi) before building.
 
 
 ## Build from the command line

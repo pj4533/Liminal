@@ -2,6 +2,12 @@
 
 This ledger follows the November 18 handoff in order. It distinguishes implementation, source review, fixture evidence, device qualification and listening acceptance. The [engineering research](lofi-studio.md) records the primary DSP sources and bench methods. The handoff was written against `a0c3cddc5a7c`. The implementation rows include the subsequent Mac listening passes. The dated bench results below describe their respective builds.
 
+## Film-sampler listening pass
+
+The approved Mac audition used eight different cached film cues over 64 bars at 70 BPM with seed 1042. It scheduled 80 dialogue drops. The median interval was 2.14 seconds and the longest was 5.14 seconds. Source cuts ranged from 0.19 to 1.24 seconds, with a median of 0.66 seconds. The master measured −17.4 LUFS integrated and −4.64 dBTP. A live Mac run at 69 BPM also scheduled ten drops from the first picture. The audio worker detects speech-like cadence, so rhythmic non-speech can qualify too. The isolated sample track and film offsets are available in a local render. [Render instructions](../development.md#lo-fi-checks)
+
+The instrument rotation now has twelve programs. The earlier eight-program measurements below describe the mix before the FM piano, vibraphone, marimba and bass recorder were added. [Expanded bank measurements](lofi-instrument-qualification.md#expanded-instrument-rotation)
+
 ## Instrument level and main-image timing
 
 A matched 64-bar capture at 70 BPM (seed 1042) covered all eight acoustic programs over 3 minutes 39 seconds. Both runs used identical drum and film sources. The highest 400 ms stereo RMS of the combined dry instrument, texture and wet return was −13.30 dBFS in an organ phrase. The same phrase now measures −16.88 dBFS. The difference between the loudest and quietest phrase maxima narrowed from 4.59 to 2.50 dB. The final capture measured −18.1 LUFS and −4.63 dBTP. The master compressor settings are identical in both captures.
