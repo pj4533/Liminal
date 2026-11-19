@@ -24,12 +24,15 @@ final class LofiMasterBus {
     nonisolated static let lofiTargetLUFS: Float = -12
     /// Default length of each half of a profile change (fade down, swap, fade up).
     nonisolated static let switchRamp: Double = 0.04
-    /// Lo-Fi finisher drive, chosen on the 32-bar `ref` capture (plan 8.7, wave 2): the highest drive
-    /// that keeps limiter reduction, pumping and soft-clip use inside C-M6, C-M8 and C-M9.
+    /// Lo-Fi finisher drive, chosen on the 32-bar `ref` capture (plan 8.7, wave 2) with the stems as they were
+    /// before the per-bus chains: +4 dB into a -12 dB glue threshold is the loudest setting found that keeps
+    /// soft-clip use (C-M9), kick-synchronous dips (C-M8) and limiter reduction (C-M6) inside their bounds
+    /// with some margin (-12.5 LUFS). The section 8.7 start (+6 dB, -14 dB) reached -11.7 LUFS but failed
+    /// C-M8 and C-M9 on the raw drum peaks. Revisit once the drum bus chain controls those peaks.
     nonisolated static let lofiSettings: LofiMasterSettings = {
         var settings = LofiMasterSettings.lofi
-        settings.inputGainDB = 6
-        settings.glue?.thresholdDB = -14
+        settings.inputGainDB = 4
+        settings.glue?.thresholdDB = -12
         return settings
     }()
 
