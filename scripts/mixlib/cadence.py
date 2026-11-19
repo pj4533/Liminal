@@ -2,6 +2,8 @@
 
 import numpy as np
 
+from .audio import chop_duration_frames
+
 
 def event_key(c):
     if c.get("padID") is not None:
@@ -15,7 +17,7 @@ def events_of(cap):
         if c.get("frame") is None:
             continue
         f = int(c["frame"])
-        d = int(c.get("durationFrames") or 0)
+        d = chop_duration_frames(c)
         out.append({"frame": f, "end": f + d, "key": event_key(c), "raw": c})
     return sorted(out, key=lambda e: e["frame"])
 

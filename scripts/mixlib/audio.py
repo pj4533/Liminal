@@ -73,6 +73,17 @@ def write_wav(path, samples, rate):
         f.write(b"data" + struct.pack("<I", len(data)) + data)
 
 
+def chop_duration_frames(c):
+    """durationFrames when the manifest has it (v2), else the source span over the speed (v1)."""
+    d = c.get("durationFrames")
+    if d:
+        return int(d)
+    try:
+        return int(round((c["sourceEnd"] - c["sourceStart"]) / max(float(c.get("speed", 1.0)), 0.05)))
+    except (KeyError, TypeError):
+        return 0
+
+
 def merge_intervals(items, gap=0):
     out = []
     for a, b in sorted(items):
@@ -185,7 +196,7 @@ class Capture:
         """Merged (start, end) frame intervals of scheduled dialogue (gaps up to 0.1 s merged)."""
         raw = []
         for c in self.chops():
-            f, d = c.get("frame"), c.get("durationFrames")
+            f, d = c.get("frame"), chop_duration_frames(c)
             if f is not None and d:
                 raw.append((int(f), int(f) + int(d)))
         if not raw and self.has_section("dialogue"):
