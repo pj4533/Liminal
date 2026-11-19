@@ -5,6 +5,10 @@ import Testing
 
 /// Arrangement contracts: bass accents on the drummer's kicks with one voice per phrase,
 /// mid shells that answer the melody, and a recognizable theme return.
+///
+/// Serialized because the full-length renders are CPU heavy: run in parallel they fill the
+/// cooperative pool and starve the wall-clock deadline tests in the dialogue suites.
+@Suite(.serialized)
 struct LofiArrangementTests {
     private func score(_ phrase: Int, seed: UInt64, scale: ScaleType? = nil, timing: LofiTimingField? = nil,
                        clock: LofiClock = LofiClock(tempo: 70, sampleRate: 48_000)) -> LofiScore {
