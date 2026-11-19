@@ -138,7 +138,6 @@ nonisolated final class MusicConductor: @unchecked Sendable {
             let wasArchiveOnly = archiveOnly
             archiveOnly = archiveBeatDuration != nil
             archive?.setBeatLocked(archiveOnly)
-            mix.setLofiVoicing(archiveOnly, over: 0.2)
             if let archiveBeatDuration { archive?.setEchoTempo(archiveBeatDuration) }
             mix.syncDelay(toBeatDuration: archiveBeatDuration, pattern: pattern, now: scheduler.now)
             if began, !stopping {
@@ -213,7 +212,6 @@ nonisolated final class MusicConductor: @unchecked Sendable {
         realtime = false
         archiveOnly = archiveBeatDuration != nil
         archive?.setBeatLocked(archiveOnly)
-        mix.setLofiVoicing(archiveOnly, over: 0)
         if let archiveBeatDuration { archive?.setEchoTempo(archiveBeatDuration) }
         mix.syncDelay(toBeatDuration: archiveBeatDuration, pattern: pattern)
         begin(at: 0)

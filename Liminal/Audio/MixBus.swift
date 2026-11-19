@@ -11,7 +11,7 @@ import Foundation
 ///                                                         reflections and repeats -> reverbBus
 ///     strips -> reverbBus -> ZitaReverb (wet) -> LPF 2.9 kHz -> reverbReturn -------------------------+
 ///               reverbBus -> HPF 300 -> LPF 1.8k -> Costello (halo) -> shimmerReturn ----------------+
-///     master -> HPF 28 Hz -> LPF 5.4 kHz (10 kHz in Lo-Fi) -> masterTrim -> PeakLimiter -> -1.5 dB -> output
+///     master -> HPF 28 Hz -> LPF 5.4 kHz -> masterTrim -> PeakLimiter -> -1.5 dB -> output
 nonisolated final class MixBus {
     let dryBus = Mixer()
     let reverbBus = Mixer()
@@ -330,13 +330,5 @@ nonisolated final class MixBus {
 
     /// Master low-pass for Ambient (the calm D92 voicing).
     static let ambientLowpassHz: Float = 5400
-    /// Lo-Fi voicing (plan 8.6): in archive-only mode this bus carries only the film bed and its returns,
-    /// so the master low-pass opens to keep the bed's consonants and air.
-    static let lofiLowpassHz: Float = 10000
 
-    /// Opens the master low-pass while the conductor is archive-only (Lo-Fi) and restores the Ambient value.
-    /// The limiter and every return keep their values.
-    func setLofiVoicing(_ on: Bool, over: Double) {
-        ParamRamp.set(lowpass.$cutoffFrequency, on ? Self.lofiLowpassHz : Self.ambientLowpassHz, over: over)
-    }
 }

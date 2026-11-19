@@ -95,7 +95,8 @@ nonisolated final class ArchiveVoice {
     let highpass: HighPassButterworthFilter
     let lowpass: LowPassButterworthFilter
     let lowpass2: LowPassButterworthFilter
-    /// Static Lo-Fi dip in the dialogue slot; bypassed in Ambient so that chain is unchanged.
+    /// Dip in the dialogue slot, kept in the graph but bypassed in both modes: the Lo-Fi bed keeps its
+    /// baseline chain (user direction, 19 November 2026).
     let presenceDip: PeakingParametricEqualizerFilter
     let spectralSweep: Phaser
     let strip: LayerStrip
@@ -111,27 +112,16 @@ nonisolated final class ArchiveVoice {
     /// Strip trim at the default Footage audio setting.
     static let baseTrim: Float = dbToGain(-10.5)
 
-    /// Lo-Fi film bed (plan 8.6). Ambient keeps the constants above.
+    /// Lo-Fi film bed. The user's direction of 19 November 2026 (docs/plans/mpc-chopping.md) keeps the
+    /// baseline effected bed: mostly wet, dark band-limiting (HPF about 205-290 Hz, two low-pass stages at
+    /// 2.1-3.2 kHz), the beat-locked phaser at 0.36-0.58 wet and sends at 1.18 times the contours. Plan 8.6's
+    /// clarity pass (drier direct sound, smaller sends, an opened low-pass) is not applied.
     enum LofiBed {
-        static let highpassHz: Float = 120
-        static let lowpassHz: Float = 6500
-        /// The second low-pass stage is opened rather than removed, so the graph is the same in both modes.
-        static let openLowpassHz: Float = 16000
-        static let dipHz: Float = 2200
-        static let dipDB: Float = -2.5
-        static let dipQ: Float = 0.7
-        static let phaserMix: ClosedRange<Float> = 0.10...0.18
-        static let directDB: ClosedRange<Float> = -3...0
-        static let sends: ClosedRange<Float> = 0.25...0.45
-        /// Context gain under a featured chop, with its own down and up times.
-        static let duckDB: Float = -3
-        static let duckDown = 0.04
-        static let duckUp = 0.3
-        /// Strip trim relative to `baseTrim` (the 1.76 and 1.31 context factors are gone, plan 8.6).
-        /// The old bed reached the mix mostly through its sends (up to 2.3) on top of a 1.76 context
-        /// gain; with sends of 0.25 to 0.45 the same trim left it 7 LU quieter (audibility index 0.02
-        /// in the reference capture). +11 dB puts the default setting at an index of about 0.24.
-        static let trim: Float = dbToGain(11)
+        /// Context gain outside and under a chop that ducks the bed (chops may duck the bed; the bed keys nothing).
+        static let contextGain: Float = 1.76
+        static let underChopGain: Float = 1.31
+        static let duckDown = 0.065
+        static let duckUp = 0.15
     }
 
     /// Dialogue chop returns (plan 8.5). Levels are relative to the 0.72 dry path.
@@ -241,13 +231,13 @@ nonisolated final class ArchiveVoice {
     /// Diagnostics and tests: chops stored but not yet on the player, and those queued.
     var chopCounts: (stored: Int, queued: Int) { (storedChops.count, queuedChops.count) }
 
-    /// The bed's context gain: 1 normally and -3 dB under a featured chop in Lo-Fi (40 ms down,
-    /// 300 ms up, plan 8.6); always 1 in Ambient. Called on every conductor step in Lo-Fi, so the
+    /// The bed's context gain in Lo-Fi: 1.76, and 1.31 under a featured chop that ducks the bed (65 ms
+    /// down, 150 ms up, the baseline values); always 1 in Ambient. Called on every conductor step in Lo-Fi, so the
     /// down ramp starts within half a step of 40 ms before the chop.
     private func blendSoundtrack(at time: Double) {
         let ahead = time + 0.01 + LofiBed.duckDown
         let underDrop = dropWindows.contains { ahead >= $0.lowerBound && time + 0.01 < $0.upperBound }
-        let gain: Float = beatLocked && underDrop ? dbToGain(LofiBed.duckDB) : 1
+        let gain: Float = beatLocked ? (underDrop ? LofiBed.underChopGain : LofiBed.contextGain) : 1
         guard gain != lastBedGain else { return }
         ParamRamp.setGain(bed, gain, over: gain < lastBedGain ? LofiBed.duckDown : LofiBed.duckUp)
         lastBedGain = gain
@@ -345,8 +335,7 @@ nonisolated final class ArchiveVoice {
         highpass = HighPassButterworthFilter(bed, cutoffFrequency: Self.highpassHz)
         lowpass = LowPassButterworthFilter(highpass, cutoffFrequency: Self.lowpassHz)
         lowpass2 = LowPassButterworthFilter(lowpass, cutoffFrequency: Self.lowpassHz)
-        presenceDip = PeakingParametricEqualizerFilter(lowpass2, centerFrequency: LofiBed.dipHz,
-                                                       gain: dbToGain(LofiBed.dipDB), q: LofiBed.dipQ)
+        presenceDip = PeakingParametricEqualizerFilter(lowpass2, centerFrequency: 2200, gain: 1, q: 0.7)
         spectralSweep = Phaser(presenceDip, notchMinimumFrequency: 200, notchMaximumFrequency: 1300,
                                notchWidth: 510, vibratoMode: 0, depth: 0.52, feedback: 0.12,
                                lfoBPM: 28, dryWetMix: 0.12)
@@ -358,11 +347,10 @@ nonisolated final class ArchiveVoice {
         LofiCaptureHooks.tap("bed-post", spectralSweep.avAudioNode)
     }
 
-    /// The filters are bypassed (no DSP) while nothing plays. The Lo-Fi dip runs only when beat-locked,
-    /// so the Ambient chain is exactly the previous one.
+    /// The filters are bypassed (no DSP) while nothing plays. The presence dip never runs.
     private func setFilters(running: Bool) {
         for n in [highpass, lowpass, lowpass2, spectralSweep] as [Node] { if running { n.start() } else { n.stop() } }
-        if running && beatLocked { presenceDip.start() } else { presenceDip.stop() }
+        presenceDip.stop()
     }
 
     /// Start a segment. If another one is still audible it fades out briefly first.
@@ -546,7 +534,7 @@ nonisolated final class ArchiveVoice {
 
     /// Strip trim for a Footage audio gain: linear in the setting (monotonic, zero is silent).
     private func trim(for gain: Float) -> Float {
-        Self.baseTrim * max(0, gain) * (beatLocked ? LofiBed.trim : 1)
+        Self.baseTrim * max(0, gain)
     }
 
     /// Stop at once (engine stop, conductor restart).
@@ -630,28 +618,27 @@ nonisolated final class ArchiveVoice {
         strip.setSends(reverb: reverb, delay: echo, over: 0.12)
     }
 
-    /// Lo-Fi bed (plan 8.6): a clear, mostly direct film. HPF 120 Hz, one 6.5 kHz low-pass stage (the
-    /// second opened), a -2.5 dB dip at 2.2 kHz, light phasing, direct sound -3 to 0 dB with the one
-    /// clarity swell per picture, and sends of 0.25 to 0.45 following the room and echo contours.
+    /// Lo-Fi bed: the baseline effected chain the user asked to keep. Sends at 1.18 times the room and
+    /// echo contours, the beat-locked phaser at 0.36-0.58 wet, HPF 290-205 Hz and two low-pass stages at
+    /// 2.1-3.2 kHz, direct sound 0.27-0.60, with one short clarity swell per picture.
     private func updateLofiMix(_ cueMix: CueMix, progress: Double) {
+        let value = cueMix.clarity.value(at: progress)
+        let wetScale: Float = 1.18 * (1 - 0.18 * value)
+        let reverb = cueMix.room.value(at: progress) * wetScale
+        let echo = cueMix.echo.value(at: progress) * wetScale
         let u = Float(max(0, 1 - abs(progress - cueMix.revealCenter) / cueMix.revealHalfWidth))
         let reveal = u * u * (3 - 2 * u)
+        let cutoff = 2100 + 1100 * reveal
         let motion = cueMix.movement.value(at: progress)
-        let room = min(1, max(0, (cueMix.room.value(at: progress) - 0.95) / 0.90))
-        let echo = min(1, max(0, (cueMix.echo.value(at: progress) - 0.95) / 1.0))
-        let sends = LofiBed.sends, mix = LofiBed.phaserMix, direct = LofiBed.directDB
         ParamRamp.set(spectralSweep.$notchMaximumFrequency, 900 + 970 * motion, over: 0.13)
-        ParamRamp.set(spectralSweep.$dryWetMix, mix.lowerBound + (mix.upperBound - mix.lowerBound) * motion, over: 0.13)
-        ParamRamp.set(highpass.$cutoffFrequency, LofiBed.highpassHz, over: 0.12)
-        ParamRamp.set(lowpass.$cutoffFrequency, LofiBed.lowpassHz, over: 0.12)
-        ParamRamp.set(lowpass2.$cutoffFrequency, LofiBed.openLowpassHz, over: 0.12)
-        ParamRamp.set(presenceDip.$gain, dbToGain(LofiBed.dipDB), over: 0.12)
+        ParamRamp.set(spectralSweep.$dryWetMix, 0.36 + 0.22 * motion, over: 0.13)
+        ParamRamp.set(highpass.$cutoffFrequency, 290 - 85 * reveal, over: 0.12)
+        ParamRamp.set(lowpass.$cutoffFrequency, cutoff, over: 0.12)
+        ParamRamp.set(lowpass2.$cutoffFrequency, cutoff, over: 0.12)
         if let dry = strip.dryGain {
-            let db = direct.lowerBound + (direct.upperBound - direct.lowerBound) * reveal
-            ParamRamp.setGain(dry, dbToGain(db), over: 0.12)
+            ParamRamp.setGain(dry, 0.27 + 0.33 * reveal, over: 0.12)
         }
-        strip.setSends(reverb: sends.lowerBound + (sends.upperBound - sends.lowerBound) * room,
-                       delay: sends.lowerBound + (sends.upperBound - sends.lowerBound) * echo, over: 0.12)
+        strip.setSends(reverb: reverb, delay: echo, over: 0.12)
     }
 
     private var lastPan: Float = 0

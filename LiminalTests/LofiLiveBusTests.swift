@@ -81,10 +81,12 @@ struct LofiLiveBusTests {
         for l in e.layers { l.allStrips.forEach { $0.trim = 0 } }
     }
 
-    // MARK: Film bed (plan 8.6)
+    // MARK: Film bed (user direction, 19 November 2026: keep the baseline effected bed)
 
-    /// Four tones through the Lo-Fi bed: 60 Hz, 1 kHz, 2.2 kHz and 4 kHz, 0.6 s each.
-    @Test func lofiBedIsClearAndFreeOfRumble() throws {
+    /// Four tones through the Lo-Fi bed: 60 Hz, 1 kHz, 2.2 kHz and 4 kHz, 0.6 s each. The bed keeps its
+    /// dark band-limiting (HPF 205-290 Hz, two low-pass stages at 2.1-3.2 kHz) and the Ambient master
+    /// low-pass; plan 8.6's clarity pass is not applied.
+    @Test func lofiBedKeepsItsDarkBaselineChain() throws {
         let engine = GenerativeEngine(seed: 11)
         let format = engine.archiveFormat
         let rate = format.sampleRate
@@ -94,7 +96,7 @@ struct LofiLiveBusTests {
             return t < 2.4 ? 0.1 * Float(sin(2 * .pi * tones[k] * t)) : 0
         }
         var begun = false
-        let taps = try render(engine, seconds: 3, beat: 0.8, taps: [engine.archive.presenceDip, engine.archive.spectralSweep],
+        let taps = try render(engine, seconds: 3, beat: 0.8, taps: [engine.archive.spectralSweep],
                               configure: layersSilent) { t in
             if !begun, t >= 0.2 {
                 begun = true
@@ -104,23 +106,16 @@ struct LofiLiveBusTests {
         // Cue time 0 is the first step at or after 0.2 s.
         let start = (0.2 / 0.02).rounded(.up) * 0.02
         func level(_ x: [Float], _ k: Int) -> Double { rmsDB(x, start + 0.6 * Double(k) + 0.25, start + 0.6 * Double(k) + 0.55, rate: rate) }
-        let input = 20 * log10(0.1 / 2.0.squareRoot())
-        let eq = taps[0], post = taps[1]
+        let post = taps[0]
         let r60 = level(post, 0), r1k = level(post, 1), r4k = level(post, 3)
-        // The previous bed (two low-pass stages at 2.1 to 3.2 kHz) put 4 kHz more than 30 dB under 1 kHz.
-        #expect(r4k > r1k - 6, "4 kHz \(r4k - r1k) dB against 1 kHz")
-        #expect(r60 < r1k - 10, "60 Hz \(r60 - r1k) dB against 1 kHz")
-        // The dip: the measured 2.2 kHz level against the Butterworth stages alone.
-        let butterworth = [LofiBiquad.Kind.highpass(hz: 120, q: 0.7071067811865476), .lowpass(hz: 6500, q: 0.7071067811865476),
-                           .lowpass(hz: 16000, q: 0.7071067811865476)]
-            .reduce(0.0) { $0 + LofiBiquad($1, sampleRate: rate).magnitudeDB(at: 2200) }
-        let dip = level(eq, 2) - input - butterworth
-        #expect(dip <= -2 && dip >= -3, "2.2 kHz dip \(dip) dB")
-        // MixBus Lo-Fi voicing.
-        #expect(engine.mix.lowpass.$cutoffFrequency.parameter?.value == MixBus.lofiLowpassHz)
+        #expect(r4k < r1k - 12, "4 kHz \(r4k - r1k) dB against 1 kHz")
+        #expect(r60 < r1k - 20, "60 Hz \(r60 - r1k) dB against 1 kHz")
+        #expect(engine.mix.lowpass.$cutoffFrequency.parameter?.value == MixBus.ambientLowpassHz)
+        #expect(!engine.archive.presenceDip.isStarted)
     }
 
-    @Test func lofiBedIsMostlyDirect() throws {
+    /// The Lo-Fi bed is mostly wet: its reverb and delay returns carry at least as much as the direct sound.
+    @Test func lofiBedIsMostlyWet() throws {
         let engine = GenerativeEngine(seed: 12)
         let format = engine.archiveFormat
         let cue = try noise(format, seconds: 7, amplitude: 0.1, seed: 4)
@@ -136,7 +131,8 @@ struct LofiLiveBusTests {
         let wet = zip(x[1], x[2]).map { $0 + $1 }
         let rate = format.sampleRate
         let ratio = rmsDB(x[0], 2, 6.4, rate: rate) - rmsDB(wet, 2, 6.4, rate: rate)
-        #expect(ratio >= 3, "direct to wet \(ratio) dB")
+        print("Lo-Fi bed direct to wet \(ratio) dB")
+        #expect(ratio <= 0, "direct to wet \(ratio) dB")
     }
 
     /// Footage audio at 0, -6 dB, the default, +3.5 dB and the top: bed and chops never get quieter as
@@ -289,12 +285,15 @@ struct LofiLiveBusTests {
             }
             #expect(abs(rmsDB(x[k], 4.0, 4.2, rate: rate) - before) < 0.05)
         }
-        // The bed: -3 dB under the featured line, 40 ms down, unchanged under the stab.
+        // The bed keeps its baseline context gains: 1.76, and 1.31 under the featured line (about -2.6 dB),
+        // 65 ms down starting 75 ms ahead, so halfway about 42 ms before the chop. Unchanged under the stab.
         let bed = x[3]
+        let context = Float(20 * log10(Double(ArchiveVoice.LofiBed.contextGain)))
+        let under = Float(20 * log10(Double(ArchiveVoice.LofiBed.underChopGain)))
         let bedBefore = rmsDB(bed, 0.6, 0.9, rate: rate)
-        #expect(abs(rmsDB(bed, 1.15, 1.75, rate: rate) - bedBefore + 3) <= 1)
-        let bedDown = try #require(crossing(bed, after: 0.6, from: 0, to: -3, rate: rate))
-        #expect(abs(bedDown - (featured - 0.02)) <= 0.02, "bed halfway at \(bedDown) s")
+        #expect(abs(rmsDB(bed, 1.15, 1.75, rate: rate) - bedBefore - Double(under - context)) <= 1)
+        let bedDown = try #require(crossing(bed, after: 0.6, from: context, to: under, rate: rate))
+        #expect(abs(bedDown - (featured - 0.0425)) <= 0.025, "bed halfway at \(bedDown) s")
         #expect(abs(rmsDB(bed, stab + 0.05, stab + 0.28, rate: rate) - bedBefore) < 0.1)
     }
 
