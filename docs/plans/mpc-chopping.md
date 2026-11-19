@@ -19,6 +19,23 @@ Status: plan. Numbers marked *start* are tuning hypotheses exposed as named cons
 > - **The bed never drives ducking.** Nothing is sidechained to or ducked by the film bed. Chops may still duck the bed, and the music may stay on top of it, but the bed is never a key signal.
 > - **Criteria changes.** C-B9's "bed direct to wet at least +3 dB" and "roll-off at least 3 kHz" are dropped. They are replaced by "bed effects chain matches the baseline character (wet at least equal to direct)" and "bed at least 10 dB under the music plus chops in gaps, audibility index in gaps still at least 0.20". In C-B6, theme-return salience may be judged against mids, space and bed only. The chops are a featured layer, so failing to clear them is not a defect if the return's first bar is chop-free.
 
+> **User direction on chopping, 19 November 2026 (binding; overrides section 5's families, rest blocks and occupancy budgets where they conflict).** The user heard a 32-bar render. It repeated whole lines ("when they want to investigate" four times, plus one slowed, unintelligible chunk) and left bars 8–17 empty.
+>
+> What the user wants is how a producer chops on an MPC:
+> - **Pick one line per 16-bar loop.** That line is the motif.
+> - **Split it into logical pieces.** Use words and word groups ("when they" | "want to" | "investigate"), and split long words at syllables ("invest" | "tigate").
+> - **Drop the pieces on the beat, with pauses, so it's funky:**
+>   - repeat pieces, back to back or with a gap ("when they… when they");
+>   - split a piece with a pause ("when…..they");
+>   - land pieces on downbeats ("…want to invest…..tigate");
+>   - reorder pieces ("…want to invest….when they").
+> - **Play the full line rarely**, at most twice in 16 bars.
+> - **Keep the pieces on the grid and intelligible.** Native rate only; no slowed chunks. Effects are light.
+> - **No gaps.** Every bar of every 16-bar loop has at least one piece onset, including the breakdown and the return.
+> - **The chops stay loud and forward in the beat.**
+>
+> This is implemented by wave 4 package `chop-motif`. Mix calibration runs after it in wave 5.
+
 ## 1. Goals and non-goals
 
 Goals
