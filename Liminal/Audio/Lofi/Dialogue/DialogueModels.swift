@@ -64,6 +64,16 @@ nonisolated enum DialogueTuning {
     static let boundaryLowDepthDB: Float = 4
     static let boundaryHighDepthDB: Float = 12
     static let boundaryLowConfidence: Float = 0.2
+    // Real-footage tuning (wave 3, docs/plans/mpc-chopping-measurements.md, "Dialogue tuning").
+    /// A short phrase fragment joins the following segment unless that pause is this much longer.
+    static let forwardMergeBias = 1.5
+    /// A short last fragment joins the previous segment only across a pause up to this long.
+    static let trailingMergePauseSeconds = 0.12
+    /// Silence before and after a line, up to this long, raises its entrance and exit scores.
+    static let linePauseContextSeconds = 0.40
+    /// A valley that stays within `valleyRunDB` of its minimum this long is preferred as a split.
+    static let wordGapSeconds = 0.07
+    static let valleyRunDB: Float = 3
 
     // MARK: Transcript refinement (plan 7)
     static let wordSnapSeconds = 0.060
@@ -74,6 +84,8 @@ nonisolated enum DialogueTuning {
     static let transcribedCoverage = 0.8
     static let transcribedConfidence: Float = 0.5
     static let clausePauseSeconds = 0.120
+    /// A unit edge this close to a protected span's edge does not count as cutting it.
+    static let protectedCutToleranceSeconds = 0.030
 
     // MARK: Ranking and bank (plan 4.4, 4.5)
     static let rhythmicFitPool = 6
@@ -98,6 +110,27 @@ nonisolated enum DialogueTuning {
     static let minimumAnchorSound: Float = 0.2
     static let minimumPadSound: Float = 0.12
     static let headMaximumSeconds = 3.0
+    /// Stab choice: loudness of the stab's syllable over its phrase's mean syllable, in dB, that
+    /// counts as fully prominent, and how much prominence weighs against `sound`.
+    static let stabProminenceDB: Float = 6
+    static let stabProminenceWeight: Float = 0.45
+    /// Transcribed stabs that are only function words lose this share of their value.
+    static let functionWordStabFactor: Float = 0.6
+    /// Transcribed line endings: a sentence end, a clause end, an open end, an ellipsis, a
+    /// function word. Acoustic lines rank by `sound` alone.
+    static let lineFitSentenceEnd: Float = 1.0
+    static let lineFitClauseEnd: Float = 0.92
+    static let lineFitOpenEnd: Float = 0.85
+    static let lineFitEllipsis: Float = 0.7
+    static let lineFitFunctionWord: Float = 0.65
+    /// An utterance whose last phrase is a lone fragment (the next sentence's first word) ranks lower.
+    static let fragmentTailFactor: Float = 0.8
+    static let functionWords: Set<String> = [
+        "a", "an", "the", "and", "or", "but", "so", "to", "of", "in", "on", "at", "for", "from", "with", "by", "as",
+        "is", "was", "are", "were", "be", "been", "have", "has", "had", "it", "it's", "its", "that", "this", "there",
+        "we", "i", "you", "he", "she", "they", "them", "him", "her", "my", "your", "our", "their", "if", "then",
+        "uh", "um", "oh", "well", "very", "do", "does", "did", "into", "than", "which", "who", "what",
+    ]
 
     // MARK: Rendering (plan 4.6)
     static let chokeLeadSeconds = 0.002
@@ -132,7 +165,15 @@ nonisolated enum DialogueTuning {
     static let callResponseSpaceBeats = 2.0
     static let anchorReusePieces = 2
     static let anchorReusePhrases = 16
+    /// A line shorter than this never takes over the anchor role from a recurring bank's anchor.
+    static let rotatedAnchorMinimumSeconds = 0.7
     static let windowDifference = 0.25
+    /// Sixteenths a pattern may move as a whole: out of the rest after a boundary, or (a late
+    /// plan) to begin at the next bar.
+    static let restShiftSlots = 12
+    /// Accent slots of a take-opening anchor hook: the line, then the same line again in bar 3.
+    static let hookSlots: [(Int, Int)] = [(8, 40), (16, 44), (8, 36)]
+    static let lateShiftSlots = 20
     /// Per-block share that guarantees the 16-bar window difference (|∩| <= 0.75 min).
     static let blockOverlapShare = 0.75
     static let memoryBlocks = 8

@@ -16,6 +16,9 @@ nonisolated enum DialogueCueCoordinator {
     static let transcriptReplanMargin = 0.5
     /// A transcript must arrive this long before the second block's commit to be used.
     static let transcriptCommitGap = 1.0
+    /// A first block with less than this many beats left after the bed starts is a stub (its last
+    /// bar is a rest anyway); the transcript then targets the block after the next one.
+    static let stubBlockBeats = 4.0
 
     struct Timings: Sendable, Equatable {
         var classifyMs: Double = 0
@@ -45,7 +48,11 @@ nonisolated enum DialogueCueCoordinator {
 
     struct Built: @unchecked Sendable {
         let analysis: DialogueAnalysis
+        /// The bank as built (what the cache keeps).
         let bank: DialoguePadBank?
+        /// The bank as this piece played it (`DialoguePerformer.bankForPiece`: a recurring bank may
+        /// hand its anchor role to a fresh line); the plan, chops and log refer to it.
+        var played: DialoguePadBank? = nil
         let plan: DialoguePerformancePlan
         let chops: [DialogueChop]
         /// The performance memory after this plan; the owner commits it only when the plan is posted.
@@ -136,14 +143,15 @@ nonisolated enum DialogueCueCoordinator {
         t = clock.now
         let snapshot = snapshot(transport, window: window)
         var memory = memory
-        let plan = DialogueEngine.perform(bank, snapshot: snapshot, window: window, earliestStart: earliestStart,
+        let played = DialoguePerformer.bankForPiece(bank, snapshot: snapshot, window: window, memory: memory)
+        let plan = DialogueEngine.perform(played, snapshot: snapshot, window: window, earliestStart: earliestStart,
                                           memory: &memory, seed: seed, cueToken: source.cueToken, revision: revision)
         timings.planMs = ms(clock.now - t)
         t = clock.now
-        let chops = bank.map { DialogueEngine.render(plan, bank: $0, source: source, analysis: analysis) } ?? []
+        let chops = played.map { DialogueEngine.render(plan, bank: $0, source: source, analysis: analysis) } ?? []
         timings.renderMs = ms(clock.now - t)
-        return Built(analysis: analysis, bank: bank, plan: plan, chops: chops, memory: memory, timings: timings,
-                     snapshot: snapshot, window: window, earliestStart: earliestStart, log: DialogueEngine.log(plan, bank: bank))
+        return Built(analysis: analysis, bank: bank, played: played, plan: plan, chops: chops, memory: memory, timings: timings,
+                     snapshot: snapshot, window: window, earliestStart: earliestStart, log: DialogueEngine.log(plan, bank: played))
     }
 
     /// The transcript-refined plan for the blocks from `from` (a block start): the acoustic blocks
@@ -158,23 +166,25 @@ nonisolated enum DialogueCueCoordinator {
         timings.bankMs = ms(clock.now - t)
         t = clock.now
         var memory = memoryBefore
+        // The piece keeps the anchor choice it started with (decided on the memory before the cue).
+        let rotated = DialoguePerformer.bankForPiece(refined, snapshot: acoustic.snapshot, window: acoustic.window, memory: memoryBefore) ?? refined
         if from > acoustic.window.lowerBound {
-            _ = DialogueEngine.perform(acoustic.bank, snapshot: acoustic.snapshot, window: acoustic.window.lowerBound..<from,
+            _ = DialogueEngine.perform(acoustic.played ?? acoustic.bank, snapshot: acoustic.snapshot, window: acoustic.window.lowerBound..<from,
                                        earliestStart: acoustic.earliestStart, memory: &memory, seed: seed,
                                        cueToken: source.cueToken, revision: 0)
             memory.pieceCounter -= 1
         }
         let window = from..<acoustic.window.upperBound
-        let plan = DialogueEngine.perform(refined, snapshot: acoustic.snapshot, window: window,
+        let plan = DialogueEngine.perform(rotated, snapshot: acoustic.snapshot, window: window,
                                           earliestStart: max(acoustic.earliestStart, from), memory: &memory, seed: seed,
                                           cueToken: source.cueToken, revision: revision)
         timings.planMs = ms(clock.now - t)
         t = clock.now
-        let chops = DialogueEngine.render(plan, bank: refined, source: source, analysis: acoustic.analysis)
+        let chops = DialogueEngine.render(plan, bank: rotated, source: source, analysis: acoustic.analysis)
         timings.renderMs = ms(clock.now - t)
-        return Built(analysis: acoustic.analysis, bank: refined, plan: plan, chops: chops, memory: memory, timings: timings,
+        return Built(analysis: acoustic.analysis, bank: refined, played: rotated, plan: plan, chops: chops, memory: memory, timings: timings,
                      snapshot: acoustic.snapshot, window: window, earliestStart: max(acoustic.earliestStart, from),
-                     log: DialogueEngine.log(plan, bank: refined))
+                     log: DialogueEngine.log(plan, bank: rotated))
     }
 
     /// One log line per plan, and the capture report when the offline harness is running.
@@ -183,7 +193,12 @@ nonisolated enum DialogueCueCoordinator {
         let t = built.timings
         let leadText = lead.map { String(format: "%.2f", $0) } ?? "-"
         LMLog.audio.info("Lo-Fi dialogue plan cue=\(cue) rev=\(built.plan.revision) bank=\(String(built.plan.bankID, radix: 16), privacy: .public) families=\(families, privacy: .public) events=\(built.chops.count) classify=\(t.classifyMs, format: .fixed(precision: 0))ms analyze=\(t.analyzeMs, format: .fixed(precision: 0))ms bank=\(t.bankMs, format: .fixed(precision: 0))ms plan=\(t.planMs, format: .fixed(precision: 0))ms render=\(t.renderMs, format: .fixed(precision: 0))ms lead=\(leadText, privacy: .public)s")
-        if LofiCaptureHooks.isEnabled { LofiCaptureHooks.appendReport("dialoguePlans", built.log) }
+        if LofiCaptureHooks.isEnabled {
+            var log = built.log
+            log["timings"] = t.dictionary(cue: cue)
+            if let lead { log["leadSeconds"] = (lead * 1000).rounded() / 1000 }
+            LofiCaptureHooks.appendReport("dialoguePlans", log)
+        }
     }
 
     static func ms(_ d: Duration) -> Double {
@@ -367,7 +382,13 @@ nonisolated final class DialogueDirector: @unchecked Sendable {
         // Transcription runs beside the acoustic path. It may refine the second block and later.
         var reuse = cached(source)
         let firstSnapshot = DialogueCueCoordinator.snapshot(info, window: window)
-        let firstBlock = DialogueCueCoordinator.blocks(firstSnapshot, window: window).lowerBound
+        // A cue whose bed starts inside a block (the fade before the boundary) plays that stub block
+        // as rest; the transcript's target is the block after the first whole one (live tuning: with
+        // the stub counted, a 1 s transcript was always "too late").
+        var firstBlock = DialogueCueCoordinator.blocks(firstSnapshot, window: window).lowerBound
+        if firstSnapshot.time(beat: Double(16 * (firstBlock + 1))) - window.lowerBound < DialogueCueCoordinator.stubBlockBeats * info.beatDuration {
+            firstBlock += 1
+        }
         let secondBlockStart = firstSnapshot.time(beat: Double(16 * (firstBlock + 1)))
         let useDeadline = min(started + config.transcriptCap,
                               secondBlockStart - DialogueCueCoordinator.commitMargin - DialogueCueCoordinator.transcriptCommitGap)
@@ -441,8 +462,33 @@ nonisolated final class DialogueDirector: @unchecked Sendable {
         guard let transcriptTask else { return outcome }
         let transcript = await withTaskCancellationHandler { await transcriptTask.value } onCancel: { transcriptTask.cancel() }
         let arrived = now()
+        if transcript != nil { outcome.transcriptArrivedAt = arrived }
+
+        // The transport moved on while recognition ran (tempo change, restart): the posted plan sits on
+        // a stale grid. The analysis and bank are kept (refined when a transcript came) and the plan
+        // is rebuilt against the new snapshot from the commit margin on, replacing unqueued chops.
+        if !Task.isCancelled, isCurrent(), let latest = transport(), latest.revision != info.revision,
+           let generation = committedGeneration {
+            let refined = transcript.flatMap { DialogueEngine.bank(acoustic.analysis, transcript: $0, seed: seed) }
+            if let transcript { store(source, transcript: transcript, refined: refined) }
+            let from = now() + DialogueCueCoordinator.commitMargin
+            let rebuilt = DialogueCueCoordinator.build(source: source, speech: speech, transcript: nil, transport: latest,
+                                                       window: window, earliestStart: from, memory: memoryBefore, seed: seed,
+                                                       revision: 1, reuse: .init(analysis: acoustic.analysis, bank: refined ?? acoustic.bank))
+            guard !Task.isCancelled, isCurrent(), transport()?.revision == latest.revision,
+                  state.withLock({ $0.generation }) == generation else { return outcome }
+            LMLog.audio.info("Lo-Fi dialogue cue=\(source.cueToken) transport revision \(info.revision) -> \(latest.revision) during recognition: plan rebuilt")
+            let plan = ArchiveVoice.ChopPlan(token: source.cueToken, revision: 1, replaceFrom: from,
+                                             chops: rebuilt.chops.filter { $0.event.startTime >= from })
+            post(plan)
+            commit(rebuilt.memory, expecting: generation)
+            outcome.posted.append(plan)
+            outcome.built.append(rebuilt)
+            outcome.transcriptUsed = refined != nil
+            DialogueCueCoordinator.report(rebuilt, cue: source.cueToken, lead: rebuilt.firstStart.map { $0 - now() })
+            return outcome
+        }
         guard let transcript else { return outcome }
-        outcome.transcriptArrivedAt = arrived
         guard arrived <= useDeadline, !Task.isCancelled, isCurrent(), transport()?.revision == info.revision,
               let generation = committedGeneration else {
             let refined = DialogueEngine.bank(acoustic.analysis, transcript: transcript, seed: seed)

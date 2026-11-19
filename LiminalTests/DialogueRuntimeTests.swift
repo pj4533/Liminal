@@ -159,11 +159,11 @@ struct DialogueRuntimeTests {
     @Test func aLateTranscriptChangesNothingButIsCached() async throws {
         let transcript = DialogueFixtures.transcript(Self.fixture)
         let director = DialogueDirector(.neutral(transcriptProvider: {
-            FixtureTranscriptProvider(transcript, delay: .milliseconds(2000))
+            FixtureTranscriptProvider(transcript, delay: .milliseconds(3000))
         }))
         let start = Self.uptime()
-        // The second block starts 2.7 s from now, so a transcript is useful only until 1.4 s.
-        let info = Self.info(origin: start + 2.7 - 16 * Self.beat)
+        // The second block starts 4.0 s from now, so a transcript is useful only until 2.7 s.
+        let info = Self.info(origin: start + 4.0 - 16 * Self.beat)
         let window = (start + 0.2)..<(info.origin + 32 * Self.beat)
         let recorder = Recorder()
         let outcome = await run(director, info: info, window: window, recorder: recorder).value
@@ -233,6 +233,157 @@ struct DialogueRuntimeTests {
         #expect(director.memory.pieceCounter == 1)
         let built = try #require(outcome.built.first)
         #expect(director.memory.blocks.map(\.fingerprint) == built.memory.blocks.map(\.fingerprint))
+    }
+
+    // MARK: Integration (handoff "Implementation phases and acceptance")
+
+    @Test func aCueReplacedWhileItsPlanIsBuiltPostsOnlyTheNewCue() async throws {
+        let director = DialogueDirector(.neutral(transcriptProvider: { NullTranscriptProvider() }, analysisDelay: .milliseconds(800)))
+        let start = Self.uptime()
+        let info = Self.info(origin: start)
+        let window = DialogueCueCoordinator.window(due: start + 0.3, span: 8 * Self.bar, transport: info)
+        let current = Mutex(1)
+        let recorder = Recorder()
+        let first = run(director, token: 1, info: info, window: window, current: { current.withLock { $0 == 1 } }, recorder: recorder)
+        try await Task.sleep(for: .milliseconds(200))
+        // The weaver replaces the piece: the old cue is no longer current, the new one starts.
+        current.withLock { $0 = 2 }
+        let second = run(director, token: 2, info: info, window: window, current: { current.withLock { $0 == 2 } }, recorder: recorder)
+        let old = await first.value
+        let new = await second.value
+        #expect(old.discarded == "staleCue")
+        #expect(new.discarded == nil)
+        #expect(recorder.plans.map(\.token) == [2])
+        #expect(director.memory.pieceCounter == 1, "only the posted cue advanced the memory")
+    }
+
+    @Test func stopThenRestartPlansAgainstTheNewTransport() async throws {
+        let start = Self.uptime()
+        let before = Self.info(origin: start, revision: 1)
+        let window = DialogueCueCoordinator.window(due: start + 0.3, span: 8 * Self.bar, transport: before)
+        let director = DialogueDirector(.neutral(transcriptProvider: { NullTranscriptProvider() }))
+        // Stop while analysing: the transport disappears.
+        let gone = Transport(before, later: nil)
+        let none = Recorder()
+        let stopped = await run(director, info: before, window: window, transport: { gone.read() }, recorder: none).value
+        #expect(stopped.discarded == "transportGone" && none.plans.isEmpty)
+        // Restart: a new transport revision and origin; the cached analysis is reused.
+        let restartOrigin = Self.uptime() + 0.2
+        let after = Self.info(origin: restartOrigin, revision: 2)
+        let restartWindow = DialogueCueCoordinator.window(due: restartOrigin, span: 8 * Self.bar, transport: after)
+        let recorder = Recorder()
+        let outcome = await run(director, token: 2, info: after, window: restartWindow, recorder: recorder).value
+        let built = try #require(outcome.built.first)
+        #expect(recorder.plans.count == 1)
+        #expect(built.plan.transportRevision == 2)
+        #expect(built.timings.analyzeMs == 0, "the analysis cached before the stop is reused")
+        #expect(built.plan.events.allSatisfy { $0.startTime >= restartOrigin })
+        #expect(director.memory.pieceCounter == 1)
+    }
+
+    @Test func aTempoChangeDuringRecognitionKeepsTheAnalysisAndRebuildsThePlan() async throws {
+        let transcript = DialogueFixtures.transcript(Self.fixture)
+        let director = DialogueDirector(.neutral(transcriptProvider: {
+            FixtureTranscriptProvider(transcript, delay: .milliseconds(700))
+        }))
+        let start = Self.uptime()
+        let first = Self.info(origin: start, revision: 1)
+        // After the acoustic plan is posted the next take is committed at 80 BPM.
+        let faster = LofiTransportInfo(revision: 2, takeIndex: 0, phraseAtTakeStart: 0, origin: start, beatDuration: 60.0 / 80,
+                                       nextBeatDuration: nil, seed: 5, options: LofiOptions(tempo: 80), timing: nil)
+        let window = DialogueCueCoordinator.window(due: start + 0.2, span: 8 * Self.bar, transport: first)
+        let posted = Mutex(false)
+        let recorder = Recorder()
+        let source = Self.fixture.source(contentID: "runtime", cueToken: 1)
+        let outcome = await Task.detached(priority: .utility) {
+            await director.run(source: source, window: window, seed: 9,
+                               transport: { posted.withLock { $0 } ? faster : first }, isCurrent: { true },
+                               post: { recorder.add($0); posted.withLock { $0 = true } })
+        }.value
+        let plans = recorder.plans
+        try #require(plans.count == 2, "acoustic plan, then the rebuilt one")
+        #expect(plans[1].revision == 1)
+        let rebuilt = try #require(outcome.built.last)
+        #expect(rebuilt.plan.transportRevision == 2)
+        #expect(rebuilt.timings.analyzeMs == 0, "the analysis is kept")
+        #expect(plans[1].chops.allSatisfy { $0.event.startTime >= plans[1].replaceFrom })
+        // Every accent of the rebuilt plan sits on the new 80 BPM sixteenth grid (plus the gesture offset).
+        let sixteenth = 60.0 / 80 / 4
+        for chop in plans[1].chops {
+            let position = (chop.event.accentTime - start) / sixteenth
+            let error = abs(position - position.rounded()) * sixteenth
+            #expect(error <= DialogueTuning.gestureOffsetSeconds.upperBound + 1e-6, "accent \(error) s off the new grid")
+        }
+        #expect(director.memory.pieceCounter == 1, "the rebuilt plan replaces the cue's piece")
+        #expect(director.cachedTranscript(source) == transcript)
+    }
+
+    @Test func aTransportThatNeverSettlesCommitsNothing() async throws {
+        final class Moving: @unchecked Sendable {
+            let n = Mutex<UInt32>(0)
+            let origin: Double
+            init(_ origin: Double) { self.origin = origin }
+            func read() -> LofiTransportInfo? { DialogueRuntimeTests.info(origin: origin, revision: n.withLock { $0 += 1; return $0 }) }
+        }
+        let start = Self.uptime()
+        let moving = Moving(start)
+        let info = Self.info(origin: start)
+        let window = DialogueCueCoordinator.window(due: start + 0.3, span: 8 * Self.bar, transport: info)
+        let director = DialogueDirector(.neutral(transcriptProvider: { NullTranscriptProvider() }))
+        let recorder = Recorder()
+        let outcome = await run(director, info: info, window: window, transport: { moving.read() }, recorder: recorder).value
+        #expect(recorder.plans.isEmpty)
+        #expect(outcome.discarded == "unsettledTransport")
+        #expect(director.memory.pieceCounter == 0 && director.generation == 0, "no stale revision is committed")
+    }
+
+    @Test func aWindowAcrossTheTakeTurnUsesTheNextTakesTempo() throws {
+        let origin = 200.0
+        let next = 60.0 / 64
+        let info = LofiTransportInfo(revision: 4, takeIndex: 0, phraseAtTakeStart: 0, origin: origin, beatDuration: Self.beat,
+                                     nextBeatDuration: next, seed: 5, options: LofiOptions(tempo: Self.bpm), timing: nil)
+        // A piece that starts eight bars before the turn and runs eight bars past it.
+        let due = origin + 56 * Self.beat
+        let turn = origin + 64 * Self.beat
+        let window = due..<(turn + 32 * next)
+        let source = Self.fixture.source(contentID: "turn")
+        var memory = DialoguePerformanceMemory()
+        var found = 0
+        for seed in 0..<12 {
+            let built = DialogueCueCoordinator.build(source: source, speech: [], transcript: nil, transport: info, window: window,
+                                                     earliestStart: due, memory: memory, seed: UInt64(seed))
+            memory = built.memory
+            for e in built.plan.events where e.accentTime > turn + 0.05 {
+                found += 1
+                let position = (e.accentTime - turn) / (next / 4)
+                let error = abs(position - position.rounded()) * next / 4
+                #expect(error <= DialogueTuning.gestureOffsetSeconds.upperBound + 1e-6, "accent \(error) s off the next take's grid")
+            }
+            #expect(built.plan.events.allSatisfy { $0.startTime >= due && $0.endTime <= window.upperBound + 1e-6 })
+        }
+        #expect(found > 0, "some events fall in the next take")
+    }
+
+    @Test func identicalInputsGiveIdenticalPlansAndLogs() throws {
+        let start = 300.0
+        let info = Self.info(origin: start)
+        let window = DialogueCueCoordinator.window(due: start, span: 8 * Self.bar, transport: info)
+        func build() -> DialogueCueCoordinator.Built {
+            DialogueCueCoordinator.build(source: Self.fixture.source(contentID: "same"), speech: [], transcript: nil, transport: info,
+                                         window: window, earliestStart: start + 0.3, memory: DialoguePerformanceMemory(), seed: 21)
+        }
+        let a = build(), b = build()
+        #expect(a.plan.bankID == b.plan.bankID && a.plan.analysisVersion == DialogueEngine.analysisVersion)
+        #expect(a.plan.events == b.plan.events)
+        #expect(a.plan.blocks.map(\.fingerprint) == b.plan.blocks.map(\.fingerprint))
+        for (x, y) in zip(a.chops, b.chops) {
+            let n = Int(x.buffer.frameLength)
+            #expect(n == Int(y.buffer.frameLength))
+            #expect(memcmp(x.buffer.floatChannelData![0], y.buffer.floatChannelData![0], n * 4) == 0, "chop buffers are bit-identical")
+        }
+        let logA = try JSONSerialization.data(withJSONObject: a.log, options: [.sortedKeys])
+        let logB = try JSONSerialization.data(withJSONObject: b.log, options: [.sortedKeys])
+        #expect(logA == logB)
     }
 
     // MARK: Cache and transport

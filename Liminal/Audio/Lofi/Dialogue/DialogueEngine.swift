@@ -4,7 +4,7 @@ import Foundation
 /// Facade of the dialogue engine (plan 3.4): analysis, bank, performance, rendering and logs.
 /// Pure and deterministic; runs off the audio thread.
 nonisolated enum DialogueEngine {
-    static let analysisVersion = 1
+    static let analysisVersion = 2
 
     struct Timings: Sendable, Equatable {
         var analyzeMs: Double = 0
@@ -77,16 +77,18 @@ nonisolated enum DialogueEngine {
         let analysis = analyze(source, speech: speech)
         timings.analyzeMs = ms(clock.now - t)
         t = clock.now
-        let bank = bank(analysis, transcript: transcript, seed: seed)
+        // A transcript that leaves no playable bank falls back to the acoustic bank.
+        let bank = bank(analysis, transcript: transcript, seed: seed) ?? (transcript == nil ? nil : bank(analysis, transcript: nil, seed: seed))
         timings.bankMs = ms(clock.now - t)
         t = clock.now
-        let plan = DialoguePerformer.perform(bank, snapshot: snapshot, window: window, earliestStart: earliestStart,
+        let played = DialoguePerformer.bankForPiece(bank, snapshot: snapshot, window: window, memory: memory)
+        let plan = DialoguePerformer.perform(played, snapshot: snapshot, window: window, earliestStart: earliestStart,
                                              memory: &memory, seed: seed, cueToken: source.cueToken, revision: 0)
         timings.planMs = ms(clock.now - t)
         t = clock.now
-        let chops = bank.map { render(plan, bank: $0, source: source, analysis: analysis) } ?? []
+        let chops = played.map { render(plan, bank: $0, source: source, analysis: analysis) } ?? []
         timings.renderMs = ms(clock.now - t)
-        return Prepared(analysis: analysis, bank: bank, plan: plan, chops: chops, timings: timings)
+        return Prepared(analysis: analysis, bank: played, plan: plan, chops: chops, timings: timings)
     }
 
     // MARK: Logging

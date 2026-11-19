@@ -429,6 +429,145 @@ struct DialogueEngineTests {
         }
     }
 
+    // MARK: One film repeated (the `same` matrix case)
+
+    /// 64 bars of one recurring source in 8-bar pieces through the coordinator's core, committed at
+    /// each boundary (the capture harness) or ahead of it (live): the performance develops.
+    @Test(arguments: [false, true]) func aRepeatedFilmDevelopsOverSixtyFourBars(_ atBoundary: Bool) throws {
+        let director = DialogueDirector()
+        let beat = 60.0 / 70
+        var memory = DialoguePerformanceMemory()
+        var blocks: [DialogueBlock] = []
+        var anchors = Set<UInt64>()
+        var hits = 0
+        for piece in 0..<8 {
+            let source = Shared.fixture.source(contentID: "same-film", cueToken: piece + 1, sourceStart: 120)
+            let take = piece / 2
+            let info = LofiTransportInfo(revision: 1, takeIndex: take, phraseAtTakeStart: 4 * take, origin: Double(64 * take) * beat,
+                                         beatDuration: beat, nextBeatDuration: nil, seed: 1042, options: LofiOptions(tempo: 70), timing: nil)
+            let due = Double(32 * piece) * beat
+            let reuse = director.cached(source)
+            if reuse != nil { hits += 1 }
+            let window = DialogueCueCoordinator.window(due: due, span: 30, transport: info)
+            let built = DialogueCueCoordinator.build(source: source, speech: [], transcript: nil, transport: info, window: window,
+                                                     earliestStart: atBoundary ? due + DialogueCueCoordinator.commitMargin : due - 2,
+                                                     memory: memory, seed: 1042 &+ UInt64(piece), reuse: reuse)
+            if reuse == nil { director.store(source, analysis: built.analysis, bank: built.bank) }
+            memory = built.memory
+            blocks += built.plan.blocks
+            if let played = built.played {
+                anchors.formUnion(built.plan.events.filter { $0.padID == played.anchorPadID }.map(\.padKey))
+            }
+        }
+        let families = Set(blocks.filter { !$0.events.isEmpty }.map(\.family))
+        let forced = blocks.filter(\.forcedChange).count
+        print("DIALOGUE-SAME boundary=\(atBoundary) families \(families.map(\.rawValue).sorted()) anchors \(anchors.count) forced \(forced)/\(blocks.count) hits \(hits)")
+        #expect(hits == 7, "the bank is cached after the first piece")
+        #expect(families.count >= 3)
+        #expect(anchors.count >= 2, "a recurring bank hands its anchor to another line")
+        #expect(Double(forced) <= 0.10 * Double(blocks.count))
+        #expect(blocks.filter { $0.phrase % 4 == 0 }.allSatisfy { !$0.events.isEmpty }, "every take opens with dialogue")
+    }
+
+    // MARK: Fallback fixtures (handoff acceptance)
+
+    /// Invariants that hold for any input: one dry voice, a native protected anchor, events inside
+    /// their pads, occupancy and a rest bar in every 8.
+    private func checkInvariants(_ blocks: [DialogueBlock], bank: DialoguePadBank?, bpm: Double = 70, _ label: String) {
+        let events = blocks.flatMap(\.events).sorted { $0.startTime < $1.startTime }
+        for (a, b) in zip(events, events.dropFirst()) {
+            #expect(b.startTime >= a.endTime - 1e-9, "\(label): overlapping dry events")
+        }
+        let bar = 4 * 60 / bpm
+        for group in Dictionary(grouping: blocks, by: { $0.phrase / 2 }).values {
+            let seconds = group.flatMap(\.events).map(\.duration).reduce(0, +)
+            #expect(seconds <= DialogueTuning.maximumOccupancy * 8 * bar + 1e-6, "\(label): occupancy \(seconds / (8 * bar))")
+        }
+        guard let bank else {
+            #expect(events.isEmpty, "\(label): events without a bank")
+            return
+        }
+        #expect(bank.anchor.transform == .native && bank.anchor.protected, "\(label): anchor not native and protected")
+        for e in events {
+            let pad = bank.pad(e.padID)
+            #expect(pad != nil && e.duration <= (pad?.duration ?? 0) + 1e-9, "\(label): event longer than its pad")
+        }
+    }
+
+    @Test func musicUnderSpeechOverlappingSpeakersAndBabbleFollowTheFallbackOrder() throws {
+        var music = DialogueFixtures.Options()
+        music.musicBed = 0.9
+        var overlap = DialogueFixtures.Options()
+        overlap.secondSpeaker = true
+        var babble = DialogueFixtures.Options()
+        babble.sentences = ["kalo mitu resa banu, peko tila.", "zumo kare nita sobe laku.", "fema tobi kuno resi, valo mita."]
+        let cases: [(String, DialogueFixtures.Options)] = [("music-under-speech", music), ("overlapping-speakers", overlap),
+                                                         ("babble", babble)]
+        for (name, options) in cases {
+            let fixture = DialogueFixtures.speech(options)
+            let source = fixture.source(contentID: name)
+            let analysis = DialogueEngine.analyze(source, speech: [])
+            let bank = DialogueEngine.bank(analysis, transcript: nil, seed: 5)
+            checkInvariants(bank.map { performance($0, seed: 9).blocks } ?? [], bank: bank, name)
+            // A music-led classification gives no bank at all (plan 5.5): film and music continue alone.
+            let musicLed = (0..<60).map { LofiSpeechFocus.Window(range: Double($0) * 0.5..<(Double($0) * 0.5 + 1), speech: 0.2, music: 0.8, singing: 0.1) }
+            let led = DialogueEngine.analyze(source, speech: musicLed)
+            #expect(DialogueEngine.bank(led, transcript: nil, seed: 5) == nil, "\(name): a music-led cue made a bank")
+            // A transcript that recognises nothing confidently changes nothing.
+            let doubtful = DialogueFixtures.transcript(fixture, confidence: 0.3)
+            let refined = DialogueEngine.bank(analysis, transcript: doubtful, seed: 5)
+            #expect(refined?.bankID == bank?.bankID && refined?.usedTranscript != true, "\(name): a low-confidence transcript changed the bank")
+            print("DIALOGUE-FALLBACK \(name): bank \(bank != nil) pads \(bank?.pads.count ?? 0) anchor \(bank.map { $0.anchor.level.name } ?? "-")")
+        }
+        // Speech-like babble still sounds like speech: the acoustic path may chop it, never more than
+        // the original-order line, a phrase, a stab or rest, and never with invented text.
+        let babbleBank = DialogueEngine.bank(DialogueEngine.analyze(DialogueFixtures.speech(babble).source(contentID: "babble"), speech: []),
+                                             transcript: nil, seed: 5)
+        #expect(babbleBank?.pads.allSatisfy { $0.text == nil } ?? true)
+    }
+
+    @Test func hundredRandomRealLengthSourcesStayInRangeAndFinite() throws {
+        var rng = MusicRNG(seed: 9001)
+        var banks = 0
+        for seed in 0..<100 {
+            var o = DialogueFixtures.Options()
+            o.seconds = rng.range(24...32)
+            o.sampleRate = rng.pick([44_100, 48_000])
+            o.seed = UInt64(1000 + seed)
+            o.whisper = rng.chance(0.15)
+            o.musicBed = rng.chance(0.3) ? rng.rangeF(0.1...0.8) : 0
+            o.secondSpeaker = rng.chance(0.2)
+            o.pitch = rng.range(0.8...1.4)
+            let fixture = DialogueFixtures.speech(o)
+            let source = fixture.source(contentID: "long-\(seed)", sourceStart: rng.range(0...900), rate: rng.pick([1, 1, 0.8]))
+            var memory = DialoguePerformanceMemory()
+            let bpm = rng.range(58...82)
+            let nextBPM: Double? = rng.chance(0.3) ? rng.range(58...82) : nil
+            let snapshot = DialogueFixtures.snapshot(bpm: bpm, nextBPM: nextBPM)
+            let prepared = DialogueEngine.prepare(source, speech: [], transcript: nil, snapshot: snapshot,
+                                                  window: 0..<snapshot.time(beat: 96), earliestStart: rng.range(0...2),
+                                                  memory: &memory, seed: UInt64(seed))
+            if prepared.bank != nil { banks += 1 }
+            for unit in prepared.analysis.units {
+                #expect(unit.frames.lowerBound >= 0 && unit.frames.upperBound <= source.frameCount)
+            }
+            for pad in prepared.bank?.pads ?? [] {
+                let last = DialogueChopRenderer.readPosition(pad, outputFrame: DialogueChopRenderer.outputCount(pad) - 1)
+                #expect(pad.frames.lowerBound >= 0 && last < Double(source.frameCount - 1), "seed \(seed): read past the buffer")
+            }
+            checkInvariants(prepared.plan.blocks, bank: prepared.bank, bpm: min(bpm, nextBPM ?? bpm), "seed \(seed)")
+            for chop in prepared.chops {
+                let data = try #require(chop.buffer.floatChannelData)
+                var finite = true
+                for c in 0..<Int(chop.buffer.format.channelCount) {
+                    for i in 0..<Int(chop.buffer.frameLength) where !data[c][i].isFinite { finite = false }
+                }
+                #expect(finite, "seed \(seed): non-finite sample")
+            }
+        }
+        #expect(banks >= 80, "most synthetic speech gives a bank (\(banks)/100)")
+    }
+
     // MARK: Transcript and reorder guards
 
     private func words(_ text: String, confidence: Float? = 0.9, gap: Int = 2_400) -> [DialogueWordSpan] {

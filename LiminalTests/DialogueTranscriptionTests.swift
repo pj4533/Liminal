@@ -41,6 +41,103 @@ import Testing
         var count: Int { value.withLock { $0 } }
     }
 
+    // MARK: Transcript path end to end (plan 6.2, 7)
+
+    private static let clauses: SpeechFixture = {
+        var o = DialogueFixtures.Options()
+        o.seconds = 14
+        o.sentences = ["the night was cold, the band played on.", "she runs to the station every morning.",
+                       "keep your eyes on the road ahead."]
+        return DialogueFixtures.speech(o)
+    }()
+
+    /// Plays `bank` over two takes in 8-bar pieces with carried memory.
+    private static func blocks(_ bank: DialoguePadBank, seed: UInt64) -> [DialogueBlock] {
+        var memory = DialoguePerformanceMemory()
+        var result: [DialogueBlock] = []
+        for take in 0..<2 {
+            let snapshot = DialogueFixtures.snapshot(bpm: 70, origin: Double(take) * 64 * 60 / 70, phraseAtOrigin: 4 * take, takeIndex: take)
+            for half in 0..<2 {
+                let window = snapshot.time(beat: Double(32 * half))..<snapshot.time(beat: Double(32 * half + 32))
+                result += DialogueEngine.perform(bank, snapshot: snapshot, window: window, earliestStart: window.lowerBound,
+                                                 memory: &memory, seed: seed &+ UInt64(2 * take + half)).blocks
+            }
+        }
+        return result
+    }
+
+    @Test func sparseReorderAppearsOnlyWithAGuardTemplateAndPlaysTheArrangedOrder() throws {
+        let source = Self.clauses.source(contentID: "clauses")
+        let analysis = DialogueEngine.analyze(source, speech: [])
+        let acoustic = try #require(DialogueEngine.bank(analysis, transcript: nil, seed: 3))
+        #expect(acoustic.reorder == .sourceOrder && !acoustic.usedTranscript)
+        let refined = try #require(DialogueEngine.bank(analysis, transcript: DialogueFixtures.transcript(Self.clauses), seed: 3))
+        #expect(refined.usedTranscript)
+        let units = Dictionary(refined.pads.map { ($0.unitID, $0.frames) }, uniquingKeysWith: { a, _ in a })
+        let pair = DialoguePerformer.reorderPair(refined.reorder, frames: { units[$0] })
+        var sparse = 0
+        for seed in 0..<24 {
+            #expect(!Self.blocks(acoustic, seed: UInt64(seed)).contains { $0.family == .sparseReorder },
+                    "no sparse reorder without a transcript")
+            for block in Self.blocks(refined, seed: UInt64(seed)) where block.family == .sparseReorder {
+                sparse += 1
+                let (first, second) = try #require(pair, "sparseReorder without a guard template")
+                let played = block.events.compactMap { refined.pad($0.padID)?.unitID }
+                #expect(played == [first, second], "plays the arranged order \([first, second]), got \(played)")
+            }
+        }
+        print("DIALOGUE-REORDER template \(refined.reorder.template?.rawValue ?? "sourceOrder") pair \(String(describing: pair)) sparse blocks \(sparse)")
+        if pair != nil { #expect(sparse > 0, "a safe template is used at least once in 24 seeds") }
+        // The plan log carries the intended text and both orders.
+        var memory = DialoguePerformanceMemory()
+        let log = DialogueEngine.log(DialogueEngine.perform(refined, snapshot: DialogueFixtures.snapshot(bpm: 70),
+                                                            window: 0..<30, earliestStart: 0,
+                                                            memory: &memory, seed: 1, cueToken: 1, revision: 1), bank: refined)
+        #expect(log["usedTranscript"] as? Bool == true)
+        #expect(!(log["intendedText"] as? String ?? "").isEmpty)
+        let original = try #require(log["originalOrder"] as? [Int]), arranged = try #require(log["arrangedOrder"] as? [Int])
+        #expect(log["reorderTemplate"] as? String == (refined.reorder.template?.rawValue ?? "sourceOrder"))
+        if let pair {
+            #expect(arranged == [pair.0, pair.1] && Set(original) == Set(arranged))
+            if refined.reorder.template != .omitParenthetical { #expect(original != arranged, "the arranged order runs against the source") }
+        }
+        else { #expect(!original.isEmpty) }
+    }
+
+    @Test func aTranscriptBeforeTheSecondBlockChangesOnlyLaterBlocksThroughTheCoordinator() async throws {
+        let transcript = DialogueFixtures.transcript(Self.clauses)
+        var settings = DialogueDirector.Settings(transcriptProvider: { FixtureTranscriptProvider(transcript, delay: .milliseconds(200)) })
+        settings.classify = { _, _, _ in [] }
+        let director = DialogueDirector(settings)
+        let start = Double(DispatchTime.now().uptimeNanoseconds) / 1e9
+        let beat = 60.0 / 70
+        let info = LofiTransportInfo(revision: 1, takeIndex: 0, phraseAtTakeStart: 0, origin: start, beatDuration: beat,
+                                     nextBeatDuration: nil, seed: 5, options: LofiOptions(tempo: 70), timing: nil)
+        let window = DialogueCueCoordinator.window(due: start + 0.2, span: 32 * beat, transport: info)
+        let posted = Mutex<[ArchiveVoice.ChopPlan]>([])
+        let source = Self.clauses.source(contentID: "clauses-run")
+        let outcome = await director.run(source: source, window: window, seed: 4, transport: { info }, isCurrent: { true },
+                                         post: { plan in posted.withLock { $0.append(plan) } })
+        let plans = posted.withLock { $0 }
+        try #require(plans.count == 2)
+        let acoustic = try #require(outcome.built.first), refined = try #require(outcome.built.last)
+        let from = plans[1].replaceFrom
+        #expect(abs(from - (start + 16 * beat)) < 1e-6, "the refinement starts at the second block")
+        // Blocks before the refinement are untouched: the first plan's events there stay as they were.
+        let firstBlock = acoustic.plan.blocks.filter { $0.phrase == 0 }
+        #expect(!refined.plan.blocks.contains { $0.phrase == 0 })
+        #expect(firstBlock.flatMap(\.events).allSatisfy { $0.startTime < from })
+        #expect(plans[1].chops.allSatisfy { $0.event.startTime >= from })
+        #expect(refined.plan.usedTranscript && refined.log["intendedText"] != nil && refined.log["arrangedOrder"] != nil)
+        // sparseReorder only where the refined bank carries a playable template.
+        let bank = try #require(refined.bank)
+        let units = Dictionary(bank.pads.map { ($0.unitID, $0.frames) }, uniquingKeysWith: { a, _ in a })
+        if refined.plan.blocks.contains(where: { $0.family == .sparseReorder }) {
+            #expect(DialoguePerformer.reorderPair(bank.reorder, frames: { units[$0] }) != nil)
+        }
+        #expect(!acoustic.plan.blocks.contains { $0.family == .sparseReorder })
+    }
+
     // MARK: Failure modes
 
     @Test func unavailableIsNil() async {
