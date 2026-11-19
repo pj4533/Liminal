@@ -32,12 +32,20 @@ struct LofiMixRenderTests {
         let block: Int
         let postrollBeats: Int?
         let limiter: String?
+        let checkout: String?
+        let hooks: [String: String]?
+        let sameFilm: Bool?
     }
 
     @MainActor @Test func captureCombinedMix() async throws {
         let path = URL(fileURLWithPath: "/private/tmp/liminal-lofi-audio-config-\(getuid()).json")
         guard FileManager.default.fileExists(atPath: path.path) else { return }
         let config = try JSONDecoder().decode(Config.self, from: Data(contentsOf: path))
+        // The config path is shared by every worktree; only the checkout that asked may capture.
+        if let checkout = config.checkout {
+            let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            guard root.standardizedFileURL.path == URL(fileURLWithPath: checkout).standardizedFileURL.path else { return }
+        }
         let base = try #require(URL(string: config.receiver))
         try #require(base.host == "127.0.0.1")
         let session = URLSession(configuration: .ephemeral)
@@ -66,6 +74,8 @@ struct LofiMixRenderTests {
 
     @MainActor private func capture(_ config: Config, receiver: URL, session: URLSession) async throws {
         try FileManager.default.createDirectory(at: config.out, withIntermediateDirectories: true)
+        LofiCaptureHooks.begin(options: config.hooks ?? ["masterProfile": "lofi"])
+        defer { LofiCaptureHooks.end() }
         let audio = AudioEngine()
         let format = AudioKit.Settings.audioFormat
         let options = LofiOptions(tempo: config.tempo, scale: config.scale)
@@ -120,7 +130,7 @@ struct LofiMixRenderTests {
             footageHash = SHA256.hash(data: try Data(contentsOf: source, options: .mappedIfSafe)).description
             cue = try await ArchiveAudioDecoder.decode(url: source, sourceStart: 0, sourceLength: 13, rate: 1,
                                                         format: format)
-        } else if config.filmReel == true {
+        } else if config.filmReel == true || config.sameFilm == true {
             let directory = ArchiveClipStore.defaultDirectory()
             struct Catalog: Decodable { let clips: [ArchiveClip] }
             let catalog = try JSONDecoder().decode(Catalog.self, from: Data(contentsOf: directory.appending(path: "index.json")))
@@ -136,7 +146,7 @@ struct LofiMixRenderTests {
                     sourceLength: seconds, rate: 1, format: format) else { continue }
                 hashes.append(SHA256.hash(data: try Data(contentsOf: url, options: .mappedIfSafe)).description)
                 reel.append((buffer, clip.title, offset))
-                if reel.count >= (config.bars + 7) / 8 { break }
+                if config.sameFilm == true || reel.count >= (config.bars + 7) / 8 { break }
             }
             cue = try #require(reel.first?.buffer, "No cached film reel with audio")
             footageHash = hashes.joined(separator: "/")
@@ -223,7 +233,9 @@ struct LofiMixRenderTests {
             ("footage-room", mix.reverbReturn.avAudioNode), ("lofi", bus.output.avAudioNode),
             ("footage", mix.output.avAudioNode), ("pre-master", master.input.avAudioNode),
             ("glue", master.glue.avAudioNode),
-        ]
+        ] + LofiCaptureHooks.taps.map { ($0.name, $0.node) }
+        let tapNames = nodes.map(\.0)
+        try #require(Set(tapNames).count == tapNames.count, "Duplicate capture tap names: \(tapNames)")
         try audio.start()
         defer { audio.stop() }
         let capture = try nodes.map { name, node in
@@ -247,6 +259,7 @@ struct LofiMixRenderTests {
         else { cueBeats = config.nextDrumName == nil ? [5] : [5] + stride(from: 26, to: config.bars * 4, by: 32).map(Double.init) }
         let cueFrames = cue == nil ? [] : cueBeats.map { clock.frame(at: $0) }.filter { $0 < scoreFrames }
         var chopEvents: [[String: Any]] = []
+        var dialogueTimings: [[String: Any]] = []
         var cueIndex = 0
         var cursor = 0
         var noProgress = 0
@@ -256,12 +269,17 @@ struct LofiMixRenderTests {
         while cursor < frames {
             let time = Double(cursor) / format.sampleRate
             if cueIndex < cueFrames.count, cursor == cueFrames[cueIndex], let cue = reel.isEmpty ? cue : reel[cueIndex % reel.count].buffer {
+                let started = ContinuousClock.now
                 let hits = LofiDialogueSampler.prepareFootage(cue, grid: .init(origin: 0, beatDuration: clock.beatDuration),
                     cueStart: time, duration: Double(cue.frameLength) / format.sampleRate,
                     seed: config.seed &+ UInt64(cueIndex))
+                let elapsed = ContinuousClock.now - started
+                let totalMs = Double(elapsed.components.seconds) * 1000 + Double(elapsed.components.attoseconds) / 1e15
+                dialogueTimings.append(["cue": cueIndex, "totalMs": totalMs])
                 chopEvents += hits.map { hit in
                     ["frame": Int((hit.time * format.sampleRate).rounded()), "sourceStart": hit.source.lowerBound,
-                     "sourceEnd": hit.source.upperBound, "speed": hit.speed, "articulation": hit.articulation.rawValue, "cue": cueIndex, "reversed": hit.reversed]
+                     "sourceEnd": hit.source.upperBound, "speed": hit.speed, "articulation": hit.articulation.rawValue, "cue": cueIndex, "reversed": hit.reversed,
+                     "durationFrames": Int(hit.buffer.frameLength)]
                 }
                 archive.begin(.init(buffer: cue, gain: 0.9, fadeIn: 0.5, label: "offline fixture",
                                     activity: ArchiveAudioMath.activity(cue), chops: hits), now: time)
@@ -300,8 +318,12 @@ struct LofiMixRenderTests {
         tapsInstalled = false
         for (_, sink) in capture { try sink.finish(frames: frames) }
         let wall = Date().timeIntervalSince(t0)
-        let manifest: [String: Any] = [
-            "schema": "liminal-lofi-capture-v1", "frames": frames, "sampleRate": format.sampleRate,
+        LofiCaptureHooks.runFinishers()
+        for (name, data) in LofiCaptureHooks.files {
+            try data.write(to: config.out.appending(path: name), options: .atomic)
+        }
+        var manifest: [String: Any] = [
+            "schema": "liminal-lofi-capture-v2", "frames": frames, "sampleRate": format.sampleRate,
             "block": config.block, "seed": String(config.seed), "bpm": tempo, "beatsPerBar": 4,
             "dialogueOnMusicBus": true, "masterCalibration": "fixed-nominal", "archiveMix": "conductor",
             "clockOriginFrame": 0, "postrollFrames": postroll, "scoredFrames": scoreFrames,
@@ -319,7 +341,15 @@ struct LofiMixRenderTests {
             "latencySamples": ["reportedGlue": master.glue.avAudioNode.latency * format.sampleRate,
                                "reportedLimiter": limiterNode.latency * format.sampleRate],
             "kickCandidates": kicks, "dialogueChops": chopEvents,
+            "sections": ["drums": ["drums"], "bass": ["bass"], "mids": ["texture"], "lead": ["dry"],
+                         "space": ["wet"], "dialogue": ["dialogue-chops"], "bed": ["footage"]],
+            "grid": ["beatFrames": clock.framesPerBeat, "barFrames": clock.framesPerBeat * 4,
+                     "phraseFrames": Double(clock.frameCount), "takeFrames": Double(takeFrames)],
+            "dialogueTimings": dialogueTimings,
+            "sameFilm": config.sameFilm == true,
+            "hooks": config.hooks ?? [:],
         ]
+        manifest["diagnostics"] = LofiCaptureHooks.reports
         try Self.write(manifest, file: "manifest.json", in: config.out)
         try Self.write(score, file: "score.json", in: config.out)
     }
