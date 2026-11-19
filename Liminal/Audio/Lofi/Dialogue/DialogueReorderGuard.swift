@@ -141,7 +141,10 @@ nonisolated enum DialogueReorderGuard {
         var start = 0
         for i in 0..<(words.count - 1) {
             let pause = sampleRate.map { Double(words[i + 1].frames.lowerBound - words[i].frames.upperBound) / $0 }
-            let paused = pause.map { $0 >= DialogueTuning.clausePauseSeconds } ?? true
+            // A sentence end needs no measured pause: recognised words are often contiguous, and a
+            // line must not run on into the next sentence's first word (real-footage tuning).
+            let sentenceEnd = tagged[i].text.last.map { ".?!".contains($0) } ?? false
+            let paused = sentenceEnd || (pause.map { $0 >= DialogueTuning.clausePauseSeconds } ?? true)
             let marked = tagged[i].endsClause ||
                 [.conjunction, .subordinator].contains(tagged[i + 1].wordClass)
             let inside = spans.contains { $0.contains(i) && $0.contains(i + 1) }

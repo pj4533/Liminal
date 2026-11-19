@@ -61,10 +61,7 @@ nonisolated enum DialogueHierarchy {
             let frames = units[i].frames
             let overlapping = spans.filter { $0.overlaps(frames) }
             units[i].protectedSpans += overlapping.map { max($0.lowerBound, frames.lowerBound)..<min($0.upperBound, frames.upperBound) }
-            let cuts = overlapping.contains { span in
-                (span.lowerBound < frames.lowerBound && frames.lowerBound < span.upperBound) ||
-                    (span.lowerBound < frames.upperBound && frames.upperBound < span.upperBound)
-            }
+            let cuts = overlapping.contains { cutsInside($0, frames, f: f) }
             if cuts, !rejected.contains(units[i].id) {
                 rejections.append(DialogueRejection(unit: units[i].id, reason: .protectedCut))
                 rejected.insert(units[i].id)
@@ -119,6 +116,10 @@ nonisolated enum DialogueHierarchy {
             }
             start = snap(start, f: f)
             end = max(start + 1, snap(end, f: f))
+            // Recognised words absorb the silence around them (on real footage a word before a
+            // pause often runs 0.2 to 0.5 s into it), so each word keeps only its voiced core:
+            // otherwise every unit that ends in the pause looks as if it cut the word.
+            (start, end) = core(start..<end, f: f)
             spans.append(DialogueWordSpan(index: i, text: word.text, frames: start..<end, confidence: word.confidence))
         }
         // Speech rate above 7 words per second inside an utterance, or overall, is not credible.
@@ -145,6 +146,26 @@ nonisolated enum DialogueHierarchy {
                                           confidence: previous.confidence)
         }
         return (spans, dropped)
+    }
+
+    /// A unit edge lies inside a protected span by more than the tolerance at both span ends.
+    static func cutsInside(_ span: Range<Int>, _ frames: Range<Int>, f: DialogueFeatures) -> Bool {
+        let tolerance = f.frames(seconds: DialogueTuning.protectedCutToleranceSeconds)
+        func inside(_ x: Int) -> Bool { span.lowerBound + tolerance < x && x < span.upperBound - tolerance }
+        return inside(frames.lowerBound) || inside(frames.upperBound)
+    }
+
+    /// The word without its leading and trailing inactive hops, with a release margin kept at
+    /// the end. Unchanged when the word has no active hop.
+    private static func core(_ frames: Range<Int>, f: DialogueFeatures) -> (Int, Int) {
+        var lo = f.hop(frame: frames.lowerBound), hi = f.hop(frame: max(frames.lowerBound, frames.upperBound - 1))
+        while lo < hi, !f.active[lo] { lo += 1 }
+        while hi > lo, !f.active[hi] { hi -= 1 }
+        guard f.active[lo] else { return (frames.lowerBound, frames.upperBound) }
+        let start = max(frames.lowerBound, lo * f.hop)
+        let release = f.frames(seconds: DialogueTuning.releaseSeconds)
+        let end = min(frames.upperBound, (hi + 1) * f.hop + release)
+        return end > start ? (start, end) : (frames.lowerBound, frames.upperBound)
     }
 
     private static func snap(_ frame: Int, f: DialogueFeatures) -> Int {
@@ -300,7 +321,19 @@ nonisolated enum DialogueHierarchy {
             }
             let lo = r.lowerBound + r.count / 5, hi = r.upperBound - r.count / 5
             let middle = candidates.filter { $0 > lo && $0 < hi }
-            return (middle.isEmpty ? candidates : middle).min { f.intensity[$0] < f.intensity[$1] }
+            let pool = middle.isEmpty ? candidates : middle
+            // A single deep hop is often a stop closure inside a word ("an|kle"); a valley that stays
+            // low for a word gap is a likelier word boundary, so it wins when one exists.
+            let gap = f.hops(seconds: DialogueTuning.wordGapSeconds)
+            func lowRun(_ v: Int) -> Int {
+                let level = f.intensity[v] + DialogueTuning.valleyRunDB
+                var a = v, b = v
+                while a > r.lowerBound, f.intensity[a - 1] <= level { a -= 1 }
+                while b + 1 < r.upperBound, f.intensity[b + 1] <= level { b += 1 }
+                return b - a + 1
+            }
+            let gaps = pool.filter { lowRun($0) >= gap }
+            return (gaps.isEmpty ? pool : gaps).min { f.intensity[$0] < f.intensity[$1] }
         }
 
         func splitUtterance(_ r: Range<Int>) -> [Range<Int>] {
@@ -331,13 +364,26 @@ nonisolated enum DialogueHierarchy {
             }
             if u.upperBound > start { segments.append(start..<u.upperBound) }
             if segments.isEmpty { segments = [u] }
-            // Merge short segments with the neighbour across the shorter pause.
+            // Merge short segments with a neighbour. A short fragment after a pause usually opens
+            // the next phrase ("Yes,", "In", "and"), so it joins forward unless the following pause
+            // is clearly longer. A short last fragment joins backward only across a brief pause;
+            // otherwise it stays on its own (too short to play as a phrase, still a stab), so a
+            // phrase never ends on the first word of the next sentence (real-footage tuning).
+            var kept = Set<Int>()
             while segments.count > 1,
-                  let k = segments.indices.filter({ seconds(segments[$0]) < DialogueTuning.phraseSeconds.lowerBound })
-                    .min(by: { segments[$0].count < segments[$1].count }) {
-                let left = k > 0 ? segments[k].lowerBound - segments[k-1].upperBound : Int.max
-                let right = k + 1 < segments.count ? segments[k+1].lowerBound - segments[k].upperBound : Int.max
-                let other = left <= right ? k - 1 : k + 1
+                  let k = segments.indices.filter({
+                      seconds(segments[$0]) < DialogueTuning.phraseSeconds.lowerBound && !kept.contains(segments[$0].lowerBound)
+                  }).min(by: { segments[$0].count < segments[$1].count }) {
+                let left = k > 0 ? seconds(segments[k-1].upperBound..<segments[k].lowerBound) : .infinity
+                let right = k + 1 < segments.count ? seconds(segments[k].upperBound..<segments[k+1].lowerBound) : .infinity
+                let other: Int
+                if right.isFinite, right <= left * DialogueTuning.forwardMergeBias { other = k + 1 }
+                else if left.isFinite, right.isFinite || left <= DialogueTuning.trailingMergePauseSeconds { other = k - 1 }
+                else if right.isFinite { other = k + 1 }
+                else {
+                    kept.insert(segments[k].lowerBound)
+                    continue
+                }
                 let merged = min(segments[k].lowerBound, segments[other].lowerBound)..<max(segments[k].upperBound, segments[other].upperBound)
                 segments[min(k, other)] = merged
                 segments.remove(at: max(k, other))
@@ -475,10 +521,7 @@ nonisolated enum DialogueHierarchy {
             let overlapping = spans.filter { $0.overlaps(frames) }
             unit.protectedSpans += overlapping.map { max($0.lowerBound, frames.lowerBound)..<min($0.upperBound, frames.upperBound) }
             units[id] = unit
-            let cuts = overlapping.contains { s in
-                (s.lowerBound < frames.lowerBound && frames.lowerBound < s.upperBound) ||
-                    (s.lowerBound < frames.upperBound && frames.upperBound < s.upperBound)
-            }
+            let cuts = overlapping.contains { DialogueHierarchy.cutsInside($0, frames, f: f) }
             if cuts, rejection(id) == nil { rejections.append(DialogueRejection(unit: id, reason: .protectedCut)) }
         }
 
@@ -517,8 +560,18 @@ nonisolated enum DialogueHierarchy {
             let startConfidence = confidence(start.depth), endConfidence = confidence(end.depth)
             let boundary = min(startConfidence, endConfidence)
             let peakFine = f.fine[f.fineIndex(frame: frames.lowerBound)...f.fineIndex(frame: frames.upperBound - 1)].max() ?? 0
-            score.entrance = startConfidence * (0.5 + 0.5 * quietShare(before: frames.lowerBound, level: peakFine * 0.22))
-            score.exit = endConfidence * (0.5 + 0.5 * quietShare(after: frames.upperBound, level: peakFine * 0.22))
+            let quietLevel = peakFine * 0.22
+            var before = quietShare(before: frames.lowerBound, level: quietLevel)
+            var after = quietShare(after: frames.upperBound, level: quietLevel)
+            if [.utterance, .phrase, .wordGroup].contains(level) {
+                // A line that ends into a real pause usually ends a thought; one followed by speech
+                // within a breath usually stops on "and" or "from" (real-footage tuning).
+                let context = DialogueTuning.linePauseContextSeconds
+                before = 0.5 * before + 0.5 * Float(min(1, quietRun(before: frames.lowerBound, level: quietLevel) / context))
+                after = 0.5 * after + 0.5 * Float(min(1, quietRun(after: frames.upperBound, level: quietLevel) / context))
+            }
+            score.entrance = startConfidence * (0.5 + 0.5 * before)
+            score.exit = endConfidence * (0.5 + 0.5 * after)
             if let top = strongest.first {
                 let average = inside.map(\.intensityDB).reduce(0, +) / Float(max(1, inside.count))
                 score.stress = inside.count > 1 ? min(1, max(0, (top.intensityDB - average) / 6)) : 0.5
@@ -648,6 +701,25 @@ nonisolated enum DialogueHierarchy {
             let lo = f.fineIndex(frame: frame), hi = min(f.fine.count, lo + 120)
             guard hi > lo else { return 1 }
             return Float(f.fine[lo..<hi].filter { $0 <= level }.count) / Float(hi - lo)
+        }
+
+        /// Seconds the 1 ms envelope stays at or under `level` before `frame`, up to the line context.
+        func quietRun(before frame: Int, level: Float) -> Double {
+            let limit = Int(DialogueTuning.linePauseContextSeconds / DialogueTuning.fineHopSeconds)
+            var k = f.fineIndex(frame: frame) - 1, n = 0
+            while k >= 0, n < limit, f.fine[k] <= level { k -= 1; n += 1 }
+            // The start of the analysed span counts as silence before it.
+            if k < 0 { n = limit }
+            return Double(n) * DialogueTuning.fineHopSeconds
+        }
+
+        /// Seconds the 1 ms envelope stays at or under `level` after `frame`, up to the line context.
+        func quietRun(after frame: Int, level: Float) -> Double {
+            let limit = Int(DialogueTuning.linePauseContextSeconds / DialogueTuning.fineHopSeconds)
+            var k = f.fineIndex(frame: frame), n = 0
+            while k < f.fine.count, n < limit, f.fine[k] <= level { k += 1; n += 1 }
+            if k >= f.fine.count { n = limit }
+            return Double(n) * DialogueTuning.fineHopSeconds
         }
 
         /// Share of samples on flat tops near the cue peak, counted only for a hot cue.

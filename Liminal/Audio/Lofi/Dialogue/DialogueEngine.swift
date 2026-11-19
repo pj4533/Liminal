@@ -4,7 +4,7 @@ import Foundation
 /// Facade of the dialogue engine (plan 3.4): analysis, bank, performance, rendering and logs.
 /// Pure and deterministic; runs off the audio thread.
 nonisolated enum DialogueEngine {
-    static let analysisVersion = 1
+    static let analysisVersion = 2
 
     struct Timings: Sendable, Equatable {
         var analyzeMs: Double = 0
@@ -77,7 +77,8 @@ nonisolated enum DialogueEngine {
         let analysis = analyze(source, speech: speech)
         timings.analyzeMs = ms(clock.now - t)
         t = clock.now
-        let bank = bank(analysis, transcript: transcript, seed: seed)
+        // A transcript that leaves no playable bank falls back to the acoustic bank.
+        let bank = bank(analysis, transcript: transcript, seed: seed) ?? (transcript == nil ? nil : bank(analysis, transcript: nil, seed: seed))
         timings.bankMs = ms(clock.now - t)
         t = clock.now
         let plan = DialoguePerformer.perform(bank, snapshot: snapshot, window: window, earliestStart: earliestStart,

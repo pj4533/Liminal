@@ -183,7 +183,12 @@ nonisolated enum DialogueCueCoordinator {
         let t = built.timings
         let leadText = lead.map { String(format: "%.2f", $0) } ?? "-"
         LMLog.audio.info("Lo-Fi dialogue plan cue=\(cue) rev=\(built.plan.revision) bank=\(String(built.plan.bankID, radix: 16), privacy: .public) families=\(families, privacy: .public) events=\(built.chops.count) classify=\(t.classifyMs, format: .fixed(precision: 0))ms analyze=\(t.analyzeMs, format: .fixed(precision: 0))ms bank=\(t.bankMs, format: .fixed(precision: 0))ms plan=\(t.planMs, format: .fixed(precision: 0))ms render=\(t.renderMs, format: .fixed(precision: 0))ms lead=\(leadText, privacy: .public)s")
-        if LofiCaptureHooks.isEnabled { LofiCaptureHooks.appendReport("dialoguePlans", built.log) }
+        if LofiCaptureHooks.isEnabled {
+            var log = built.log
+            log["timings"] = t.dictionary(cue: cue)
+            if let lead { log["leadSeconds"] = (lead * 1000).rounded() / 1000 }
+            LofiCaptureHooks.appendReport("dialoguePlans", log)
+        }
     }
 
     static func ms(_ d: Duration) -> Double {
@@ -441,8 +446,33 @@ nonisolated final class DialogueDirector: @unchecked Sendable {
         guard let transcriptTask else { return outcome }
         let transcript = await withTaskCancellationHandler { await transcriptTask.value } onCancel: { transcriptTask.cancel() }
         let arrived = now()
+        if transcript != nil { outcome.transcriptArrivedAt = arrived }
+
+        // The transport moved on while recognition ran (tempo change, restart): the posted plan sits on
+        // a stale grid. The analysis and bank are kept (refined when a transcript came) and the plan
+        // is rebuilt against the new snapshot from the commit margin on, replacing unqueued chops.
+        if !Task.isCancelled, isCurrent(), let latest = transport(), latest.revision != info.revision,
+           let generation = committedGeneration {
+            let refined = transcript.flatMap { DialogueEngine.bank(acoustic.analysis, transcript: $0, seed: seed) }
+            if let transcript { store(source, transcript: transcript, refined: refined) }
+            let from = now() + DialogueCueCoordinator.commitMargin
+            let rebuilt = DialogueCueCoordinator.build(source: source, speech: speech, transcript: nil, transport: latest,
+                                                       window: window, earliestStart: from, memory: memoryBefore, seed: seed,
+                                                       revision: 1, reuse: .init(analysis: acoustic.analysis, bank: refined ?? acoustic.bank))
+            guard !Task.isCancelled, isCurrent(), transport()?.revision == latest.revision,
+                  state.withLock({ $0.generation }) == generation else { return outcome }
+            LMLog.audio.info("Lo-Fi dialogue cue=\(source.cueToken) transport revision \(info.revision) -> \(latest.revision) during recognition: plan rebuilt")
+            let plan = ArchiveVoice.ChopPlan(token: source.cueToken, revision: 1, replaceFrom: from,
+                                             chops: rebuilt.chops.filter { $0.event.startTime >= from })
+            post(plan)
+            commit(rebuilt.memory, expecting: generation)
+            outcome.posted.append(plan)
+            outcome.built.append(rebuilt)
+            outcome.transcriptUsed = refined != nil
+            DialogueCueCoordinator.report(rebuilt, cue: source.cueToken, lead: rebuilt.firstStart.map { $0 - now() })
+            return outcome
+        }
         guard let transcript else { return outcome }
-        outcome.transcriptArrivedAt = arrived
         guard arrived <= useDeadline, !Task.isCancelled, isCurrent(), transport()?.revision == info.revision,
               let generation = committedGeneration else {
             let refined = DialogueEngine.bank(acoustic.analysis, transcript: transcript, seed: seed)

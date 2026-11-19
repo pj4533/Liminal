@@ -54,6 +54,30 @@ nonisolated enum DialoguePerformer {
                                        rejections: bank?.rejections ?? [])
     }
 
+    /// The two whole units a safe template plays out of source order, in their arranged order.
+    /// Nil for the source order and for `repeatClause` (a repeat is an echo, not a reorder).
+    /// For an exchange or a moved adverbial it is the first adjacent pair that runs against the
+    /// source order; for an omitted parenthetical, the adjacent pair with the widest source gap
+    /// between them (where the parenthetical was).
+    static func reorderPair(_ reorder: DialogueReorder, frames: (Int) -> Range<Int>?) -> (Int, Int)? {
+        guard let template = reorder.template, template != .repeatClause else { return nil }
+        var ids: [Int] = []
+        for id in reorder.units where !ids.contains(id) { ids.append(id) }
+        let spans = ids.compactMap(frames)
+        guard ids.count >= 2, spans.count == ids.count else { return nil }
+        let pairs = Array(zip(ids.indices, ids.indices.dropFirst()))
+        switch template {
+        case .omitParenthetical:
+            guard let k = pairs.max(by: { a, b in
+                spans[a.1].lowerBound - spans[a.0].upperBound < spans[b.1].lowerBound - spans[b.0].upperBound
+            }) else { return nil }
+            return (ids[k.0], ids[k.1])
+        default:
+            guard let k = pairs.first(where: { spans[$0.1].lowerBound < spans[$0.0].lowerBound }) else { return nil }
+            return (ids[k.0], ids[k.1])
+        }
+    }
+
     static func fingerprint(_ family: DialogueFamily, _ elements: [DialogueElement]) -> UInt64 {
         var h = DialogueHash()
         h.add(family.id)
@@ -156,6 +180,15 @@ private nonisolated struct BlockPlanner {
     var sibling: DialoguePad? { bank.siblingGroups.first.flatMap { bank.pad($0[1]) } ?? bank.pads(.sibling).first }
     var texture: DialoguePad? { bank.pads(.texture).first }
 
+    /// Native pads of the guard's arranged pair, in arranged order.
+    var reorderPads: (DialoguePad, DialoguePad)? {
+        let frames = Dictionary(bank.pads.map { ($0.unitID, $0.frames) }, uniquingKeysWith: { a, _ in a })
+        guard let (x, y) = DialoguePerformer.reorderPair(bank.reorder, frames: { frames[$0] }),
+              let a = bank.pads.first(where: { $0.unitID == x && $0.transform.isNative }),
+              let b = bank.pads.first(where: { $0.unitID == y && $0.transform.isNative }), a.padID != b.padID else { return nil }
+        return (a, b)
+    }
+
     /// Short lines that repeat a bar apart without choking themselves.
     func echoHeads(excluding lead: DialoguePad) -> [DialoguePad] {
         let fits = { (p: DialoguePad) in p.duration <= bar - 0.1 && p.transform.isNative }
@@ -204,17 +237,9 @@ private nonisolated struct BlockPlanner {
             }
             return items
         case .sparseReorder:
-            var first: DialoguePad?, second: DialoguePad?
-            if case .arrangement(let ids, .exchangeClauses) = bank.reorder, ids.count == 2 {
-                first = bank.pads.first { $0.unitID == ids[0] && $0.transform.isNative }
-                second = bank.pads.first { $0.unitID == ids[1] && $0.transform.isNative }
-            }
-            if first == nil || second == nil {
-                guard let head = bank.pads(.head).first ?? natives.dropFirst().first, let reply = answer(for: head) else { return nil }
-                first = head
-                second = reply
-            }
-            guard let a = first, let b = second, a.padID != b.padID else { return nil }
+            // Only a template the guard proved safe plays out of source order; without one this
+            // family does not exist (the source-order call and response covers it).
+            guard let (a, b) = reorderPads else { return nil }
             return [DialogueItem(padID: a.padID, slot: 8, gesture: 0), DialogueItem(padID: b.padID, slot: 34, gesture: 0)]
         case .textureFill:
             guard let t = texture, let s = s1 else { return nil }
@@ -279,7 +304,7 @@ private nonisolated struct BlockPlanner {
         case 2:
             // Breakdown: a sparse establish of at most two events, another family than the theme's.
             var order: [DialogueFamily] = [.anchor, .callResponse, .sparseReorder].shuffled(using: &r)
-            if bank.reorder.template == .exchangeClauses { order = [.sparseReorder] + order.filter { $0 != .sparseReorder } }
+            if reorderPads != nil { order = [.sparseReorder] + order.filter { $0 != .sparseReorder } }
             for f in order where !(previousGroup?.family == f && previousGroup?.bankID == bank.bankID) {
                 add(f, variants: variants, leads: [lead], change: "breakdown")
             }
