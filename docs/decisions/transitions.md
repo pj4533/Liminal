@@ -481,3 +481,19 @@ style (axes as in T27); "< 3.5" marks what round 2 had to fix.
 - Open: the round 2 clips have not been judged blind yet; the step limit is still exceeded by
   Kaleidoscope, Tide, Solarize, Dive and Whirlpool by 0.001-0.009 (T36); the image-change hitch (T39)
   should be checked on a Vision Pro.
+
+### T43. Lo-Fi drum-timed reveals use the whole family (19 November 2026)
+
+Commit `6dc0999` (18 November) timed Lo-Fi image changes to the 8- and 16-bar drum fills. It also gave every one of those changes a fixed `.classic` spec lasting `dissolveBeats`, which is 0.375–0.75 beats. Because `VisualEngine.nextTransition` returned that spec whenever a reveal was pending, the `TransitionDirector` was bypassed, and in Lo-Fi every change became the same short whole-frame dissolve. Ambient mode was unaffected.
+
+The fix: `LofiImageReveal` now asks the director for its spec when the fill is scheduled. It uses the renderers' latest intensity, energy and depth inputs, and an image interval of 32 beats.
+
+The user's timing: the warp builds while the drummer fills, and the new picture is fully in on the downbeat. So the reveal starts at `downbeat - s1 * duration`, where `s1` ends the style's swap window. The lead-in is snapped to a whole number of beats, at least two.
+
+The macOS log now reports "Lo-Fi image fully in on draw … ms after downbeat".
+
+Tests:
+- `ImageStoreTests.lofiImageIsFullyInOnTheFillDownbeat` covers every style at 58, 69 and 82 BPM. It checks that the swap is complete at the downbeat and still running a quarter beat before, that the envelope is above 0.5 one beat before, and that the lead-in is a whole number of beats, at least two.
+- `ImageStoreTests.lofiRevealsVaryTheirTransitionStyle` runs 24 reveals and expects no `.classic`, at least 8 styles, and no back-to-back repeat.
+
+The footage dissolve keeps its own timing (centred on the downbeat, `FootageWeaver`).
