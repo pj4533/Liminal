@@ -73,6 +73,9 @@ nonisolated struct LofiEffects {
     private var leadPresence: Float = 0
     private let profile: LofiPreset.Space
     private let gesture: Gesture
+    /// Per-sample constants of the gesture, resolved once (the effect loop runs unoptimized in Debug).
+    private let gains: (echo: Float, room: Float, color: Float)
+    private let isTape: Bool
     private let beatStep: Float
     private var orbit: Float = 0
 
@@ -80,6 +83,8 @@ nonisolated struct LofiEffects {
          gesture: Gesture = .cloud, scale: ScaleType = .minor) {
         self.profile = profile
         self.gesture = gesture
+        gains = gesture.returnGains
+        isTape = gesture == .tape
         beatStep = 1 / Float(clock.framesPerBeat)
         let taps = gesture.taps(for: profile)
         echoL = Delay(frames: clock.frame(at: taps.left), damping: 0.23)
@@ -91,6 +96,7 @@ nonisolated struct LofiEffects {
         motion = LofiMotion(clock: clock, tonic: tonic, scale: scale, seed: seed, gesture: gesture)
     }
 
+    @_transparent
     mutating func processReturns(lead: Stereo, texture: Stereo, grains: Stereo, space: Float) -> Returns {
         let dryPeak = max(abs(lead.left), abs(lead.right))
         leadPresence += (dryPeak - leadPresence) * (dryPeak > leadPresence ? 0.00085 : 0.00010)
@@ -116,7 +122,6 @@ nonisolated struct LofiEffects {
         let late = room.process(0.73 * early.left + swell * toneL + 0.58 * lead.left + 0.45 * texture.left,
                                 0.73 * early.right + swell * toneR + 0.58 * lead.right + 0.45 * texture.right)
         // Briefly make room for the attack, then let the space and repeats carry the phrase.
-        let gains = gesture.returnGains
         let echoGain = gains.echo * (0.96 + 0.23 * space - 0.12 * presence)
         let roomGain = gains.room * profile.diffusion * (1.30 + 0.60 * space - 0.22 * presence)
         let echo = (echoGain * echoA, echoGain * echoB)
@@ -127,7 +132,7 @@ nonisolated struct LofiEffects {
                                     + 0.34 * grainL * echoB)
         let colorR = gains.color * (0.74 * grainR - 0.75 * scatter + animated.right + 0.38 * smear.right
                                     + 0.34 * grainR * echoA)
-        if gesture == .tape {
+        if isTape {
             // The saturation is a parallel return. Its half-sample linear delay does not touch the dry attack.
             let drive = 1.25 + 0.40 * space
             let l = echo.0 + 0.55 * colorL
@@ -141,6 +146,7 @@ nonisolated struct LofiEffects {
         return Returns(echo: echo, room: classic, color: (colorL, colorR))
     }
 
+    @_transparent
     private func tape(_ x: Float) -> Float { x / (1 + 0.42 * abs(x)) }
 
     /// First-order antiderivative of a bounded tanh shaper. A midpoint limit avoids cancellation.
@@ -148,6 +154,7 @@ nonisolated struct LofiEffects {
         private var previous: Float = 0
         private var previousIntegral: Float = 0
 
+        @_transparent
         mutating func process(_ sample: Float, drive: Float) -> Float {
             let x = min(4, max(-4, sample * drive))
             let integral = logf(coshf(x))
@@ -162,17 +169,23 @@ nonisolated struct LofiEffects {
 
     /// Short moving read heads smear the grain cloud ahead of the room. Their modulation follows the bar clock.
     private struct Ensemble {
-        private var left: [Float]
-        private var right: [Float]
+        private let lines: (left: Line, right: Line)
+        private let left: UnsafeMutablePointer<Float>
+        private let right: UnsafeMutablePointer<Float>
+        private let length: Int
         private var index = 0
         private let rate: Float
 
         init(rate: Double) {
             self.rate = Float(rate)
-            left = [Float](repeating: 0, count: max(4, Int(rate * 0.023) + 2))
-            right = left
+            let count = max(4, Int(rate * 0.023) + 2)
+            lines = (Line(count: count), Line(count: count))
+            left = lines.left.samples
+            right = lines.right.samples
+            length = count
         }
 
+        @_transparent
         mutating func process(left inputL: Float, right inputR: Float, beat: Float) -> Stereo {
             left[index] = inputL
             right[index] = inputR
@@ -182,16 +195,17 @@ nonisolated struct LofiEffects {
             let b = tap(right, seconds: 0.011 - 0.0035 * sway)
             let c = tap(left, seconds: 0.016 - 0.003 * drift)
             let d = tap(right, seconds: 0.018 + 0.003 * drift)
-            index = (index + 1) % left.count
+            index = (index + 1) % length
             return (0.57 * a + 0.43 * d, 0.57 * b + 0.43 * c)
         }
 
-        private func tap(_ storage: [Float], seconds: Float) -> Float {
-            let position = Float(index + storage.count) - seconds * rate
+        @_transparent
+        private func tap(_ storage: UnsafeMutablePointer<Float>, seconds: Float) -> Float {
+            let position = Float(index + length) - seconds * rate
             let frame = Int(position)
             let u = position - Float(frame)
-            let a = storage[frame % storage.count]
-            let b = storage[(frame + 1) % storage.count]
+            let a = storage[frame % length]
+            let b = storage[(frame + 1) % length]
             return a + (b - a) * u
         }
     }
@@ -289,10 +303,20 @@ nonisolated struct LofiEffects {
         }
 
         mutating func capture(_ sample: Stereo, at frame: Int, into grains: inout (left: [Float], right: [Float])) {
+            record(sample, at: frame)
+            guard frame + 1 == window.upperBound else { return }
+            release(into: &grains)
+        }
+
+        /// Stores one sample of the window (`frame` inside `window`).
+        mutating func record(_ sample: Stereo, at frame: Int) {
             let index = frame - window.lowerBound
             captured.left[index] = sample.left
             captured.right[index] = sample.right
-            guard frame + 1 == window.upperBound else { return }
+        }
+
+        /// Writes the recorded window to its destinations; call once after the window's last frame.
+        func release(into grains: inout (left: [Float], right: [Float])) {
             for (i, destination) in destinations.enumerated() {
                 LofiEffects.replay(captured, sourceStart: 0, sourceCount: window.count - 1, into: &grains,
                                    destination: destination, rate: i == 1 ? 1 : 0.5, reverse: i != 1,
@@ -310,40 +334,68 @@ nonisolated struct LofiEffects {
         let writable = min(length, min(output.left.count, output.right.count) - destination)
         guard writable > 2 else { return }
         let leftGain = gain * (0.84 - 0.48 * pan), rightGain = gain * (0.84 + 0.48 * pan)
-        for i in 0..<writable {
-            let travel = min(Double(sourceCount - 1), Double(i) * rate)
-            let position = reverse ? Double(sourceCount - 1) - travel : travel
-            let j = Int(position)
-            let fraction = Float(position - Double(j))
-            let base = sourceStart + j
-            let window = sinf(.pi * Float(i) / Float(writable - 1))
-            let l = source.left[base] + fraction * (source.left[base + 1] - source.left[base])
-            let r = source.right[base] + fraction * (source.right[base + 1] - source.right[base])
-            output.left[destination + i] += (0.82 * l + 0.18 * r) * leftGain * window * window
-            output.right[destination + i] += (0.82 * r + 0.18 * l) * rightGain * window * window
+        source.left.withUnsafeBufferPointer { sourceL in
+        source.right.withUnsafeBufferPointer { sourceR in
+        output.left.withUnsafeMutableBufferPointer { outL in
+        output.right.withUnsafeMutableBufferPointer { outR in
+            let last = Double(sourceCount - 1)
+            for i in 0..<writable {
+                let step = Double(i) * rate
+                let travel = step < last ? step : last
+                let position = reverse ? last - travel : travel
+                let j = Int(position)
+                let fraction = Float(position - Double(j))
+                let base = sourceStart + j
+                let window = sinf(.pi * Float(i) / Float(writable - 1))
+                let l = sourceL[base] + fraction * (sourceL[base + 1] - sourceL[base])
+                let r = sourceR[base] + fraction * (sourceR[base + 1] - sourceR[base])
+                outL[destination + i] += (0.82 * l + 0.18 * r) * leftGain * window * window
+                outR[destination + i] += (0.82 * r + 0.18 * l) * rightGain * window * window
+            }
+        }}}}
+    }
+
+    /// A preallocated line read and written through a raw pointer (fast in unoptimized builds too).
+    /// Copies of a delay share the line, so each effect rack owns its delays and never copies them.
+    final class Line: @unchecked Sendable {
+        let samples: UnsafeMutablePointer<Float>
+        let count: Int
+
+        init(count: Int) {
+            self.count = max(1, count)
+            samples = .allocate(capacity: self.count)
+            samples.initialize(repeating: 0, count: self.count)
         }
+
+        deinit { samples.deallocate() }
     }
 
     private struct Delay {
-        private var buffer: [Float]
+        private let line: Line
+        private let buffer: UnsafeMutablePointer<Float>
+        private let length: Int
         private var cursor = 0
         private var low: Float = 0
         private let damping: Float
 
         init(frames: Int, damping: Float) {
-            buffer = [Float](repeating: 0, count: max(1, frames))
+            line = Line(count: frames)
+            buffer = line.samples
+            length = line.count
             self.damping = damping
         }
 
+        @_transparent
         mutating func read() -> Float {
             low += damping * (buffer[cursor] - low)
             return low
         }
 
+        @_transparent
         mutating func write(_ sample: Float) {
             buffer[cursor] = sample
             cursor += 1
-            if cursor == buffer.count { cursor = 0 }
+            if cursor == length { cursor = 0 }
         }
     }
 
@@ -371,6 +423,7 @@ nonisolated struct LofiEffects {
             gd = Float(pow(0.001, lengths.3 / t60))
         }
 
+        @_transparent
         mutating func process(_ left: Float, _ right: Float) -> Stereo {
             let inputL = preL.read(), inputR = preR.read()
             preL.write(left)
