@@ -2,9 +2,9 @@ import Testing
 import Foundation
 @testable import Liminal
 
-/// Footage cache size limits (docs/decisions/archive-video.md A31): the per-clip cap on file choice, the
-/// total budget with pinned clips included, and the launch sweep of unindexed and stale temporary files.
-struct ArchiveCacheSizeTests {
+/// Footage cache cleanup (docs/decisions/archive-video.md A31): the launch sweep of files the index does
+/// not list and of stale temporary files. Nothing indexed, and so nothing that can play, is removed.
+struct ArchiveCacheSweepTests {
     static func clip(_ id: String, mb: Int64, used: Double? = nil, count: Int = 0) -> ArchiveClip {
         ArchiveCachePolicyTests.clip(id, mb: mb, used: used, count: count)
     }
@@ -20,100 +20,27 @@ struct ArchiveCacheSizeTests {
         try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-age)], ofItemAtPath: url.path)
     }
 
-    // MARK: Per-clip cap
-
-    @Test func capIsAReasonableShareOfTheBudget() {
-        #expect(ArchiveCachePolicy.maxClipBytes == 600_000_000)
-        #expect(ArchiveCachePolicy.maxClipBytes * 5 <= ArchiveCachePolicy.capBytes)
-    }
-
-    @Test func pickFilePrefersASmallerDerivativeUnderTheCap() {
-        // VAM026-like: a 1080p main encode far over the cap and an SD derivative under it.
-        let files = [ArchiveFile(name: "Film.mp4", format: "h.264", size: "1380509459", length: "1908"),
-                     ArchiveFile(name: "Film.ia.mp4", format: "h.264 IA", size: "240000000", length: "1908")]
-        #expect(ArchiveCatalog.pickFile(files, preferSmallest: false)?.name == "Film.ia.mp4")
-        #expect(ArchiveCatalog.pickFile(files, preferSmallest: true)?.name == "Film.ia.mp4")
-    }
-
-    @Test func pickFileSkipsATitleThatOnlyExistsOverTheCap() {
-        let files = [ArchiveFile(name: "Big.mp4", format: "h.264", size: "1380509459", length: "1908"),
-                     ArchiveFile(name: "Big_512kb.mp4", format: "512Kb MPEG4", size: "700000000", length: "1908")]
-        #expect(ArchiveCatalog.pickFile(files, preferSmallest: true) == nil)
-        #expect(ArchiveCatalog.pickFile(files, preferSmallest: false) == nil)
-        #expect(ArchiveCatalog.smallestPlayableBytes(files) == 700_000_000)
-        // Exactly at the cap is allowed; a smaller cap can be passed explicitly.
-        let edge = [ArchiveFile(name: "Edge.mp4", format: "h.264", size: "600000000", length: "900")]
-        #expect(ArchiveCatalog.pickFile(edge, preferSmallest: true)?.name == "Edge.mp4")
-        #expect(ArchiveCatalog.pickFile(edge, preferSmallest: true, maxBytes: 500_000_000) == nil)
-    }
-
-    @Test func storeRefusesAClipOverTheCap() async throws {
-        let dir = try Self.tempDirectory()
-        defer { try? FileManager.default.removeItem(at: dir) }
-        let store = ArchiveClipStore(directory: dir)
-        await store.load()
-        let staged = dir.appendingPathComponent("incoming.mp4")
-        try Data([1]).write(to: staged)
-        await #expect(throws: ArchiveClipStore.AddFailure.clipTooLarge) {
-            try await store.add(Self.clip("huge", mb: 601), from: staged, protected: [])
-        }
-        #expect(await store.clips.isEmpty)
-    }
-
-    // MARK: Budget including pinned clips
-
-    @Test func budgetCountsPinnedClips() throws {
-        let pins = ArchiveSeedList.pinned.map(\.id)
-        try #require(pins.count >= 4)
-        // Four pinned clips of 300 MB against a 1 GB budget: the three most used stay.
-        let clips = [Self.clip(pins[0], mb: 300, count: 9), Self.clip(pins[1], mb: 300, count: 1),
-                     Self.clip(pins[2], mb: 300, count: 5), Self.clip(pins[3], mb: 300, count: 7)]
-        #expect(ArchiveCachePolicy.overBudget(clips, capBytes: 1_000_000_000) == [pins[1]])
-        // Under the budget: nothing goes.
-        #expect(ArchiveCachePolicy.overBudget(clips, capBytes: 1_200_000_000).isEmpty)
-    }
-
-    @Test func pinnedOutrankDiscoveriesAndSmallerClipsStillFit() throws {
-        let pins = ArchiveSeedList.pinned.map(\.id)
-        let clips = [Self.clip("discovery", mb: 100, used: 9000), Self.clip(pins[0], mb: 500, count: 3),
-                     Self.clip(pins[1], mb: 400, count: 2), Self.clip(pins[2], mb: 50, count: 1)]
-        // 500 + 400 fit in 1 GB; the 50 MB pinned clip still fits after that; the discovery does not.
-        #expect(ArchiveCachePolicy.overBudget(clips, capBytes: 1_000_000_000) == ["discovery"])
-    }
-
-    @Test func oversizedClipsGoEvenWhenTheBudgetHasRoom() throws {
-        let pin = try #require(ArchiveSeedList.pinned.first?.id)
-        let clips = [Self.clip(pin, mb: 1381, count: 20), Self.clip("small", mb: 50)]
-        #expect(ArchiveCachePolicy.overBudget(clips) == [pin])
-        // A clip on screen is kept whatever its size.
-        #expect(ArchiveCachePolicy.overBudget(clips, protected: [pin]).isEmpty)
-    }
-
     // MARK: Launch sweep
 
-    @Test func loadSweepsUnindexedFilesAndDropsOversizedPins() async throws {
+    @Test func loadSweepsUnindexedFilesAndKeepsEveryIndexedClip() async throws {
         let dir = try Self.tempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
         let pins = ArchiveSeedList.pinned.map(\.id)
+        // Indexed clips stay whatever their size (a 1.38 GB pinned film included).
         let indexed = [Self.clip(pins[0], mb: 300, count: 4), Self.clip(pins[1], mb: 1381, count: 4),
                        Self.clip("discovery", mb: 50)]
         for clip in indexed { try Self.touch(dir.appendingPathComponent(clip.fileName)) }
         try JSONEncoder().encode(ArchiveClipStore.Index(clips: indexed)).write(to: dir.appendingPathComponent("index.json"))
-        let orphans = ["VAM026.mp4", "old-build-name.mp4", ".DS_Store"]
+        let orphans = ["old-build-name.mp4", "unlisted.mp4", ".DS_Store"]
         for name in orphans { try Self.touch(dir.appendingPathComponent(name), bytes: 64) }
         try FileManager.default.createDirectory(at: dir.appendingPathComponent("tmp"), withIntermediateDirectories: true)
         try Self.touch(dir.appendingPathComponent("tmp/partial.mp4"))
 
         let store = ArchiveClipStore(directory: dir)
         await store.load()
-        #expect(Set(await store.clips.map(\.id)) == [pins[0], "discovery"])
+        #expect(Set(await store.clips.map(\.id)) == Set(indexed.map(\.id)))
         let left = Set(try FileManager.default.contentsOfDirectory(atPath: dir.path))
-        #expect(left == ["index.json", "\(pins[0]).mp4", "discovery.mp4"])
-
-        // The index on disk agrees, so a second launch finds nothing more to do.
-        let again = ArchiveClipStore(directory: dir)
-        await again.load()
-        #expect(Set(await again.clips.map(\.id)) == [pins[0], "discovery"])
+        #expect(left == Set(["index.json"] + indexed.map(\.fileName)))
     }
 
     @Test func addReplacesAnUnindexedFileOfTheSameName() async throws {

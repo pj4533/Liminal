@@ -161,14 +161,11 @@ nonisolated enum ArchiveCatalog {
         f.name.lowercased().hasSuffix("_512kb.mp4") || f.format?.lowercased() == "512kb mpeg4"
     }
 
-    /// Prefer a modest main encode or a smaller derivative. Longer films can be trimmed after
-    /// downloading, so their runtime does not disqualify them, but no file over `maxBytes` (the per-clip
-    /// cap) is ever chosen: a title that only exists larger is skipped. A file without a listed size is
-    /// not chosen either, as its cost is unknown before downloading.
-    static func pickFile(_ files: [ArchiveFile], preferSmallest: Bool,
-                         maxBytes: Int64 = ArchiveCachePolicy.maxClipBytes) -> ArchiveFile? {
+    /// Prefer a modest main encode or a smaller derivative. Longer films can be
+    /// trimmed after downloading, so their size and runtime do not disqualify them.
+    static func pickFile(_ files: [ArchiveFile], preferSmallest: Bool) -> ArchiveFile? {
         let ok = playableFiles(files).filter { f in
-            guard let b = f.bytes, b >= minBytes, b <= maxBytes else { return false }
+            guard let b = f.bytes, b >= minBytes else { return false }
             if let d = parseDuration(f.length?.value) { return d >= minimumDuration }
             return true
         }
@@ -177,11 +174,6 @@ nonisolated enum ArchiveCatalog {
         let main = ok.filter { !is512kb($0) && ($0.bytes ?? .max) <= preferredMaxBytes }
         if let best = main.max(by: { ($0.bytes ?? 0) < ($1.bytes ?? 0) }) { return best }
         return ok.filter(is512kb).max { ($0.bytes ?? 0) < ($1.bytes ?? 0) } ?? ok.min { ($0.bytes ?? 0) < ($1.bytes ?? 0) }
-    }
-
-    /// The smallest playable size listed, for the log line when every version is over the cap.
-    static func smallestPlayableBytes(_ files: [ArchiveFile]) -> Int64? {
-        playableFiles(files).compactMap(\.bytes).filter { $0 >= minBytes }.min()
     }
 
     /// Seconds from an Archive `length` ("1724.14", "10:40", "0:10:40"). Nil if unparseable or <= 0

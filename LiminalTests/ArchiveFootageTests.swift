@@ -119,8 +119,8 @@ struct ArchiveCatalogTests {
         let big = [ArchiveFile(name: "A.mp4", format: "h.264", size: "100000000", length: "900"),
                    ArchiveFile(name: "A_512kb.mp4", format: "512Kb MPEG4", size: "40000000", length: "900")]
         #expect(ArchiveCatalog.pickFile(big, preferSmallest: false)?.name == "A_512kb.mp4")
-        // A large, long film still qualifies under the per-clip cap when it is the only playable version.
-        let long = ArchiveFile(name: "B.mp4", format: "h.264", size: "590000000", length: "1743")
+        // A large, long film still qualifies when it is the only playable version.
+        let long = ArchiveFile(name: "B.mp4", format: "h.264", size: "690000000", length: "1743")
         #expect(ArchiveCatalog.pickFile([long], preferSmallest: false)?.name == "B.mp4")
         // Brief and tiny files do not qualify.
         #expect(ArchiveCatalog.pickFile([ArchiveFile(name: "C.mp4", format: "h.264", size: "5000000", length: "12")], preferSmallest: false) == nil)
