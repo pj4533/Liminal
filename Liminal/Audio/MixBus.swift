@@ -11,7 +11,7 @@ import Foundation
 ///                                                         reflections and repeats -> reverbBus
 ///     strips -> reverbBus -> ZitaReverb (wet) -> LPF 2.9 kHz -> reverbReturn -------------------------+
 ///               reverbBus -> HPF 300 -> LPF 1.8k -> Costello (halo) -> shimmerReturn ----------------+
-///     master -> HPF 28 Hz -> LPF 5.4 kHz -> masterTrim -> PeakLimiter -> -1.5 dB -> output
+///     master -> HPF 28 Hz -> LPF 5.4 kHz (10 kHz in Lo-Fi) -> masterTrim -> PeakLimiter -> -1.5 dB -> output
 nonisolated final class MixBus {
     let dryBus = Mixer()
     let reverbBus = Mixer()
@@ -105,7 +105,7 @@ nonisolated final class MixBus {
         shimmerReturn = Fader(shimmerVerb, gain: 0)
         master = Mixer(dryBus, reverbReturn, delayReturn, shimmerReturn, spaceMovement)
         highpass = HighPassButterworthFilter(master, cutoffFrequency: 28)
-        lowpass = LowPassButterworthFilter(highpass, cutoffFrequency: 5400)
+        lowpass = LowPassButterworthFilter(highpass, cutoffFrequency: Self.ambientLowpassHz)
         masterTrim = Fader(lowpass, gain: 0)
         limiter = PeakLimiter(masterTrim, attackTime: 0.01, decayTime: 0.06, preGain: 0)
         finalTrim = Fader(limiter, gain: dbToGain(-1.5))
@@ -326,5 +326,17 @@ nonisolated final class MixBus {
     /// Start/stop fades.
     func setMaster(_ gain: Float, over: Double) {
         ParamRamp.setGain(masterTrim, gain, over: over)
+    }
+
+    /// Master low-pass for Ambient (the calm D92 voicing).
+    static let ambientLowpassHz: Float = 5400
+    /// Lo-Fi voicing (plan 8.6): in archive-only mode this bus carries only the film bed and its returns,
+    /// so the master low-pass opens to keep the bed's consonants and air.
+    static let lofiLowpassHz: Float = 10000
+
+    /// Opens the master low-pass while the conductor is archive-only (Lo-Fi) and restores the Ambient value.
+    /// The limiter and every return keep their values.
+    func setLofiVoicing(_ on: Bool, over: Double) {
+        ParamRamp.set(lowpass.$cutoffFrequency, on ? Self.lofiLowpassHz : Self.ambientLowpassHz, over: over)
     }
 }

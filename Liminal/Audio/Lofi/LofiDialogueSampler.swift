@@ -413,7 +413,9 @@ nonisolated enum LofiDialogueSampler {
 
     /// Level the audible syllables after EQ. Quiet spaces between words must not
     /// turn a shout up. Short cuts use their actual duration, without zero padding.
-    static func clipGain(_ samples: UnsafePointer<Float>, count: Int, rate: Double) -> Float {
+    /// The defaults are the legacy sampler's targets; the pad renderer passes its own (plan 8.5).
+    static func clipGain(_ samples: UnsafePointer<Float>, count: Int, rate: Double, level target: Float = 0.132,
+                         peak ceiling: Float = 0.44, maxGain: Float = 5) -> Float {
         guard count > 0 else { return 0 }
         let hop = max(1, Int(rate * 0.05))
         var weighting = LofiKWeighting(sampleRate: rate)
@@ -436,7 +438,7 @@ nonisolated enum LofiDialogueSampler {
             momentary = max(momentary, powers[(i-width)..<i].reduce(0, +) / Double(width))
         }
         let level = Float(sqrt(max(1e-9, loud, momentary)))
-        return min(5, 0.132 / level, 0.44 / max(0.001, peak))
+        return min(maxGain, target / level, ceiling / max(0.001, peak))
     }
 
 }

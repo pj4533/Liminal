@@ -22,6 +22,10 @@ final class LofiBus {
         output = Fader(Mixer(drums, bass, dryFader, textureFader, wetFader, dialogue), gain: gain)
     }
 
+    /// The lead, mids and space faders that `ArchiveVoice` ducks under featured chops (plan 8.5).
+    /// Nothing else here writes them: start and stop ramp only `output`.
+    var duckTargets: (lead: Fader, mids: Fader, space: Fader) { (dryFader, textureFader, wetFader) }
+
     var players: [AVAudioPlayerNode] { [drums.player, bass.player, dry.player, texture.player, wet.player] }
 
     func schedule(_ take: LofiDrumTake) {
