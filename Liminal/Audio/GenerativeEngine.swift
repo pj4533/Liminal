@@ -19,7 +19,10 @@ final class GenerativeEngine: ObservableObject {
     let conductor: MusicConductor
     let mix: MixBus
     let master: LofiMasterBus
+    /// The Ambient chain's Apple sample limiter (offline Ambient renders may bypass it).
     var outputCeiling: PeakLimiter { master.limiter }
+    /// Fade of the Lo-Fi stems on stop, also used for each half of a master profile change.
+    private static let lofiFade = 0.16
     let layers: [MusicLayer]
     /// The archive film's sound strip (docs/plans/archive-video.md 4).
     let archive: ArchiveVoice
@@ -183,6 +186,8 @@ final class GenerativeEngine: ObservableObject {
         lofi.stop(immediately: true)
         conductor.stop(fade: 0)
         master.stopCalibration()
+        // The graph is stopped, so this applies at once; activateMusicMode selects Lo-Fi again if needed.
+        master.setProfile(.ambient, ramp: 0)
         recovery = Task { [weak self] in
             for delay in [0.15, 0.4, 1.0] {
                 do { try await Task.sleep(for: .seconds(delay)) } catch { return }
@@ -209,6 +214,7 @@ final class GenerativeEngine: ObservableObject {
         conductor.stop(fade: 2.0)
         lofi.stop()
         master.stopCalibration()
+        master.setProfile(.ambient, ramp: Self.lofiFade)
         lofiActive.store(false, ordering: .relaxed)
         isPlaybackReady = false
         isRunning = false
@@ -221,6 +227,7 @@ final class GenerativeEngine: ObservableObject {
         conductor.stop(fade: 0.05)
         lofi.stop(immediately: true)
         master.stopCalibration()
+        master.setProfile(.ambient, ramp: 0)
         lofiActive.store(false, ordering: .relaxed)
         isPlaybackReady = false
         isRunning = false
@@ -231,6 +238,8 @@ final class GenerativeEngine: ObservableObject {
         if musicMode == .ambient {
             lofi.stop()
             master.stopCalibration()
+            // The master fades with the Lo-Fi stems, swaps chains and returns at the Ambient level.
+            master.setProfile(.ambient, ramp: Self.lofiFade)
             lofiActive.store(false, ordering: .relaxed)
             conductor.start()
             isPlaybackReady = true
@@ -238,6 +247,8 @@ final class GenerativeEngine: ObservableObject {
             if isPlaybackReady { conductor.stop(fade: 0.18) }
             isPlaybackReady = false
             lofiActive.store(false, ordering: .relaxed)
+            // Select the finisher before the transport arms, so the output latency it reads is final.
+            master.setProfile(.lofi, ramp: Self.lofiFade)
             lofi.start(onReady: { [weak self] clock, seed in
                 guard let self, isRunning, musicMode == .lofi else { return }
                 conductor.start(archiveBeatDuration: clock.beatDuration, pattern: .choose(seed: seed, phrase: 0))
