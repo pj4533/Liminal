@@ -2,8 +2,8 @@ import Accelerate
 import AVFoundation
 import Foundation
 
-/// Renders pads to dry chops (plan 4.6): linked-rate resample, per-band noise weighting,
-/// refined edges, choke truncation, K-weighted levelling and role trims. Offline only.
+/// Renders pads to dry chops (plan 4.6, 8.5): linked-rate resample, per-band noise weighting,
+/// the per-cut vocal chain, refined edges, choke truncation, K-weighted levelling and role trims. Offline only.
 nonisolated enum DialogueChopRenderer {
     private struct Key: Hashable { let pad: Int; let frames: Int; let gain: UInt32 }
 
@@ -98,7 +98,12 @@ nonisolated enum DialogueChopRenderer {
         vDSP_vmul(t, 1, trim, 1, &t, 1, vDSP_Length(total))
         vDSP_vadd(y, 1, t, 1, &y, 1, vDSP_Length(total))
         vDSP_vma(c, 1, wC, 1, y, 1, &y, 1, vDSP_Length(total))
-        var out = Array(y[warm...])
+        // The vocal chain runs over the warm-up too, so its filters and detectors have settled at the
+        // pad start; its group delay is taken back so the accent stays on its sample (plan 8.5).
+        DialogueChopChain.process(&y, from: warm, texture: pad.role == .texture, sampleRate: sr)
+        let shift = DialogueChopChain.delayFrames
+        var out = [Float](repeating: 0, count: full)
+        for i in 0..<full where warm + shift + i < total { out[i] = y[warm + shift + i] }
 
         // Edges from the hierarchy: fade in, natural release.
         let fadeIn = max(2, Int(Double(pad.fadeIn) / rate))
@@ -228,5 +233,88 @@ nonisolated enum DialogueChopRenderer {
             let g = 0.5 - 0.5 * cosf(.pi * (rising ? phase : 1 - phase))
             x[start + k] *= g
         }
+    }
+}
+
+/// The per-cut vocal chain (plan 8.5), offline: HPF 120 Hz at 18 dB per octave, a -2.5 dB bell at 300 Hz,
+/// a +3 dB presence bell at 3 kHz, a 5-8 kHz de-esser, a 3:1 compressor taking 3 to 6 dB off the peaks,
+/// then a low-pass at 7.5 kHz for speech pads and 5.5 kHz for texture. Levelling follows in the renderer.
+nonisolated enum DialogueChopChain {
+    struct Dynamics: OptionSet, Sendable {
+        let rawValue: Int
+        static let deEsser = Dynamics(rawValue: 1)
+        static let compressor = Dynamics(rawValue: 2)
+        static let all: Dynamics = [.deEsser, .compressor]
+    }
+
+    static let highpassHz = 120.0
+    static let mudHz = 300.0, mudQ = 1.0, mudDB = -2.5
+    static let presenceHz = 3000.0, presenceQ = 0.8, presenceDB = 3.0
+    static let deEssBand = 5_000.0...8_000.0
+    static let deEssMaxDB: Float = 5.5
+    static let ratio: Float = 3, kneeDB: Float = 6, attack = 0.008, release = 0.100
+    /// Threshold below the cut's own peak: the loudest syllables see about 6 dB at 3:1, the body 0 to 3 dB.
+    static let thresholdBelowPeakDB: Float = 9
+    static let speechLowpassHz = 7_500.0, textureLowpassHz = 5_500.0
+    /// Low-frequency group delay of the chain in whole samples (mostly the low-pass), removed by the renderer.
+    static let delayFrames = 1
+
+    /// The linear stages before the dynamics.
+    static func preFilters(sampleRate: Double) -> [LofiBiquad.Kind] {
+        // 3rd-order Butterworth high-pass: a 1st-order section (below) and a Q 1 biquad.
+        [.highpass(hz: highpassHz, q: 1.0), .peak(hz: mudHz, q: mudQ, gainDB: mudDB),
+         .peak(hz: presenceHz, q: presenceQ, gainDB: presenceDB)]
+    }
+
+    static func lowpass(texture: Bool) -> LofiBiquad.Kind {
+        .lowpass(hz: texture ? textureLowpassHz : speechLowpassHz, q: 0.7071067811865476)
+    }
+
+    /// 1st-order bilinear high-pass at `highpassHz`.
+    static func firstOrderHighpass(sampleRate: Double) -> LofiBiquad.Coefficients {
+        let k = tan(Double.pi * highpassHz / sampleRate)
+        let b0 = 1 / (1 + k)
+        return LofiBiquad.Coefficients(b0: b0, b1: -b0, b2: 0, a1: (k - 1) / (k + 1), a2: 0)
+    }
+
+    /// Designed magnitude of the linear stages (dynamics idle).
+    static func magnitudeDB(at hz: Double, texture: Bool, sampleRate: Double) -> Double {
+        let kinds = preFilters(sampleRate: sampleRate) + [lowpass(texture: texture)]
+        return kinds.reduce(LofiBiquad.magnitudeDB(firstOrderHighpass(sampleRate: sampleRate), at: hz, sampleRate: sampleRate)) {
+            $0 + LofiBiquad($1, sampleRate: sampleRate).magnitudeDB(at: hz)
+        }
+    }
+
+    /// Processes `x` in place. `from` marks the start of the cut proper (earlier samples only warm the
+    /// filters); the compressor threshold is set from the cut's peak after the EQ and de-esser.
+    static func process(_ x: inout [Float], from: Int = 0, texture: Bool, sampleRate: Double, dynamics: Dynamics = .all) {
+        guard !x.isEmpty else { return }
+        let n = x.count
+        let first = firstOrderHighpass(sampleRate: sampleRate)
+        var filters = preFilters(sampleRate: sampleRate).map { LofiBiquad($0, sampleRate: sampleRate) }
+        var deEsser = LofiDeEsser(band: deEssBand, maxReductionDB: deEssMaxDB, sampleRate: sampleRate)
+        var x1 = 0.0, y1 = 0.0
+        for i in 0..<n {
+            let input = Double(x[i])
+            let hp = first.b0 * input + first.b1 * x1 - first.a1 * y1
+            x1 = input
+            y1 = abs(hp) < 1e-30 ? 0 : hp
+            var v = Float(hp)
+            for k in filters.indices { v = filters[k].process(v) }
+            if dynamics.contains(.deEsser) { v = deEsser.process(v) }
+            x[i] = v
+        }
+        if dynamics.contains(.compressor) {
+            var peak: Float = 0
+            for i in min(from, n)..<n { peak = max(peak, abs(x[i])) }
+            if peak > 1e-6 {
+                let settings = LofiCompressor.Settings(thresholdDB: 20 * log10f(peak) - thresholdBelowPeakDB, ratio: ratio,
+                                                       kneeDB: kneeDB, attack: attack, release: release)
+                var compressor = LofiCompressor(settings, sampleRate: sampleRate)
+                for i in 0..<n { x[i] *= compressor.gain(detectorLeft: x[i], detectorRight: x[i]) }
+            }
+        }
+        var lp = LofiBiquad(lowpass(texture: texture), sampleRate: sampleRate)
+        for i in 0..<n { x[i] = lp.process(x[i]) }
     }
 }

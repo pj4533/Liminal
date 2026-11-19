@@ -138,6 +138,7 @@ nonisolated final class MusicConductor: @unchecked Sendable {
             let wasArchiveOnly = archiveOnly
             archiveOnly = archiveBeatDuration != nil
             archive?.setBeatLocked(archiveOnly)
+            mix.setLofiVoicing(archiveOnly, over: 0.2)
             if let archiveBeatDuration { archive?.setEchoTempo(archiveBeatDuration) }
             mix.syncDelay(toBeatDuration: archiveBeatDuration, pattern: pattern, now: scheduler.now)
             if began, !stopping {
@@ -212,6 +213,7 @@ nonisolated final class MusicConductor: @unchecked Sendable {
         realtime = false
         archiveOnly = archiveBeatDuration != nil
         archive?.setBeatLocked(archiveOnly)
+        mix.setLofiVoicing(archiveOnly, over: 0)
         if let archiveBeatDuration { archive?.setEchoTempo(archiveBeatDuration) }
         mix.syncDelay(toBeatDuration: archiveBeatDuration, pattern: pattern)
         begin(at: 0)
@@ -262,6 +264,8 @@ nonisolated final class MusicConductor: @unchecked Sendable {
                 mix.modulate(t: time, dt: dt)
                 for layer in layers { for strip in layer.allStrips { strip.tick(now: time) } }
             }
+            // Music and bed ducking under featured chops run on every step (plan 8.5).
+            archive?.updateDucks(at: time)
             return
         }
         if time - lastModulate >= 0.0999 { modulate(time) }

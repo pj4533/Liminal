@@ -10,6 +10,8 @@ import OSLog
 final class LofiPlayback {
     private let bus: LofiBus
     var output: Fader { bus.output }
+    /// The faders the archive voice ducks under featured chops; this transport never writes them.
+    var duckTargets: (lead: Fader, mids: Fader, space: Fader) { bus.duckTargets }
     nonisolated let stateBus = MusicStateBus()
     private let sampleRate: Double
     private let bank = LofiPhraseBank()

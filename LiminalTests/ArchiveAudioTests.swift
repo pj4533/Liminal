@@ -238,10 +238,13 @@ struct ArchiveVoiceRenderTests {
         let before = peak(at: 1.0), during = peak(at: 1.7), after = peak(at: 2.5)
         #expect(before > 0.0001 && after > 0.0001)
         #expect(during > 0.055 && during < 0.096)
-        // A quiet dry film remains audible before the musical cut enters.
+        // A quiet dry film remains audible before the musical cut enters (measured 0.19 of the cut with
+        // the plan 8.6 bed: direct -3 dB, no 1.76 context boost).
         #expect(before > during * 0.10 && before < during * 0.25)
-        // The 0.6-second cut has stopped; the dotted-eighth repeat is still audible.
-        #expect(after > before * 2 && after < during)
+        // The 0.6-second cut has stopped; the dotted-eighth repeat is still audible over the bed. The echo
+        // return is now band-passed and 16 dB under the dry line (plan 8.5), so it adds about 0.6 dB to the
+        // bed's peak (measured 1.08 times the bed alone; the old 0.48 return was more than twice it).
+        #expect(after > before * 1.04 && after < during)
         #expect(peak(at: 3.25) < 0.0001)
     }
 

@@ -83,6 +83,8 @@ struct LofiMixRenderTests {
         let clock = LofiClock(tempo: tempo, sampleRate: format.sampleRate)
         let archive = ArchiveVoice(format: format)
         let bus = LofiBus(gain: 1, dialogue: archive.chopOutput)
+        let duck = bus.duckTargets
+        archive.attachMusicDuck(lead: duck.lead, mids: duck.mids, space: duck.space)
         let mix = MixBus(layers: [archive.strip], delayTime: 1.7)
         let master = LofiMasterBus(archiveAndAmbient: mix.output, lofi: bus.output)
         var limiterID = "system-dynamics-and-peak-limiter"
