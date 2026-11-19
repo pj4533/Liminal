@@ -20,7 +20,11 @@ nonisolated struct LofiDrumTake: @unchecked Sendable {
         let strength: Float
     }
 
-    init(recording: LofiDrumLibrary.Break?, clock: LofiClock) throws {
+    /// Landmarks and kicks are found on the unprocessed take; `chain` (the drum bus, plan 8.2) then
+    /// runs on the whole buffer before the splice taper. It has no latency, so both still point at
+    /// the same frames. `nil` keeps the raw recording (tests).
+    init(recording: LofiDrumLibrary.Break?, clock: LofiClock,
+         chain: LofiStemChains.Drums? = .standard) throws {
         let count = clock.frameCount * Self.phraseCount
         buffer = try LofiRenderer.stereoBuffer(clock: clock, frames: count)
         self.clock = clock
@@ -47,6 +51,12 @@ nonisolated struct LofiDrumTake: @unchecked Sendable {
                                                  sampleRate: clock.sampleRate)
         timing = LofiTimingField(landmarks: landmarks, clock: clock)
         kicks = try Self.detectKicks(channels, count: count, sampleRate: clock.sampleRate)
+        if let chain {
+            try Task.checkCancellation()
+            let stats = LofiStemChains.applyDrums(left: channels[0], right: channels[1], count: count,
+                                                  sampleRate: clock.sampleRate, settings: chain)
+            LofiStemChains.report(stats, bus: "drums", take: LofiStemChains.nextReportedTake())
+        }
         // Independent takes can end well away from zero. Taper just the splice,
         // leaving the drummer's downbeat position and all interior fills intact.
         let attack = min(count / 2, max(2, Int(clock.sampleRate * 0.001)))

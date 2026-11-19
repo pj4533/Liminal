@@ -81,11 +81,16 @@ nonisolated struct LofiSampleBank: Sendable {
         var filtered: Float = 0
         var body: Float = 0
         var position = 0.0
+        // Raw pointers keep this per-sample loop fast in unoptimized builds; same arithmetic.
+        guard let outL = left.baseAddress, let outR = right.baseAddress else { return }
+        sample.pcm.withUnsafeBufferPointer { pcmBuffer in
+        guard let pcm = pcmBuffer.baseAddress else { return }
+        let pcmCount = pcmBuffer.count
         for i in 0..<count {
             let j = Int(position)
-            guard j + 1 < sample.pcm.count else { break }
+            guard j + 1 < pcmCount else { break }
             let fraction = Float(position - Double(j))
-            let input = sample.pcm[j] + fraction * (sample.pcm[j + 1] - sample.pcm[j])
+            let input = pcm[j] + fraction * (pcm[j + 1] - pcm[j])
             filtered += (input - filtered) * coefficient
             body += (filtered - body) * coefficient
             let rise = min(1, Float(i) / Float(attack))
@@ -93,9 +98,10 @@ nonisolated struct LofiSampleBank: Sendable {
             let edge = min(1, Float(count - 1 - i) / 64)
             let onset = rise * rise * (3 - 2 * rise)
             let tone = (0.57 * filtered + 0.43 * body) * onset * fall * fall * edge * note.velocity * preset.gain
-            left[start + i] += tone * l
-            right[start + i] += tone * r
+            outL[start + i] += tone * l
+            outR[start + i] += tone * r
             position += speed * (1 + drift * sin(Double(i) * (2 * .pi * 0.6 / rate)))
+        }
         }
     }
 }

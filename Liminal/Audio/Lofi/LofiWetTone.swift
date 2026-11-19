@@ -23,6 +23,7 @@ nonisolated struct LofiWetTone {
         release = Float(1 - exp(-1 / (0.115 * sampleRate)))
     }
 
+    @_transparent
     mutating func process(_ sample: LofiEffects.Stereo, sweep: Float = 0.5,
                           space: Float = 0.5) -> LofiEffects.Stereo {
         // The lower edge moves against the upper edge. Bright transients narrow both

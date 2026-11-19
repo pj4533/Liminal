@@ -117,6 +117,9 @@ struct LofiArrangementTests {
                 for note in part(phrase.score, .bass) {
                     LofiBassVoice.add(note, voice: .pluck, clock: phrase.clock, left: l, right: r)
                 }
+                // Since the stem chains (plan 8.3) the rendered bass is the voice through the
+                // offline bass chain; the comparison keeps its intent: one voice for every note.
+                _ = LofiStemChains.applyBass(l.baseAddress!, count: n, sampleRate: phrase.clock.sampleRate)
             }
         }
         let rendered = try #require(phrase.bass.floatChannelData)
