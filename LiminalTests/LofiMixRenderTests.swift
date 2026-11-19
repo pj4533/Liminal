@@ -275,6 +275,21 @@ struct LofiMixRenderTests {
         let dialogueMode = LofiCaptureHooks.option("dialogue") ?? "engine"
         let director = DialogueDirector()
         var memory = DialoguePerformanceMemory()
+        // `transcription=apple` (`check-lofi.sh --transcribe`): transcribe every cue's source with the
+        // installed on-device model before the render starts, so the offline loop stays synchronous.
+        let transcribe = dialogueMode != "legacy" && cue != nil
+            && LofiCaptureHooks.option("transcription")?.lowercased() == "apple"
+        var transcripts: [String: CaptureTranscript] = [:]
+        var cueTranscripts: [[String: Any]] = []
+        if transcribe {
+            let sources = cueFrames.indices.compactMap { index -> DialogueSource? in
+                let film = reel.isEmpty ? nil : reel[index % reel.count]
+                guard let buffer = film?.buffer ?? cue else { return nil }
+                return DialogueSource(contentID: film?.id ?? "fixture", cueToken: index + 1, buffer: buffer,
+                                      sourceStart: film?.offset ?? 0, rate: 1)
+            }
+            transcripts = await Self.captureTranscripts(sources)
+        }
         var cueIndex = 0
         var cursor = 0
         var noProgress = 0
@@ -319,7 +334,9 @@ struct LofiMixRenderTests {
                                                  beatDuration: clock.beatDuration, nextBeatDuration: nil, seed: config.seed,
                                                  options: options, timing: (takes[take] ?? drums).timing)
                     let window = DialogueCueCoordinator.window(due: time, span: seconds, transport: info)
-                    let built = DialogueCueCoordinator.build(source: source, speech: speech, transcript: nil, transport: info,
+                    let captured = transcribe ? transcripts[Self.transcriptKey(source)] : nil
+                    let built = DialogueCueCoordinator.build(source: source, speech: speech, transcript: captured?.transcript,
+                                                             transport: info,
                                                              window: window, earliestStart: time + DialogueCueCoordinator.commitMargin,
                                                              memory: memory, seed: config.seed &+ UInt64(cueIndex),
                                                              classifyMs: classifyMs, reuse: reuse)
@@ -327,6 +344,10 @@ struct LofiMixRenderTests {
                     memory = built.memory
                     DialogueCueCoordinator.report(built, cue: token, lead: built.firstStart.map { $0 - time })
                     dialogueTimings.append(built.timings.dictionary(cue: cueIndex))
+                    if transcribe {
+                        cueTranscripts.append(Self.cueTranscriptReport(built, cue: cueIndex, source: source,
+                                                                       captured: captured, reused: reuse != nil))
+                    }
                     let families = Dictionary(built.plan.blocks.map { ($0.phrase, $0.family.rawValue) }, uniquingKeysWith: { a, _ in a })
                     let bankID = String(built.plan.bankID, radix: 16)
                     chopEvents += built.chops.map { chop in
@@ -414,9 +435,101 @@ struct LofiMixRenderTests {
             "sameFilm": config.sameFilm == true,
             "hooks": config.hooks ?? [:],
         ]
+        if transcribe { manifest["dialogueTranscripts"] = cueTranscripts }
         manifest["diagnostics"] = LofiCaptureHooks.reports
         try Self.write(manifest, file: "manifest.json", in: config.out)
         try Self.write(score, file: "score.json", in: config.out)
+    }
+
+    /// One source's on-device transcript (nil on any failure) and its `dialogueTranscripts[]` fields.
+    nonisolated struct CaptureTranscript: Sendable {
+        let transcript: DialogueTranscript?
+        let status: String
+        let words: Int
+        let text: String?
+        let recognitionMs: Double?
+        let error: String?
+
+        var fields: [String: Any] {
+            var result: [String: Any] = ["status": status, "words": words]
+            if let text { result["recognizedText"] = text }
+            if let recognitionMs { result["recognitionMs"] = (recognitionMs * 10).rounded() / 10 }
+            if let error { result["error"] = error }
+            if let model = transcript?.modelVersion { result["modelVersion"] = model }
+            return result
+        }
+    }
+
+    private static func transcriptKey(_ source: DialogueSource) -> String {
+        "\(source.contentID)@\(Int((source.sourceStart * 1000).rounded()))/\(source.frameCount)"
+    }
+
+    /// Transcribes each distinct source with the Apple provider's own analysis, without its live
+    /// deadline (offline wall time does not matter). Installed model only: when the assets are
+    /// missing or the framework is unavailable, every source maps to nil and the capture continues
+    /// on the acoustic plan. Never starts a download.
+    @MainActor private static func captureTranscripts(_ sources: [DialogueSource]) async -> [String: CaptureTranscript] {
+        let status = await DialogueSpeechAssets.status(mode: DialogueTranscriptionMode.current, environment: .live)
+        let provider = status == .ready ? AppleSpeechTranscriptProvider.live() : nil
+        var result: [String: CaptureTranscript] = [:]
+        guard let provider else {
+            let reason = status == .ready ? "SpeechAnalyzer is unavailable in this OS" : status.title
+            print("Capture transcription: on-device \(DialogueTranscription.localeIdentifier) speech model status " +
+                  "\(status.name) (\(reason)); no download is started, every cue uses the acoustic plan")
+            for source in sources {
+                result[transcriptKey(source)] = .init(transcript: nil, status: status.name, words: 0, text: nil,
+                                                      recognitionMs: nil, error: reason)
+            }
+            return result
+        }
+        for source in sources where result[transcriptKey(source)] == nil {
+            let frames = AppleSpeechTranscriptProvider.fedFrames(source, maximumSeconds: provider.maximumSeconds)
+            let started = ContinuousClock.now
+            var entry = CaptureTranscript(transcript: nil, status: status.name, words: 0, text: nil, recognitionMs: nil,
+                                          error: "empty source")
+            if frames > 0 {
+                do {
+                    let recognition = try await provider.analyze(source, frames, provider.locale)
+                    let transcript = AppleSpeechTranscriptProvider.transcript(from: recognition, source: source,
+                                                                              fedFrames: frames, locale: provider.locale)
+                    let words = transcript?.words ?? []
+                    entry = .init(transcript: transcript, status: status.name, words: words.count,
+                                  text: words.isEmpty ? nil : words.map(\.text).joined(separator: " "),
+                                  recognitionMs: DialogueCueCoordinator.ms(ContinuousClock.now - started),
+                                  error: transcript == nil ? "no words recognized" : nil)
+                } catch {
+                    entry = .init(transcript: nil, status: status.name, words: 0, text: nil,
+                                  recognitionMs: DialogueCueCoordinator.ms(ContinuousClock.now - started),
+                                  error: String(describing: error))
+                }
+            }
+            print("Capture transcription: \(source.contentID) at \(source.sourceStart) s, \(entry.words) words" +
+                  (entry.error.map { " (\($0))" } ?? ""))
+            result[transcriptKey(source)] = entry
+        }
+        return result
+    }
+
+    /// `dialogueTranscripts[]`: whether the cue's plan used a transcript, and the recognized text
+    /// of its bank's lines with the anchor line marked.
+    private static func cueTranscriptReport(_ built: DialogueCueCoordinator.Built, cue: Int, source: DialogueSource,
+                                            captured: CaptureTranscript?, reused: Bool) -> [String: Any] {
+        var result = captured?.fields ?? ["status": "missing", "words": 0]
+        result["cue"] = cue
+        result["contentID"] = source.contentID
+        result["sourceSeconds"] = (source.sourceStart * 1000).rounded() / 1000
+        result["transcriptUsed"] = built.plan.usedTranscript
+        result["bankReused"] = reused
+        if let bank = built.played ?? built.bank {
+            if let text = bank.anchor.text { result["anchorText"] = text }
+            if let intended = bank.intendedText { result["intendedText"] = intended }
+            result["lines"] = bank.pads.compactMap { pad -> [String: Any]? in
+                guard let text = pad.text else { return nil }
+                return ["padID": pad.padID, "role": pad.role.rawValue, "level": pad.level.name, "text": text,
+                        "anchor": pad.padID == bank.anchorPadID]
+            }
+        }
+        return result
     }
 
     /// `diagnostics.landmarks[]` (plan 3.2): one take's kick and snare attacks in capture frames.
