@@ -42,11 +42,27 @@ def _window_rms(x, starts, length):
     return out
 
 
+def bass_note_intervals(cap):
+    """(on, off) frames of the scored bass notes, from score.json."""
+    out = []
+    for ph in cap.score or []:
+        out += [(int(n["on"]), int(n["off"])) for n in ph.get("notes", []) if n.get("role") == "bass"]
+    return sorted(out)
+
+
 def measure_kick_bass(cap):
-    """M10 windows after each kick: 40-120 Hz RMS of drums, bass and sum; duck depth; attack lag."""
+    """M10 windows after each kick: 40-120 Hz RMS of drums, bass and sum; duck depth; attack lag.
+
+    Kicks come from the landmarks (attack frames of confident kicks) when the manifest has them. The
+    sum and duck measurements only use kicks where the bass actually sounds; the bass is silent under
+    most kicks, and a median over those kicks would measure the drums alone."""
     if not cap.has("drums") or not cap.has("bass"):
         return {"skipped": "drums or bass stem missing"}
-    kicks = [k for k in cap.kicks() if 0 <= k < cap.frames]
+    if cap.has_landmarks():
+        kicks, source = cap.kick_attack_frames(min_confidence=0.5), "landmarks (confidence 0.5 or more)"
+    else:
+        kicks, source = cap.kicks(), "kickCandidates"
+    kicks = [k for k in kicks if 0 <= k < cap.frames]
     if not kicks:
         return {"skipped": "no kick landmarks or candidates"}
     rate = cap.rate
@@ -57,32 +73,56 @@ def measure_kick_bass(cap):
     ks = np.array(kicks)
     win = int(0.12 * rate)
     rd, rb, rs = (_window_rms(x, ks, win) for x in (d_low, b_low, s_low))
+    both = (rd > 1e-3) & (rb > 1e-3)  # both parts above about -60 dBFS RMS
     louder = np.maximum(rd, rb)
-    keep = louder > 1e-5
-    sum_vs_louder = db20(rs[keep] / louder[keep]) if keep.any() else np.array([])
-    # Duck depth: bass 40-250 Hz RMS 100 ms after against 100 ms before, kicks where the bass sounds.
-    b_wide = band_signal(bass, rate, 40, 250)
-    w100 = int(0.1 * rate)
-    before = _window_rms(b_wide, ks - w100, w100)
-    after = _window_rms(b_wide, ks, w100)
-    ok = (before > 10 ** (-50 / 20)) & (after > 1e-6)
-    duck = db20(before[ok] / after[ok]) if ok.any() else np.array([])
+    sum_vs_louder = db20(rs[both] / louder[both]) if both.any() else np.array([])
     out = {
-        "kicks": int(len(ks)), "kicksCompared": int(keep.sum()),
-        "drums40to120DbMedian": float(db20(np.median(rd[keep]))) if keep.any() else None,
-        "bass40to120DbMedian": float(db20(np.median(rb[keep]))) if keep.any() else None,
-        "sumVsLouderDbMedian": float(np.median(sum_vs_louder)) if len(sum_vs_louder) else None,
-        "sumVsLouderDbWorst": float(np.min(sum_vs_louder)) if len(sum_vs_louder) else None,
-        "duckDepthDbMedian": float(np.median(duck)) if len(duck) else None,
-        "duckKicks": int(ok.sum()),
+        "kickSource": source, "kicks": int(len(ks)), "kicksWithBass": int(both.sum()),
+        "drums40to120DbMedian": float(db20(np.median(rd[rd > 1e-5]))) if (rd > 1e-5).any() else None,
+        "bass40to120DbMedian": float(db20(np.median(rb[both]))) if both.any() else None,
     }
-    notes = [n for entry in (cap.diagnostics.get("bass") or []) for n in entry.get("notes", [])
-             if n.get("alignedKickFrame") is not None and n.get("attackFrame") is not None]
-    if notes:
-        lag = np.abs(np.array([n["attackFrame"] - n["alignedKickFrame"] for n in notes], dtype=float)) / rate * 1000
+    if len(sum_vs_louder) >= 3:
+        out["sumVsLouderDbMedian"] = float(np.median(sum_vs_louder))
+        out["sumVsLouderDbWorst"] = float(np.min(sum_vs_louder))
+    else:
+        out["sumSkipped"] = f"only {int(both.sum())} kicks with both drums and bass above -60 dBFS in 40 to 120 Hz"
+    # Duck depth: bass level 8 to 48 ms after the kick against 48 to 8 ms before it, for kicks inside a
+    # sustaining bass note (so the note's own onset and release are not measured).
+    b_wide = band_signal(bass, rate, 40, 250)
+    notes = bass_note_intervals(cap)
+    w = int(0.04 * rate)
+    margin = int(0.06 * rate)
+    duck = []
+    for k in kicks:
+        if notes:
+            if not any(on + margin <= k - margin and off >= k + margin + w for on, off in notes):
+                continue
+        before = _window_rms(b_wide, [k - int(0.048 * rate)], w)[0]
+        after = _window_rms(b_wide, [k + int(0.008 * rate)], w)[0]
+        if before > 10 ** (-50 / 20) and after > 1e-6:
+            duck.append(float(db20(before / after)))
+    if duck:
+        out["duckDepthDbMedian"] = float(np.median(duck))
+        out["duckDepthDbMax"] = float(np.max(duck))
+        out["duckKicks"] = len(duck)
+        out["duckSource"] = "sustained bass notes from score.json" if notes else "all kicks (no score.json)"
+    else:
+        out["duckSkipped"] = "no kick falls inside a sustaining bass note"
+    attacks = [n for entry in (cap.diagnostics.get("bass") or []) for n in entry.get("notes", [])
+               if n.get("attackFrame") is not None]
+    aligned = [n for n in attacks if n.get("alignedKickFrame") is not None]
+    if aligned:
+        signed = np.array([n["attackFrame"] - n["alignedKickFrame"] for n in aligned], dtype=float) / rate * 1000
+        lag = np.abs(signed)
         out["alignedAccents"] = int(len(lag))
+        out["bassNotes"] = int(len(attacks))
+        out["lagMsSignedMedian"] = float(np.median(signed))
         out["lagMsMedian"] = float(np.median(lag))
         out["lagMsP90"] = float(np.percentile(lag, 90))
+        out["lagMsMax"] = float(lag.max())
+        out["lagSource"] = "diagnostics.bass attackFrame against alignedKickFrame"
+    elif attacks:
+        out["lagSkipped"] = "diagnostics.bass has no note aligned to a kick"
     else:
         out["lagSkipped"] = "no diagnostics.bass notes"
     return out

@@ -33,7 +33,7 @@ parser.add_argument("--wait-lock", default=1200, type=int, metavar="SECONDS",
                     help="Wait this long for another capture to release the shared config path (default 1200)")
 parser.add_argument("--hook", action="append", default=[], metavar="KEY=VALUE",
                     help="Capture hook option passed to LofiCaptureHooks (repeatable), e.g. masterProfile=ambient")
-parser.add_argument("--max-true-peak", type=float, help="Pass through to analyze-lofi.py (default -1.5)")
+parser.add_argument("--max-true-peak", type=float, help="Pass through to analyze-lofi.py (default: the manifest's master ceiling, else -1.5)")
 parser.add_argument("--next-drum-name", help="Use a second installed performance at the 16-bar switch")
 source = parser.add_mutually_exclusive_group()
 source.add_argument("--footage", type=Path)

@@ -212,11 +212,30 @@ class Capture:
             frames = [int(k["frame"]) for k in self.manifest.get("kickCandidates", [])]
         return sorted(set(frames))
 
-    def kick_attack_frames(self):
+    def kick_attack_frames(self, min_confidence=None):
+        """Kick attack frames in capture frames. `min_confidence` keeps only confident landmarks."""
         frames = []
         for take in self.diagnostics.get("landmarks") or []:
-            frames += [int(k["frame"]) for k in take.get("kicks", []) if k.get("frame") is not None]
-        return sorted(set(frames)) or self.kicks()
+            for k in take.get("kicks", []):
+                if k.get("frame") is None:
+                    continue
+                if min_confidence is not None and float(k.get("confidence", 1.0)) < min_confidence:
+                    continue
+                frames.append(int(k["frame"]))
+        return sorted(set(frames)) or (self.kicks() if min_confidence is None else [])
+
+    def has_landmarks(self):
+        return any(t.get("kicks") for t in self.diagnostics.get("landmarks") or [])
+
+    def plans(self):
+        return list(self.diagnostics.get("dialoguePlans") or [])
+
+    def stem_chains(self):
+        return list(self.diagnostics.get("stemChains") or [])
+
+    def master_dynamics(self):
+        d = self.diagnostics.get("masterDynamics")
+        return d if isinstance(d, dict) else {}
 
 
 class BandGrid:

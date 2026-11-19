@@ -4,6 +4,186 @@ import numpy as np
 
 from .audio import chop_duration_frames
 
+FNV_OFFSET = 0xCBF29CE484222325
+FNV_PRIME = 0x100000001B3
+MASK64 = (1 << 64) - 1
+FAMILY_IDS = {"anchor": 0, "echo": 1, "callResponse": 2, "sparseReorder": 3, "textureFill": 4, "rest": 5}
+
+
+def fnv_add(h, x):
+    """DialogueHash.add(UInt64): FNV-1a over the eight little-endian bytes."""
+    x &= MASK64
+    for i in range(8):
+        h ^= (x >> (8 * i)) & 0xFF
+        h = (h * FNV_PRIME) & MASK64
+    return h
+
+
+def block_fingerprint(family, elements):
+    """DialoguePerformer.fingerprint: the family id then (padKey, slot) per element."""
+    h = fnv_add(FNV_OFFSET, FAMILY_IDS.get(family, 99))
+    for pad_key, slot in elements:
+        h = fnv_add(h, int(pad_key))
+        h = fnv_add(h, int(slot))
+    return h
+
+
+def _hex(v):
+    try:
+        return int(str(v), 16)
+    except (TypeError, ValueError):
+        return None
+
+
+def plan_blocks(cap):
+    """Logged blocks by phrase (the highest revision wins): family, bank, logged fingerprint and elements,
+    and the scheduled events (from `dialogueChops`) recomputed into elements and a fingerprint."""
+    chops_by_block = {}
+    for c in cap.chops():
+        if c.get("block") is not None and c.get("frame") is not None:
+            chops_by_block.setdefault(int(c["block"]), []).append(c)
+    blocks = {}
+    for plan in cap.plans():
+        pad_keys = {}
+        for blk in plan.get("blocks", []):
+            for e in blk.get("events", []):
+                if e.get("padKey") is not None:
+                    pad_keys[(e.get("padID"), e.get("transform"))] = _hex(e["padKey"])
+        for blk in plan.get("blocks", []):
+            if blk.get("phrase") is None:
+                continue
+            phrase = int(blk["phrase"])
+            rev = plan.get("revision", 0)
+            if phrase in blocks and blocks[phrase]["revision"] > rev:
+                continue
+            logged = [(_hex(e.get("padKey")), int(e.get("slot", 0))) for e in blk.get("events", [])]
+            sched = sorted(chops_by_block.get(phrase, []), key=lambda c: c["frame"])
+            recomputed, unresolved = [], 0
+            for c in sched:
+                key = pad_keys.get((c.get("padID"), c.get("transform")))
+                if key is None:
+                    unresolved += 1
+                recomputed.append((key if key is not None else -1, int(c.get("slot", -1))))
+            blocks[phrase] = {
+                "phrase": phrase, "plan": plan, "revision": rev, "cue": plan.get("cue"),
+                "family": blk.get("family"), "bank": plan.get("bankID"), "section": blk.get("section"),
+                "change": blk.get("change"), "noDialogue": bool(blk.get("noDialogue")),
+                "loggedFingerprint": _hex(blk.get("fingerprint")), "logged": logged,
+                "events": blk.get("events", []), "scheduled": sched, "recomputed": recomputed,
+                "unresolved": unresolved,
+                "recomputedFingerprint": block_fingerprint(sched[0].get("family") if sched else blk.get("family"), recomputed),
+            }
+    return blocks
+
+
+def fingerprint_agreement(cap, blocks):
+    """Compare logged fingerprints and event lists with those recomputed from the scheduled events."""
+    out, bad = {"blocksChecked": 0, "disagreements": []}, []
+    rate = cap.rate
+    for phrase, b in sorted(blocks.items()):
+        if b["noDialogue"] and not b["scheduled"] and not b["logged"]:
+            continue
+        out["blocksChecked"] += 1
+        reasons = []
+        if b["unresolved"]:
+            reasons.append(f"{b['unresolved']} scheduled events have a pad the log does not mention")
+        if len(b["scheduled"]) != len(b["events"]):
+            reasons.append(f"{len(b['scheduled'])} scheduled events against {len(b['events'])} logged")
+        else:
+            for c, e in zip(b["scheduled"], b["events"]):
+                if abs(c["frame"] / rate - float(e.get("startTime", 0.0))) > 0.002:
+                    reasons.append(f"event start {c['frame'] / rate:.3f} s against logged {e.get('startTime')} s")
+                    break
+        if b["logged"] != b["recomputed"]:
+            reasons.append("pad key or slot sequence differs")
+        elif b["loggedFingerprint"] is not None and b["loggedFingerprint"] != b["recomputedFingerprint"]:
+            reasons.append(f"fingerprint {b['loggedFingerprint']:x} logged against {b['recomputedFingerprint']:x} recomputed")
+        if reasons:
+            bad.append({"phrase": phrase, "reasons": reasons})
+    out["disagreements"] = bad
+    return out
+
+
+def window_elements(blocks, per_window, source="recomputed"):
+    """Position-tagged elements per window of `per_window` blocks: (block in window, padKey, slot)."""
+    wins = {}
+    for phrase, b in blocks.items():
+        if b["noDialogue"] and not b[source]:
+            continue
+        for pad_key, slot in b[source]:
+            wins.setdefault(phrase // per_window, []).append((phrase % per_window, pad_key, slot))
+    return wins
+
+
+def window_difference(a, b):
+    """The engine's `1 - |F(n) and F(n-1)| / max(|F(n)|, |F(n-1)|)` over multisets."""
+    m = max(len(a), len(b))
+    if m == 0:
+        return 1.0
+    counts = {}
+    for e in a:
+        counts[e] = counts.get(e, 0) + 1
+    shared = 0
+    for e in b:
+        if counts.get(e, 0) > 0:
+            counts[e] -= 1
+            shared += 1
+    return 1.0 - shared / m
+
+
+def plan_cadence(cap):
+    """C-D1 to C-D3 and C-D7 from the plan log, with the scheduled-event recomputation alongside."""
+    blocks = plan_blocks(cap)
+    if not blocks:
+        return None
+    per_window = max(1, int(round(cap.take_frames / cap.phrase_frames)))
+    complete = int(cap.scored_frames / cap.take_frames + 1e-3)
+    out = {"source": "plan", "blocks": len(blocks), "fingerprintAgreement": fingerprint_agreement(cap, blocks)}
+    rec = window_elements(blocks, per_window, "recomputed")
+    log = window_elements(blocks, per_window, "logged")
+    diffs = []
+    for w in sorted(rec):
+        if w + 1 in rec and w + 1 < max(complete, 1) and w < max(complete, 1):
+            d_rec = window_difference(rec[w], rec[w + 1])
+            d_log = window_difference(log.get(w, []), log.get(w + 1, []))
+            diffs.append({"from": w, "to": w + 1, "difference": d_rec, "loggedDifference": d_log,
+                          "sizes": [len(rec[w]), len(rec[w + 1])]})
+    out["window16Differences"] = diffs
+    out["window16LoggedDisagreement"] = max((abs(d["difference"] - d["loggedDifference"]) for d in diffs), default=0.0)
+
+    # Family or bank runs; a rest block (no dialogue) ends a run and does not count as one.
+    run = longest = 0
+    prev = None
+    for phrase in sorted(blocks):
+        b = blocks[phrase]
+        if b["noDialogue"] or not b["scheduled"] and not b["logged"]:
+            run, prev = 0, None
+            continue
+        label = (b["family"], b["bank"])
+        run = run + 1 if prev == label and (phrase - 1) in blocks else 1
+        prev = label
+        longest = max(longest, run)
+    out["familyRunBars"] = {"source": "plan", "longestBars": longest * int(round(cap.phrase_frames / cap.bar_frames)),
+                            "families": sorted({b["family"] for b in blocks.values() if not b["noDialogue"]})}
+
+    identical = []
+    for phrase in sorted(blocks):
+        a, b = blocks.get(phrase - 1), blocks[phrase]
+        if a and a["recomputed"] and b["recomputed"] and a["recomputed"] == b["recomputed"] and b["change"] != "repeat":
+            identical.append(phrase)
+    out["identicalConsecutiveBlocks"] = identical
+    out["blocksWithDialogue"] = sum(1 for b in blocks.values() if b["scheduled"])
+
+    hooks = []
+    for phrase in sorted(blocks):
+        b = blocks[phrase]
+        if b["family"] == "echo" and len(b["recomputed"]) >= 2:
+            hooks.append(bool(b["recomputed"][0] == b["recomputed"][1]
+                              and b["scheduled"][0].get("transform") == b["scheduled"][1].get("transform")))
+    out["hookSamePad"] = hooks
+    out["echoBlocks"] = len(hooks)
+    return out
+
 
 def event_key(c):
     if c.get("padID") is not None:
@@ -52,6 +232,7 @@ def measure_cadence(cap):
     window16 = cap.take_frames
     window8 = cap.bar_frames * 8
     out = {"events": len(ev), "usedPadIDs": any(e["key"][0] == "pad" for e in ev)}
+    plan = plan_cadence(cap)
 
     # 16-bar fingerprints
     by_w16 = {}
@@ -66,6 +247,7 @@ def measure_cadence(cap):
             b = fingerprint(by_w16[w + 1], cap, window16, block)
             diffs.append({"from": w, "to": w + 1, "difference": difference(a, b), "sizes": [len(a), len(b)]})
     out["window16Differences"] = diffs
+    out["window16DifferencesEventKeys"] = diffs
 
     # 4-bar block fingerprints and identical consecutive blocks
     by_block = {}
@@ -75,9 +257,9 @@ def measure_cadence(cap):
     block_fp = {b: sorted((e["key"], int(round((e["frame"] - b * block) / sixteenth))) for e in evs)
                 for b, evs in by_block.items()}
     repeats = set()
-    for plan in cap.diagnostics.get("dialoguePlans") or []:
-        for blk in plan.get("blocks", []):
-            if blk.get("variation") == "repeat" and blk.get("phrase") is not None:
+    for logged_plan in cap.plans():
+        for blk in logged_plan.get("blocks", []):
+            if blk.get("change") == "repeat" and blk.get("phrase") is not None:
                 repeats.add(int(blk["phrase"]))
     identical = [b for b in sorted(block_fp) if b - 1 in block_fp and block_fp[b] == block_fp[b - 1]
                  and block_fp[b] and b not in repeats]
@@ -85,19 +267,7 @@ def measure_cadence(cap):
     out["blocksWithDialogue"] = len(block_fp)
 
     # Family or bank run length from the plan log, else 8-bar fingerprint differences
-    labels = {}
-    for plan in cap.diagnostics.get("dialoguePlans") or []:
-        for blk in plan.get("blocks", []):
-            if blk.get("phrase") is not None and blk.get("family") is not None:
-                labels[int(blk["phrase"])] = (blk.get("family"), plan.get("bankID"))
-    if labels:
-        seq = [labels[k] for k in sorted(labels)]
-        longest = run = 1
-        for a, b in zip(seq, seq[1:]):
-            run = run + 1 if a == b else 1
-            longest = max(longest, run)
-        out["familyRunBars"] = {"source": "plan", "longestBars": longest * 4}
-    else:
+    if not plan:
         by_w8 = {}
         for e in ev:
             by_w8.setdefault(window_index(e["frame"], window8), []).append(e)
@@ -108,6 +278,13 @@ def measure_cadence(cap):
                 b = {(e["key"], int(round((e["frame"] % window8) / sixteenth))) for e in by_w8[w + 1]}
                 pairs.append(difference(a, b))
         out["familyRunBars"] = {"source": "fingerprint-8-bar", "minDifference": min(pairs) if pairs else None}
+
+    if plan:
+        out["plan"] = plan
+        for key in ("window16Differences", "familyRunBars", "identicalConsecutiveBlocks", "blocksWithDialogue"):
+            out[key] = plan[key]
+        out["fingerprintAgreement"] = plan["fingerprintAgreement"]
+        out["window16LoggedDisagreement"] = plan["window16LoggedDisagreement"]
 
     # Rests, occupancy and the last two beats before each 8-bar boundary
     scored_windows = int(cap.scored_frames / window8 + 1e-3)
@@ -137,7 +314,10 @@ def measure_cadence(cap):
     boundary_hits = []
     for w in range(1, scored_windows + 1):
         edge = w * window8
-        boundary_hits.append({"boundary": w, "events": sum(1 for e in ev if edge - 2 * cap.beat_frames <= e["frame"] < edge)})
+        a = edge - 2 * cap.beat_frames
+        boundary_hits.append({"boundary": w,
+                              "events": sum(1 for e in ev if a <= e["frame"] < edge),
+                              "sounding": sum(1 for e in ev if e["end"] > a and e["frame"] < edge)})
     out["eventsLastTwoBeats"] = boundary_hits
 
     overlaps = 0
@@ -159,18 +339,24 @@ def measure_cadence(cap):
     if leads:
         out["leadSecondsMin"] = float(min(leads))
 
-    # Hook statements: first two events of each 16-bar window must share pad and transform
-    hooks = []
-    if out["usedPadIDs"]:
+    # Hook statements: engine data (the repeated head of each echo block); without a plan log, the first
+    # two events of each 16-bar window.
+    if not plan and out["usedPadIDs"]:
+        hooks = []
         for w, evs in sorted(by_w16.items()):
             first = sorted(evs, key=lambda e: e["frame"])[:2]
             if len(first) == 2:
                 hooks.append(bool(first[0]["key"][:3] == first[1]["key"][:3]))
         out["hookSamePad"] = hooks
+    elif plan:
+        out["hookSamePad"] = plan["hookSamePad"]
 
-    # Accent distance from kick attacks
-    accents = [int(e["raw"]["accentFrame"]) for e in ev if e["raw"].get("accentFrame") is not None]
-    kicks = np.array(cap.kick_attack_frames(), dtype=float)
+    # Accent distance from confident kick attacks. Texture slices have no stressed accent.
+    accent_events = [e for e in ev if e["raw"].get("accentFrame") is not None and e["raw"].get("role") != "texture"]
+    accents = [int(e["raw"]["accentFrame"]) for e in accent_events]
+    confident = cap.has_landmarks()
+    kicks = np.array(cap.kick_attack_frames(min_confidence=0.5) if confident else cap.kick_attack_frames(), dtype=float)
+    out["accentKickSource"] = "landmarks (confidence 0.5 or more)" if confident else "kickCandidates"
     if accents and len(kicks):
         dist = np.array([np.min(np.abs(kicks - a)) for a in accents]) / rate * 1000
         out["accentKickDistanceMsP10"] = float(np.percentile(dist, 10))

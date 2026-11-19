@@ -2,6 +2,7 @@
 
 import numpy as np
 from scipy import fft as sfft
+from scipy import signal as sps
 
 from .audio import BAND_NAMES, BANDS, THIRD_CENTERS, db10
 
@@ -92,3 +93,18 @@ def measure_ltas(cap, grid, names):
                                 "tiltDbPerOctave": tilt_db_per_octave(THIRD_CENTERS, density),
                                 "bandShares": band_shares(grid, g)}
     return out
+
+
+def energy_below_db_under_total(sig, rate, cutoff=25.0, decimate=16):
+    """How far (dB) the energy below `cutoff` Hz is under the total, from a Welch estimate with 0.7 Hz bins.
+
+    The 4096-point analysis grid has 11.7 Hz bins and a Hann main lobe of 23 Hz, so 40 to 60 Hz
+    bass leaks into its 0 to 25 Hz groups; this estimate does not."""
+    x = np.asarray(sig, dtype=np.float32)
+    mono = x if x.ndim == 1 else x.mean(axis=1)
+    low = sps.decimate(mono.astype(np.float64), decimate, ftype="fir", zero_phase=True)
+    r = rate / decimate
+    f, pxx = sps.welch(low, fs=r, window="hann", nperseg=min(len(low), 1 << 16), noverlap=None)
+    full_total = float(np.mean(mono.astype(np.float64) ** 2))
+    below = float(np.trapezoid(pxx[f <= cutoff], f[f <= cutoff]))
+    return float(db10(full_total) - db10(max(below, 1e-20)))

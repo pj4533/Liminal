@@ -61,12 +61,27 @@ def measure_dialogue(cap, grid, grids):
         per.append({"startFrame": int(a), "endFrame": int(b), "snrOctaveDb": snr, "sii": sii_proxy(snr),
                     "snr1to4kDb": snr_1_to_4k(grid, d, others, mask),
                     "lufs": segment_lufs(dsig, cap.rate, a, min(b, len(dsig)))})
+    if cap.has("dialogue-dry"):
+        dry = cap.signal(["dialogue-dry"])
+        gains = []
+        for p in per:
+            a, b = p["startFrame"], min(p["endFrame"], len(dry))
+            dl = segment_lufs(dry, cap.rate, a, b)
+            p["dryLufs"] = dl
+            if dl is not None and p["lufs"] is not None:
+                gains.append(p["lufs"] - dl)
+        dry_info = {"chains": float(np.median(gains)) if gains else None}
+    else:
+        dry_info = None
     sii = np.array([p["sii"] for p in per])
     snr14 = np.array([p["snr1to4kDb"] for p in per])
     lufs = np.array([p["lufs"] for p in per if p["lufs"] is not None])
-    return {"chops": len(per), "siiMean": float(sii.mean()), "siiP10": float(np.percentile(sii, 10)),
-            "snr1to4kMeanDb": float(snr14.mean()), "loudnessSpreadLu": float(lufs.max() - lufs.min()) if len(lufs) else None,
-            "perChop": per, "octaveCenters": OCTAVE_CENTERS}
+    few = len(per) < 3  # a 10th percentile and a spread over one or two chops say nothing
+    return {"chops": len(per), "siiMean": float(sii.mean()), "siiP10": None if few else float(np.percentile(sii, 10)),
+            "fewChops": few,
+            "snr1to4kMeanDb": float(snr14.mean()), "loudnessSpreadLu": float(lufs.max() - lufs.min()) if len(lufs) and not few else None,
+            "perChop": per, "octaveCenters": OCTAVE_CENTERS,
+            "dialogueDryTap": None if dry_info is None else {"processedMinusDryLuMedian": dry_info["chains"]}}
 
 
 def measure_bed(cap, grid, grids):
@@ -114,4 +129,10 @@ def measure_bed(cap, grid, grids):
                                               - db10(max(band_mean(grid, bed, mask, 1000, 4000), 1e-18)))
     active = grid.power(bed) > 10 ** (-60 / 10)
     out["rolloff85Hz"] = spectral_rolloff(grid, bed, 0.85, active_frames=active if active.any() else None)
+    if cap.has("bed-post"):
+        post = grid.for_stem(cap, "bed-post")
+        if post is not None:
+            act = grid.power(post) > 10 ** (-60 / 10)
+            out["rolloff85HzBedPost"] = spectral_rolloff(grid, post, 0.85, active_frames=act if act.any() else None)
+            out["bedBandwidthSource"] = "bed-post tap"
     return out

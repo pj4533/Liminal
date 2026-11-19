@@ -96,7 +96,13 @@ def run_analysis(cap, want_plots=True, log=print):
     p = (master_grid["PL"] + master_grid["PR"]) * 0.5
     total = float(p.mean(axis=0).sum())
     below25 = float(p.mean(axis=0)[grid.sl(0, 25)].sum())
-    metrics["masterBelow25HzDbUnderTotal"] = float(db10(total) - db10(max(below25, 1e-20)))
+    metrics["masterBelow25HzDbUnderTotalGrid"] = float(db10(total) - db10(max(below25, 1e-20)))
+    try:
+        metrics["masterBelow25HzDbUnderTotal"] = spectral.energy_below_db_under_total(master, cap.rate)
+        metrics["masterBelow25HzMethod"] = "Welch, 0.7 Hz bins (the 4096-point grid leaks 40 to 60 Hz into 0 to 25 Hz)"
+    except Exception as exc:
+        metrics["masterBelow25HzDbUnderTotal"] = metrics["masterBelow25HzDbUnderTotalGrid"]
+        metrics["masterBelow25HzMethod"] = f"4096-point grid ({exc})"
 
     stage("masking matrix")
     safe(metrics, "masking", masking.measure_masking, cap, grid, present)
@@ -126,6 +132,9 @@ def run_analysis(cap, want_plots=True, log=print):
     safe(metrics, "spaceVsLead", music.measure_space_vs_lead, cap, grid, present)
     stage("cadence")
     safe(metrics, "cadence", cadence.measure_cadence, cap)
+    metrics["stemChains"] = cap.stem_chains()
+    metrics["engineDiagnostics"] = sorted((cap.diagnostics or {}).keys())
+    metrics["taps"] = [n for n in ("dialogue-dry", "bed-post", "master-in", "glue") if cap.has(n)]
     metrics["routing"] = (cap.analysis or {}).get("routing")
     metrics["analysisPassed"] = (cap.analysis or {}).get("passed")
     stage("done")
@@ -145,7 +154,10 @@ class Check:
     """Accumulates sub-checks for one criterion."""
 
     def __init__(self):
-        self.values, self.fails, self.skipped, self.passed = {}, [], [], 0
+        self.values, self.fails, self.skipped, self.passed, self.notes = {}, [], [], 0, []
+
+    def note(self, text):
+        self.notes.append(text)
 
     def test(self, name, value, ok, note=None):
         self.values[name] = None if value is None else (round(value, 4) if isinstance(value, float) else value)
@@ -158,12 +170,17 @@ class Check:
 
     def result(self):
         if not self.passed and not self.fails:
-            return {"status": "skipped", "reason": "; ".join(self.skipped) or "no inputs", "values": self.values}
+            out = {"status": "skipped", "reason": "; ".join(self.skipped) or "no inputs", "values": self.values}
+            if self.notes:
+                out["notes"] = self.notes
+            return out
         out = {"status": "fail" if self.fails else "pass", "values": self.values}
         if self.fails:
             out["failedChecks"] = self.fails
         if self.skipped:
             out["skippedChecks"] = self.skipped
+        if self.notes:
+            out["notes"] = self.notes
         return out
 
 
@@ -213,6 +230,12 @@ def ev_C_M6(m, b, c):
             return
         mean, p95, mx, above = s["meanReductionDb"], s["p95ReductionDb"], s["maxReductionDb"], s["above3dbFraction"]
     c.values["source"] = src
+    cc = g(m, "dynamics", "crossCheck")
+    if cc:
+        c.values["inferredP95DisagreementDb"] = round(cc["p95DisagreementDb"], 3)
+        if cc["warn"]:
+            c.note(f"engine total reduction p95 {cc['engineTotalP95Db']:.2f} dB against {cc['inferredP95Db']:.2f} dB inferred "
+                   f"from pre-master and master: disagreement {cc['p95DisagreementDb']:.2f} dB is above 1 dB")
     c.test("meanDb", mean, mean <= b["meanDbMax"])
     c.test("p95Db", p95, p95 <= b["p95DbMax"])
     c.test("maxDb", mx, mx <= b["maxDbMax"])
@@ -235,7 +258,12 @@ def ev_C_M8(m, b, c):
 
 
 def ev_C_M9(m, b, c):
-    v = g(m, "dynamics", "engine", "clip", "engagedFraction")
+    v = g(m, "dynamics", "engine", "clipEngagedFractionSamples")
+    hop = g(m, "dynamics", "engine", "clip", "engagedFraction")
+    if v is None:
+        v = hop  # no per-sample meter in the manifest: the per-hop fraction overstates it
+    else:
+        c.values["clipEngagedFractionHops"] = None if hop is None else round(hop, 4)
     c.test("clipEngagedFraction", v, None if v is None else v <= b["engagedFractionMax"], "no master-gr.csv")
 
 
@@ -269,15 +297,18 @@ def ev_C_B2(m, b, c):
     if kb.get("skipped"):
         c.test("kickBass", None, None, kb["skipped"])
         return
-    for key, bound, op in (("lagMsMedian", "lagMsMedianMax", "max"), ("lagMsP90", "lagMsP90Max", "max")):
+    for key, bound in (("lagMsMedian", "lagMsMedianMax"), ("lagMsP90", "lagMsP90Max")):
         v = kb.get(key)
         c.test(key, v, None if v is None else v <= b[bound], kb.get("lagSkipped", "no diagnostics.bass"))
     v = kb.get("sumVsLouderDbMedian")
-    c.test("sumVsLouderDbMedian", v, None if v is None else v >= b["sumMedianDbMin"])
+    c.test("sumVsLouderDbMedian", v, None if v is None else v >= b["sumMedianDbMin"], kb.get("sumSkipped"))
     v = kb.get("sumVsLouderDbWorst")
-    c.test("sumVsLouderDbWorst", v, None if v is None else v >= b["sumWorstDbMin"])
+    c.test("sumVsLouderDbWorst", v, None if v is None else v >= b["sumWorstDbMin"], kb.get("sumSkipped"))
     v = kb.get("duckDepthDbMedian")
-    c.test("duckDepthDbMedian", v, _in(v, b["duckDepthDb"]))
+    c.test("duckDepthDbMedian", v, _in(v, b["duckDepthDb"]), kb.get("duckSkipped"))
+    for k in ("kicksWithBass", "duckKicks", "alignedAccents", "lagMsMax"):
+        if kb.get(k) is not None:
+            c.values[k] = kb[k]
 
 
 def ev_C_B3(m, b, c):
@@ -292,7 +323,13 @@ def ev_C_B4(m, b, c):
     c.test("drumCrestDb", d.get("crestDb"), _in(d.get("crestDb"), b["crestDb"]))
     pk = d.get("samplePeakDbfs")
     c.test("drumPeakDbfs", pk, None if pk is None else pk <= b["peakDbfsMax"])
-    c.skipped.append("kickAttackRatio: needs diagnostics.landmarks of the unprocessed take")
+    chains = [e for e in (m.get("stemChains") or []) if e.get("bus") == "drums"]
+    ratios = [float(e[k]) for e in chains for k in ("kickAttackRatio", "attackTimeRatio", "attackRatio") if e.get(k) is not None]
+    peaks = [float(e["outPeakDb"]) for e in chains if e.get("outPeakDb") is not None]
+    if peaks:
+        c.test("drumBusOutPeakDb", max(peaks), max(peaks) <= b["peakDbfsMax"])
+    c.test("kickAttackRatioMax", max(ratios) if ratios else None, None if not ratios else max(ratios) <= b["kickAttackRatioMax"],
+           "no diagnostics.stemChains attack-time ratio")
 
 
 def ev_C_B5(m, b, c):
@@ -303,8 +340,11 @@ def ev_C_B5(m, b, c):
     v = g(ml, "bothPlay", "leadMinusMidsDb")
     c.test("leadMinusMidsDb", v, _in(v, b["leadMinusMidsDb"]))
     r = g(ml, "leadRestMidsPlay", "leadMinusMidsDb")
-    c.test("midsOverLeadInRestsDb", None if r is None else -r, None if r is None else -r >= b["midsOverLeadInRestsDbMin"])
-    arts = ml.get("articulationsPer16Bars")
+    c.test("midsOverLeadInRestsDb", None if r is None else -r, None if r is None else -r >= b["midsOverLeadInRestsDbMin"],
+           ml.get("leadRestMidsPlaySkipped", "no lead rest where the mids play"))
+    arts = ml.get("articulationsPer16BarsEngine") or ml.get("articulationsPer16Bars")
+    if ml.get("articulationsPer16BarsEngine"):
+        c.values["articulationSource"] = "engine musicLevels"
     if arts:
         low = min(arts.values())
         c.test("minArticulationsPer16Bars", low, low >= b["articulationsPer16BarsMin"])
@@ -336,10 +376,11 @@ def ev_C_B8(m, b, c):
         c.test("dialogue", None, None, d["skipped"])
         return
     c.test("siiMean", d.get("siiMean"), d["siiMean"] >= b["siiMeanMin"])
-    c.test("siiP10", d.get("siiP10"), d["siiP10"] >= b["siiP10Min"])
+    c.test("siiP10", d.get("siiP10"), None if d.get("siiP10") is None else d["siiP10"] >= b["siiP10Min"],
+           f"only {d.get('chops')} featured chops")
     c.test("snr1to4kMeanDb", d.get("snr1to4kMeanDb"), d["snr1to4kMeanDb"] >= b["snr1to4kMeanDbMin"])
     s = d.get("loudnessSpreadLu")
-    c.test("loudnessSpreadLu", s, None if s is None else s <= b["loudnessSpreadLuMax"])
+    c.test("loudnessSpreadLu", s, None if s is None else s <= b["loudnessSpreadLuMax"], f"only {d.get('chops')} featured chops")
 
 
 def ev_C_B9(m, b, c):
@@ -353,7 +394,9 @@ def ev_C_B9(m, b, c):
     c.test("audibilityIndex", v, _in(v, b["audibilityIndex"]), bed.get("gapsSkipped"))
     v = bed.get("dialogueOverBed1to4kDb")
     c.test("dialogueOverBed1to4kDb", v, None if v is None else v >= b["dialogueOverBedDbMin"])
-    v = bed.get("rolloff85Hz")
+    v = bed.get("rolloff85HzBedPost", bed.get("rolloff85Hz"))
+    if bed.get("rolloff85HzBedPost") is not None:
+        c.values["rolloffSource"] = "bed-post"
     c.test("rolloff85Hz", v, None if v is None else v >= b["rolloffHzMin"])
 
 
@@ -377,10 +420,15 @@ def ev_C_D1(m, b, c):
         c.test("window16Differences", None, None, "no cadence")
         return
     if not diffs:
-        c.test("pairs", None, None, "fewer than two 16-bar windows with dialogue")
+        c.test("pairs", None, None, "fewer than two complete 16-bar windows with dialogue")
         return
     low = min(d["difference"] for d in diffs)
+    c.values["source"] = "plan log, recomputed from scheduled events" if _cad(m).get("plan") else "scheduled events"
     c.test("minDifference", low, low >= b["differenceMin"])
+    c.values["pairs"] = len(diffs)
+    lg = _cad(m).get("window16LoggedDisagreement")
+    if lg is not None and lg > 1e-9:
+        c.note(f"window differences from the logged elements differ from the recomputed ones by up to {lg:.3f}")
 
 
 def ev_C_D2(m, b, c):
@@ -388,6 +436,7 @@ def ev_C_D2(m, b, c):
     if not fam:
         c.test("familyRunBars", None, None, "no cadence")
     elif fam["source"] == "plan":
+        c.values["source"] = "plan log"
         c.test("longestFamilyRunBars", fam["longestBars"], fam["longestBars"] <= b["runBarsMax"])
     else:
         v = fam.get("minDifference")
@@ -401,6 +450,12 @@ def ev_C_D3(m, b, c):
         return
     n = len(cad["identicalConsecutiveBlocks"])
     c.test("identicalConsecutiveBlocks", n, n == 0)
+    fa = cad.get("fingerprintAgreement")
+    if fa is not None:
+        c.test("fingerprintDisagreements", len(fa["disagreements"]), len(fa["disagreements"]) == 0)
+        c.values["blocksChecked"] = fa["blocksChecked"]
+        for d in fa["disagreements"][:5]:
+            c.note(f"phrase {d['phrase']}: " + "; ".join(d["reasons"]))
 
 
 def ev_C_D4(m, b, c):
@@ -415,8 +470,8 @@ def ev_C_D4(m, b, c):
         c.test("maxOccupancyPer8", occ, occ <= b["occupancyMax"])
     else:
         c.test("windows", None, None, "no complete 8-bar window with dialogue")
-    last = [x["events"] for x in cad["eventsLastTwoBeats"]]
-    c.test("eventsInLastTwoBeats", sum(last), sum(last) == 0)
+    last = [x.get("sounding", x["events"]) for x in cad["eventsLastTwoBeats"]]
+    c.test("dryAudioInLastTwoBeats", sum(last), sum(last) == 0)
 
 
 def ev_C_D5(m, b, c):
@@ -432,18 +487,30 @@ def ev_C_D6(m, b, c):
     else:
         c.test("totalMsP95", st["totalMsP95"], st["totalMsP95"] <= b["totalMsP95Max"])
         c.test("totalMsMax", st["totalMsMax"], st["totalMsMax"] <= b["totalMsMax"])
+        c.values["cues"] = st["count"]
     lead = _cad(m).get("leadSecondsMin")
     c.test("leadSecondsMin", lead, None if lead is None else lead >= b["leadSecondsMin"], "no committedFrame in chops")
 
 
 def ev_C_D7(m, b, c):
-    h = _cad(m).get("hookSamePad")
+    cad = _cad(m)
+    h = cad.get("hookSamePad")
+    if cad.get("plan") and not h:
+        c.test("hookSamePadFraction", None, None, "no echo-family block (no repeated hook statement) in this capture")
+        return
     c.test("hookSamePadFraction", None if not h else float(np.mean(h)), None if not h else all(h), "no padID in chops")
+    if h:
+        c.values["hooks"] = len(h)
 
 
 def ev_C_D8(m, b, c):
-    v = _cad(m).get("accentsAtLeast50msFraction")
-    c.test("accentsAtLeast50msFraction", v, None if v is None else v >= b["fractionMin"], "no accentFrame in chops")
+    cad = _cad(m)
+    v = cad.get("accentsAtLeast50msFraction")
+    few = cad.get("accents") is not None and cad["accents"] < 5
+    c.test("accentsAtLeast50msFraction", v, None if (v is None or few) else v >= b["fractionMin"],
+           f"only {cad.get('accents')} stressed accents" if few else "no stressed accentFrame in chops, or no kick landmarks")
+    if cad.get("accents") is not None:
+        c.values["accents"] = cad["accents"]
 
 
 EVALUATORS = {k[3:].replace("_", "-"): v for k, v in globals().items() if k.startswith("ev_C_")}
@@ -524,15 +591,17 @@ def scalar_values(results):
     return out
 
 
-def write_report(outdir, cap, metrics, results, baseline=None):
+def write_report(outdir, cap, metrics, results, baseline=None, criteria=None, auditions=None):
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
     summary = summarize(results)
     doc = {"schema": SCHEMA, "capture": str(cap.path), "case": cap.case, "captureSchema": cap.schema,
            "gitRevision": cap.manifest.get("gitRevision"), "summary": summary,
            "criteria": _clean(results), "metrics": _clean(metrics)}
+    if auditions is not None:
+        doc["auditions"] = _clean(auditions)
     (outdir / "mix-report.json").write_text(json.dumps(doc, indent=1, allow_nan=False) + "\n")
-    (outdir / "mix-report.md").write_text(markdown(doc, baseline))
+    (outdir / "mix-report.md").write_text(markdown(doc, baseline, criteria))
     return doc
 
 
@@ -546,32 +615,188 @@ def fmt(v):
     return str(v)
 
 
-def markdown(doc, baseline=None):
+STATUS_ORDER = {"fail": 0, "warn": 1, "skipped": 2, "pass": 3}
+
+MEASUREMENT = {
+    "C-M1": "BS.1770-4 integrated loudness of master.wav (M1, cross-checked with ffmpeg ebur128)",
+    "C-M2": "true peak by ffmpeg ebur128 and by an independent 16x reconstruction (M2)",
+    "C-M3": "true peak minus integrated loudness (PLR, M3)",
+    "C-M4": "short-term loudness maximum and true peak minus that maximum (PSR, M3)",
+    "C-M5": "sample peak minus RMS of the master (crest factor, M3)",
+    "C-M6": "limiter gain reduction from the engine trace master-gr.csv, cross-checked against a trace inferred from pre-master and master (M4)",
+    "C-M7": "glue compressor gain reduction from master-gr.csv (M4)",
+    "C-M8": "RMS of the master gain trace in the 0.5 to 8 Hz band and its dip 20 to 80 ms after kick landmarks (M5)",
+    "C-M9": "fraction of samples on which the soft clipper engaged, from the engine meters (M4)",
+    "C-M10": "L/R correlation below 120 Hz and full band, and mono fold-down loudness loss (M9)",
+    "C-M11": "master energy below 25 Hz against the total (Welch estimate) and the 250 Hz to 8 kHz spectral tilt (M7)",
+    "C-M12": "loudness range of the master (M1)",
+    "C-B1": "per-section energy in 20 to 120 Hz against the louder of drums and bass (M8)",
+    "C-B2": "bass attack against the aligned kick attack (diagnostics.bass), the 40 to 120 Hz kick plus bass sum, and the bass duck depth under kicks (M10)",
+    "C-B3": "bass against drums in 60 to 250 Hz, and bass harmonics against its fundamental (M8)",
+    "C-B4": "drum bus crest and peak, and kick attack time against the unprocessed take (M3, stemChains)",
+    "C-B5": "mids against lead in 400 Hz to 3 kHz when both play and in lead rests, and mid articulation count (M13)",
+    "C-B6": "lead salience over the first two return notes, theme to return onset correlation, and the program of each (M14)",
+    "C-B7": "lead minus space level in lead-active phrases (M13)",
+    "C-B8": "octave-band SNR of the dialogue against every other section during chops, as the SII proxy and 1 to 4 kHz SNR (M11)",
+    "C-B9": "bed direct to wet ratio, bed audibility in the gaps between chops, bed against dialogue in 1 to 4 kHz, and bed 85 percent roll-off (M12)",
+    "C-B10": "stem sums against the Lo-Fi bus and the pre-master (M16)",
+    "C-D1": "difference between consecutive 16-bar windows of position-tagged (padKey, slot) elements, recomputed from the scheduled events (M15)",
+    "C-D2": "longest run of bars with the same family and bank in the plan log (M15)",
+    "C-D3": "consecutive identical blocks, and agreement of logged and recomputed fingerprints (M15)",
+    "C-D4": "empty bars per 8, dry audio in the last two beats before an 8-bar boundary, and occupancy (M15)",
+    "C-D5": "overlap between scheduled dry events (M15)",
+    "C-D6": "per-cue stage timings and the lead of each event ahead of its commit (M15)",
+    "C-D7": "pad and transform of the two statements of each echo hook (M15)",
+    "C-D8": "distance of stressed accents from confident kick landmarks (M15)",
+}
+
+# Sections whose energy decides a criterion, and the bands to rank them in (indices into BAND_NAMES).
+DRIVER_BANDS = {
+    "C-B1": (0, 2, ("mids", "lead", "space", "dialogue", "bed")), "C-B8": (5, 6, ("dialogue",)),
+    "C-B9": (5, 6, ("bed",)), "C-B5": (4, 6, ("mids", "lead")), "C-B6": (4, 6, ("lead",)), "C-B7": (4, 6, ("lead", "space")),
+    "C-B3": (1, 2, ("bass", "drums")), "C-B2": (1, 1, ("bass", "drums")), "C-B4": (0, 8, ("drums",)),
+}
+RIVAL_STYLE = ("C-B8", "C-B9", "C-B6", "C-B7", "C-B5")
+MASTER_DRIVERS = ("C-M1", "C-M2", "C-M3", "C-M4", "C-M5", "C-M6", "C-M7", "C-M8", "C-M9", "C-M11", "C-M12")
+
+
+def _bound_text(bounds):
+    parts = []
+    for k, v in bounds.items():
+        if isinstance(v, (list, tuple)):
+            lo, hi = v
+            parts.append(f"{k} {fmt(lo)} to {fmt(hi)}")
+        elif k.endswith("Max"):
+            parts.append(f"{k[:-3]} <= {fmt(v)}")
+        elif k.endswith("Min"):
+            parts.append(f"{k[:-3]} >= {fmt(v)}")
+        else:
+            parts.append(f"{k} {fmt(v)}")
+    return "; ".join(parts) if parts else "-"
+
+
+def _criteria_bounds(criteria, case):
+    out = {}
+    for c in criteria or []:
+        out[c["id"]] = {**c.get("bounds", {}), **(c.get("boundsByCase", {}).get(case) or {})}
+    return out
+
+
+def _headline_values(r, limit=4):
+    vals = r.get("values") or {}
+    failed = list(r.get("failedChecks", []))
+    keys = [k for k in vals if k in failed] + [k for k in vals if k not in failed]
+    shown = []
+    for k in keys:
+        v = vals[k]
+        if v is None or (isinstance(v, str) and k not in failed):
+            continue
+        shown.append((k, v))
+        if len(shown) >= limit:
+            break
+    return shown
+
+
+def verdict_rows(doc, baseline, criteria):
+    """Rows sorted failures first: (id, level, values text, bounds text, baseline text, status)."""
+    bounds = _criteria_bounds(criteria, doc["case"])
+    base = {r["id"]: r for r in (baseline or {}).get("criteria", [])}
+    rows = []
+    for r in doc["criteria"]:
+        shown = _headline_values(r)
+        keys = [k for k, _ in shown]
+        b = base.get(r["id"], {})
+        bvals = b.get("values") or {}
+        btext = ", ".join(f"{k}={fmt(bvals[k])}" for k in keys if k in bvals)
+        if not btext:
+            btext = f"({b.get('status', '-')})" if b else "-"
+        rows.append((r["id"], r["level"], ", ".join(f"{k}={fmt(v)}" for k, v in shown) or (r.get("reason") or "-"),
+                     _bound_text(bounds.get(r["id"], {})), btext, r["status"]))
+    order = {r["id"]: i for i, r in enumerate(doc["criteria"])}
+    rows.sort(key=lambda x: (STATUS_ORDER[x[5]], 0 if x[1] == "fail" else 1, order[x[0]]))
+    return rows
+
+
+def _db_sum(values):
+    return float(10 * np.log10(sum(10 ** (v / 10) for v in values) + 1e-20))
+
+
+def _drivers(m, cid):
+    energy = m.get("bandEnergyDb") or {}
+    if cid in DRIVER_BANDS and energy:
+        lo, hi, owners = DRIVER_BANDS[cid]
+        level = {s: _db_sum(v[lo:hi + 1]) for s, v in energy.items()}
+        if cid in RIVAL_STYLE:
+            rivals = sorted(((s, v) for s, v in level.items() if s not in owners), key=lambda t: -t[1])[:2]
+            text = ", ".join(f"{s} ({v:.1f} dB)" for s, v in rivals)
+            own = ", ".join(f"{s} ({level[s]:.1f} dB)" for s in owners if s in level)
+            return f"{own} against {text} in {BAND_NAMES[lo]} to {BAND_NAMES[hi]} Hz"
+        top = sorted(level.items(), key=lambda t: -t[1])[:3]
+        return "loudest in that range: " + ", ".join(f"{s} ({v:.1f} dB)" for s, v in top)
+    if cid in MASTER_DRIVERS and energy:
+        total = {s: _db_sum(v) for s, v in energy.items()}
+        top = sorted(total.items(), key=lambda t: -t[1])[:3]
+        return "loudest sections overall: " + ", ".join(f"{s} ({v:.1f} dB)" for s, v in top)
+    return None
+
+
+def failure_paragraphs(doc, baseline):
+    base = {r["id"]: r for r in (baseline or {}).get("criteria", [])}
+    out = []
+    for r in sorted(doc["criteria"], key=lambda r: (STATUS_ORDER[r["status"]], 0 if r["level"] == "fail" else 1)):
+        if r["status"] not in ("fail", "warn"):
+            continue
+        shown = ", ".join(f"{k} = {fmt(r['values'][k])}" for k in r.get("failedChecks", []) if k in (r.get("values") or {}))
+        drv = _drivers(doc["metrics"], r["id"])
+        b = base.get(r["id"])
+        text = (f"**{r['id']}** ({r['level']}-level, {r['status']}). {r['description']}. Measured: "
+                f"{MEASUREMENT.get(r['id'], 'see the criteria table')}. Out of bounds: {shown or 'see values'}.")
+        if drv:
+            text += f" Stems driving it: {drv}."
+        if b:
+            text += f" Baseline: {b['status']}."
+        for note in r.get("notes", []):
+            text += f" Note: {note}."
+        out.append(text)
+    return out
+
+
+def markdown(doc, baseline=None, criteria=None, auditions=None):
     m = doc["metrics"]
     s = doc["summary"]["counts"]
+    auditions = auditions if auditions is not None else doc.get("auditions")
     lines = [f"# Mix report: {doc['case']}", "",
              f"Capture `{doc['capture']}` ({doc['captureSchema']}), revision `{doc.get('gitRevision')}`.", "",
              f"Criteria: {s['pass']} pass, {s['fail']} fail, {s['warn']} warn, {s['skipped']} skipped. "
              f"Strict failures: {', '.join(doc['summary']['strictFailures']) or 'none'}.", "",
-             "## Headline", "",
-             "| Measure | Value |", "|---|---|",
-             f"| Integrated loudness | {fmt(g(m, 'loudness', 'integratedLufs'))} LUFS (ffmpeg {fmt(g(m, 'loudness', 'ffmpeg', 'integratedLufs'))}, diff {fmt(g(m, 'loudness', 'ffmpegDiffLu'))} LU) |",
-             f"| True peak | {fmt(g(m, 'truePeak', 'ffmpegDbtp'))} dBTP (reconstruction {fmt(g(m, 'truePeak', 'reconstructionDbtp'))}) |",
-             f"| PLR / PSR | {fmt(g(m, 'crest', 'plrDb'))} / {fmt(g(m, 'crest', 'psrDb'))} dB |",
-             f"| Master crest | {fmt(g(m, 'crest', 'master', 'crestDb'))} dB |",
-             f"| Short-term max / LRA | {fmt(g(m, 'loudness', 'shortTermMaxLufs'))} LUFS / {fmt(g(m, 'loudness', 'lraLu'))} LU |",
-             f"| Pumping index / kick dip | {fmt(g(m, 'dynamics', 'pumpingIndexDb'))} / {fmt(g(m, 'dynamics', 'kickDipDb'))} dB ({g(m, 'dynamics', 'pumpingSource')}) |",
-             f"| Master correlation below 120 Hz / full band | {fmt(g(m, 'lowbandMono', 'below120Correlation'))} / {fmt(g(m, 'lowbandMono', 'fullBandCorrelation'))} |",
-             f"| Mono fold loss | {fmt(g(m, 'lowbandMono', 'monoLossLu'))} LU |",
-             f"| Tilt 250 Hz to 8 kHz | {fmt(g(m, 'spectrum', 'signals', 'master', 'tiltDbPerOctave'))} dB/oct |",
-             "", "## Criteria", "", "| Id | Level | Status | Values | Notes |", "|---|---|---|---|---|"]
+             "## Verdict", "",
+             "Failures first. A `fail` status on a fail-level criterion gates `--strict`; a `warn` status is reported only.", "",
+             "| Criterion | Level | Value | Bounds | Baseline value | Status |", "|---|---|---|---|---|---|"]
+    for cid, level, val, bnd, bval, status in verdict_rows(doc, baseline, criteria):
+        lines.append(f"| {cid} | {level} | {val} | {bnd} | {bval} | {status} |")
+    paras = failure_paragraphs(doc, baseline)
+    if paras:
+        lines += ["", "### Why each criterion failed", ""] + [p + "\n" for p in paras]
+    lines += ["", "## Headline", "",
+              "| Measure | Value |", "|---|---|",
+              f"| Integrated loudness | {fmt(g(m, 'loudness', 'integratedLufs'))} LUFS (ffmpeg {fmt(g(m, 'loudness', 'ffmpeg', 'integratedLufs'))}, diff {fmt(g(m, 'loudness', 'ffmpegDiffLu'))} LU) |",
+              f"| True peak | {fmt(g(m, 'truePeak', 'ffmpegDbtp'))} dBTP (reconstruction {fmt(g(m, 'truePeak', 'reconstructionDbtp'))}) |",
+              f"| PLR / PSR | {fmt(g(m, 'crest', 'plrDb'))} / {fmt(g(m, 'crest', 'psrDb'))} dB |",
+              f"| Master crest | {fmt(g(m, 'crest', 'master', 'crestDb'))} dB |",
+              f"| Short-term max / LRA | {fmt(g(m, 'loudness', 'shortTermMaxLufs'))} LUFS / {fmt(g(m, 'loudness', 'lraLu'))} LU |",
+              f"| Pumping index / kick dip | {fmt(g(m, 'dynamics', 'pumpingIndexDb'))} / {fmt(g(m, 'dynamics', 'kickDipDb'))} dB ({g(m, 'dynamics', 'pumpingSource')}) |",
+              f"| Master correlation below 120 Hz / full band | {fmt(g(m, 'lowbandMono', 'below120Correlation'))} / {fmt(g(m, 'lowbandMono', 'fullBandCorrelation'))} |",
+              f"| Mono fold loss | {fmt(g(m, 'lowbandMono', 'monoLossLu'))} LU |",
+              f"| Tilt 250 Hz to 8 kHz | {fmt(g(m, 'spectrum', 'signals', 'master', 'tiltDbPerOctave'))} dB/oct |",
+              f"| Engine diagnostics found | {', '.join(m.get('engineDiagnostics') or []) or 'none'}; taps: {', '.join(m.get('taps') or []) or 'none'} |",
+              "", "## Criteria detail", "", "| Id | Level | Status | Values | Notes |", "|---|---|---|---|---|"]
     base = {}
     if baseline:
         base = {r["id"]: r for r in baseline.get("criteria", [])}
     for r in doc["criteria"]:
         vals = ", ".join(f"{k}={fmt(v)}" for k, v in (r.get("values") or {}).items())
         note = r.get("reason") or "; ".join((r.get("failedChecks") and ["failed: " + ", ".join(r["failedChecks"])] or [])
-                                            + (r.get("skippedChecks") or []))
+                                            + (r.get("skippedChecks") or []) + (r.get("notes") or []))
         lines.append(f"| {r['id']} | {r['level']} | {r['status']} | {vals} | {note} |")
     if baseline:
         lines += ["", "## Against baseline", "", "| Id | Value | Baseline | Candidate | Delta |", "|---|---|---|---|---|"]
@@ -581,10 +806,148 @@ def markdown(doc, baseline=None):
                 bv = (b.get("values") or {}).get(k)
                 if isinstance(v, (int, float)) and isinstance(bv, (int, float)) and not isinstance(v, bool):
                     lines.append(f"| {r['id']} | {k} | {fmt(bv)} | {fmt(v)} | {fmt(v - bv)} |")
+    if auditions:
+        from .auditions import auditions_markdown
+        lines += [""] + auditions_markdown(auditions).rstrip("\n").split("\n")
     lines += ["", "## Notes", "",
               "Power sums assume uncorrelated sections. Band edges 20-60, 60-120, 120-250, 250-500, 500-1k, 1-2k, 2-4k, 4-8k, 8-16k Hz. "
               "A skipped sub-check is listed in Notes and does not fail a criterion."]
     return "\n".join(lines) + "\n"
+
+
+def _esc(x):
+    import html
+    return html.escape(str(x))
+
+
+def write_html(outdir, doc, baseline=None, criteria=None):
+    """Static report/index.html: verdict table, per-criterion detail, auditions and every PNG, no external assets."""
+    import re
+    outdir = Path(outdir)
+    s = doc["summary"]["counts"]
+    rows = verdict_rows(doc, baseline, criteria)
+    css = ("body{font:14px/1.45 -apple-system,Helvetica,Arial,sans-serif;margin:24px;max-width:1280px;background:#fff;color:#1b1b1b}"
+           "table{border-collapse:collapse;margin:12px 0;width:100%}th,td{border:1px solid #d0d0d0;padding:4px 8px;text-align:left;vertical-align:top}"
+           "th{background:#f0f0f0}.fail{background:#fde2e2}.warn{background:#fff3cd}.skipped{background:#eceff3;color:#555}.pass{background:#e3f4e3}"
+           "img{max-width:100%;border:1px solid #ddd;margin:6px 0}h1,h2{margin-top:28px}code{font-size:12px}"
+           "@media (prefers-color-scheme:dark){body{background:#16181c;color:#e6e6e6}th{background:#262a30}th,td{border-color:#444}"
+           ".fail{background:#5a2323}.warn{background:#5a4b1c}.skipped{background:#2a2e35;color:#aaa}.pass{background:#1f4023}img{border-color:#444}}")
+    parts = [f"<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+             f"<title>Mix report {_esc(doc['case'])}</title><style>{css}</style></head><body>",
+             f"<h1>Mix report: {_esc(doc['case'])}</h1>",
+             f"<p>Capture <code>{_esc(doc['capture'])}</code> ({_esc(doc['captureSchema'])}), revision <code>{_esc(doc.get('gitRevision'))}</code>.<br>"
+             f"{s['pass']} pass, {s['fail']} fail, {s['warn']} warn, {s['skipped']} skipped. "
+             f"Strict failures: {_esc(', '.join(doc['summary']['strictFailures']) or 'none')}.</p>",
+             "<h2>Verdict</h2><table><tr><th>Criterion</th><th>Level</th><th>Value</th><th>Bounds</th><th>Baseline value</th><th>Status</th></tr>"]
+    for cid, level, val, bnd, bval, status in rows:
+        parts.append(f"<tr class='{status}'><td>{_esc(cid)}</td><td>{level}</td><td>{_esc(val)}</td><td>{_esc(bnd)}</td>"
+                     f"<td>{_esc(bval)}</td><td>{status}</td></tr>")
+    parts.append("</table>")
+    paras = failure_paragraphs(doc, baseline)
+    if paras:
+        parts.append("<h2>Why each criterion failed</h2>")
+        for p in paras:
+            parts.append("<p>" + re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", _esc(p)) + "</p>")
+    if doc.get("auditions"):
+        parts.append("<h2>Auditions</h2><table><tr><th>File</th><th>LUFS</th><th>dBTP</th><th>What to listen for</th></tr>")
+        for e in doc["auditions"]:
+            if e.get("file"):
+                parts.append(f"<tr><td><a href='auditions/{_esc(e['file'])}'>{_esc(e['file'])}</a><br><audio controls preload='none' "
+                             f"src='auditions/{_esc(e['file'])}'></audio></td><td>{e['lufs']:.2f}</td><td>{e['truePeakDbtp']:.2f}</td>"
+                             f"<td>{_esc(e['title'])}. {_esc(e['listen'])}</td></tr>")
+            else:
+                parts.append(f"<tr class='skipped'><td>{_esc(e['title'])}</td><td colspan='3'>skipped: {_esc(e.get('skipped', ''))}</td></tr>")
+        parts.append("</table>")
+    parts.append("<h2>Criteria detail</h2><table><tr><th>Id</th><th>Status</th><th>Values</th><th>Notes</th></tr>")
+    for r in doc["criteria"]:
+        vals = ", ".join(f"{k}={fmt(v)}" for k, v in (r.get("values") or {}).items())
+        note = r.get("reason") or "; ".join((r.get("skippedChecks") or []) + (r.get("notes") or []))
+        parts.append(f"<tr class='{r['status']}'><td>{_esc(r['id'])}</td><td>{r['status']}</td><td>{_esc(vals)}</td><td>{_esc(note)}</td></tr>")
+    parts.append("</table><h2>Figures</h2>")
+    for png in sorted(outdir.glob("*.png")):
+        parts.append(f"<h3>{_esc(png.stem)}</h3><img src='{_esc(png.name)}' alt='{_esc(png.stem)}' loading='lazy'>")
+    parts.append("</body></html>")
+    (outdir / "index.html").write_text("\n".join(parts))
+
+
+def matrix_summary(out, cases, baseline=None, criteria=None):
+    """Write OUT/matrix-summary.md and .json from OUT/<case>/report/mix-report.json. Returns (markdown, strict_failed)."""
+    out = Path(out)
+    docs, base_docs = {}, {}
+    for case in cases:
+        path = out / case / "report" / "mix-report.json"
+        docs[case] = json.loads(path.read_text()) if path.is_file() else None
+        if baseline:
+            bpath = Path(baseline) / case / "report" / "mix-report.json"
+            base_docs[case] = json.loads(bpath.read_text()) if bpath.is_file() else None
+    ids, levels = [], {}
+    for doc in docs.values():
+        for r in (doc or {}).get("criteria", []):
+            if r["id"] not in ids:
+                ids.append(r["id"])
+            levels[r["id"]] = r["level"]
+    by_case = {c: {r["id"]: r for r in d["criteria"]} if d else {} for c, d in docs.items()}
+    totals = {c: (d["summary"]["counts"] if d else None) for c, d in docs.items()}
+    strict = {c: (d["summary"]["strictFailures"] if d else ["no report"]) for c, d in docs.items()}
+
+    lines = ["# Mix matrix summary", "",
+             f"Cases: {', '.join(cases)}. Baseline: {baseline or 'none'}.", "",
+             "## Counts", "", "| Case | pass | warn | fail | skipped | strict failures |", "|---|---|---|---|---|---|"]
+    grand = {"pass": 0, "warn": 0, "fail": 0, "skipped": 0}
+    for c in cases:
+        t = totals[c]
+        if t:
+            for k in grand:
+                grand[k] += t[k]
+            lines.append(f"| {c} | {t['pass']} | {t['warn']} | {t['fail']} | {t['skipped']} | {', '.join(strict[c]) or 'none'} |")
+        else:
+            lines.append(f"| {c} | - | - | - | - | no report |")
+    lines.append(f"| **total** | {grand['pass']} | {grand['warn']} | {grand['fail']} | {grand['skipped']} | |")
+
+    lines += ["", "## Criteria by case", "",
+              "| Criterion | Level | " + " | ".join(cases) + " |", "|---|---|" + "---|" * len(cases)]
+    for cid in ids:
+        row = []
+        for c in cases:
+            r = by_case[c].get(cid)
+            row.append("-" if r is None else r["status"])
+        lines.append(f"| {cid} | {levels[cid]} | " + " | ".join(row) + " |")
+
+    lines += ["", "## Failing fail-level criteria (the wave 4 to-do list)", ""]
+    for c in cases:
+        fails = [cid for cid in ids if by_case[c].get(cid, {}).get("status") == "fail" and levels[cid] == "fail"]
+        lines.append(f"- {c}: {', '.join(fails) or 'none'}")
+    lines += ["", "Warn-level criteria that warn:", ""]
+    for c in cases:
+        warns = [cid for cid in ids if by_case[c].get(cid, {}).get("status") == "warn"]
+        lines.append(f"- {c}: {', '.join(warns) or 'none'}")
+
+    if baseline:
+        lines += ["", "## Against baseline", "",
+                  "Headline value of each criterion: the first failed check, else the first numeric value.", "",
+                  "| Case | Criterion | Value | Baseline | Candidate | Delta | Baseline status | Status |", "|---|---|---|---|---|---|---|---|"]
+        for c in cases:
+            bd = {r["id"]: r for r in (base_docs.get(c) or {}).get("criteria", [])}
+            for cid in ids:
+                r, b = by_case[c].get(cid), bd.get(cid)
+                if r is None or b is None:
+                    continue
+                vals = r.get("values") or {}
+                keys = [k for k in r.get("failedChecks", []) if isinstance(vals.get(k), (int, float))]
+                keys += [k for k, v in vals.items() if isinstance(v, (int, float)) and not isinstance(v, bool) and k not in keys]
+                for k in keys[:1]:
+                    bv = (b.get("values") or {}).get(k)
+                    if isinstance(bv, (int, float)):
+                        lines.append(f"| {c} | {cid} | {k} | {fmt(bv)} | {fmt(vals[k])} | {fmt(vals[k] - bv)} | {b['status']} | {r['status']} |")
+                    else:
+                        lines.append(f"| {c} | {cid} | {k} | - | {fmt(vals[k])} | - | {b['status']} | {r['status']} |")
+    md = "\n".join(lines) + "\n"
+    (out / "matrix-summary.md").write_text(md)
+    (out / "matrix-summary.json").write_text(json.dumps({
+        "cases": cases, "totals": totals, "strictFailures": strict,
+        "grid": {c: {cid: r["status"] for cid, r in by_case[c].items()} for c in cases},
+        "values": {c: {cid: r.get("values", {}) for cid, r in by_case[c].items()} for c in cases}}, indent=1) + "\n")
+    return md, any(strict[c] for c in cases)
 
 
 def print_comparison(doc, baseline):
