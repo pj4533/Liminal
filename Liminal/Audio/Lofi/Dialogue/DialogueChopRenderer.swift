@@ -111,15 +111,24 @@ nonisolated enum DialogueChopRenderer {
         ramp(&out, from: 0, length: min(fadeIn, full / 2), rising: true)
         ramp(&out, from: full - min(fadeOut, full / 2), length: min(fadeOut, full / 2), rising: false)
         out[full - 1] = 0
-        // Level the full statement once; a choked copy keeps the same gain.
-        let levelling: Float
+        // Level the full statement once; a choked copy keeps the same gain. The statement is levelled
+        // by loudness, and a soft shoulder then holds the few peaks above it under the ceiling.
+        var levelling: Float
         if let cached = level {
             levelling = cached
         } else {
-            levelling = out.withUnsafeBufferPointer { LofiDialogueSampler.clipGain($0.baseAddress!, count: full, rate: sr) }
+            levelling = out.withUnsafeBufferPointer {
+                LofiDialogueSampler.clipGain($0.baseAddress!, count: full, rate: sr, level: DialogueChopChain.levelTarget,
+                                             peak: DialogueChopChain.rawPeakLimit, maxGain: DialogueChopChain.maxLevelGain)
+            }
             level = levelling
         }
-        var gain = levelling * powf(10, gainDB / 20)
+        if !levelling.isFinite { levelling = 0 }
+        vDSP_vsmul(out, 1, &levelling, &out, 1, vDSP_Length(full))
+        for i in 0..<full {
+            out[i] = LofiSaturation.softClip(out[i], threshold: DialogueChopChain.peakKnee, ceiling: DialogueChopChain.peakCeiling)
+        }
+        var gain = powf(10, gainDB / 20)
         if !gain.isFinite { gain = 0 }
         if count < full {
             out.removeLast(full - count)
@@ -258,6 +267,19 @@ nonisolated enum DialogueChopChain {
     static let speechLowpassHz = 7_500.0, textureLowpassHz = 5_500.0
     /// Low-frequency group delay of the chain in whole samples (mostly the low-pass), removed by the renderer.
     static let delayFrames = 1
+
+    /// Levelling after the chain (the renderer's `clipGain` call). The K-weighted level of the loud
+    /// syllables is the target; the legacy sampler's 0.132 with a hard 0.44 peak cap left featured lines
+    /// 2 dB under the drums in 1 to 4 kHz, and the cap, not the level, set most gains (spread 2.2 LU).
+    /// 0.28 is about 7 dB above that. Peaks are 9 to 12 dB over the level after the compressor, so the
+    /// loudest fraction of a percent of samples meets a soft shoulder from `peakKnee` to `peakCeiling`
+    /// (under 1 percent of samples, residual below -35 dB in the reference capture) instead of
+    /// setting the gain. `rawPeakLimit` bounds how far a single spike may be pushed into the shoulder.
+    static let levelTarget: Float = 0.28
+    static let peakKnee: Float = 0.7
+    static let peakCeiling: Float = 1.0
+    static let rawPeakLimit: Float = 1.5
+    static let maxLevelGain: Float = 10
 
     /// The linear stages before the dynamics.
     static func preFilters(sampleRate: Double) -> [LofiBiquad.Kind] {

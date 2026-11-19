@@ -201,20 +201,24 @@ struct ArchiveVoiceRenderTests {
         let engine = GenerativeEngine(seed: 7)
         let format = engine.archiveFormat
         let rate = format.sampleRate
-        func tone(_ duration: Double, amplitude: Float) throws -> AVAudioPCMBuffer {
+        func tone(_ duration: Double, hz: Double, amplitude: Float) throws -> AVAudioPCMBuffer {
             let n = AVAudioFrameCount(duration * rate)
             let b = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: n))
             b.frameLength = n
             let pcm = try #require(b.floatChannelData)
             for i in 0..<Int(n) {
-                let value = amplitude * Float(sin(2 * .pi * 400 * Double(i) / rate))
+                let value = amplitude * Float(sin(2 * .pi * hz * Double(i) / rate))
                 pcm[0][i] = value
                 pcm[1][i] = value
             }
             return b
         }
-        let bed = try tone(4, amplitude: 0.1)
-        let chop = try tone(0.6, amplitude: 0.1)
+        // The bed and the cut use different tones so each layer is measured on its own. The Lo-Fi bed
+        // now reaches the mix at about the level of a cut (plan 8.6), so a shared tone would only show
+        // how the two happen to add.
+        let bedHz = 400.0, chopHz = 1000.0
+        let bed = try tone(4, hz: bedHz, amplitude: 0.1)
+        let chop = try tone(0.6, hz: chopHz, amplitude: 0.1)
         let cue = ArchiveVoice.Cue(buffer: bed, gain: 1, fadeIn: 0.1, label: "blend",
             chops: [1.4, 3.0].map { .init(articulation: .phrase, time: $0, source: 0..<Int(chop.frameLength), speed: 1, buffer: chop) })
         engine.engine.output = Mixer(engine.archive.strip.outputs.dry, engine.archive.chopOutput)
@@ -235,16 +239,30 @@ struct ArchiveVoiceRenderTests {
             let start = Int(seconds * rate)
             return (start..<start + Int(0.1 * rate)).reduce(Float.zero) { max($0, abs(pcm[$1])) }
         }
-        let before = peak(at: 1.0), during = peak(at: 1.7), after = peak(at: 2.5)
-        #expect(before > 0.0001 && after > 0.0001)
-        #expect(during > 0.055 && during < 0.096)
-        // A quiet dry film remains audible before the musical cut enters (measured 0.19 of the cut with
-        // the plan 8.6 bed: direct -3 dB, no 1.76 context boost).
-        #expect(before > during * 0.10 && before < during * 0.25)
-        // The 0.6-second cut has stopped; the dotted-eighth repeat is still audible over the bed. The echo
-        // return is now band-passed and 16 dB under the dry line (plan 8.5), so it adds about 0.6 dB to the
-        // bed's peak (measured 1.08 times the bed alone; the old 0.48 return was more than twice it).
-        #expect(after > before * 1.04 && after < during)
+        /// Amplitude of one tone over 0.1 s (a whole number of cycles of both tones).
+        func level(at seconds: Double, hz: Double) -> Float {
+            let start = Int(seconds * rate), n = Int(0.1 * rate)
+            var re = 0.0, im = 0.0
+            for i in 0..<n {
+                let phase = 2 * Double.pi * hz * Double(i) / rate
+                re += Double(pcm[start + i]) * cos(phase)
+                im += Double(pcm[start + i]) * sin(phase)
+            }
+            return Float(2 * (re * re + im * im).squareRoot() / Double(n))
+        }
+        let bedBefore = level(at: 1.0, hz: bedHz), bedDuring = level(at: 1.7, hz: bedHz)
+        let cut = level(at: 1.7, hz: chopHz), echo = level(at: 2.5, hz: chopHz)
+        // The film is clearly audible before the musical cut enters: the 0.1 tone arrives between 0.05
+        // and 0.11 (strip trim 1.06 at the default setting, direct sound -3 to 0 dB, light phasing),
+        // where the old quiet bed was under a quarter of the cut. It stays audible under the cut.
+        #expect(bedBefore > 0.03 && bedBefore < 0.13, "bed before the cut \(bedBefore)")
+        #expect(bedDuring > bedBefore * 0.25, "bed under the cut \(bedDuring)")
+        // The cut plays through the 0.72 dry path.
+        #expect(cut > 0.055 && cut < 0.096, "cut \(cut)")
+        // The 0.6-second cut has stopped; its dotted-eighth repeat is still audible. The echo return is
+        // band-passed and about 16 dB under the dry line (plan 8.5; 0.16 of it, plus a little room).
+        #expect(echo > cut * 0.08 && echo < cut * 0.35, "echo \(echo) against the cut \(cut)")
+        #expect(level(at: 1.0, hz: chopHz) < 0.0005)
         #expect(peak(at: 3.25) < 0.0001)
     }
 

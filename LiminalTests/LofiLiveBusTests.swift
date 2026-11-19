@@ -443,4 +443,47 @@ struct LofiLiveBusTests {
             #expect(y.max()! > 0.05, "the pad is audible")
         }
     }
+
+    /// Levelling follows the loudness of the statement, not its single highest peak: a quiet source, a
+    /// loud one and one with isolated spikes all leave at the target level, and the soft shoulder
+    /// keeps every sample under the ceiling.
+    @Test func renderedPadsAreLevelledByLoudnessUnderASoftCeiling() throws {
+        let rate = Self.rate
+        func render(scale: Float, spikes: Bool) throws -> [Float] {
+            var rng = MusicRNG(seed: 33)
+            var x = (0..<Int(rate * 3)).map { _ in scale * rng.rangeF(-1...1) }
+            // A plosive-like 2 ms burst every 0.25 s, 6 dB over the body: too short for the compressor.
+            if spikes { for i in stride(from: 50_000, to: 94_000, by: 12_000) { for k in 0..<96 { x[i + k] *= 2 } } }
+            let source = DialogueSource(contentID: "level", cueToken: 1, buffer: DialogueFixtures.buffer(x, rate: rate),
+                                        sourceStart: 0, rate: 1)
+            let analysis = DialogueAnalysis(version: 1, contentID: "level", cueToken: 1,
+                                            clock: DialogueClock(sourceStart: 0, rate: 1, sampleRate: rate), bufferFrames: x.count,
+                                            features: nil, speech: [], units: [], rejections: [])
+            let frames = 48_000..<96_000
+            let pad = DialoguePad(padID: 0, unitID: 0, role: .anchor, frames: frames, transform: .native, accentOffset: 0.1,
+                                  duration: Double(frames.count) / rate, protected: false, text: nil, fadeIn: 2400, fadeOut: 2400,
+                                  level: .phrase, score: DialogueScore(), padKey: 1)
+            var level: Float?
+            let buffer = try #require(DialogueChopRenderer.renderPad(pad, source: source, analysis: analysis, gainDB: 0, level: &level))
+            return Array(UnsafeBufferPointer(start: try #require(buffer.floatChannelData)[0], count: Int(buffer.frameLength)))
+        }
+        /// Decibels the statement sits from the target, by the levelling's own measure with its caps opened.
+        func offTarget(_ y: [Float]) -> Float {
+            let gain = y.withUnsafeBufferPointer {
+                LofiDialogueSampler.clipGain($0.baseAddress!, count: y.count, rate: rate, level: DialogueChopChain.levelTarget,
+                                             peak: 100, maxGain: 100)
+            }
+            return -20 * log10(gain)
+        }
+        for (name, scale, spikes) in [("quiet", Float(0.2), false), ("loud", 0.8, false), ("spiky", 0.3, true)] {
+            let y = try render(scale: scale, spikes: spikes)
+            let peak = y.map { abs($0) }.max() ?? 0
+            #expect(peak <= DialogueChopChain.peakCeiling, "\(name) peak \(peak)")
+            if spikes { #expect(peak > DialogueChopChain.peakKnee, "the bursts reach the shoulder: \(peak)") }
+            #expect(abs(offTarget(y)) < 1, "\(name) is \(offTarget(y)) dB from the level target")
+        }
+        // Near-silence is not raised to the target: the gain stops at `maxLevelGain`.
+        let faint = try render(scale: 0.002, spikes: false)
+        #expect(offTarget(faint) < -6, "a faint source stays \(offTarget(faint)) dB from the target")
+    }
 }

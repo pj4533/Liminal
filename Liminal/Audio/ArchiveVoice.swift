@@ -128,7 +128,10 @@ nonisolated final class ArchiveVoice {
         static let duckDown = 0.04
         static let duckUp = 0.3
         /// Strip trim relative to `baseTrim` (the 1.76 and 1.31 context factors are gone, plan 8.6).
-        static let trim: Float = 1
+        /// The old bed reached the mix mostly through its sends (up to 2.3) on top of a 1.76 context
+        /// gain; with sends of 0.25 to 0.45 the same trim left it 7 LU quieter (audibility index 0.02
+        /// in the reference capture). +11 dB puts the default setting at an index of about 0.24.
+        static let trim: Float = dbToGain(11)
     }
 
     /// Dialogue chop returns (plan 8.5). Levels are relative to the 0.72 dry path.

@@ -4,6 +4,7 @@ import AVFoundation
 import CryptoKit
 import Darwin
 import Foundation
+import Synchronization
 import Testing
 @testable import Liminal
 
@@ -252,6 +253,8 @@ struct LofiMixRenderTests {
             node.installTap(onBus: 0, bufferSize: 1024, format: nil, block: sink.tap)
         }
         var tapsInstalled = true
+        let sinks = capture.map(\.1)
+        var tapWaits = 0
         defer { if tapsInstalled { for (node, _) in capture { node.removeTap(onBus: 0) } } }
         try FileManager.default.createDirectory(at: config.out, withIntermediateDirectories: true)
         let finalFile = try Self.file("master", format: format, directory: config.out)
@@ -364,6 +367,7 @@ struct LofiMixRenderTests {
                     try finalFile.write(from: work)
                     cursor += written
                     noProgress = 0
+                    if Self.awaitTaps(sinks, cursor: cursor) { tapWaits += 1 }
                     continue
                 }
             }
@@ -377,6 +381,7 @@ struct LofiMixRenderTests {
         for (node, _) in capture { node.removeTap(onBus: 0) }
         tapsInstalled = false
         for (_, sink) in capture { try sink.finish(frames: frames) }
+        print("Capture taps: the render waited \(tapWaits) times for \(sinks.count) tap files")
         let wall = Date().timeIntervalSince(t0)
         LofiCaptureHooks.runFinishers()
         for (name, data) in LofiCaptureHooks.files {
@@ -482,6 +487,20 @@ struct LofiMixRenderTests {
         return buffer
     }
 
+    /// AVAudioEngine hands tap audio over in 0.1 s blocks on its own queue. A manual render that runs
+    /// ahead of the file writes overruns a tap's buffer and a block is dropped (`skippedTapFrames`,
+    /// seen on a busy machine once the capture had twenty taps), so the render waits while any tap
+    /// has two complete blocks outstanding. The limit only bounds a stall; a real skip still fails.
+    @discardableResult
+    nonisolated private static func awaitTaps(_ sinks: [TapFile], cursor: Int) -> Bool {
+        guard sinks.contains(where: { $0.isBehind(cursor) }) else { return false }
+        let deadline = DispatchTime.now().uptimeNanoseconds + 2_000_000_000
+        while sinks.contains(where: { $0.isBehind(cursor) }), DispatchTime.now().uptimeNanoseconds < deadline {
+            usleep(200)
+        }
+        return true
+    }
+
     /// Offline-only taps. File writes run inside the tool's pull graph, never in app playback.
     nonisolated private final class TapFile: @unchecked Sendable {
         private let name: String
@@ -490,6 +509,9 @@ struct LofiMixRenderTests {
         private var firstSample: AVAudioFramePosition?
         private var frames = 0
         private var failure: Error?
+        /// Frames written so far, and the tap's block length, for `awaitTaps` on the render thread.
+        private let delivered = Atomic<Int>(0)
+        private let block = Atomic<Int>(4800)
         init(name: String, format: AVAudioFormat, directory: URL, frames: Int) throws {
             self.name = name
             required = frames
@@ -518,8 +540,19 @@ struct LofiMixRenderTests {
                         try file?.write(from: end)
                     }
                     frames += count
-                } catch { failure = error }
+                    block.store(max(1, Int(buffer.frameLength)), ordering: .relaxed)
+                    delivered.store(frames >= required ? .max : frames, ordering: .relaxed)
+                } catch {
+                    failure = error
+                    delivered.store(.max, ordering: .relaxed)
+                }
             }
+        }
+
+        /// Whether two or more complete tap blocks are still waiting to be written at `cursor`.
+        func isBehind(_ cursor: Int) -> Bool {
+            let done = delivered.load(ordering: .relaxed)
+            return done != .max && cursor - done >= 2 * block.load(ordering: .relaxed)
         }
 
         enum CaptureError: Error { case skippedTapFrames(String, Int, Int) }
