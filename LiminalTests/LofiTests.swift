@@ -248,7 +248,20 @@ struct LofiTests {
         let phrase = try LofiRenderer.render(seed: 3, section: .answer, options: .init(tempo: 70),
                                              sampleRate: clock.sampleRate, drift: .init(seed: 3), startBeat: 16,
                                              drums: take, drumStartBeat: 16)
-        #expect(phrase.score.notes.first { $0.part == .bass }?.beat == played)
+        // A take with landmarks places the accent through its timing field: the voice's audible
+        // attack lands on the detected kick attack, and without a confident kick the note stays on 0.
+        // A take without landmarks keeps the original kick snap.
+        let bass = try #require(phrase.score.notes.first { $0.part == .bass })
+        let lead = phrase.score.bassVoice.attackLead / clock.beatDuration
+        if take.landmarks.isEmpty {
+            #expect(bass.beat == played)
+        } else if let kick = take.timing.kicks(phraseStartBeat: 16, minConfidence: LofiScore.bassAccentConfidence)
+            .first(where: { abs($0) <= LofiScore.bassAccentWindow }) {
+            #expect(abs(bass.beat - max(0, kick - lead)) < 1e-9)
+            #expect(abs(kick - played) < 0.03)
+        } else {
+            #expect(bass.beat == 0)
+        }
     }
 
     @Test func aTempoRequestWaitsForTheFollowingFullBreak() {
