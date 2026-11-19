@@ -14,6 +14,8 @@ nonisolated enum MusicControl {
     /// Archive footage sound (docs/plans/archive-video.md 4): start a decoded segment, fade it out, or
     /// change its level ("Footage audio").
     case archiveBegin(ArchiveVoice.Cue), archiveEnd(fade: Double), archiveGain(Float)
+    /// A dialogue performance for a cue (plan 6.3): stored, then queued incrementally on the chop timeline.
+    case archiveChops(ArchiveVoice.ChopPlan)
 }
 
 /// Owns time, randomness, harmony, scenes and layers (decisions D3-D6). Runs on its own serial queue in
@@ -307,6 +309,7 @@ nonisolated final class MusicConductor: @unchecked Sendable {
         case .archiveBegin(let cue): if began && !stopping { archive?.begin(cue, now: scheduler.now) }
         case .archiveEnd(let fade): archive?.end(fade: fade, now: scheduler.now)
         case .archiveGain(let g): archive?.setGain(g)
+        case .archiveChops(let plan): if began && !stopping { archive?.perform(plan, now: scheduler.now) }
         }
     }
 

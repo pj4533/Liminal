@@ -92,9 +92,14 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
         let post: @Sendable (MusicControl) -> Void
         let format: AVAudioFormat
         let takeGrid: @Sendable () -> LofiTakeGrid?
-        init(format: AVAudioFormat, takeGrid: @escaping @Sendable () -> LofiTakeGrid?, post: @escaping @Sendable (MusicControl) -> Void) {
+        /// The Lo-Fi transport side channel (plan 3.6); nil outside Lo-Fi.
+        let transport: @Sendable () -> LofiTransportInfo?
+        init(format: AVAudioFormat, takeGrid: @escaping @Sendable () -> LofiTakeGrid?,
+             transport: @escaping @Sendable () -> LofiTransportInfo? = { nil },
+             post: @escaping @Sendable (MusicControl) -> Void) {
             self.format = format
             self.takeGrid = takeGrid
+            self.transport = transport
             self.post = post
         }
     }
@@ -109,6 +114,10 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
     private let localClip = OSAllocatedUnfairLock<(clip: ArchiveClip, url: URL)?>(initialState: nil)
     private let music = OSAllocatedUnfairLock<MusicSink?>(initialState: nil)
     private var audioTokenSeed = OSAllocatedUnfairLock(initialState: 0)
+    /// Dialogue performance memory and bank cache across cues (plan 6.2).
+    let dialogue = DialogueDirector()
+    /// The running dialogue coordinator task and its cue token; cancelled with the cue.
+    private let dialogueTask = OSAllocatedUnfairLock<(token: Int, task: Task<Void, Never>)?>(initialState: nil)
 
     /// -LiminalVideoOff removes the feature whatever the setting says.
     static var isAvailable: Bool { !DebugLaunchOptions.videoOff }
@@ -128,6 +137,8 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
     func attachMusic(_ engine: GenerativeEngine) {
         let sink = MusicSink(format: engine.archiveFormat, takeGrid: { [weak engine] in
             engine?.musicState.read().lofiTakeGrid
+        }, transport: { [weak engine] in
+            engine?.musicState.transport()
         }) { [weak engine] c in engine?.post(c) }
         music.withLock { $0 = sink }
     }
@@ -228,6 +239,7 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
             return s.running
         }
         old.forEach { $0.cancel() }
+        cancelDialogue()
         guard wasRunning else { return }
         sources.forEach { $0.stop() }
         shared.withLock { s in if !s.enabled { s.status = "Archive footage off" } }
@@ -252,6 +264,58 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
     }
 
     // MARK: - Sound (plan 4, A27)
+
+    /// Cancels the dialogue coordinator (all cues, or only the one with `token`).
+    private func cancelDialogue(matching token: Int? = nil) {
+        let task = dialogueTask.withLock { current -> Task<Void, Never>? in
+            guard let c = current, token == nil || c.token == token else { return nil }
+            current = nil
+            return c.task
+        }
+        task?.cancel()
+    }
+
+    /// The cue `token` is still pending or playing.
+    private func isCurrentAudio(_ token: Int) -> Bool {
+        shared.withLock { s in
+            guard s.running, s.wantsRun, !s.disabling else { return false }
+            if s.pendingAudio?.token == token { return true }
+            if let a = s.audio, a.token == token, !a.ended { return true }
+            return false
+        }
+    }
+
+    /// Starts the dialogue work for a decoded cue beside the bed (plan 6.2). Lo-Fi only: it needs the
+    /// take grid and the transport info. Utility priority, cancelled with the cue token.
+    private func startDialogue(token: Int, piece: FootagePiece, cue: ArchiveAudioCuePlan, clip: ArchiveClip, url: URL,
+                               bed: AVAudioPCMBuffer, due: Double, sink: MusicSink) {
+        guard sink.takeGrid() != nil, let info = sink.transport() else { return }
+        let window = DialogueCueCoordinator.window(due: due, span: cue.endAt - cue.beginAt, transport: info)
+        guard !window.isEmpty else { return }
+        let director = dialogue
+        let contentID = clip.id
+        let format = sink.format
+        let seed = UInt64(piece.seed.bitPattern)
+        let task = Task.detached(priority: .utility) { [weak self] in
+            let source: DialogueSource
+            do {
+                source = try await ArchiveDialogueSource.make(cue: cue, bed: bed, url: url, contentID: contentID,
+                                                              cueToken: token, format: format)
+            } catch {
+                LMLog.audio.warning("📼🔊 no dialogue: native decode failed (\(String(describing: error), privacy: .public))")
+                return
+            }
+            guard !Task.isCancelled else { return }
+            _ = await director.run(source: source, window: window, seed: seed, transport: sink.transport,
+                                   isCurrent: { [weak self] in self?.isCurrentAudio(token) ?? false },
+                                   post: { sink.post(.archiveChops($0)) })
+        }
+        let previous = dialogueTask.withLock { current -> Task<Void, Never>? in
+            defer { current = (token, task) }
+            return current?.task
+        }
+        previous?.cancel()
+    }
 
     /// Decodes a piece's sound off the main actor and posts it to the music at the cue's start.
     private func scheduleAudio(piece: FootagePiece, cue: ArchiveAudioCuePlan, clip: ArchiveClip, url: URL) {
@@ -284,10 +348,11 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
             LMLog.audio.info("📼🔊 decoded \(String(format: "%.1f", seconds), privacy: .public)s in \(String(format: "%.0f", (Self.uptime() - t0) * 1000), privacy: .public) ms")
             let due = start + cue.beginAt
             guard let self else { return }
-            let chops = sink.takeGrid().map { grid in
-                LofiDialogueSampler.prepareFootage(buffer, grid: grid, cueStart: due, duration: cue.endAt - cue.beginAt,
-                                           seed: UInt64(piece.seed.bitPattern))
-            } ?? []
+            // The bed never waits for dialogue analysis: the coordinator runs beside this loop and
+            // posts its plan at a safe bar boundary (plan 6.2).
+            var posted = false
+            defer { if !posted { self.cancelDialogue(matching: token) } }
+            self.startDialogue(token: token, piece: piece, cue: cue, clip: clip, url: url, bed: buffer, due: due, sink: sink)
             let deadline = start + cue.fadeOutAt
             while true {
                 let time = Self.uptime()
@@ -305,7 +370,7 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
             let late = Self.uptime() - due
             guard let ready = ArchiveAudioMath.catchUp(buffer, late: late) else { return }
             let activity = ArchiveAudioMath.activity(ready)
-            let posted = self.shared.withLock { s -> Bool in
+            posted = self.shared.withLock { s -> Bool in
                 guard s.pendingAudio?.token == token else { return false }
                 s.pendingAudio = nil
                 guard s.running, s.wantsRun, !s.disabling, late < cue.fadeOutAt - cue.beginAt,
@@ -313,7 +378,7 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
                 s.audio = AudioState(cue: cue, token: token, pieceIndex: piece.index, begun: true)
                 sink.post(.archiveBegin(ArchiveVoice.Cue(buffer: ready, gain: g,
                     fadeIn: max(0.35, cue.fadeIn - max(late, 0)),
-                    label: title, claritySeed: piece.seed, activity: activity, chops: chops)))
+                    label: title, claritySeed: piece.seed, activity: activity, token: token)))
                 return true
             }
             if posted && late > 0.1 {

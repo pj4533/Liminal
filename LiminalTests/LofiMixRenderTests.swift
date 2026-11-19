@@ -118,7 +118,7 @@ struct LofiMixRenderTests {
             drums = try LofiDrumTake(recording: drumFixture(clock: clock), clock: clock)
         }
         var footageHash = config.noFootage ? "none" : "public-formant-fixture-v1"
-        var reel: [(buffer: AVAudioPCMBuffer, title: String, offset: Double)] = []
+        var reel: [(buffer: AVAudioPCMBuffer, title: String, offset: Double, id: String)] = []
         let cue: AVAudioPCMBuffer?
         if config.noFootage {
             cue = nil
@@ -145,7 +145,7 @@ struct LofiMixRenderTests {
                 guard let buffer = try? await ArchiveAudioDecoder.decode(url: url, sourceStart: offset,
                     sourceLength: seconds, rate: 1, format: format) else { continue }
                 hashes.append(SHA256.hash(data: try Data(contentsOf: url, options: .mappedIfSafe)).description)
-                reel.append((buffer, clip.title, offset))
+                reel.append((buffer, clip.title, offset, clip.id))
                 if config.sameFilm == true || reel.count >= (config.bars + 7) / 8 { break }
             }
             cue = try #require(reel.first?.buffer, "No cached film reel with audio")
@@ -180,6 +180,8 @@ struct LofiMixRenderTests {
         }
         let takeFrames = Int(drums.buffer.frameLength)
         var kicks: [[String: Any]] = []
+        /// The take scheduled at each take index, for the dialogue transport and the landmark report.
+        var takes: [Int: LofiDrumTake] = [:]
         for i in 0..<phrases {
             if i == LofiDrumTake.phraseCount, let name = config.nextDrumName {
                 let asset = try #require(LofiDrumLibrary.assets().first { $0.entry.name == name })
@@ -188,6 +190,9 @@ struct LofiMixRenderTests {
             }
             if i.isMultiple(of: LofiDrumTake.phraseCount) {
                 bus.schedule(drums)
+                takes[i / LofiDrumTake.phraseCount] = drums
+                LofiCaptureHooks.appendReport("landmarks", Self.landmarkReport(drums, take: i / LofiDrumTake.phraseCount,
+                                                                              offset: i * clock.frameCount, limit: scoreFrames))
                 kicks += drums.kicks.compactMap { hit in
                     let frame = i * clock.frameCount + hit.frame
                     return frame < scoreFrames ? ["frame": frame, "strength": hit.strength] : nil
@@ -260,6 +265,11 @@ struct LofiMixRenderTests {
         let cueFrames = cue == nil ? [] : cueBeats.map { clock.frame(at: $0) }.filter { $0 < scoreFrames }
         var chopEvents: [[String: Any]] = []
         var dialogueTimings: [[String: Any]] = []
+        // `dialogue=engine` (default) plans each cue with the coordinator's core against a transport
+        // built from the capture clock; `dialogue=legacy` keeps the old sampler for A/B captures.
+        let dialogueMode = LofiCaptureHooks.option("dialogue") ?? "engine"
+        let director = DialogueDirector()
+        var memory = DialoguePerformanceMemory()
         var cueIndex = 0
         var cursor = 0
         var noProgress = 0
@@ -269,20 +279,68 @@ struct LofiMixRenderTests {
         while cursor < frames {
             let time = Double(cursor) / format.sampleRate
             if cueIndex < cueFrames.count, cursor == cueFrames[cueIndex], let cue = reel.isEmpty ? cue : reel[cueIndex % reel.count].buffer {
-                let started = ContinuousClock.now
-                let hits = LofiDialogueSampler.prepareFootage(cue, grid: .init(origin: 0, beatDuration: clock.beatDuration),
-                    cueStart: time, duration: Double(cue.frameLength) / format.sampleRate,
-                    seed: config.seed &+ UInt64(cueIndex))
-                let elapsed = ContinuousClock.now - started
-                let totalMs = Double(elapsed.components.seconds) * 1000 + Double(elapsed.components.attoseconds) / 1e15
-                dialogueTimings.append(["cue": cueIndex, "totalMs": totalMs])
-                chopEvents += hits.map { hit in
-                    ["frame": Int((hit.time * format.sampleRate).rounded()), "sourceStart": hit.source.lowerBound,
-                     "sourceEnd": hit.source.upperBound, "speed": hit.speed, "articulation": hit.articulation.rawValue, "cue": cueIndex, "reversed": hit.reversed,
-                     "durationFrames": Int(hit.buffer.frameLength)]
+                if dialogueMode == "legacy" {
+                    let started = ContinuousClock.now
+                    let hits = LofiDialogueSampler.prepareFootage(cue, grid: .init(origin: 0, beatDuration: clock.beatDuration),
+                        cueStart: time, duration: Double(cue.frameLength) / format.sampleRate,
+                        seed: config.seed &+ UInt64(cueIndex))
+                    let elapsed = ContinuousClock.now - started
+                    let totalMs = Double(elapsed.components.seconds) * 1000 + Double(elapsed.components.attoseconds) / 1e15
+                    dialogueTimings.append(["cue": cueIndex, "totalMs": totalMs])
+                    chopEvents += hits.map { hit in
+                        ["frame": Int((hit.time * format.sampleRate).rounded()), "sourceStart": hit.source.lowerBound,
+                         "sourceEnd": hit.source.upperBound, "speed": hit.speed, "articulation": hit.articulation.rawValue, "cue": cueIndex, "reversed": hit.reversed,
+                         "durationFrames": Int(hit.buffer.frameLength)]
+                    }
+                    archive.begin(.init(buffer: cue, gain: 0.9, fadeIn: 0.5, label: "offline fixture",
+                                        activity: ArchiveAudioMath.activity(cue), chops: hits), now: time)
+                } else {
+                    let token = cueIndex + 1
+                    let film = reel.isEmpty ? nil : reel[cueIndex % reel.count]
+                    let source = DialogueSource(contentID: film?.id ?? "fixture", cueToken: token, buffer: cue,
+                                                sourceStart: film?.offset ?? 0, rate: 1)
+                    let seconds = Double(cue.frameLength) / format.sampleRate
+                    let reuse = director.cached(source)
+                    var speech = reuse?.analysis.speech ?? []
+                    var classifyMs = 0.0
+                    if reuse == nil {
+                        let started = ContinuousClock.now
+                        speech = await LofiSpeechFocus.classify(cue, seconds: seconds, budget: DialogueCueCoordinator.classifyBudget)
+                        classifyMs = DialogueCueCoordinator.ms(ContinuousClock.now - started)
+                    }
+                    let take = Int((Double(cursor) / clock.framesPerBeat + 0.01) / 64)
+                    let info = LofiTransportInfo(revision: 1, takeIndex: take, phraseAtTakeStart: take * LofiDrumTake.phraseCount,
+                                                 origin: Double(take * takeFrames) / format.sampleRate,
+                                                 beatDuration: clock.beatDuration, nextBeatDuration: nil, seed: config.seed,
+                                                 options: options, timing: (takes[take] ?? drums).timing)
+                    let window = DialogueCueCoordinator.window(due: time, span: seconds, transport: info)
+                    let built = DialogueCueCoordinator.build(source: source, speech: speech, transcript: nil, transport: info,
+                                                             window: window, earliestStart: time + DialogueCueCoordinator.commitMargin,
+                                                             memory: memory, seed: config.seed &+ UInt64(cueIndex),
+                                                             classifyMs: classifyMs, reuse: reuse)
+                    if reuse == nil { director.store(source, analysis: built.analysis, bank: built.bank) }
+                    memory = built.memory
+                    DialogueCueCoordinator.report(built, cue: token, lead: built.firstStart.map { $0 - time })
+                    dialogueTimings.append(built.timings.dictionary(cue: cueIndex))
+                    let families = Dictionary(built.plan.blocks.map { ($0.phrase, $0.family.rawValue) }, uniquingKeysWith: { a, _ in a })
+                    let bankID = String(built.plan.bankID, radix: 16)
+                    chopEvents += built.chops.map { chop in
+                        let e = chop.event
+                        let pad = built.bank?.pad(e.padID)
+                        return ["frame": Int((e.startTime * format.sampleRate).rounded()),
+                                "sourceStart": pad?.frames.lowerBound ?? 0, "sourceEnd": pad?.frames.upperBound ?? 0,
+                                "speed": e.transform.playbackRate, "articulation": e.role.rawValue, "cue": cueIndex,
+                                "reversed": false, "durationFrames": Int(chop.buffer.frameLength),
+                                "padID": e.padID, "role": e.role.rawValue, "family": families[e.block] ?? "",
+                                "block": e.block, "protected": e.protected,
+                                "accentFrame": Int((e.accentTime * format.sampleRate).rounded()),
+                                "transform": e.transform.name, "text": e.text.map { $0 as Any } ?? NSNull(),
+                                "committedFrame": cursor, "bankID": bankID, "slot": e.slot] as [String: Any]
+                    }
+                    archive.begin(.init(buffer: cue, gain: 0.9, fadeIn: 0.5, label: "offline fixture",
+                                        activity: ArchiveAudioMath.activity(cue), token: token), now: time)
+                    archive.perform(.init(token: token, revision: 0, chops: built.chops), now: time)
                 }
-                archive.begin(.init(buffer: cue, gain: 0.9, fadeIn: 0.5, label: "offline fixture",
-                                    activity: ArchiveAudioMath.activity(cue), chops: hits), now: time)
                 cueIndex += 1
             }
             if cursor > 0 && cursor < scoreFrames && cursor.isMultiple(of: clock.frameCount) {
@@ -352,6 +410,17 @@ struct LofiMixRenderTests {
         manifest["diagnostics"] = LofiCaptureHooks.reports
         try Self.write(manifest, file: "manifest.json", in: config.out)
         try Self.write(score, file: "score.json", in: config.out)
+    }
+
+    /// `diagnostics.landmarks[]` (plan 3.2): one take's kick and snare attacks in capture frames.
+    private static func landmarkReport(_ take: LofiDrumTake, take index: Int, offset: Int, limit: Int) -> [String: Any] {
+        func marks(_ kind: LofiDrumLandmark.Kind) -> [[String: Any]] {
+            take.landmarks.filter { $0.kind == kind && offset + $0.attackFrame < limit }.map {
+                ["frame": offset + $0.attackFrame, "peakFrame": offset + $0.peakFrame,
+                 "strength": Double($0.strength), "confidence": Double($0.confidence)]
+            }
+        }
+        return ["take": index, "name": take.name ?? "fixture", "kicks": marks(.kick), "snares": marks(.snare)]
     }
 
     private static func write(_ object: Any, file: String, in directory: URL) throws {

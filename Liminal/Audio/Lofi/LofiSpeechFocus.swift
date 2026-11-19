@@ -4,7 +4,7 @@ import Synchronization
 
 /// Per-picture speech evidence. The footage worker owns each analyzer and only
 /// processes the portion of the soundtrack which the sampler can actually use.
-nonisolated final class LofiSpeechFocus: NSObject, SNResultsObserving {
+nonisolated final class LofiSpeechFocus: NSObject, SNResultsObserving, @unchecked Sendable {
     struct Window {
         let range: Range<Double>
         let speech: Double
@@ -35,6 +35,77 @@ nonisolated final class LofiSpeechFocus: NSObject, SNResultsObserving {
         return observer.windows.withLock { $0 }
     }
 
+    /// Bounded classification for the dialogue coordinator (plan 4.2 step 7). The analysis runs on a
+    /// utility queue; whatever windows have arrived when `budget` seconds pass (or the task is
+    /// cancelled) are returned at once, without blocking a thread on a semaphore.
+    static func classify(_ source: AVAudioPCMBuffer, seconds: Double, budget: Double) async -> [Window] {
+        let count = min(Int(source.frameLength), Int(max(0, min(32, seconds)) * source.format.sampleRate))
+        guard count > 0, budget > 0, let channel = source.floatChannelData?[0],
+              let mono = AVAudioFormat(standardFormatWithSampleRate: source.format.sampleRate, channels: 1),
+              let input = AVAudioPCMBuffer(pcmFormat: mono, frameCapacity: AVAudioFrameCount(count)),
+              let request = try? SNClassifySoundRequest(classifierIdentifier: .version1) else { return [] }
+        input.frameLength = AVAudioFrameCount(count)
+        input.floatChannelData![0].update(from: channel, count: count)
+        let observer = LofiSpeechFocus()
+        let analyzer = SNAudioStreamAnalyzer(format: mono)
+        request.windowDuration = CMTime(seconds: 1, preferredTimescale: 1000)
+        request.overlapFactor = 0.5
+        do { try analyzer.add(request, withObserver: observer) } catch { return [] }
+        let delivery = Delivery()
+        let work = Analysis(analyzer: analyzer, input: input)
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<[Window], Never>) in
+                delivery.arm(continuation)
+                observer.onComplete = { [observer] in delivery.resume(observer.windows.withLock { $0 }) }
+                if Task.isCancelled { delivery.resume(observer.windows.withLock { $0 }) }
+                DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + budget) { [observer] in
+                    delivery.resume(observer.windows.withLock { $0 })
+                }
+                DispatchQueue.global(qos: .utility).async {
+                    work.analyzer.analyze(work.input, atAudioFramePosition: 0)
+                    work.analyzer.completeAnalysis()
+                    work.analyzer.removeAllRequests()
+                }
+            }
+        } onCancel: { [observer] in
+            delivery.resume(observer.windows.withLock { $0 })
+        }
+    }
+
+    /// Resumes a continuation exactly once, from whichever of completion, budget or cancellation comes first.
+    private final class Delivery: @unchecked Sendable {
+        private let state = Mutex<(continuation: CheckedContinuation<[Window], Never>?, pending: [Window]?)>((nil, nil))
+
+        func arm(_ continuation: CheckedContinuation<[Window], Never>) {
+            let early = state.withLock { s -> [Window]? in
+                if let pending = s.pending { return pending }
+                s.continuation = continuation
+                return nil
+            }
+            if let early { continuation.resume(returning: early) }
+        }
+
+        func resume(_ windows: [Window]) {
+            let continuation = state.withLock { s -> CheckedContinuation<[Window], Never>? in
+                defer { s.continuation = nil }
+                if s.continuation == nil, s.pending == nil { s.pending = windows }
+                return s.continuation
+            }
+            continuation?.resume(returning: windows)
+        }
+    }
+
+    private struct Analysis: @unchecked Sendable {
+        let analyzer: SNAudioStreamAnalyzer
+        let input: AVAudioPCMBuffer
+    }
+
+    private let completion = Mutex<(@Sendable () -> Void)?>(nil)
+    private var onComplete: (@Sendable () -> Void)? {
+        get { completion.withLock { $0 } }
+        set { completion.withLock { $0 = newValue } }
+    }
+
     func request(_ request: SNRequest, didProduce result: SNResult) {
         guard let result = result as? SNClassificationResult else { return }
         func confidence(_ id: String) -> Double { result.classification(forIdentifier: id)?.confidence ?? 0 }
@@ -46,8 +117,14 @@ nonisolated final class LofiSpeechFocus: NSObject, SNResultsObserving {
         windows.withLock { $0.append(window) }
     }
 
-    func requestDidComplete(_ request: SNRequest) { finished.signal() }
-    func request(_ request: SNRequest, didFailWithError error: Error) { finished.signal() }
+    func requestDidComplete(_ request: SNRequest) {
+        finished.signal()
+        onComplete?()
+    }
+    func request(_ request: SNRequest, didFailWithError error: Error) {
+        finished.signal()
+        onComplete?()
+    }
 
     /// Duration-weighted confidence lets spoken words over a music bed survive.
     /// In ambiguous material retain the envelope-based candidate at lower priority.

@@ -19,8 +19,54 @@ nonisolated final class ArchiveVoice {
         /// Seeded by the footage piece so successive cues vary in how clearly they emerge.
         var claritySeed: Float = 0.75
         var activity: [Float] = []
+        /// Legacy sampler hits (absolute transport seconds), converted to the same scheduled-chop list as plans.
         var chops: [LofiDialogueSampler.Hit] = []
+        /// The footage service's cue token. Plans with this token belong to this cue. Nil means a new one.
+        var token: Int? = nil
     }
+
+    /// A dialogue performance for one cue (plan 3.6, 6.3), posted with `MusicControl.archiveChops`.
+    /// Chop start times are transport seconds: host uptime live, conductor seconds in manual rendering.
+    struct ChopPlan: @unchecked Sendable {
+        let token: Int
+        /// 0 for the acoustic plan; a higher revision replaces stored chops from `replaceFrom`.
+        let revision: Int
+        let replaceFrom: Double
+        let chops: [DialogueChop]
+        /// The chops open drop windows in the film bed (the existing ducking).
+        let bedDuck: Bool
+
+        init(token: Int, revision: Int, replaceFrom: Double = -.infinity, chops: [DialogueChop], bedDuck: Bool = true) {
+            self.token = token
+            self.revision = revision
+            self.replaceFrom = replaceFrom
+            self.chops = chops
+            self.bedDuck = bedDuck
+        }
+    }
+
+    /// One statement on the persistent chop timeline.
+    private struct ScheduledChop {
+        let token: Int
+        /// Transport seconds.
+        let start: Double
+        let buffer: AVAudioPCMBuffer
+        let duck: Bool
+        var end: Double { start + Double(buffer.frameLength) / buffer.format.sampleRate }
+    }
+
+    /// Sample 0 of the chop player: transport seconds and conductor seconds.
+    private struct ChopTimeline {
+        let anchor: Double
+        let conductorAnchor: Double
+        /// Seconds a chop must still be ahead of `now` to be queued (presentation latency plus render lead).
+        let margin: Double
+    }
+
+    /// Chops are queued this far ahead of their start on every modulation tick.
+    static let chopQueueAhead = 1.0
+    /// The chop echo and room may ring this long after the cue's end before the chop fader closes.
+    static let chopTailSeconds = 2.0
 
     /// Node wrapper for an `AVAudioPlayerNode` (AudioKit's `AudioPlayer` adds a mixer and file handling we
     /// do not need). Connected in the engine's format; buffers must use `format`.
@@ -103,13 +149,29 @@ nonisolated final class ArchiveVoice {
     private var dropWindows: [Range<Double>] = []
     private var lastBedGain: Float = 1
     private var lastChopGain: Float = 0
+    /// Not yet queued chops, sorted by start, and the ones already on the player (pruned).
+    private var storedChops: [ScheduledChop] = []
+    private var queuedChops: [ScheduledChop] = []
+    private var timeline: ChopTimeline?
+    /// The newest cue token whose bed has begun; plans for older tokens are stale.
+    private var currentCueToken: Int?
+    /// Highest plan revision stored per cue token.
+    private var planRevisions: [Int: Int] = [:]
+    /// Conductor seconds after which the chop fader closes (the cue's end plus the tail).
+    private var chopsUntil = -Double.infinity
+    private var lastTime = 0.0
 
-    private func updateChopGain() {
-        let gain: Float = beatLocked && playing ? min(cueGain, 1.15) * strip.fadeValue : 0
+    /// The chop fader follows the Footage audio setting and beat lock, with its own 50 ms ramp.
+    /// It no longer follows the bed's fade-in (plan 6.3).
+    private func updateChopGain(at t: Double) {
+        let gain: Float = beatLocked && t < chopsUntil ? min(cueGain, 1.15) : 0
         guard abs(gain - lastChopGain) > 0.0001 else { return }
         ParamRamp.setGain(chopOutput, gain, over: 0.05)
         lastChopGain = gain
     }
+
+    /// Diagnostics and tests: chops stored but not yet on the player, and those queued.
+    var chopCounts: (stored: Int, queued: Int) { (storedChops.count, queuedChops.count) }
 
     private func blendSoundtrack(at time: Double) {
         let underDrop = dropWindows.contains { $0.contains(time + 0.055) }
@@ -127,13 +189,10 @@ nonisolated final class ArchiveVoice {
     }
 
     func setBeatLocked(_ enabled: Bool) {
-        if !enabled {
-            chops.player.stop()
-            dropWindows.removeAll()
-        }
+        if !enabled { stopChopTimeline() }
         beatLocked = enabled
         blendSoundtrack(at: cueStart)
-        updateChopGain()
+        updateChopGain(at: lastTime)
         if playing { setGain(cueGain) }
     }
 
@@ -212,8 +271,8 @@ nonisolated final class ArchiveVoice {
         updateMix(progress: 0)
         p.scheduleBuffer(cue.buffer, at: nil, options: [], completionHandler: nil)
         p.play()
-        scheduleChops(cue.chops, now: now)
         playing = true
+        beginChops(for: cue, now: now, seconds: seconds)
         label = cue.label
         stopAt = nil
         endAt = now + seconds
@@ -221,30 +280,119 @@ nonisolated final class ArchiveVoice {
         LMLog.audio.info("📼🔊 archive audio begin \"\(cue.label, privacy: .public)\" \(String(format: "%.1f", seconds), privacy: .public)s gain=\(String(format: "%.1f", 20 * log10(max(cue.gain, 1e-6))), privacy: .public)dB fadeIn=\(String(format: "%.1f", cue.fadeIn), privacy: .public)s")
     }
 
-    private func scheduleChops(_ hits: [LofiDialogueSampler.Hit], now: Double) {
-        let player = chops.player
-        player.stop()
-        let offline = player.engine?.isInManualRenderingMode == true
-        let latency = offline ? 0 : player.outputPresentationLatency
-        // All buffers use one player sample timeline. The live anchor is the same
-        // host clock as the drum player; compensate for the route's presentation latency.
-        let lead = max(0.06, latency + 0.025)
-        let host = mach_absolute_time()
-        let anchor = offline ? now : Double(DispatchTime.now().uptimeNanoseconds) / 1e9 + lead + latency
-        let valid = beatLocked ? hits.filter { $0.time >= anchor } : []
-        dropWindows = valid.map { hit in
-            let start = now + (hit.time - anchor) + (offline ? 0 : lead)
-            return start..<(start + Double(hit.buffer.frameLength) / format.sampleRate)
+    // MARK: Chop timeline (plan 6.3)
+
+    /// A new bed adopts its token: older cues' unqueued chops are dropped (the old bed is fading out),
+    /// and legacy sampler hits join the same scheduled list as plan chops.
+    private func beginChops(for cue: Cue, now: Double, seconds: Double) {
+        lastTime = now
+        let token = cue.token ?? (max(currentCueToken ?? 0, planRevisions.keys.max() ?? 0) + 1)
+        currentCueToken = token
+        storedChops.removeAll { $0.token < token }
+        planRevisions = planRevisions.filter { $0.key >= token }
+        chopsUntil = now + seconds + Self.chopTailSeconds
+        if !cue.chops.isEmpty, beatLocked {
+            planRevisions[token] = max(planRevisions[token] ?? 0, 0)
+            store(cue.chops.map { ScheduledChop(token: token, start: $0.time, buffer: $0.buffer, duck: true) })
+            LMLog.audio.info("Lo-Fi film sampler stored \(cue.chops.count) hits for this picture")
         }
         blendSoundtrack(at: now)
-        guard !valid.isEmpty else { return }
-        for hit in valid {
-            let frame = AVAudioFramePosition(((hit.time - anchor) * format.sampleRate).rounded())
-            player.scheduleBuffer(hit.buffer, at: AVAudioTime(sampleTime: frame, atRate: format.sampleRate))
+        updateChopGain(at: now)
+    }
+
+    /// Stores a plan's chops. Stale tokens and revisions are ignored; a higher revision replaces
+    /// stored, not yet queued chops at or after `replaceFrom`. Queued audio is never moved.
+    func perform(_ plan: ChopPlan, now: Double) {
+        lastTime = now
+        guard beatLocked else { return }
+        if let current = currentCueToken, plan.token < current {
+            LMLog.audio.info("Lo-Fi dialogue plan for stale cue \(plan.token) ignored")
+            return
         }
-        if offline { player.play() }
-        else { player.play(at: AVAudioTime(hostTime: host + AVAudioTime.hostTime(forSeconds: lead))) }
-        LMLog.audio.info("Lo-Fi film sampler scheduled \(valid.count) hits for this picture")
+        if let stored = planRevisions[plan.token], plan.revision <= stored { return }
+        planRevisions[plan.token] = plan.revision
+        storedChops.removeAll { $0.token == plan.token && $0.start >= plan.replaceFrom }
+        let queuedEnd = queuedChops.filter { $0.token == plan.token }.map(\.end).max() ?? -.infinity
+        let incoming = plan.chops.map {
+            ScheduledChop(token: plan.token, start: $0.event.startTime, buffer: $0.buffer, duck: plan.bedDuck)
+        }.filter { $0.start >= plan.replaceFrom && $0.start >= queuedEnd }
+        store(incoming)
+        LMLog.audio.info("Lo-Fi dialogue plan cue=\(plan.token) revision=\(plan.revision) stored \(incoming.count) chops")
+        blendSoundtrack(at: now)
+        updateChopGain(at: now)
+    }
+
+    private func store(_ chops: [ScheduledChop]) {
+        guard !chops.isEmpty else { return }
+        storedChops += chops
+        storedChops.sort { $0.start < $1.start }
+    }
+
+    private var isOffline: Bool { chops.player.engine?.isInManualRenderingMode == true }
+
+    /// Transport seconds now: host uptime live, conductor seconds in manual rendering.
+    private func transportNow(_ t: Double) -> Double {
+        isOffline ? t : Double(DispatchTime.now().uptimeNanoseconds) / 1e9
+    }
+
+    /// Starts the persistent chop player once per beat-locked session. The live anchor is the same
+    /// host clock as the drum player, compensated for the route's presentation latency (read once).
+    private func startChopTimeline(at t: Double) -> ChopTimeline {
+        if let timeline { return timeline }
+        let player = chops.player
+        let made: ChopTimeline
+        if isOffline {
+            made = ChopTimeline(anchor: t, conductorAnchor: t, margin: 0)
+            player.play()
+        } else {
+            let latency = player.outputPresentationLatency
+            let lead = max(0.06, latency + 0.025)
+            let host = mach_absolute_time()
+            let anchor = Double(DispatchTime.now().uptimeNanoseconds) / 1e9 + lead + latency
+            made = ChopTimeline(anchor: anchor, conductorAnchor: t + lead, margin: latency + 0.03)
+            player.play(at: AVAudioTime(hostTime: host + AVAudioTime.hostTime(forSeconds: lead)))
+        }
+        timeline = made
+        return made
+    }
+
+    private func stopChopTimeline() {
+        chops.player.stop()
+        timeline = nil
+        storedChops.removeAll()
+        queuedChops.removeAll()
+        planRevisions.removeAll()
+        dropWindows.removeAll()
+    }
+
+    /// Queues every stored chop that starts within the next second at its sample time on the
+    /// persistent timeline; chops already in the past are dropped. Only the modulation tick calls
+    /// this: its time is exact in manual rendering (a control's `now` is one conductor step old),
+    /// and plans always arrive at least 0.3 s ahead, more than the 0.1 s tick.
+    private func queueDueChops(at t: Double) {
+        let now = transportNow(t)
+        queuedChops.removeAll { $0.end < now - 1 }
+        dropWindows.removeAll { $0.upperBound < t - 1 }
+        guard beatLocked, let first = storedChops.first, first.start < now + Self.chopQueueAhead else { return }
+        let timeline = startChopTimeline(at: t)
+        let rate = format.sampleRate
+        var dropped = 0
+        while let chop = storedChops.first, chop.start < now + Self.chopQueueAhead {
+            storedChops.removeFirst()
+            let frame = AVAudioFramePosition(((chop.start - timeline.anchor) * rate).rounded())
+            guard chop.start >= now + timeline.margin, frame >= 0 else {
+                dropped += 1
+                continue
+            }
+            chops.player.scheduleBuffer(chop.buffer, at: AVAudioTime(sampleTime: frame, atRate: rate),
+                                        options: [], completionHandler: nil)
+            queuedChops.append(chop)
+            if chop.duck {
+                let start = timeline.conductorAnchor + (chop.start - timeline.anchor)
+                dropWindows.append(start..<(start + Double(chop.buffer.frameLength) / rate))
+            }
+        }
+        if dropped > 0 { LMLog.audio.warning("Lo-Fi dialogue dropped \(dropped) late chops") }
     }
 
     /// Fade out over `fade` seconds; the player stops once the fade is complete.
@@ -253,6 +401,10 @@ nonisolated final class ArchiveVoice {
         guard playing else { return }
         strip.fade(to: 0, over: fade, now: now)
         stopAt = now + fade + 0.3
+        // Chops inside the fade still sound; later ones are dropped and the fader closes after the tail.
+        let cutoff = transportNow(now) + fade
+        if let token = currentCueToken { storedChops.removeAll { $0.token <= token && $0.start > cutoff } }
+        chopsUntil = min(chopsUntil, now + fade + Self.chopTailSeconds)
         LMLog.audio.info("📼🔊 archive audio end fade=\(String(format: "%.1f", fade), privacy: .public)s")
     }
 
@@ -271,14 +423,18 @@ nonisolated final class ArchiveVoice {
         powerDown()
     }
 
+    /// Engine stop and reset: the bed and the chop timeline stop.
     func powerDown() {
-        if playing {
-            source.player.stop()
-            chops.player.stop()
-        }
-        dropWindows.removeAll()
+        stopChopTimeline()
+        chopsUntil = -.infinity
+        releaseBed()
+    }
+
+    /// The bed finished (or was replaced): the persistent chop timeline keeps running.
+    private func releaseBed() {
+        if playing { source.player.stop() }
         playing = false
-        updateChopGain()
+        updateChopGain(at: lastTime)
         stopAt = nil
         endAt = nil
         label = nil
@@ -288,6 +444,8 @@ nonisolated final class ArchiveVoice {
 
     /// 10 Hz with the other strips.
     func modulate(t: Double) {
+        lastTime = t
+        queueDueChops(at: t)
         if playing {
             // A buffer that ran out (it ends with its own 80 ms fade) is released like a finished fade.
             if let e = endAt, t >= e + 0.2, stopAt == nil { stopAt = t }
@@ -297,7 +455,7 @@ nonisolated final class ArchiveVoice {
                     start(next, now: t)
                 } else {
                     strip.fade(to: 0, over: 0, now: t)
-                    powerDown()
+                    releaseBed()
                 }
             }
             if playing {
@@ -307,7 +465,7 @@ nonisolated final class ArchiveVoice {
             }
         }
         strip.tick(now: t)
-        updateChopGain()
+        updateChopGain(at: t)
         let window = Int(max(0, t - cueStart) / ArchiveAudioMath.activityWindow)
         speechActivity = playing && activityEnvelope.indices.contains(window) ? presence * activityEnvelope[window] : 0
     }

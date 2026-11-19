@@ -295,6 +295,116 @@ struct ArchiveVoiceRenderTests {
         #expect(during > -60 && during < -30)
         #expect(after < during - 25)                // the reverb tail is dying away
     }
+
+    // MARK: Incremental chop scheduling (plan 6.3)
+
+    @MainActor private struct ChopProbe {
+        let engine: GenerativeEngine
+        let rate: Double
+        let impulse: AVAudioPCMBuffer
+
+        init(seed: UInt64) throws {
+            engine = GenerativeEngine(seed: seed)
+            let format = engine.archiveFormat
+            rate = format.sampleRate
+            impulse = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 64))
+            impulse.frameLength = 64
+            for c in 0..<Int(format.channelCount) {
+                for i in 0..<64 { impulse.floatChannelData![c][i] = i == 0 ? 1 : 0 }
+            }
+        }
+
+        func silence(_ seconds: Double) throws -> AVAudioPCMBuffer {
+            let n = AVAudioFrameCount(seconds * rate)
+            let b = try #require(AVAudioPCMBuffer(pcmFormat: engine.archiveFormat, frameCapacity: n))
+            b.frameLength = n
+            for c in 0..<Int(b.format.channelCount) { b.floatChannelData![c].update(repeating: 0, count: Int(n)) }
+            return b
+        }
+
+        func chop(at start: Double) -> DialogueChop {
+            let event = DialogueEvent(padID: 0, role: .stab, block: 0, slot: 0, accentTime: start, startTime: start,
+                                      duration: 64 / rate, gainDB: 0, protected: false, chokeAt: nil, text: nil,
+                                      transform: .native, padKey: 1, snareLanded: false)
+            return DialogueChop(event: event, buffer: impulse)
+        }
+
+        /// Renders the chop output (and the silent bed, so its player is attached) and returns channel 0.
+        func render(seconds: Double, onStep: @escaping (Double) -> Void) throws -> [Float] {
+            engine.engine.output = Mixer(engine.archive.strip.outputs.dry, engine.archive.chopOutput)
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent("chop-probe-\(UUID().uuidString).wav")
+            defer {
+                try? FileManager.default.removeItem(at: url)
+                try? FileManager.default.removeItem(at: url.deletingPathExtension().appendingPathExtension("score.json"))
+            }
+            try engine.renderOffline(seconds: seconds, to: url, archiveBeatDuration: 0.8, onStep: onStep)
+            let file = try AVAudioFile(forReading: url)
+            let pcm = try #require(AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)))
+            try file.read(into: pcm)
+            return Array(UnsafeBufferPointer(start: pcm.floatChannelData![0], count: Int(pcm.frameLength)))
+        }
+
+        /// First sample above `threshold` within 50 ms of `time`.
+        func onset(_ x: [Float], near time: Double, threshold: Float = 0.3) -> Int? {
+            let lo = max(0, Int((time - 0.05) * rate)), hi = min(x.count, Int((time + 0.05) * rate))
+            return (lo..<hi).first { abs(x[$0]) > threshold }
+        }
+    }
+
+    @Test func planChopsLandWithinOneSampleAndAReplacementKeepsEarlierQueuedChops() throws {
+        let probe = try ChopProbe(seed: 5)
+        let bed = try probe.silence(6)
+        let early = 1.234567, queued = 2.2, replaced = 3.5, replacement = 3.111, stale = 4.05
+        var begun = false, planned = false, replacing = false, stalePosted = false
+        let x = try probe.render(seconds: 4.6) { t in
+            let engine = probe.engine
+            if !begun, t >= 0.2 {
+                begun = true
+                engine.post(.archiveBegin(ArchiveVoice.Cue(buffer: bed, gain: 1, fadeIn: 0.1, label: "plan", token: 1)))
+            }
+            // Posted before the chop timeline has started.
+            if !planned, t >= 0.3 {
+                planned = true
+                engine.post(.archiveChops(.init(token: 1, revision: 0, chops: [early, queued, replaced].map(probe.chop))))
+            }
+            // Posted during playback, after the 2.2 s chop is queued and before 3.5 s is.
+            if !replacing, t >= 2.3 {
+                replacing = true
+                engine.post(.archiveChops(.init(token: 1, revision: 1, replaceFrom: 2.5, chops: [probe.chop(at: replacement)])))
+            }
+            if !stalePosted, t >= 2.4 {
+                stalePosted = true
+                engine.post(.archiveChops(.init(token: 1, revision: 1, chops: [probe.chop(at: stale)])))
+                engine.post(.archiveChops(.init(token: 0, revision: 5, chops: [probe.chop(at: stale)])))
+            }
+        }
+        for time in [early, queued, replacement] {
+            let found = try #require(probe.onset(x, near: time), "no chop near \(time) s")
+            let planned = Int((time * probe.rate).rounded())
+            #expect(abs(found - planned) <= 1, "chop at \(time) s landed \(found - planned) samples off")
+        }
+        #expect(probe.onset(x, near: replaced) == nil, "the replaced chop is gone")
+        #expect(probe.onset(x, near: stale) == nil, "stale revisions and tokens are ignored")
+    }
+
+    @Test func chopGainIsIndependentOfTheBedFadeIn() throws {
+        let probe = try ChopProbe(seed: 6)
+        let bed = try probe.silence(8)
+        var begun = false, planned = false
+        let x = try probe.render(seconds: 2) { t in
+            if !begun, t >= 0.2 {
+                begun = true
+                // A slow 5 s fade-in: the old fade-coupled gain was about 0.05 of nominal at 1 s.
+                probe.engine.post(.archiveBegin(ArchiveVoice.Cue(buffer: bed, gain: 1, fadeIn: 5, label: "fade", token: 3)))
+                planned = true
+                probe.engine.post(.archiveChops(.init(token: 3, revision: 0, chops: [probe.chop(at: 1.0)])))
+            }
+            _ = planned
+        }
+        let found = try #require(probe.onset(x, near: 1.0, threshold: 0.05))
+        // The dry chop path is 0.72; the fader is min(cueGain, 1.15) = 1 regardless of the bed fade.
+        #expect(abs(x[found]) > 0.65 && abs(x[found]) < 0.8, "chop peak \(x[found])")
+    }
 }
 
 struct LofiDialogueSamplerTests {
