@@ -14,10 +14,57 @@ struct LofiLiveBusTests {
     // MARK: Harness
 
     /// Records channel 0 of each tapped node on the render timeline.
+    ///
+    /// AVAudioEngine delivers tap buffers on its own thread, also in manual rendering, a few render
+    /// calls behind the render (0.1 s buffers here). The recorder is therefore locked, and the harness
+    /// waits for the taps to catch up with the render before it removes them and reads the samples.
+    /// Removing them straight after the last render call dropped the final buffers whenever that
+    /// thread was starved, which read as a level a few decibels low at the end of the capture.
+    /// Call `waitForDelivery` while the engine still renders.
     private final class Recorder: @unchecked Sendable {
-        var samples: [[Float]]
-        init(count: Int, frames: Int) { samples = Array(repeating: [Float](repeating: 0, count: frames), count: count) }
+        private let lock = NSLock()
+        private var samples: [[Float]]
+        private var written: [Int]
+
+        init(count: Int, frames: Int) {
+            samples = Array(repeating: [Float](repeating: 0, count: frames), count: count)
+            written = Array(repeating: 0, count: count)
+        }
+
+        func write(_ k: Int, start: Int, data: UnsafePointer<Float>, count: Int) {
+            lock.lock(); defer { lock.unlock() }
+            let limit = samples[k].count
+            let from = max(0, -start), to = min(count, limit - start)
+            if to > from {
+                samples[k].withUnsafeMutableBufferPointer { out in
+                    for i in from..<to { out[start + i] = data[i] }
+                }
+            }
+            written[k] = max(written[k], start + count)
+        }
+
+        /// The fewest frames any tap has delivered so far.
+        var delivered: Int { lock.withLock { written.min() ?? 0 } }
+
+        func channels(prefix frames: Int) -> [[Float]] { lock.withLock { samples.map { Array($0.prefix(frames)) } } }
+
+        /// Blocks until every tap has delivered `frames`, or until delivery has made no progress for
+        /// `stall` seconds. Returns the frames every tap delivered.
+        func waitForDelivery(of frames: Int, stall: TimeInterval = 30) -> Int {
+            var last = delivered
+            var lastProgress = Date()
+            while last < frames, Date().timeIntervalSince(lastProgress) < stall {
+                Thread.sleep(forTimeInterval: 0.002)
+                let now = delivered
+                if now > last { last = now; lastProgress = Date() }
+            }
+            return last
+        }
     }
+
+    /// Rendered past the requested length so the taps deliver everything asked for while the engine
+    /// still runs: tap buffers are 0.1 s at 48 kHz and arrive a few render calls late.
+    private static let tapSlackSeconds = 0.5
 
     /// Renders `seconds` through `engine` (beat-locked when `beat` is set) and returns the taps' channel 0.
     private func render(_ engine: GenerativeEngine, seconds: Double, beat: Double?, taps: [Node],
@@ -33,23 +80,28 @@ struct LofiLiveBusTests {
             try? FileManager.default.removeItem(at: url.deletingPathExtension().appendingPathExtension("score.json"))
         }
         var installed = false
-        try engine.renderOffline(seconds: seconds, to: url, archiveBeatDuration: beat, configure: configure, onStep: { t in
+        var delivered: Int?
+        try engine.renderOffline(seconds: seconds + Self.tapSlackSeconds, to: url, archiveBeatDuration: beat,
+                                 configure: configure, onStep: { t in
             if !installed {
                 installed = true
                 for (k, node) in taps.enumerated() {
                     node.avAudioNode.installTap(onBus: 0, bufferSize: 1024, format: nil) { buffer, time in
                         guard let data = buffer.floatChannelData?[0] else { return }
-                        let start = Int(time.sampleTime)
-                        for i in 0..<Int(buffer.frameLength) where start + i >= 0 && start + i < recorder.samples[k].count {
-                            recorder.samples[k][start + i] = data[i]
-                        }
+                        recorder.write(k, start: Int(time.sampleTime), data: data, count: Int(buffer.frameLength))
                     }
                 }
             }
-            onStep(t)
+            if t < seconds {
+                onStep(t)
+            } else if delivered == nil, t >= seconds + 0.6 * Self.tapSlackSeconds {
+                // The buffers that cover `frames` were rendered at least 0.2 s ago; wait for their delivery.
+                delivered = recorder.waitForDelivery(of: frames)
+            }
         })
         for node in taps { node.avAudioNode.removeTap(onBus: 0) }
-        return recorder.samples.map { Array($0.prefix(frames)) }
+        try #require((delivered ?? 0) >= frames, "taps delivered \(delivered ?? 0) of \(frames) frames")
+        return recorder.channels(prefix: frames)
     }
 
     private func buffer(_ format: AVAudioFormat, seconds: Double, _ value: (Int, Double) -> Float) throws -> AVAudioPCMBuffer {

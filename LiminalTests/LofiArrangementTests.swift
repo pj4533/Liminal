@@ -334,14 +334,15 @@ struct LofiArrangementTests {
     @Test(.responsivePool) func phraseRenderTimeStaysWithinBudget() throws {
         var best = Double.infinity
         for _ in 0..<3 {
-            let start = ContinuousClock.now
-            for index in 0..<8 {
-                _ = try LofiRenderer.render(seed: 1042, section: LofiScore.section(at: index), options: .init(tempo: 70),
-                                            sampleRate: 48_000, drift: .init(seed: 1042),
-                                            startBeat: Double(index) * LofiClock.beats)
-            }
-            let elapsed = (ContinuousClock.now - start).components
-            best = min(best, Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18)
+            // Load-corrected CPU time, so the parallel suite does not inflate it (see `ForegroundTiming`).
+            let cost = try ForegroundTiming.measure {
+                for index in 0..<8 {
+                    _ = try LofiRenderer.render(seed: 1042, section: LofiScore.section(at: index), options: .init(tempo: 70),
+                                                sampleRate: 48_000, drift: .init(seed: 1042),
+                                                startBeat: Double(index) * LofiClock.beats)
+                }
+            }.cost
+            best = min(best, cost.seconds)
         }
         let perPhrase = best / 8 * 1000
         print("LOFI_RENDER_TIME_PER_PHRASE_MS \(perPhrase) reference \(Self.referenceRenderMilliseconds)")

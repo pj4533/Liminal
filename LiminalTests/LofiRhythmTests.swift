@@ -324,15 +324,15 @@ struct LofiRhythmTests {
         for asset in LofiDrumLibrary.assets() {
             let recording = try LofiDrumLibrary.load(asset)
             let clock = LofiClock(tempo: asset.entry.bpm, sampleRate: asset.entry.sampleRate)
-            let started = Date()
-            let take = try LofiDrumTake(recording: recording, clock: clock)
-            let preparation = Date().timeIntervalSince(started)
+            // Load-corrected CPU time, so the parallel suite does not inflate it (see `ForegroundTiming`).
+            let (take, takeCost) = try ForegroundTiming.measure { try LofiDrumTake(recording: recording, clock: clock) }
+            let preparation = takeCost.seconds
             // Time the landmark pass alone on the prepared take (the taper does not matter here).
             let channels = try #require(take.buffer.floatChannelData)
             let count = Int(take.buffer.frameLength)
-            let detectStart = Date()
-            _ = try LofiDrumLandmarks.detect(left: channels[0], right: channels[1], count: count, sampleRate: clock.sampleRate)
-            let detection = Date().timeIntervalSince(detectStart)
+            let detection = try ForegroundTiming.measure {
+                _ = try LofiDrumLandmarks.detect(left: channels[0], right: channels[1], count: count, sampleRate: clock.sampleRate)
+            }.cost.seconds
             worstDetection = max(worstDetection, detection)
 
             let name = asset.entry.name

@@ -329,7 +329,7 @@ struct LofiMasterKernelTests {
         #expect(finalAmplitude > dbToGain(-20) * dbToGain(4))
     }
 
-    @Test(.responsivePool) func kernelRunsAtLeastTenTimesRealtimeInThisBuild() {
+    @Test(.responsivePool) func kernelRunsAtLeastTenTimesRealtimeInThisBuild() throws {
         var noise = Noise(state: 5)
         let seconds = 20.0
         let count = Int(Self.rate * seconds)
@@ -337,8 +337,8 @@ struct LofiMasterKernelTests {
         let right = (0..<count).map { _ in 1.5 * noise.next() }
         var outL = [Float](repeating: 0, count: count), outR = outL
         let kernel = LofiMasterKernel(sampleRate: Self.rate, maximumFrames: 512, settings: .lofi)
-        let clock = ContinuousClock()
-        let elapsed = clock.measure {
+        // Load-corrected CPU time, so the parallel suite does not inflate it (see `ForegroundTiming`).
+        let cost = try ForegroundTiming.measure {
             left.withUnsafeBufferPointer { l in
                 right.withUnsafeBufferPointer { r in
                     outL.withUnsafeMutableBufferPointer { ol in
@@ -354,10 +354,10 @@ struct LofiMasterKernelTests {
                     }
                 }
             }
-        }
-        let wall = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) * 1e-18
-        let factor = seconds / wall
-        print("Master kernel realtime factor at 512-frame blocks: \(factor)x (\(wall * 1000) ms for \(seconds) s)")
+        }.cost
+        let cpu = cost.seconds
+        let factor = seconds / cpu
+        print("Master kernel realtime factor at 512-frame blocks: \(factor)x (\(cpu * 1000) ms of CPU for \(seconds) s)")
         #expect(factor >= 10)
     }
 

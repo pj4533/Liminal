@@ -704,20 +704,27 @@ struct DialogueEngineTests {
 
     // MARK: Budget and logs
 
+    /// The budget is the CPU cost of the stages with the machine's load taken out (see
+    /// `ForegroundTiming`), so the parallel suite does not decide the result.
     @Test(.responsivePool) func prepareFinishesWithinTheStageBudget() throws {
         let fixture = DialogueFixtures.speech(DialogueFixtures.Options(seconds: 30, seed: 9))
         let snapshot = DialogueFixtures.snapshot(bpm: 70)
         var best = DialogueEngine.Timings(analyzeMs: .infinity)
+        var bestCost = ForegroundTiming.Cost.unmeasured
         for _ in 0..<3 {
-            var memory = DialoguePerformanceMemory()
-            let prepared = DialogueEngine.prepare(fixture.source(contentID: "budget"), speech: [], transcript: nil, snapshot: snapshot,
-                                                  window: 0..<snapshot.time(beat: 32), earliestStart: 0, memory: &memory, seed: 1)
+            let source = fixture.source(contentID: "budget")
+            let (prepared, cost) = try ForegroundTiming.measure {
+                var memory = DialoguePerformanceMemory()
+                return DialogueEngine.prepare(source, speech: [], transcript: nil, snapshot: snapshot,
+                                              window: 0..<snapshot.time(beat: 32), earliestStart: 0, memory: &memory, seed: 1)
+            }
             #expect(!prepared.chops.isEmpty)
             if prepared.timings.totalMs < best.totalMs { best = prepared.timings }
+            if cost.seconds < bestCost.seconds { bestCost = cost }
             let log = DialogueEngine.log(prepared.plan, bank: prepared.bank)
             #expect(JSONSerialization.isValidJSONObject(log))
         }
-        print("DIALOGUE-TIMINGS 30 s at 48 kHz: \(best.dictionary)")
-        #expect(best.totalMs < 400)
+        print("DIALOGUE-TIMINGS 30 s at 48 kHz: \(best.dictionary) cost \(bestCost)")
+        #expect(bestCost.milliseconds < 400, "\(bestCost); stages by wall clock \(best.dictionary)")
     }
 }

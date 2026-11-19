@@ -16,8 +16,15 @@ struct LofiProductionTests {
 
         av.stop()
         NotificationCenter.default.post(name: .AVAudioEngineConfigurationChange, object: av)
-        let deadline = ContinuousClock.now + .seconds(30)
-        while !av.isRunning && ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        // The recovery task needs the main actor after its 0.15 s sleep. Other main-actor tests render
+        // for tens of seconds at a time beside this one, so a wall-clock deadline can pass before the
+        // recovery has had one turn. Count polls instead: each sleep gives the main actor away, and
+        // the recovery is queued for it ahead of this test's next poll.
+        var polls = 0
+        while !av.isRunning && polls < 1500 {
+            try await Task.sleep(for: .milliseconds(20))
+            polls += 1
+        }
         #expect(av.isRunning && music.isPlaybackReady)
 
         av.stop()
