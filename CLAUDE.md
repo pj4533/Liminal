@@ -54,7 +54,7 @@ Automated test runs once exceeded the user's monthly Google budget. Any DEBUG la
 - `Liminal/Services/`: `SettingsService` (persistent settings), `EnvironmentService` (credentials).
 - `Liminal/Utils/DebugLaunchOptions.swift`: every debug launch flag, compiled out of Release. The flag table is in `docs/development.md`.
 - `LiminalTests/`, `LiminalUITests/`; `scripts/` (perf, shader bench, transition/footage clips, music renders and Lo-Fi analysis, archive curation); `tools/` (standalone Swift harnesses).
-- Docs: `docs/README.md` (index), `architecture.md`, `experience.md`, `development.md`, `decisions/` (rationale, with numbered items such as D34 and A30), `plans/` and `research/` (may describe unfinished or historical work). `codexupdates.md` and the older uppercase docs (`LIMINAL.md`, `PLATFORM_ARCHITECTURE.md`, `DUAL_PIPELINE_ARCHITECTURE.md`, …) predate current decisions. Check the source before relying on them.
+- Docs: `docs/README.md` (index), `architecture.md`, `experience.md`, `development.md`, `decisions/` (rationale, with numbered items such as D34 and A30), `plans/` and `research/` (may describe unfinished or historical work). The older uppercase docs (`LIMINAL.md`, `PLATFORM_ARCHITECTURE.md`, `DUAL_PIPELINE_ARCHITECTURE.md`, …) predate current decisions. Check the source before relying on them.
 
 ## Contracts to preserve
 
