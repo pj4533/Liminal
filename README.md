@@ -26,7 +26,7 @@ Liminal pairs evolving ambient music with surreal AI imagery, flowing visual eff
 
 ## An atmosphere that keeps changing
 
-- **Two music modes** — slow Ambient scenes, or Lo-Fi with returning piano, organ, and plucked-string phrases, deep bass, and optional local 16-bar drum breaks. Film echoes follow the beat.
+- **Two music modes** — slow Ambient scenes, or Lo-Fi with returning acoustic or electric piano hooks, plucked strings, and replies from soft mallets, bass recorder, or pipe organ, deep bass, and optional local 16-bar drum breaks. Film echoes follow the beat.
 - **Living imagery** — generated scenes blend through fluid effects that respond to the music.
 - **Immersive space** — depth gives the imagery relief as it wraps around you on Vision Pro.
 - **Traces of old film** — Vintage films from the Internet Archive weave texture, movement, and occasional sound into the scene.

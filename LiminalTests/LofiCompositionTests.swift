@@ -60,7 +60,20 @@ struct LofiCompositionTests {
     @Test func eachTakeContainsThreeInstrumentFamiliesAndPianoReturns() throws {
         let bank = LofiSampleBank.bundled
         let programs = (0..<48).map { LofiPreset.selection(seed: 32, phrase: $0) }
-        #expect(Set(programs.map(\.name)).count == 8)
+        #expect(Set(programs.prefix(16).map(\.name)).count == 12)
+        let concertRoots = [
+            "fmkeys": [48, 52, 56, 60, 64, 68, 72],
+            "vibes": [57, 60, 64, 67, 71, 74],
+            "marimba": [48, 55, 59, 65, 72],
+            "bassrec": [54, 58, 60, 64, 68, 72]
+        ]
+        for (group, roots) in concertRoots {
+            let preset = try #require(programs.first { $0.sampleGroup == group })
+            for root in roots {
+                let sample = try #require(bank.sample(for: preset, midi: root))
+                #expect(sample.root == root && sample.recordedRoot == root)
+            }
+        }
         for start in stride(from: 0, to: programs.count, by: 4) {
             let voices = Array(programs[start..<(start + 4)])
             #expect(voices[0].family == .piano && voices[0] == voices[3])
@@ -98,7 +111,7 @@ struct LofiCompositionTests {
     }
 
     @Test func quietOrganPlaysItsIntendedOctave() throws {
-        let organ = try #require((0..<8).map { LofiPreset.selection(seed: 32, phrase: $0) }
+        let organ = try #require((0..<16).map { LofiPreset.selection(seed: 32, phrase: $0) }
             .first { $0.sampleGroup == "organ" })
         let sample = try #require(LofiSampleBank.bundled.sample(for: organ, midi: 60))
         let clock = LofiClock(tempo: 70, sampleRate: 16_000)

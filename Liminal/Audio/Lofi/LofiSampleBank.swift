@@ -12,6 +12,8 @@ nonisolated struct LofiSampleBank: Sendable {
     }
 
     static let bundled = Self(urls: Bundle.main.urls(forResourcesWithExtension: "wav", subdirectory: nil) ?? [])
+    // These original files retain source labels one octave below concert pitch.
+    private static let octaveLowLabels: Set<String> = ["upright", "yamaha", "pizz", "cellopluck", "organ", "psaltery"]
     private let groups: [String: [Sample]]
 
     init(urls: [URL]) {
@@ -22,8 +24,7 @@ nonisolated struct LofiSampleBank: Sendable {
             else { continue }
             let layer = fields.count == 4 ? Int(fields[3]) ?? 2 : 2
             let group = String(fields[1])
-            // These sources label the played octave one lower than the measured waveform.
-            let recordedRoot = (group == "grand" || group == "harp") ? root : root + 12
+            let recordedRoot = Self.octaveLowLabels.contains(group) ? root + 12 : root
             guard let sample = try? Self.load(url, root: root, layer: layer, recordedRoot: recordedRoot)
             else { continue }
             groups[group, default: []].append(sample)

@@ -318,7 +318,6 @@ nonisolated struct LofiScore: Sendable, Equatable {
     }
 
     private static func articulate(_ line: [Note], for preset: LofiPreset, random: MusicRNG) -> [Note] {
-        // Hold organ tones through their body, let piano ring, and keep plucks light.
         // Keep MIDI and onsets independent of the sample program so the hook remains recognizable.
         let length: Double
         let tone: Double
@@ -326,6 +325,8 @@ nonisolated struct LofiScore: Sendable, Equatable {
         case .piano: (length, tone) = (1.0, 0.63)
         case .strings: (length, tone) = (0.61, 0.45)
         case .organ: (length, tone) = (1.42, 0.40)
+        case .mallets: (length, tone) = (0.80, 0.44)
+        case .wind: (length, tone) = (1.12, 0.36)
         }
         var color = random.fork(913)
         return line.enumerated().map { i, note in

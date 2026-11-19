@@ -2,7 +2,7 @@
 
 ## Acoustic sampler comparison
 
-The checked-in acoustic WAVs contain 43 recordings, 4,917,750 bytes on disk and 9,830,084 bytes of decoded mono Float32 PCM before decoder and array overhead. Steinway has seven roots with two recorded velocities per root. Quiet pipe organ and plucked psaltery cover five and four roots respectively. Their preparations and sources are in the [instrument credits](../lofi-samples.md).
+At the time of this comparison the acoustic bank contained 43 recordings, 4,917,750 bytes on disk and 9,830,084 bytes of decoded mono Float32 PCM before decoder and array overhead. Steinway has seven roots with two recorded velocities per root. Quiet pipe organ and plucked psaltery cover five and four roots respectively. Their preparations and sources are in the [instrument credits](../lofi-samples.md).
 
 One matched-source macOS manual render compared Liminal's Swift bank to `AVAudioUnitSampler`. Both received the same Steinway D4 WAV and a MIDI C4 at the 0.5-beat offset, velocity 0.57, duration 0.6 beats, 70 BPM and 48 kHz. The file is a 128,044-byte mono WAV with 256,000 decoded PCM bytes. The dry left-channel timing below uses the first and last sample above 1% of each take's own maximum. A Hann-windowed frequency scan used the same 10,000-frame steady-state region in each take. Apple single-file loading used the WAV as C4, so the matched comparison used a –200-cent global correction for that one recording. A production bank would need per-zone tuning and velocity mapping. [Apple sampler reference](https://sosumi.ai/documentation/avfaudio/avaudiounitsampler)
 
@@ -25,6 +25,12 @@ xcrun swiftc -O \
   tools/LofiSamplerComparison.swift -o /tmp/liminal-sampler-compare
 /tmp/liminal-sampler-compare /tmp/liminal-sampler-audition
 ```
+
+## Expanded instrument rotation
+
+The bank now contains 67 recordings. The 24 additions use the Yamaha TX81Z FM piano’s lowest recorded velocity, soft vibraphone and marimba strikes, and straight bass recorder sustains. All 24 had a measured fundamental within 36 cents of the bundled MIDI root. The complete bank occupies 8,861,206 bytes on disk and decodes to 17,714,884 bytes of mono Float32 PCM before array overhead. See the [per-note recording credits](../lofi-samples.md#additional-colors).
+
+One 64-bar stereo render at 70 BPM (seed 1042, Release the Bracken followed by Bags Dude, cached archive audio) exercised every program. For each phrase, the meter measured the loudest 400 ms window in the sum of dry lead, texture and musical effects. The FM piano measured −16.89 dBFS on its statement and −17.68 on its return, vibraphone −17.23, marimba −16.83 and bass recorder −17.48. The eight earlier voices ranged from −19.38 to −16.88 dBFS in the same render. The full master measured −18.1 LUFS integrated and −4.63 dBTP.
 
 ## Build, reuse and host by role
 
