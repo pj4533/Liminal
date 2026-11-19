@@ -294,6 +294,9 @@ private nonisolated struct BlockPlanner {
             return items
         case .rest:
             return variant % 2 == 0 ? [] : [DialogueItem(padID: lead.padID, slot: 16, gesture: 0)]
+        case .statement, .stutter, .splitPause, .reorder, .callAnswer, .sparse, .returnOpen, .turnaround:
+            // Motif cells are planned by `DialogueMotifPerformer`, not by this grammar.
+            return nil
         }
     }
 

@@ -399,8 +399,21 @@ nonisolated struct DialogueTransportSnapshot: Sendable {
     var kicks: [DialogueLandmark]
     var snares: [DialogueLandmark]
     var leadNotes: [ClosedRange<Double>] = []
+    /// The drummer's human offset in beats at each sixteenth of the take (256 values, from
+    /// `LofiTimingField.offset(atBeat:)`); empty means a straight grid. The motif's slots follow it.
+    var grooveOffsets: [Double] = []
 
     static let takeBeats = 64.0
+    static let takeSixteenths = 256
+
+    /// Transport seconds of a take-relative sixteenth on the drummer's grid (the take's own swing
+    /// and push). Sixteenths past the take repeat the same groove on the next take.
+    func gridTime(sixteenth s: Int) -> Double {
+        let beat = Double(s) / 4
+        guard !grooveOffsets.isEmpty else { return time(beat: beat) }
+        let n = grooveOffsets.count
+        return time(beat: beat + grooveOffsets[((s % n) + n) % n])
+    }
 
     var turn: Double { origin + Self.takeBeats * beatDuration }
 
@@ -454,12 +467,44 @@ nonisolated struct DialogueEvent: Sendable, Equatable {
     let transform: DialogueTransform
     let padKey: UInt64
     let snareLanded: Bool
+    // Motif additions (wave 4 `chop-motif`). `duration` includes an echo throw's tail.
+    var cell: DialogueCell? = nil
+    /// Motif fragment id (the pad id in the motif bank).
+    var piece: Int? = nil
+    var effect: DialogueChopEffect = .none
 
     var endTime: Double { startTime + duration }
 }
 
+/// A light per-piece effect rendered into the chop buffer (motif mode; intelligibility first).
+nonisolated enum DialogueChopEffect: Sendable, Hashable {
+    case none
+    /// Band-limited repeats of the piece at `delay` seconds, rendered into `tail` seconds after the dry piece.
+    case echoThrow(delay: Double, tail: Double)
+    /// A band-passed repeat ("telephone").
+    case filtered
+    /// The piece played backwards as a pickup; its end lands just before the next slot.
+    case reversed
+
+    var name: String {
+        switch self {
+        case .none: "none"
+        case .echoThrow: "echoThrow"
+        case .filtered: "filtered"
+        case .reversed: "reversed"
+        }
+    }
+}
+
+/// Cell kinds of the motif layer (docs/plans/mpc-chopping.md, section 5).
+nonisolated enum DialogueCell: String, Sendable, CaseIterable {
+    case statement, stutter, splitPause, reorder, callAnswer, sparse, returnOpen, turnaround, repair
+}
+
 nonisolated enum DialogueFamily: String, Sendable, CaseIterable {
     case anchor, echo, callResponse, sparseReorder, textureFill, rest
+    // Motif blocks are named after the cell that opens them.
+    case statement, stutter, splitPause, reorder, callAnswer, sparse, returnOpen, turnaround
     var id: UInt64 { UInt64(Self.allCases.firstIndex(of: self)!) }
 }
 
@@ -535,6 +580,13 @@ nonisolated struct DialoguePerformanceMemory: Sendable {
     var lastDryEnd: Double?
     /// Pieces already served by the previous bank in the fallback order (plan 5.5).
     var fallbackPieces = 0
+    /// The motif of the current (or last) 16-bar loop, with its source PCM so the second piece of
+    /// the loop keeps playing the same line when the film changes at bar 9.
+    var motif: DialogueMotif?
+    /// Lines that led a loop, newest last (bounded).
+    var motifLines: [DialogueMotifLineUse] = []
+    /// Full-line statements the motif's loop has played so far.
+    var motifLineStatements = 0
 
     init() {}
 

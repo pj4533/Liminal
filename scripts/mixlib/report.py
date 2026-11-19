@@ -460,6 +460,9 @@ def ev_C_D3(m, b, c):
 
 def ev_C_D4(m, b, c):
     cad = _cad(m)
+    if cad.get("motif"):
+        c.test("rests", None, None, "motif mode: the user direction of 19 November 2026 puts a piece in every bar (C-D9)")
+        return
     if "restsPer8Bars" not in cad:
         c.test("rests", None, None, "no cadence")
         return
@@ -511,6 +514,29 @@ def ev_C_D8(m, b, c):
            f"only {cad.get('accents')} stressed accents" if few else "no stressed accentFrame in chops, or no kick landmarks")
     if cad.get("accents") is not None:
         c.values["accents"] = cad["accents"]
+
+
+def ev_C_D9(m, b, c):
+    mo = _cad(m).get("motif")
+    if not mo or not mo["loops"]:
+        c.test("motifLoops", None, None, "no motif plan log or no complete 16-bar loop")
+        return
+    loops = mo["loops"]
+    empty = sum(len(x["emptyBars"]) for x in loops)
+    c.test("emptyBars", empty, empty <= b["emptyBarsMax"])
+    full = max(x["fullLine"] for x in loops)
+    c.test("maxFullLinePer16", full, full <= b["fullLineMax"])
+    shares = [x["subLineShare"] for x in loops if x["subLineShare"] is not None]
+    c.test("minSubLineShare", min(shares) if shares else None, None if not shares else min(shares) >= b["subLineShareMin"])
+    missing = [x["loop"] for x in loops if not set(b["cellsEveryLoop"]) <= set(x["cells"])]
+    c.test("loopsMissingCells", len(missing), not missing)
+    occ = [x["occupancy"] for x in loops]
+    c.test("minOccupancy", min(occ), min(occ) >= b["occupancy"][0])
+    c.test("maxOccupancy", max(occ), max(occ) <= b["occupancy"][1])
+    c.values["loops"] = len(loops)
+    for x in loops:
+        c.note(f"loop {x['loop'] + 1}: onsets per bar {x['onsetsPerBar']}, full line {x['fullLine']}, "
+               f"sub-line {fmt(x['subLineShare'])}, occupancy {fmt(x['occupancy'])}, cells {', '.join(x['cells'])}")
 
 
 EVALUATORS = {k[3:].replace("_", "-"): v for k, v in globals().items() if k.startswith("ev_C_")}
@@ -648,6 +674,7 @@ MEASUREMENT = {
     "C-D6": "per-cue stage timings and the lead of each event ahead of its commit (M15)",
     "C-D7": "pad and transform of the two statements of each echo hook (M15)",
     "C-D8": "distance of stressed accents from confident kick landmarks (M15)",
+    "C-D9": "motif mode: piece onsets in every bar of each 16-bar loop, full-line statements, sub-line share, cells and occupancy (M15)",
 }
 
 # Sections whose energy decides a criterion, and the bands to rank them in (indices into BAND_NAMES).

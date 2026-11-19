@@ -7,7 +7,10 @@ from .audio import chop_duration_frames
 FNV_OFFSET = 0xCBF29CE484222325
 FNV_PRIME = 0x100000001B3
 MASK64 = (1 << 64) - 1
-FAMILY_IDS = {"anchor": 0, "echo": 1, "callResponse": 2, "sparseReorder": 3, "textureFill": 4, "rest": 5}
+# DialogueFamily.allCases order: the grammar's families, then the motif cells (wave 4 `chop-motif`).
+FAMILY_IDS = {"anchor": 0, "echo": 1, "callResponse": 2, "sparseReorder": 3, "textureFill": 4, "rest": 5,
+              "statement": 6, "stutter": 7, "splitPause": 8, "reorder": 9, "callAnswer": 10, "sparse": 11,
+              "returnOpen": 12, "turnaround": 13}
 
 
 def fnv_add(h, x):
@@ -362,4 +365,44 @@ def measure_cadence(cap):
         out["accentKickDistanceMsP10"] = float(np.percentile(dist, 10))
         out["accentsAtLeast50msFraction"] = float((dist >= 50).mean())
         out["accents"] = len(accents)
+    motif = measure_motif(cap, ev)
+    if motif:
+        out["motif"] = motif
     return out
+
+
+def measure_motif(cap, ev):
+    """Motif mode (user direction of 19 November 2026, plan section 5): per complete 16-bar loop, the
+    piece onsets per bar, full-line statements, the share of sub-line pieces, the cells heard and the
+    occupancy. None when the plan log has no motif (the grammar's rest rules, C-D4, then apply)."""
+    motifs = {}
+    for plan in cap.plans():
+        for m in [plan.get("motif")] + list(plan.get("motifs") or []):
+            if m and m.get("loop") is not None:
+                motifs[int(m["loop"])] = m
+    if not motifs:
+        return None
+    loop_frames = cap.take_frames
+    loops = []
+    for w in range(int(cap.scored_frames / loop_frames + 1e-3)):
+        a = w * loop_frames
+        inside = [e for e in ev if a <= e["frame"] < a + loop_frames]
+        onsets = [sum(1 for e in inside if a + k * cap.bar_frames <= e["frame"] < a + (k + 1) * cap.bar_frames) for k in range(16)]
+        frags = {f["id"]: f for f in (motifs.get(w) or {}).get("fragments", [])}
+        pieces = [e["raw"].get("piece") for e in inside if e["raw"].get("piece") is not None]
+        sub = [bool(frags.get(p, {}).get("subLine")) for p in pieces]
+        merged, cur = [], None
+        for e in sorted(inside, key=lambda e: e["frame"]):
+            s, t = e["frame"], min(e["end"], a + loop_frames)
+            if cur and s <= cur[1]:
+                cur[1] = max(cur[1], t)
+            else:
+                cur = [s, t]
+                merged.append(cur)
+        cells = sorted({e["raw"].get("cell") for e in inside if e["raw"].get("cell")})
+        loops.append({"loop": w, "line": (motifs.get(w) or {}).get("line"), "onsetsPerBar": onsets,
+                      "emptyBars": [k + 1 for k, n in enumerate(onsets) if n == 0],
+                      "fullLine": sum(1 for p in pieces if p == 0),
+                      "subLineShare": float(np.mean(sub)) if sub else None,
+                      "occupancy": float(sum(t - s for s, t in merged) / loop_frames), "cells": cells})
+    return {"loops": loops}

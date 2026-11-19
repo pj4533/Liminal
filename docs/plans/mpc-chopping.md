@@ -359,63 +359,121 @@ Bank cache: key `(contentID, sourceStart to 10 ms, length, analysisVersion, loca
 
 Linked-rate resample (linear interpolation at the source rate; windowed sinc when the rate is below 1), per-band noise weighting as today but without the fixed -18 dB cut above 3.9 kHz, edges from 4.3, then the per-cut chain of section 8.5 (added in wave 3), then K-weighted levelling (`clipGain`, target 0.132, peak cap 0.44). Role trims: anchor 0 dB, head and answer -1 dB, stab -1 dB, sibling -1.5 dB, texture -5 dB.
 
-## 5. Dialogue: performance grammar and cadence
+## 5. Dialogue: the motif layer and cadence
 
-### 5.1 Grid and blocks
+Wave 4 package `chop-motif` replaced the block grammar with a motif layer, following the user's direction on chopping (top of this plan). The grammar's families, rest blocks and occupancy budgets remain only as the fallback for a session that has no usable line yet (5.6). Code: `Liminal/Audio/Lofi/Dialogue/DialogueMotif.swift`. Tuning constants: `DialogueMotifTuning`.
 
-A block is one 4-bar phrase (16 beats, 64 sixteenth slots). A footage piece in Lo-Fi spans 8 bars between fill boundaries, so one bank normally covers two blocks. A drum take is four blocks. Slots name the position of the stress accent, not the buffer start:
+### 5.1 One line per 16-bar loop
 
-```text
-start = accentTime + gestureOffset - accentOffset / rate
-```
+- A loop is one drum take: 16 bars, 4 blocks, 256 sixteenths. Its index is the global phrase divided by 4.
+- The first cue that reaches a loop chooses the motif line from its own analysis.
+  - Candidates are utterance, phrase and word-group units with at least three syllable nuclei and 1.2 to 4.0 s long. When none qualifies, the range relaxes to 0.7 to 4.5 s. A line never spans more than 1.4 bars.
+  - Rank: `sound × lineFit` (section 4.4). A transcribed line gets × 1.25. A line longer than 2.6 s loses up to 20 percent at 4 s.
+- The loop keeps its line when the film changes at bar 9.
+  - The motif (`DialogueMotif`) carries its source PCM and analysis in `DialoguePerformanceMemory.motif`.
+  - The second cue renders its pieces from that source. The rendered buffers do not depend on the bed, so nothing in the architecture forbids this.
+- A new loop chooses a new line.
+  - A line may lead at most two loops (`lineUses`), and never two loops in a row.
+  - A line that overlaps the previous loop's line by more than half also counts as the same line.
+- When the loop's film has no bank (music-led or silent), the previous motif is carried with a new seeded arrangement, logged as `motif:carried`. Coverage wins over novelty here. The 16-bar change rule still holds through the new arrangement.
 
-`gestureOffset` is one value per pattern in -20 to +25 ms. No per-syllable jitter.
+### 5.2 Pieces
 
-### 5.2 Families
+The line is cut into pieces that tile it in source order, then into syllable halves.
 
-Positions are `bar.beat` with `e`, `&`, `a` for the second, third and fourth sixteenth. Each family has two or three seeded placement variants.
+- **Transcribed lines.** Pieces are word groups taken from the refined word spans ("when they" | "want to" | "investigate").
+  - A group shorter than 0.25 s takes the next word. A group holds at most three words.
+  - A pause of 120 ms or more always separates groups.
+- **Acoustic lines.** Pieces follow the deepest and longest valleys between syllable nuclei.
+  - Valleys are scored as depth in dB plus 40 × the time the envelope stays within 3 dB of the minimum, so a word gap beats a syllable dip.
+  - Target: about one piece per 0.45 s, two to six per line. Each piece is at least 0.22 s.
+  - A piece over 0.62 s is cut again at its deepest inner valley.
+- **Syllable halves.** A piece of at least 0.26 s with two nuclei splits at the valley nearest its middle ("invest" | "tigate"). Each half keeps at least 28 percent of the piece and at least 120 ms.
+  - Transcribed halves are labelled by whole words, or by letters when a single word is split ("invest-", "-igate").
+- **Cut points.** Each cut moves to the quietest 1 ms frame within 60 ms, then to a zero crossing within 2 ms.
+  - Fade-in is 3 ms after a burst (a rise of more than 10 dB within 15 ms) and 6 ms otherwise. Fade-out is 10 ms.
+  - The line's outer edges keep the hierarchy's fades.
+- **Native rate only.** The accent of a piece is the onset of its first syllable nucleus.
+- **The motif bank.** The fragments become a `DialoguePadBank`: the line is `anchor` (0 dB, protected) and every piece and half is `stab` (-1 dB). The existing renderer, chain, levelling and choke play them unchanged.
 
-| Family | Events in a block | Notes |
+### 5.3 Cells
+
+The loop is built from eight 2-bar cells. Slots are sixteenths from the cell start.
+
+- **Item placement.** An `at` item sits on its slot. If the slot is taken, it moves up to 2 sixteenths later; the first item of a late plan may move up to 6.
+- An `after` item sits on the first sixteenth that leaves the given space after the previous piece. A space of 0 means back to back.
+
+| Cell | Bars | Content (variants are seeded) |
 |---|---|---|
-| `anchor` | anchor at 1.3 or 2.1; stab at 3.2a | bar 4 rests |
-| `echo` | head at 1.2&; the same head at 2.2& (identical buffer); sibling at 3.2& or 3.3a | Premier flip-flop; bar 4 rests |
-| `callResponse` | head at 1.2e; at least 2 beats of space; answer with its accent on a backbeat (2.2, 2.4 or 3.2) placed on the snare landmark | optional stab at 4.1a when bar 4 is not the last bar of the piece |
-| `sparseReorder` | answer at 1.3; head at 3.1& | only with a transcript that passes the guards of section 7; otherwise the same placements in source order |
-| `textureFill` | stab at 1.4a; two or three texture slices on off-beat sixteenths in bar 2; stab at 3.4a | at most one block in four; texture is gated |
-| `rest` | nothing, or one anchor | used when no bank exists |
+| `statement` | 1-2 | The full line on the downbeat (or its "e"). The last piece follows with an echo throw, then the focal piece and a middle piece in bar 2. |
+| `stutter` | | One piece repeated back to back or with a 1 to 3 sixteenth gap ("when they / when they"). A half-stutter ("wh-, wh-, when they") is one variant. Each variant includes one filtered repeat. |
+| `splitPause` | | Syllable halves with a 3 or 4 sixteenth pause ("when ..... they", "invest ..... tigate"). The second half often gets an echo throw. Without halves, the shortest pair of neighbouring pieces stands in. |
+| `reorder` | | Later pieces before earlier ones ("want to invest ..... when they"). This always runs against source order. For transcribed lines, it plays only when `DialogueReorderGuard.allowsPieceReorder` passes (no negation, number or "n't"); otherwise the cell is `callAnswer`. |
+| `callAnswer` | | The focal piece, then an answering piece on the "and" of 3, in both bars. |
+| `sparse` | 9-10 (breakdown) | One or two pieces per bar with a closing echo throw. In 45 percent of loops this cell is the second, and last, full-line `statement`. |
+| `returnOpen` | 13-14 | One short piece 3 dB lower late in bar 13, so the lead's returning hook opens clear. Then the focal piece, back to back, with an answer. |
+| `turnaround` | 15-16 | A run into the drum fill: the focal piece, a three-fold half-stutter, sometimes a reversed pickup, and the focal piece landing on the next loop's downbeat. |
 
-Placement rules
+- Cells 2 to 6 (bars 3 to 12) are a seeded order of `stutter`, `splitPause`, `reorder` (or `callAnswer`) and one more, plus the breakdown cell.
+- Each block is logged under the family of its first cell (`DialogueFamily` gained the cell names). Neighbouring blocks therefore always differ in family.
+- **Roles.** The focal piece X is usually the opening words (30 percent of loops pick an inner piece). Y is the closing piece and Z a middle one. All pieces recur across cells, so the motif stays recognisable.
 
-- The first two beats after an 8-bar boundary are empty. The last bar of each 8 is empty (drum fill). At least one empty dialogue bar in every 8.
-- Occupancy (dry audio time over bar time) is at most 0.55 over any 8 bars; an event's echo is not counted, a second intelligible statement is.
-- Two to five phrase events per block plus at most one ornament group. Breakdown blocks have at most two events.
-- A stressed accent sits at least 50 ms from a confident kick attack; if not, the accent moves one sixteenth away. One anchor or answer per 8 bars lands on a snare landmark (the drummer's actual time).
-- A returning theme phrase (`returnTheme`) keeps its first bar free of dialogue so the first notes of the hook are exposed.
-- One dry voice. Events never overlap. A later event chokes the earlier one: the earlier buffer is rendered to end 2 ms before the later start with a 12 ms release. A protected event within 80 ms of its end is not choked; the later event moves one sixteenth later or is dropped.
-- Non-native events are at most 40 percent of events in 8 bars. The anchor is always native.
+### 5.4 Grid, coverage and effects
 
-### 5.3 Development across a take
+**Grid**
 
-| Block (section) | Role |
-|---|---|
-| 1 (theme) | establish: `anchor` or `echo` with the piece's bank |
-| 2 (variation or answer) | the block-1 pattern with exactly one change: omit a hit, swap a pad for its sibling, shift one accent by a sixteenth, or answer with `callResponse` |
-| 3 (breakdown) | new piece and bank: sparse establish, at most two events |
-| 4 (returnTheme) | first bar empty; the bank's anchor restated unchanged; one echo; last bar empty |
+- The snapshot carries the drummer's offset at every sixteenth (`grooveOffsets`, from `LofiTimingField.offset(atBeat:)`).
+- Each accent lands exactly on `gridTime(sixteenth:)`. The tests require an error under 2 ms. No gesture offset is applied in motif mode.
+- Kick clearance does not apply: pieces sit on downbeats deliberately. C-D8 is a warning only.
 
-The family for block 1 comes from a seeded shuffled cycle with no back-to-back repeat between takes. A variation counter advances each take. When a bank recurs (cache hit) its anchor may be reused for at most two pieces in 64 bars, then the next-ranked unit becomes the anchor.
+**Coverage**
 
-### 5.4 Cadence rule (the 16-bar requirement)
+- After the cells are placed, every owned bar whose start is not before the earliest start must contain a piece onset (a start inside the bar).
+- When a bar has none, the shortest recurring piece that fits is placed on sixteenth 8, 4, 12, 6 and so on. That repair piece may choke the previous piece (never the line) as long as 120 ms of it remains.
+- There are no rest blocks.
 
-- Fingerprint of a block: the family id and the ordered list of `(padKey, slot)` where `padKey` hashes the source id, the unit frames and the transform.
-- Micro change every 4 bars: consecutive blocks differ in at least one event, except the declared exact repeat inside `echo`.
-- Macro change every 8 bars: the family or the bank changes.
-- Hard ceiling: for consecutive 16-bar windows `W(n-1)`, `W(n)` on the take grid, `1 - |F(n) ∩ F(n-1)| / max(|F(n)|, |F(n-1)|) >= 0.25`. The performer enforces it before returning a plan: if the candidate plan fails, it forces a different family and anchor and records `forcedChange` in the log. Windows without a bank are exempt and logged as `noDialogue`.
-- The plan log carries fingerprints; `scripts/mix-report.py` recomputes them from the scheduled events and fails the capture if any window pair is below 0.25.
+**Voice and timing**
 
-### 5.5 Fallback order
+- There is one dry voice: overlaps choke with the existing 2 ms lead and 12 ms release.
+- A plan ready by its window's start plus the commit margin starts with the window.
+- A late plan drops what it missed and begins at the next bar (6.1). Transcript revisions replay the earlier blocks on the memory from before the cue (6.2). The loop keeps its line; its own source is re-cut by words.
+- Pieces may run to the 8-bar boundary up to 1.75 s past the bed's end (`tailAfterBedSeconds`, inside `ArchiveVoice.chopTailSeconds`).
 
-Original-order anchor line; a shorter readable phrase; one clearly non-semantic stab; the previous bank for at most one further piece; rest. A piece without usable speech produces no dialogue while film and music continue.
+**Effects** (rendered offline into the piece buffer by `DialogueChopRenderer.apply`)
+
+- *Echo throw*: two repeats every 0.75 beat at -7 and -13 dB, band-limited to 400 Hz to 3 kHz. The repeats sit inside the space before the next piece and run at most 1.6 beats. The event's duration includes the tail.
+- *Filtered repeat*: a 600 Hz to 2.8 kHz band, loudness-matched to the dry piece with at most 8 dB of make-up.
+- *Reversed pickup*: the piece played backwards, ending 30 ms before the slot it leads into.
+- Nothing is slowed or pitched.
+- Chop levels are not lowered (user direction). Only the return's first-bar piece is 3 dB down.
+
+### 5.5 Cadence rule (the 16-bar requirement)
+
+- A new loop has a new line, or, when carried, a new seeded arrangement. C-D1 compares position-tagged `(padKey, slot)` elements of consecutive 16-bar windows and requires a difference of at least 0.25. In both measured captures it is 1.00.
+- **C-D9** (new; `scripts/mixlib/cadence.py` `measure_motif`) checks each complete loop:
+  - no bar without a chop onset;
+  - the full line at most twice;
+  - at least 60 percent sub-line pieces (shorter than half the line);
+  - `stutter` and `splitPause` cells present;
+  - occupancy 0.30 to 0.62.
+  - Its notes list the onsets per bar. C-D4 (rests) is skipped in motif mode.
+- The C-B8 intelligibility proxy measures each chop's dry length (`dryFrames` in the capture manifest), because an echo throw's tail is an effect, not speech.
+
+### 5.6 Fallback order
+
+- A session with no motif line at all (no speech so far) uses the block grammar of the earlier waves (`DialoguePerformer`), whose own fallback order ends in rest.
+- Once any loop has had a line, later loops without speech carry it (5.1).
+
+### 5.7 Measured (19 November 2026, `--private-drums --film-reel --bars 32`)
+
+| Case | Empty bars | Onsets/bar | Full line per loop | Sub-line share | Occupancy | C-B8 SII mean / p10 / 1-4 kHz SNR / spread |
+|---|---|---|---|---|---|---|
+| seed 2077, 72 BPM | 0 of 32 | 1 to 4 (mean 2.8) | 2, 1 | 0.96, 0.98 | 0.41, 0.36 | 0.64 / 0.51 / +5.3 dB / 2.78 LU |
+| seed 4242, 82 BPM | 0 of 32 | 1 to 4 (mean 2.8) | 1, 1 | 0.98, 0.98 | 0.39, 0.31 | 0.59 / 0.54 / +7.0 dB / 1.00 LU |
+
+- Before this package, the 72 BPM capture had 20 empty bars of 32, including bars 8 to 17. It played whole lines and one slowed chunk. Its occupancy was 0.17.
+- 84 BPM was requested, but `check-lofi.sh` accepts 58 to 82 BPM, so the second case ran at 82.
+- The 72 BPM spread of 2.78 LU comes from one 164 ms piece in loop 2, measured with its stutter gaps, and from the deliberately lower return piece. Dry pieces measure -14.6 to -15.7 LUFS.
 
 ## 6. Scheduling, deadlines and cancellation
 

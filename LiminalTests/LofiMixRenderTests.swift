@@ -331,16 +331,20 @@ struct LofiMixRenderTests {
                     let bankID = String(built.plan.bankID, radix: 16)
                     chopEvents += built.chops.map { chop in
                         let e = chop.event
-                        let pad = built.bank?.pad(e.padID)
+                        let pad = (built.played ?? built.bank)?.pad(e.padID)
                         return ["frame": Int((e.startTime * format.sampleRate).rounded()),
                                 "sourceStart": pad?.frames.lowerBound ?? 0, "sourceEnd": pad?.frames.upperBound ?? 0,
                                 "speed": e.transform.playbackRate, "articulation": e.role.rawValue, "cue": cueIndex,
-                                "reversed": false, "durationFrames": Int(chop.buffer.frameLength),
+                                "durationFrames": Int(chop.buffer.frameLength),
                                 "padID": e.padID, "role": e.role.rawValue, "family": families[e.block] ?? "",
                                 "block": e.block, "protected": e.protected,
                                 "accentFrame": Int((e.accentTime * format.sampleRate).rounded()),
                                 "transform": e.transform.name, "text": e.text.map { $0 as Any } ?? NSNull(),
-                                "committedFrame": cursor, "bankID": bankID, "slot": e.slot] as [String: Any]
+                                "committedFrame": cursor, "bankID": bankID, "slot": e.slot,
+                                "cell": e.cell?.rawValue ?? NSNull(), "piece": e.piece.map { $0 as Any } ?? NSNull(),
+                                "effect": e.effect.name, "reversed": e.effect == .reversed,
+                                "dryFrames": Int(chop.buffer.frameLength) - { if case .echoThrow(_, let tail) = e.effect {
+                                    return Int((tail * format.sampleRate).rounded()) } else { return 0 } }()] as [String: Any]
                     }
                     archive.begin(.init(buffer: cue, gain: 0.9, fadeIn: 0.5, label: "offline fixture",
                                         activity: ArchiveAudioMath.activity(cue), token: token), now: time)

@@ -359,7 +359,11 @@ struct DialogueRuntimeTests {
                 let error = abs(position - position.rounded()) * next / 4
                 #expect(error <= DialogueTuning.gestureOffsetSeconds.upperBound + 1e-6, "accent \(error) s off the next take's grid")
             }
-            #expect(built.plan.events.allSatisfy { $0.startTime >= due && $0.endTime <= window.upperBound + 1e-6 })
+            // The motif's turnaround may land one piece on the next loop's downbeat, inside the chop tail.
+            #expect(built.plan.events.allSatisfy {
+                $0.startTime >= due && $0.startTime < window.upperBound
+                    && $0.endTime <= window.upperBound + DialogueMotifTuning.tailAfterBedSeconds + 1e-6
+            })
         }
         #expect(found > 0, "some events fall in the next take")
     }
@@ -403,7 +407,8 @@ struct DialogueRuntimeTests {
         let reused = DialogueCueCoordinator.build(source: source, speech: [], transcript: nil, transport: info, window: window,
                                                   earliestStart: start + 0.3, memory: DialoguePerformanceMemory(), seed: 4,
                                                   reuse: hit)
-        #expect(reused.plan.bankID == bank.bankID && reused.timings.analyzeMs == 0)
+        // The cached analysis and bank are reused; the motif bank cut from them is the same too.
+        #expect(reused.bank?.bankID == bank.bankID && reused.plan.bankID == built.plan.bankID && reused.timings.analyzeMs == 0)
         for i in 1...DialogueDirector.cacheEntries {
             director.store(Self.fixture.source(contentID: "cache-\(i)"), analysis: built.analysis, bank: built.bank)
         }

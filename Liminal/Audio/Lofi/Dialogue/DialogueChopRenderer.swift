@@ -5,9 +5,9 @@ import Foundation
 /// Renders pads to dry chops (plan 4.6, 8.5): linked-rate resample, per-band noise weighting,
 /// the per-cut vocal chain, refined edges, choke truncation, K-weighted levelling and role trims. Offline only.
 nonisolated enum DialogueChopRenderer {
-    private struct Key: Hashable { let pad: Int; let frames: Int; let gain: UInt32 }
+    private struct Key: Hashable { let pad: Int; let frames: Int; let gain: UInt32; let effect: DialogueChopEffect }
 
-    /// One buffer per (pad, choke length, gain) inside a call, so exact repeats share an instance.
+    /// One buffer per (pad, choke length, gain, effect) inside a call, so exact repeats share an instance.
     static func render(_ plan: DialoguePerformancePlan, bank: DialoguePadBank, source: DialogueSource,
                        analysis: DialogueAnalysis) -> [DialogueChop] {
         var cache: [Key: AVAudioPCMBuffer] = [:]
@@ -16,19 +16,80 @@ nonisolated enum DialogueChopRenderer {
         for event in plan.events {
             guard let pad = bank.pad(event.padID) else { continue }
             let full = outputCount(pad)
-            let frames = event.chokeAt == nil ? full : min(full, Int((event.duration * source.sampleRate).rounded()))
+            var frames = event.chokeAt == nil ? full : min(full, Int((event.duration * source.sampleRate).rounded()))
+            var total = frames
+            if case .echoThrow = event.effect {
+                frames = full
+                total = max(full, Int((event.duration * source.sampleRate).rounded()))
+            }
             guard frames > 1 else { continue }
-            let key = Key(pad: pad.padID, frames: frames, gain: event.gainDB.bitPattern)
+            let key = Key(pad: pad.padID, frames: total, gain: event.gainDB.bitPattern, effect: event.effect)
             if let buffer = cache[key] {
                 chops.append(DialogueChop(event: event, buffer: buffer))
                 continue
             }
-            guard let rendered = renderPad(pad, source: source, analysis: analysis, frames: frames,
+            guard var rendered = renderPad(pad, source: source, analysis: analysis, frames: frames,
                                            gainDB: event.gainDB, level: &levels[pad.padID]) else { continue }
+            if event.effect != .none, let processed = apply(event.effect, to: rendered, frames: total) { rendered = processed }
             cache[key] = rendered
             chops.append(DialogueChop(event: event, buffer: rendered))
         }
         return chops
+    }
+
+    // MARK: Piece effects (motif mode)
+
+    /// A light effect on a rendered piece: an echo throw rendered into the following space, a
+    /// band-passed repeat, or the piece reversed as a pickup. Offline; returns a new buffer.
+    static func apply(_ effect: DialogueChopEffect, to buffer: AVAudioPCMBuffer, frames total: Int) -> AVAudioPCMBuffer? {
+        guard let input = buffer.floatChannelData?[0] else { return nil }
+        let n = Int(buffer.frameLength)
+        let sr = buffer.format.sampleRate
+        var dry = Array(UnsafeBufferPointer(start: input, count: n))
+        var out: [Float]
+        func band(_ x: [Float], _ low: Double, _ high: Double) -> [Float] {
+            var hp = LofiBiquad(.highpass(hz: low, q: 0.7071067811865476), sampleRate: sr)
+            var lp = LofiBiquad(.lowpass(hz: high, q: 0.7071067811865476), sampleRate: sr)
+            return x.map { lp.process(hp.process($0)) }
+        }
+        switch effect {
+        case .none:
+            return buffer
+        case .reversed:
+            out = dry.reversed()
+        case .filtered:
+            out = band(dry, DialogueMotifTuning.filteredBand.low, DialogueMotifTuning.filteredBand.high)
+            // Loudness-matched to the dry piece (RMS, at most `filteredMakeupDB`), so the repeat is a colour, not a drop.
+            func rms(_ x: [Float]) -> Float { var v: Float = 0; vDSP_rmsqv(x, 1, &v, vDSP_Length(x.count)); return v }
+            let match = rms(out) > 1e-9 ? rms(dry) / rms(out) : 1
+            let makeup = min(match, powf(10, DialogueMotifTuning.filteredMakeupDB / 20))
+            for i in out.indices { out[i] = LofiSaturation.softClip(out[i] * makeup, threshold: DialogueChopChain.peakKnee,
+                                                                    ceiling: DialogueChopChain.peakCeiling) }
+            ramp(&out, from: max(0, n - min(n / 2, Int(0.008 * sr))), length: min(n / 2, Int(0.008 * sr)), rising: false)
+        case .echoThrow(let delay, _):
+            let count = max(n, total)
+            out = [Float](repeating: 0, count: count)
+            for i in 0..<n { out[i] = dry[i] }
+            let wet = band(dry, DialogueMotifTuning.echoBand.low, DialogueMotifTuning.echoBand.high)
+            let step = Int((delay * sr).rounded())
+            for (k, db) in DialogueMotifTuning.echoGainsDB.enumerated() {
+                let g = powf(10, db / 20), offset = (k + 1) * step
+                guard offset < count else { break }
+                for i in 0..<min(n, count - offset) { out[offset + i] += g * wet[i] }
+            }
+            let fade = min(count / 3, Int(0.030 * sr))
+            ramp(&out, from: count - fade, length: fade, rising: false)
+        }
+        if !out.isEmpty { out[out.count - 1] = 0 }
+        dry.removeAll()
+        let count = out.count
+        guard count > 1, let result = AVAudioPCMBuffer(pcmFormat: buffer.format, frameCapacity: AVAudioFrameCount(count)),
+              let channels = result.floatChannelData else { return nil }
+        result.frameLength = AVAudioFrameCount(count)
+        for ch in 0..<Int(buffer.format.channelCount) {
+            out.withUnsafeBufferPointer { channels[ch].update(from: $0.baseAddress!, count: count) }
+        }
+        return result
     }
 
     /// Output frames of an unchoked pad.
