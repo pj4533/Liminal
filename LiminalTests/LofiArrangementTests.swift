@@ -328,7 +328,7 @@ struct LofiArrangementTests {
     /// 48 kHz, eight phrases, best of three): 2210 ms per phrase.
     static let referenceRenderMilliseconds = 2210.0
 
-    @Test func phraseRenderTimeStaysWithinBudget() throws {
+    @Test(.responsivePool) func phraseRenderTimeStaysWithinBudget() throws {
         var best = Double.infinity
         for _ in 0..<3 {
             let start = ContinuousClock.now

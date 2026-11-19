@@ -7,7 +7,7 @@ import Testing
 /// The dialogue coordinator beside the film bed (plan 6.2): the bed never waits, plans arrive at
 /// safe boundaries, stale cues and transports are discarded or replanned, transcripts refine only
 /// later blocks, and memory advances only for posted plans.
-@Suite(.serialized)
+@Suite(.serialized, .responsivePool)
 struct DialogueRuntimeTests {
     static let bpm = 70.0
     static var beat: Double { 60 / bpm }
@@ -71,6 +71,8 @@ struct DialogueRuntimeTests {
 
     @Test func bedIsPostedOnTimeWhileASlowAnalysisRunsAndThePlanStartsAtTheNextBar() async throws {
         let director = DialogueDirector(.neutral(transcriptProvider: { NullTranscriptProvider() }, analysisDelay: .seconds(5)))
+        // Synthesize the shared fixture before the clock starts, so its cost is not counted as lateness.
+        _ = Self.fixture
         let start = Self.uptime()
         let info = Self.info(origin: start)
         let due = start + 0.6

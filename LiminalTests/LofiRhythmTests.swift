@@ -316,7 +316,7 @@ struct LofiRhythmTests {
         let legacyKicks: [[Double]]
     }
 
-    @Test(.enabled(if: !LofiDrumLibrary.assets().isEmpty))
+    @Test(.enabled(if: !LofiDrumLibrary.assets().isEmpty), .responsivePool)
     func installedTakesHaveSaneLandmarks() throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]

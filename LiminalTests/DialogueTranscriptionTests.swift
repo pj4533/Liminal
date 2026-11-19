@@ -8,7 +8,7 @@ import Testing
 
 /// The on-device transcription provider (plan 7) over injected framework closures: every
 /// failure is nil within the deadline plus 0.3 s, and analyzer time maps to film seconds.
-@Suite(.serialized) struct DialogueTranscriptionTests {
+@Suite(.serialized, .responsivePool) struct DialogueTranscriptionTests {
     private typealias Provider = AppleSpeechTranscriptProvider
     private static let slack: Swift.Duration = .milliseconds(300)
 

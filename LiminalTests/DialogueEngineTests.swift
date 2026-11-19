@@ -551,7 +551,7 @@ struct DialogueEngineTests {
         #expect(abs(Double(first.frames.lowerBound) / 48_000 - fixture.words[first.index].start) < 0.07)
     }
 
-    @Test func fixtureTranscriptProviderRespectsTheDeadline() async throws {
+    @Test(.responsivePool) func fixtureTranscriptProviderRespectsTheDeadline() async throws {
         let transcript = DialogueFixtures.transcript(Shared.fixture)
         let clock = ContinuousClock()
         let quick = FixtureTranscriptProvider(transcript, delay: .milliseconds(10))
@@ -565,7 +565,7 @@ struct DialogueEngineTests {
 
     // MARK: Budget and logs
 
-    @Test func prepareFinishesWithinTheStageBudget() throws {
+    @Test(.responsivePool) func prepareFinishesWithinTheStageBudget() throws {
         let fixture = DialogueFixtures.speech(DialogueFixtures.Options(seconds: 30, seed: 9))
         let snapshot = DialogueFixtures.snapshot(bpm: 70)
         var best = DialogueEngine.Timings(analyzeMs: .infinity)

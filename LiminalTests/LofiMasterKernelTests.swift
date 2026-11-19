@@ -329,7 +329,7 @@ struct LofiMasterKernelTests {
         #expect(finalAmplitude > dbToGain(-20) * dbToGain(4))
     }
 
-    @Test func kernelRunsAtLeastTenTimesRealtimeInThisBuild() {
+    @Test(.responsivePool) func kernelRunsAtLeastTenTimesRealtimeInThisBuild() {
         var noise = Noise(state: 5)
         let seconds = 20.0
         let count = Int(Self.rate * seconds)
