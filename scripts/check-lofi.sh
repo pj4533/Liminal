@@ -37,6 +37,10 @@ parser.add_argument("--hook", action="append", default=[], metavar="KEY=VALUE",
                     help="Capture hook option passed to LofiCaptureHooks (repeatable), e.g. masterProfile=ambient")
 parser.add_argument("--max-true-peak", type=float, help="Pass through to analyze-lofi.py (default: the manifest's master ceiling, else -1.5)")
 parser.add_argument("--next-drum-name", help="Use a second installed performance at the 16-bar switch")
+parser.add_argument("--transcribe", action="store_true",
+                    help="Transcribe each footage cue with the installed on-device Apple speech model before the "
+                         "render (same as --hook transcription=apple). Never downloads; without the model the "
+                         "capture falls back to the acoustic plan and manifest.dialogueTranscripts says why")
 source = parser.add_mutually_exclusive_group()
 source.add_argument("--footage", type=Path)
 source.add_argument("--cached-footage", action="store_true")
@@ -60,7 +64,11 @@ for item in args.hook:
     if not sep or not key:
         parser.error("--hook expects KEY=VALUE")
     hooks[key] = value
-out = args.out.resolve() if args.out else Path(tempfile.mkdtemp(prefix="liminal-lofi-")).resolve()
+if args.transcribe:
+    if args.no_footage:
+        parser.error("--transcribe needs footage")
+    hooks["transcription"] = "apple"
+out =args.out.resolve() if args.out else Path(tempfile.mkdtemp(prefix="liminal-lofi-")).resolve()
 if out.is_relative_to(Path.cwd()) or (out.exists() and any(out.iterdir())):
     parser.error("use an empty output directory outside the repository")
 out.mkdir(parents=True, exist_ok=True)

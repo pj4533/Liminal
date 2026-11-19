@@ -36,6 +36,18 @@ Status: plan. Numbers marked *start* are tuning hypotheses exposed as named cons
 >
 > This is implemented by wave 4 package `chop-motif`. Mix calibration runs after it in wave 5.
 
+> **User direction on chop effects and blend, 19 November 2026 (binding, for wave 5 `mix-calibration` and later rounds).** The user approved the word-piece motif chopping ("way better… definitely go with that") and asked for two changes. `mix-calibration` may edit the effect constants in `DialogueMotif.swift` and the chop chain and returns in `ArchiveVoice.swift` and `DialogueChopRenderer.swift`.
+>
+> 1. **Much heavier effects on the chops.**
+>    - Tempo echo: more of it, with more feedback and repeats; echo throws on most cell endings and on stutters.
+>    - Reverse: more frequent reversed pickups, about one per 2–4 bars.
+>    - Reverb: more, with a clearly audible room or plate tail.
+>    - Filtered repeats: more of them.
+>    - The dry piece stays intelligible and on the grid. The effects carry the space between pieces.
+> 2. **Chops glued into the mix.** In the 72 BPM render they stood out on top of the music. They need more compression and limiting so they sit inside the beat while staying forward and loud. That means a firmer chop-bus compressor and a peak limiter for a consistent level, and possibly a light, short duck of the music under the chops instead of more chop level. Chops should not read as a separate layer on top.
+>
+> The user's next clip should come from a capture that uses the transcript path when on-device Apple transcription assets are available, so pieces align with real words.
+
 ## 1. Goals and non-goals
 
 Goals
