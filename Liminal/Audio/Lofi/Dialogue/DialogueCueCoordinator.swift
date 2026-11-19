@@ -45,7 +45,11 @@ nonisolated enum DialogueCueCoordinator {
 
     struct Built: @unchecked Sendable {
         let analysis: DialogueAnalysis
+        /// The bank as built (what the cache keeps).
         let bank: DialoguePadBank?
+        /// The bank as this piece played it (`DialoguePerformer.bankForPiece`: a recurring bank may
+        /// hand its anchor role to a fresh line); the plan, chops and log refer to it.
+        var played: DialoguePadBank? = nil
         let plan: DialoguePerformancePlan
         let chops: [DialogueChop]
         /// The performance memory after this plan; the owner commits it only when the plan is posted.
@@ -136,14 +140,15 @@ nonisolated enum DialogueCueCoordinator {
         t = clock.now
         let snapshot = snapshot(transport, window: window)
         var memory = memory
-        let plan = DialogueEngine.perform(bank, snapshot: snapshot, window: window, earliestStart: earliestStart,
+        let played = DialoguePerformer.bankForPiece(bank, snapshot: snapshot, window: window, memory: memory)
+        let plan = DialogueEngine.perform(played, snapshot: snapshot, window: window, earliestStart: earliestStart,
                                           memory: &memory, seed: seed, cueToken: source.cueToken, revision: revision)
         timings.planMs = ms(clock.now - t)
         t = clock.now
-        let chops = bank.map { DialogueEngine.render(plan, bank: $0, source: source, analysis: analysis) } ?? []
+        let chops = played.map { DialogueEngine.render(plan, bank: $0, source: source, analysis: analysis) } ?? []
         timings.renderMs = ms(clock.now - t)
-        return Built(analysis: analysis, bank: bank, plan: plan, chops: chops, memory: memory, timings: timings,
-                     snapshot: snapshot, window: window, earliestStart: earliestStart, log: DialogueEngine.log(plan, bank: bank))
+        return Built(analysis: analysis, bank: bank, played: played, plan: plan, chops: chops, memory: memory, timings: timings,
+                     snapshot: snapshot, window: window, earliestStart: earliestStart, log: DialogueEngine.log(plan, bank: played))
     }
 
     /// The transcript-refined plan for the blocks from `from` (a block start): the acoustic blocks
@@ -158,23 +163,25 @@ nonisolated enum DialogueCueCoordinator {
         timings.bankMs = ms(clock.now - t)
         t = clock.now
         var memory = memoryBefore
+        // The piece keeps the anchor choice it started with (decided on the memory before the cue).
+        let rotated = DialoguePerformer.bankForPiece(refined, snapshot: acoustic.snapshot, window: acoustic.window, memory: memoryBefore) ?? refined
         if from > acoustic.window.lowerBound {
-            _ = DialogueEngine.perform(acoustic.bank, snapshot: acoustic.snapshot, window: acoustic.window.lowerBound..<from,
+            _ = DialogueEngine.perform(acoustic.played ?? acoustic.bank, snapshot: acoustic.snapshot, window: acoustic.window.lowerBound..<from,
                                        earliestStart: acoustic.earliestStart, memory: &memory, seed: seed,
                                        cueToken: source.cueToken, revision: 0)
             memory.pieceCounter -= 1
         }
         let window = from..<acoustic.window.upperBound
-        let plan = DialogueEngine.perform(refined, snapshot: acoustic.snapshot, window: window,
+        let plan = DialogueEngine.perform(rotated, snapshot: acoustic.snapshot, window: window,
                                           earliestStart: max(acoustic.earliestStart, from), memory: &memory, seed: seed,
                                           cueToken: source.cueToken, revision: revision)
         timings.planMs = ms(clock.now - t)
         t = clock.now
-        let chops = DialogueEngine.render(plan, bank: refined, source: source, analysis: acoustic.analysis)
+        let chops = DialogueEngine.render(plan, bank: rotated, source: source, analysis: acoustic.analysis)
         timings.renderMs = ms(clock.now - t)
-        return Built(analysis: acoustic.analysis, bank: refined, plan: plan, chops: chops, memory: memory, timings: timings,
+        return Built(analysis: acoustic.analysis, bank: refined, played: rotated, plan: plan, chops: chops, memory: memory, timings: timings,
                      snapshot: acoustic.snapshot, window: window, earliestStart: max(acoustic.earliestStart, from),
-                     log: DialogueEngine.log(plan, bank: refined))
+                     log: DialogueEngine.log(plan, bank: rotated))
     }
 
     /// One log line per plan, and the capture report when the offline harness is running.

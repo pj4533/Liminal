@@ -165,7 +165,15 @@ nonisolated enum DialogueTuning {
     static let callResponseSpaceBeats = 2.0
     static let anchorReusePieces = 2
     static let anchorReusePhrases = 16
+    /// A line shorter than this never takes over the anchor role from a recurring bank's anchor.
+    static let rotatedAnchorMinimumSeconds = 0.7
     static let windowDifference = 0.25
+    /// Sixteenths a pattern may move as a whole: out of the rest after a boundary, or (a late
+    /// plan) to begin at the next bar.
+    static let restShiftSlots = 12
+    /// Accent slots of a take-opening anchor hook: the line, then the same line again in bar 3.
+    static let hookSlots: [(Int, Int)] = [(8, 40), (16, 44), (8, 36)]
+    static let lateShiftSlots = 20
     /// Per-block share that guarantees the 16-bar window difference (|∩| <= 0.75 min).
     static let blockOverlapShare = 0.75
     static let memoryBlocks = 8

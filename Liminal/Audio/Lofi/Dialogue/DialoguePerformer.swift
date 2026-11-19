@@ -4,6 +4,8 @@ import Foundation
 /// Pure and seeded: the same bank, snapshot, window, memory and seed give the same plan.
 nonisolated enum DialoguePerformer {
     static let establishing: [DialogueFamily] = [.anchor, .echo, .callResponse]
+    /// Families that open a take: both state their first pad twice.
+    static let themeFamilies: [DialogueFamily] = [.anchor, .echo]
 
     static func perform(_ bank: DialoguePadBank?, snapshot: DialogueTransportSnapshot, window: Range<Double>,
                         earliestStart: Double, memory: inout DialoguePerformanceMemory, seed: UInt64,
@@ -52,6 +54,41 @@ nonisolated enum DialoguePerformer {
                                        transportRevision: snapshot.revision, revision: revision,
                                        usedTranscript: bank?.usedTranscript ?? false, blocks: blocks,
                                        rejections: bank?.rejections ?? [])
+    }
+
+    /// The bank as this piece plays it (plan 5.3). A recurring bank whose anchor already led two
+    /// pieces in the last 64 bars hands the anchor role to its best fresh native line, so the
+    /// piece states a different quote; the bank id changes with it. Otherwise the bank as built.
+    static func bankForPiece(_ bank: DialoguePadBank?, snapshot: DialogueTransportSnapshot, window: Range<Double>,
+                             memory: DialoguePerformanceMemory) -> DialoguePadBank? {
+        guard let bank, !bank.pads.isEmpty else { return bank }
+        let phrase = snapshot.phraseAtOrigin + Int((snapshot.beat(time: window.lowerBound) / 16 + 1e-9).rounded(.down))
+        let piece = memory.pieceCounter
+        func used(_ pad: DialoguePad) -> Bool {
+            memory.anchorPieces(pad.padKey, before: piece, phrase: phrase) >= DialogueTuning.anchorReusePieces
+        }
+        guard used(bank.anchor) else { return bank }
+        let lines = bank.pads.filter {
+            $0.transform.isNative && [.head, .answer].contains($0.role) && $0.duration >= DialogueTuning.rotatedAnchorMinimumSeconds
+        }.sorted { ($0.score.sound, -$0.padID) > ($1.score.sound, -$1.padID) }
+        guard let next = lines.first(where: { !used($0) }) else { return bank }
+        func copy(_ p: DialoguePad, role: DialoguePad.Role, protected: Bool) -> DialoguePad {
+            DialoguePad(padID: p.padID, unitID: p.unitID, role: role, frames: p.frames, transform: p.transform,
+                        accentOffset: p.accentOffset, duration: p.duration, protected: protected, text: p.text,
+                        fadeIn: p.fadeIn, fadeOut: p.fadeOut, level: p.level, score: p.score, padKey: p.padKey)
+        }
+        let pads = bank.pads.map { p -> DialoguePad in
+            if p.padID == next.padID { return copy(p, role: .anchor, protected: true) }
+            if p.padID == bank.anchorPadID { return copy(p, role: .head, protected: p.protected) }
+            return p
+        }
+        var hash = DialogueHash()
+        hash.add(bank.bankID)
+        hash.add(next.padID)
+        return DialoguePadBank(bankID: hash.value, analysisVersion: bank.analysisVersion, pads: pads, anchorPadID: next.padID,
+                               siblingGroups: bank.siblingGroups, sourceID: bank.sourceID, clock: bank.clock,
+                               rejections: bank.rejections, usedTranscript: bank.usedTranscript, reorder: bank.reorder,
+                               originalOrder: bank.originalOrder, arrangedOrder: bank.arrangedOrder, intendedText: bank.intendedText)
     }
 
     /// The two whole units a safe template plays out of source order, in their arranged order.
@@ -209,6 +246,11 @@ private nonisolated struct BlockPlanner {
     func template(_ family: DialogueFamily, variant: Int, lead: DialoguePad) -> [DialogueItem]? {
         let s1 = stabs.first, s2 = stabs.dropFirst().first ?? stabs.first
         switch family {
+        case .anchor where phrase % 4 == 0:
+            // A take opens on a hook: the line stated, a rest, the same line again (identical buffer).
+            // Exact repetition is what turns the quote into a musical figure (craft note 3.2).
+            let (first, second) = DialogueTuning.hookSlots[variant % DialogueTuning.hookSlots.count]
+            return [DialogueItem(padID: lead.padID, slot: first, gesture: 0), DialogueItem(padID: lead.padID, slot: second, gesture: 1)]
         case .anchor:
             switch variant % 3 {
             case 0: return [DialogueItem(padID: lead.padID, slot: 8, gesture: 0)] + (s1.map { [DialogueItem(padID: $0.padID, slot: 39, gesture: 1)] } ?? [])
@@ -273,10 +315,16 @@ private nonisolated struct BlockPlanner {
         }
         let variants = [0, 1, 2].shuffled(using: &r)
         let cycle = MusicRNG(seed: memory.cycleSeed ?? seed)
-        let primary = cycle.shuffledCycle(DialoguePerformer.establishing, index: memory.familyCycleIndex)
+        // A take's first block establishes with a hook (plan 5.3: anchor or echo), alternating so no
+        // two takes open alike; later establishing blocks cycle through all three families.
+        let theme = DialoguePerformer.themeFamilies
+        let primary = phrase % 4 == 0
+            ? theme[(memory.familyCycleIndex + Int((memory.cycleSeed ?? seed) % UInt64(theme.count))) % theme.count]
+            : cycle.shuffledCycle(DialoguePerformer.establishing, index: memory.familyCycleIndex)
         let previousGroup = record(phrase - 2)
         func establishing(_ change: String) {
-            let order = [primary] + DialoguePerformer.establishing.filter { $0 != primary }
+            let preferred = phrase % 4 == 0 ? [primary] + theme.filter { $0 != primary } : [primary]
+            let order = preferred + DialoguePerformer.establishing.filter { !preferred.contains($0) }
             let fresh = order.filter { previousGroup?.family != $0 || previousGroup?.bankID != bank.bankID }
             for f in fresh { add(f, variants: variants, leads: [lead], change: change) }
             add(.textureFill, variants: variants, leads: [lead], change: change)
@@ -402,11 +450,15 @@ private nonisolated struct BlockPlanner {
         let needsSnare = !(groupRecord?.snareLanded ?? false)
         let snareRoles: [DialoguePad.Role] = [.answer, .anchor, .head, .stab, .sibling]
         // A pattern whose first accent would sound inside the rest after a boundary moves as a
-        // whole, keeping its internal spacing (the echo's bar, the call's space).
+        // whole, keeping its internal spacing (the echo's bar, the call's space). A late plan's
+        // pattern moves the same way to begin at the next bar instead of losing its opening
+        // gesture (real-footage tuning: committed at the boundary, every establish lost its anchor).
         var items = c.items.sorted(by: { $0.slot < $1.slot })
         if let first = items.first, let pad = bank.pad(first.padID) {
+            let floor = max(time(lowerBeat), hard)
+            let limit = hard > time(lowerBeat) ? DialogueTuning.lateShiftSlots : DialogueTuning.restShiftSlots
             var shift = 0
-            while shift < 12, time(blockBeat + Double(first.slot + shift) / 4) + offset - pad.renderedAccentOffset < time(lowerBeat) {
+            while shift < limit, time(blockBeat + Double(first.slot + shift) / 4) + offset - pad.renderedAccentOffset < floor {
                 shift += 1
             }
             if shift > 0, items.allSatisfy({ $0.slot + shift < 64 }) {
@@ -553,12 +605,17 @@ private nonisolated struct BlockPlanner {
         let all = candidates()
         var chosen: (Candidate, [DialogueEvent])?
         var forced = false
-        for (index, c) in all.enumerated() {
-            guard let events = realize(c), passes(c, events) else { continue }
-            if c.family != .rest, events.isEmpty, !c.items.isEmpty { continue }
-            chosen = (c, events)
-            forced = index > 0 && c.change.hasPrefix("forced")
-            break
+        // A candidate that kept its opening gesture beats one that lost it to the deadline or the
+        // block edges; only when none keeps it does a partial pattern play.
+        for keepsLead in [true, false] where chosen == nil {
+            for (index, c) in all.enumerated() {
+                guard let events = realize(c), passes(c, events) else { continue }
+                if c.family != .rest, events.isEmpty, !c.items.isEmpty { continue }
+                if keepsLead, let lead = c.items.min(by: { $0.slot < $1.slot }), !events.contains(where: { $0.padID == lead.padID }) { continue }
+                chosen = (c, events)
+                forced = index > 0 && c.change.hasPrefix("forced")
+                break
+            }
         }
         let (c, events) = chosen ?? (Candidate(family: .rest, variation: 0, items: [], change: "forced:rest", lead: nil), [])
         if chosen == nil { forced = true }
