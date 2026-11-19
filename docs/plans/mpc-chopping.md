@@ -1,0 +1,669 @@
+# MPC-style dialogue chopping, per-bus mix and master: implementation plan
+
+19 November 2026. Branch `feature/mpc-chopping` (local only, never pushed). Baseline commit `c42f1b5`.
+
+Inputs: [handoff](../research/mpc-chopping-handoff.md), [craft notes](../research/mpc-chopping-craft.md), [mix engineering notes](../research/lofi-mix-engineering.md), [technical notes](../research/mpc-chopping-technical.md), and a code audit of the baseline. This plan implements handoff phases 1 to 3 in full and phase 4 only where a measured need appears (section 13 lists what is deferred and why).
+
+Status: plan. Numbers marked *start* are tuning hypotheses exposed as named constants. Numbers in section 9 are acceptance criteria.
+
+## 1. Goals and non-goals
+
+Goals
+
+1. Dialogue from each incoming film becomes a small stable bank of related cuts ("pads") performed against AJ Hall's takes with a bounded grammar: anchor, echo, call-response, sparse-reorder, texture-fill, with rests and returns. A kept pattern changes one dimension at a time.
+2. The dialogue performance changes at least every 16 bars (enforced in code, logged, and checked from captures).
+3. Analysis never delays the film bed or the music. The bed is published as soon as it is decoded; the plan arrives later at a safe bar boundary.
+4. Music work from the handoff: film bed clarity, theme-return recognition, louder and more varied mids that answer the melody, bass punch with three bounded voices, multiband drum attack landmarks and a sparse shared timing field.
+5. Optional local transcription (SpeechAnalyzer and SpeechTranscriber) with conservative safe reordering. The acoustic path always remains.
+6. Every section (drums, bass, mids, lead, dialogue chops, film bed) has its own effect chain and spectral slot. The master is loud and competitive, true-peak safe, with controlled crest and gain reduction and no pumping or distortion.
+7. Verification that does not need ears: per-bus stems, multi-resolution spectrograms, band energy and masking, low-band mono and correlation, kick and bass windows, crest, LUFS, true peak, limiter gain reduction, intelligibility proxies and chop cadence, produced by one command and documented.
+
+Non-goals: new user-facing style controls, cloud inference, handpicked dialogue, replacing AJ Hall's takes with reconstructed hits, an iOS target, changes to Ambient mode's sound.
+
+## 2. Architecture
+
+```text
+footage piece (8 bars in Lo-Fi) ── decode ──► film bed cue (posted at its due time, never waits)
+        │                                      └► ArchiveVoice bed chain ► MixBus ► master
+        └─ DialogueCueCoordinator (utility task, cancellable, token + transport revision)
+             native-rate source PCM ► DialogueAnalyzer ► DialogueHierarchy ► DialogueBankBuilder
+             (+ SoundAnalysis speech windows, + optional transcript at a later block)
+             LofiTransportInfo (revision, phrase, timing field, arrangement key)
+             ► DialoguePerformer (grammar, cadence memory) ► DialogueChopRenderer
+             ► MusicControl.archiveChops(plan) ► ArchiveVoice incremental sample-time scheduling
+                                                 ► chop FX ► LofiBus ► master
+
+drum take (64 beats) ► LofiDrumLandmarks ► LofiTimingField ─► LofiScore (bass accents, mid answers)
+                     ► drum bus chain (offline)              └► dialogue stress placement
+LofiScore ► LofiRenderer ► per-stem chains (offline: bass, lead, mids, space) ► LofiBus players
+LofiBus + film path ► LofiMasterBus: [ambient: Apple glue + limiter] / [lofi: LofiMasterFinisher]
+```
+
+Design rules
+
+- Music stems, drum takes and dialogue chops are rendered to buffers off the audio thread. Their effect chains run there in plain Swift (deterministic, testable, no realtime limits). Only the film bed chain, the chop echo and room, the bus duck faders and the master run in the live graph.
+- The master finisher is the only custom realtime DSP. It is an in-process `AUAudioUnit` whose kernel owns preallocated memory and uses Accelerate block operations. No allocation, lock, I/O or inference on the render thread.
+- New pure types are `nonisolated` and `Sendable` (the project default isolation is `MainActor`). New files are picked up by the file-system-synchronized Xcode groups; `project.pbxproj` is not edited.
+- Ambient mode keeps its present master path bit for bit apart from a constant delay.
+
+## 3. Frozen interfaces between work packages
+
+These names are contracts. A package may add members; it may not rename or change the meaning of these.
+
+### 3.1 Capture hooks (wave 1, package `verify-tooling`)
+
+`Liminal/Audio/Lofi/LofiCaptureHooks.swift`
+
+```swift
+nonisolated enum LofiCaptureHooks {
+    struct Tap { let name: String; let node: AVAudioNode }
+    static var isEnabled: Bool { get }                       // false in the app
+    static func begin(options: [String: String])              // harness only: enable, clear, store options
+    static func end()
+    static func option(_ key: String) -> String?
+    static func tap(_ name: String, _ node: AVAudioNode)      // no-op unless enabled; name ^[a-z0-9][a-z0-9-]*$
+    static func report(_ key: String, _ value: Any)           // JSON value, becomes manifest.diagnostics[key]
+    static func appendReport(_ key: String, _ element: Any)   // manifest.diagnostics[key] is an array
+    static func file(_ name: String, _ data: Data)            // extra artifact, name ends .json or .csv
+    static func onFinish(_ body: @escaping @Sendable () -> Void) // run after the render, before the manifest
+    static var taps: [Tap] { get }
+    static var reports: [String: Any] { get }
+    static var files: [String: Data] { get }
+    static func runFinishers()
+}
+```
+
+Lock-guarded, never touched on the render thread. Components register taps and reports in their initializers or offline code paths. The harness never needs editing to add a tap.
+
+Options in use: `masterProfile` (`lofi` default in captures, `ambient`), `transcription` (`off` default, `fixture`, `apple`), `dialogue` (`engine` default from wave 2, `legacy`).
+
+### 3.2 Capture manifest v2
+
+`manifest.schema = "liminal-lofi-capture-v2"`. Existing keys stay. New keys:
+
+| Key | Content |
+|---|---|
+| `sections` | `{"drums":["drums"],"bass":["bass"],"mids":["texture"],"lead":["dry"],"space":["wet"],"dialogue":["dialogue-chops"],"bed":["footage"]}` |
+| `grid` | `{"beatFrames", "barFrames", "phraseFrames", "takeFrames"}` (floats) |
+| `dialogueChops[]` | adds `durationFrames`; from wave 2 also `padID`, `role`, `family`, `block`, `protected`, `accentFrame`, `transform`, `text` |
+| `dialogueTimings[]` | `{cue, classifyMs, analyzeMs, bankMs, planMs, renderMs, totalMs}` wall clock per cue |
+| `diagnostics.dialoguePlans[]` | `{cue, sourceID, bankID, analysisVersion, seed, transportRevision, revision, usedTranscript, pads[], blocks[{phrase, section, family, variation, fingerprint, events[]}], rejections[{unit, reason}]}` |
+| `diagnostics.masterDynamics` | `{profile, ceilingDbtp, latencyFrames, glue{meanDb,p95Db,maxDb}, clip{engagedFraction,maxDb}, limiter{meanDb,p95Db,maxDb,above3dbFraction}, traceFile, traceHopFrames}` |
+| `diagnostics.landmarks[]` | `{take, name, kicks[{frame, peakFrame, strength, confidence}], snares[...]}` in capture frames |
+| `diagnostics.stemChains[]` | `{phrase or take, bus, inPeakDb, outPeakDb, inRmsDb, outRmsDb, grMeanDb, grMaxDb}` |
+| `diagnostics.bass[]` | `{phrase, voice, notes[{frame, attackFrame, alignedKickFrame}]}` |
+
+Extra file `master-gr.csv`: `frame,glue_db,clip_db,limiter_db`, one row per `traceHopFrames` (64).
+
+### 3.3 DSP toolkit and master finisher (wave 1, package `dsp-core`)
+
+`Liminal/Audio/Lofi/DSP/`
+
+```swift
+nonisolated struct LofiBiquad: Sendable {
+    enum Kind: Sendable, Equatable {
+        case highpass(hz: Double, q: Double), lowpass(hz: Double, q: Double)
+        case peak(hz: Double, q: Double, gainDB: Double)
+        case lowShelf(hz: Double, gainDB: Double), highShelf(hz: Double, gainDB: Double)
+        case bandpass(hz: Double, q: Double), allpass(hz: Double, q: Double)
+    }
+    init(_ kind: Kind, sampleRate: Double)
+    mutating func process(_ x: Float) -> Float
+    mutating func reset()
+    func magnitudeDB(at hz: Double) -> Double
+}
+nonisolated struct LofiFilterChain: Sendable {            // offline, stereo, shared coefficients
+    init(_ kinds: [LofiBiquad.Kind], sampleRate: Double)
+    mutating func process(left: UnsafeMutablePointer<Float>, right: UnsafeMutablePointer<Float>, count: Int)
+}
+nonisolated struct LofiCompressor: Sendable {
+    struct Settings: Sendable, Equatable {
+        var thresholdDB: Float, ratio: Float, kneeDB: Float, attack: Double, release: Double
+        var makeupDB: Float = 0, sidechainHighpassHz: Double? = nil, rmsWindow: Double = 0
+    }
+    init(_ settings: Settings, sampleRate: Double)
+    mutating func gain(detectorLeft: Float, detectorRight: Float) -> Float   // linked linear gain incl. makeup
+    private(set) var reductionDB: Float
+    struct Stats: Sendable { var meanDB: Float; var maxDB: Float }
+    mutating func process(left: UnsafeMutablePointer<Float>, right: UnsafeMutablePointer<Float>, count: Int) -> Stats
+}
+nonisolated struct LofiDeEsser: Sendable { init(band: ClosedRange<Double>, maxReductionDB: Float, sampleRate: Double); mutating func process(_ x: Float) -> Float }
+nonisolated enum LofiSaturation {
+    static func tape(_ x: Float, drive: Float) -> Float                    // odd, unity small-signal gain
+    static func softClip(_ x: Float, threshold: Float, ceiling: Float) -> Float
+    static func process(left:right:count:drive:oversampling:)               // offline, 2x or 4x
+}
+nonisolated enum LofiStereo {
+    static func monoBelow(_ hz: Double, left:, right:, count:, sampleRate:)  // LR4 split, low band summed
+    static func correlation(left:, right:, count:) -> Float
+}
+nonisolated enum LofiTruePeak { static func linear(_ samples: UnsafePointer<Float>, count: Int, factor: Int) -> Float }  // 4 or 16
+nonisolated enum LofiLoudness {
+    struct Result: Sendable { let integrated: Double; let shortTermMax: Double; let momentaryMax: Double; let range: Double }
+    static func measure(left: [Float], right: [Float], sampleRate: Double) -> Result   // BS.1770-4 gating
+}
+nonisolated struct LofiMasterSettings: Sendable, Equatable {
+    var inputGainDB: Float, highpassHz: Double
+    var glue: LofiCompressor.Settings?
+    var clipThresholdDB: Float?, ceilingDBTP: Float, lookahead: Double, releaseFast: Double, releaseSlow: Double
+    static let passthrough: Self        // unity gain, latency only
+    static let lofi: Self               // section 8.7
+}
+nonisolated struct LofiMasterMeters: Sendable { var glueDB, clipDB, limiterDB: (mean: Float, p95: Float, max: Float); var limiterAbove3dBFraction: Float; var clipEngagedFraction: Float; var frames: Int }
+nonisolated struct LofiMasterTracePoint: Sendable { let frame: Int; let glueDB: Float; let clipDB: Float; let limiterDB: Float }
+final class LofiMasterKernel { /* preallocated; process(inL,inR,outL,outR,count); latencyFrames */
+    static func processOffline(left: [Float], right: [Float], settings: LofiMasterSettings, sampleRate: Double, blockSize: Int)
+        -> (left: [Float], right: [Float], meters: LofiMasterMeters, trace: [LofiMasterTracePoint])
+}
+nonisolated final class LofiMasterFinisher: Node {
+    init(_ input: Node, settings: LofiMasterSettings = .passthrough)
+    func apply(_ settings: LofiMasterSettings, ramp: Double)
+    var meters: LofiMasterMeters { get }; func resetMeters()
+    func startTrace(capacity: Int); func takeTrace() -> [LofiMasterTracePoint]   // offline diagnostics
+    var latency: Double { get }
+}
+```
+
+### 3.4 Dialogue engine (wave 1, package `dialogue-core`)
+
+`Liminal/Audio/Lofi/Dialogue/`
+
+```swift
+nonisolated struct DialogueSource: @unchecked Sendable {
+    let contentID: String, cueToken: Int, buffer: AVAudioPCMBuffer   // immutable native-rate mono-duplicated PCM
+    let sourceStart: Double, rate: Double                            // film seconds of frame 0; film seconds per buffer second
+    func sourceSeconds(frame: Int) -> Double; func frame(sourceSeconds: Double) -> Int
+}
+nonisolated struct SpeechUnit: Sendable, Identifiable {
+    enum Level: Int, Sendable { case utterance, phrase, wordGroup, stab, texture }
+    let id: Int, parentID: Int?, level: Level, frames: Range<Int>
+    let previousID: Int?, nextID: Int?
+    var text: String?, tokenRange: Range<Int>?, recognitionConfidence: Float?
+    let boundaryConfidence: Float, speechScore: Float, interferenceScore: Float
+    let stressAnchors: [Int], protectedSpans: [Range<Int>], tail: Range<Int>
+    let score: DialogueScore                                          // named components, logged
+}
+nonisolated struct DialoguePad: Sendable { enum Role { case anchor, head, answer, stab, sibling, texture }
+    let padID: Int, unitID: Int, role: Role, frames: Range<Int>, transform: DialogueTransform, accentOffset: Double, duration: Double, protected: Bool, text: String? }
+nonisolated enum DialogueTransform: Sendable, Hashable { case native, linkedRate(semitones: Double) }
+nonisolated struct DialoguePadBank: Sendable { let bankID: UInt64, analysisVersion: Int, pads: [DialoguePad], anchorPadID: Int, siblingGroups: [[Int]] }
+nonisolated struct DialogueTransportSnapshot: Sendable {
+    var revision: UInt32, takeIndex: Int, origin: Double, beatDuration: Double, nextBeatDuration: Double?
+    var phraseAtOrigin: Int                         // global phrase index of the take start
+    var kicks: [DialogueLandmark], snares: [DialogueLandmark]   // take-relative beats, confidence
+    var leadNotes: [ClosedRange<Double>]            // take-relative beats, may be empty
+    func time(beat: Double) -> Double; func beat(time: Double) -> Double
+}
+nonisolated struct DialogueEvent: Sendable { let padID: Int, role: DialoguePad.Role, block: Int, slot: Int
+    let accentTime: Double, startTime: Double, duration: Double, gainDB: Float, protected: Bool, chokeAt: Double?, text: String? }
+nonisolated struct DialoguePerformancePlan: Sendable {
+    let sourceID: String, cueToken: Int, bankID: UInt64, analysisVersion: Int, seed: UInt64
+    let transportRevision: UInt32, revision: Int, usedTranscript: Bool
+    let blocks: [DialogueBlock]                     // one per 4-bar phrase: family, variation, fingerprint, events
+    let rejections: [DialogueRejection]
+    var events: [DialogueEvent] { get }
+}
+nonisolated struct DialoguePerformanceMemory: Sendable { /* bounded: last 8 block fingerprints, family cycle, variation counter, anchor use counts, last bank */ }
+nonisolated struct DialogueChop: @unchecked Sendable { let event: DialogueEvent; let buffer: AVAudioPCMBuffer }
+nonisolated enum DialogueEngine {
+    static let analysisVersion: Int
+    static func analyze(_ source: DialogueSource, speech: [LofiSpeechFocus.Window]) -> DialogueAnalysis
+    static func bank(_ analysis: DialogueAnalysis, transcript: DialogueTranscript?, seed: UInt64) -> DialoguePadBank?
+    static func perform(_ bank: DialoguePadBank, snapshot: DialogueTransportSnapshot, window: Range<Double>,
+                        earliestStart: Double, memory: inout DialoguePerformanceMemory, seed: UInt64) -> DialoguePerformancePlan
+    static func render(_ plan: DialoguePerformancePlan, bank: DialoguePadBank, source: DialogueSource, analysis: DialogueAnalysis) -> [DialogueChop]
+    static func log(_ plan: DialoguePerformancePlan, bank: DialoguePadBank?) -> [String: Any]   // diagnostics.dialoguePlans element
+}
+nonisolated struct DialogueTranscript: Sendable { struct Word: Sendable { let text: String; let start: Double; let end: Double; let confidence: Float? }
+    let locale: String, modelVersion: String, words: [Word] }                                   // film seconds
+protocol TranscriptProvider: Sendable { func transcript(for source: DialogueSource, deadline: ContinuousClock.Instant) async -> DialogueTranscript? }
+nonisolated struct NullTranscriptProvider: TranscriptProvider
+nonisolated struct FixtureTranscriptProvider: TranscriptProvider
+nonisolated enum DialogueTranscription { static func makeProvider() -> any TranscriptProvider }   // Null in wave 1, Apple-backed in wave 2
+```
+
+### 3.5 Drum landmarks, timing field and bass voices (wave 1, package `rhythm-foundation`)
+
+```swift
+nonisolated struct LofiDrumLandmark: Sendable, Equatable { enum Kind: Int, Sendable { case kick, snare, hat, other }
+    let kind: Kind, attackFrame: Int, peakFrame: Int, strength: Float, confidence: Float }
+nonisolated struct LofiTimingField: Sendable {
+    let landmarks: [LofiDrumLandmark]                     // sorted, take frames
+    func kicks(phraseStartBeat: Int, minConfidence: Float) -> [Double]       // phrase-local beats of attacks
+    func snares(phraseStartBeat: Int, minConfidence: Float) -> [Double]
+    func nearestAttack(beat: Double, kind: LofiDrumLandmark.Kind, within: Double) -> (beat: Double, confidence: Float)?
+    func offset(atBeat: Double) -> Double                 // sparse interpolated human offset in beats, 0 when unknown
+}
+extension LofiDrumTake { var landmarks: [LofiDrumLandmark] { get }; var timing: LofiTimingField { get } }   // `kicks` stays unchanged
+nonisolated enum LofiBassVoice: Int, CaseIterable, Sendable { case classic, roundSub, pluck, longAnswer
+    var attackLead: Double { get }                         // seconds from note start to the audible attack landmark
+    static func add(_ note: LofiScore.Note, voice: LofiBassVoice, clock: LofiClock, left:, right:)
+}
+```
+
+### 3.6 Runtime controls (wave 2, package `dialogue-runtime`)
+
+```swift
+extension ArchiveVoice { struct ChopPlan: @unchecked Sendable { let token: Int, revision: Int, replaceFrom: Double, chops: [DialogueChop], bedDuck: Bool } }
+enum MusicControl { ... case archiveChops(ArchiveVoice.ChopPlan) }
+nonisolated struct LofiTransportInfo: Sendable {   // published through MusicStateBus side channel, not inside MusicState
+    let revision: UInt32, takeIndex: Int, phraseAtTakeStart: Int, origin: Double, beatDuration: Double, nextBeatDuration: Double?
+    let seed: UInt64, options: LofiOptions, timing: LofiTimingField?
+}
+extension MusicStateBus { func setTransport(_ info: LofiTransportInfo?); func transport() -> LofiTransportInfo? }
+```
+
+### 3.7 Master bus (wave 2, package `master-bus`)
+
+```swift
+extension LofiMasterBus { enum Profile: String, Sendable { case ambient, lofi }
+    func setProfile(_ profile: Profile, ramp: Double); var profile: Profile { get }; var finisher: LofiMasterFinisher { get } }
+```
+
+Default profile is `ambient` (legacy behavior). The engine selects `lofi` before Lo-Fi starts. Captures select it through the `masterProfile` hook option.
+
+## 4. Dialogue: source to pad bank
+
+### 4.1 Source and clocks
+
+- The bed keeps the existing decode (`cue.rate`, normalisation to -26 dBFS RMS, soft clip at -9 dBFS).
+- The dialogue source is native rate. When `cue.rate >= 0.97` the bed buffer is reused. When the cue is slowed (20 percent of pieces), the coordinator decodes the same film range a second time at rate 1 for analysis and chops, so chops are never pitch-dropped by the picture rate.
+- `DialogueSource` holds the only conversion between film seconds and buffer frames. Transcript word times are film seconds. Plan times are transport seconds on the take grid clock. No other code mixes these.
+- Only the first `min(32 s, cue span)` is analysed.
+
+### 4.2 Analysis (10 ms hop)
+
+1. Three-band envelopes as today (corners 145, 820, 3900 Hz; floor at the 20th percentile; gate `max(0.0025, 0.19 x p80)`).
+2. Speech intensity contour in 300 to 3000 Hz (dB).
+3. Syllable nuclei (de Jong and Wempe): local maxima above `p99 - 25 dB`, at least a 2 dB dip between neighbours, voiced (normalised autocorrelation peak above 0.3 for lags of 70 to 400 Hz in a 30 ms frame, or low zero-crossing rate).
+4. Pauses: intensity below `noise + 6 dB` for at least 180 ms ends an utterance; 80 ms or more marks a pause group.
+5. Onset type at each unit start: burst (rise under 15 ms) or gradual (fricative or vowel).
+6. Clipping share (flat tops near the soft-clip ceiling) and per-unit band SNR.
+7. Speech windows from `LofiSpeechFocus` (SoundAnalysis), with a 0.9 s budget. Without them, weights are neutral.
+
+### 4.3 Hierarchy
+
+| Level | Span (*start*) | Built from |
+|---|---|---|
+| utterance | 0.7 to 6 s, at least 3 nuclei | pause-delimited; longer spans split at the deepest inner pause |
+| phrase | 0.7 to 3 s | pause groups or nuclei valleys inside an utterance |
+| wordGroup | transcript only | recognised words or groups whose boundaries pass acoustic refinement |
+| stab | 0.15 to 0.6 s, 1 or 2 nuclei | onset to next valley |
+| texture | 60 to 150 ms | vowel core, non-semantic |
+
+Each unit keeps its parent, its neighbours in source order, its stress anchors (onset of the strongest nuclei, at most three), protected spans and its natural tail.
+
+Boundary refinement: move a cut to the nearest energy minimum within 30 ms; start 5 to 20 ms before a burst onset and 10 to 30 ms before a gradual onset; snap to a zero crossing within 2 ms; fade in 3 to 8 ms; release 8 to 20 ms after the valley and tail. `boundaryConfidence` maps valley depth (4 dB gives 0.2, 12 dB or more gives 1).
+
+Invariants (tested): children lie inside parents; the children of a unit in source order cover it with no duplicated and no missing frames outside pauses; no read outside the buffer; no cut inside a protected span.
+
+### 4.4 Ranking
+
+Named components in 0 to 1, logged per unit: `speech`, `clarity`, `entrance`, `exit`, `stress`, `accentRegularity` (low variance of inter-stress intervals), `roleFit`; penalties `clipping`, `interference`, `boundaryUncertainty`.
+
+```text
+sound = speech * clarity^0.7 * (0.5 + 0.5 entrance) * (0.5 + 0.5 exit) * (0.7 + 0.3 stress)
+        * (0.8 + 0.2 accentRegularity) * (1 - 0.6 clipping)
+```
+
+Rhythmic fit is evaluated only among the six best units by `sound`, and only breaks ties within 10 percent. Hard rejections carry a reason: `notSpeech`, `tooQuiet` (never amplified to pass), `tooShort`, `tooLong`, `uncertainBoundaries`, `clipped`, `overTransformed`.
+
+### 4.5 Pad bank
+
+8 to 12 pads (fewer when the film offers less), ordered by source time, stable ids:
+
+| Role | Count | Rule |
+|---|---|---|
+| anchor | 1 | best utterance or phrase, native, protected ending |
+| head | 1 or 2 | first clause of the anchor, or the best other phrase |
+| answer | 1 or 2 | the unit that follows the head in source order |
+| stab | 2 to 4 | stressed word or syllable group from the anchor; first phonemes differ where possible |
+| sibling | 1 | one stab or head at a single linked-rate step, -2 to -4 semitones (rate 0.79 to 0.89) |
+| texture | 0 or 1 | vowel core; may be +1 to +2 semitones; never a protected phrase |
+
+`bankID` hashes the content id, source range, analysis version and pad list. Pads render once and are cached; repeats reuse the same buffer, so the first statements are bit-identical.
+
+Bank cache: key `(contentID, sourceStart to 10 ms, length, analysisVersion, locale, modelVersion)`; four entries with PCM, twelve without.
+
+### 4.6 Rendering one pad
+
+Linked-rate resample (linear interpolation at the source rate; windowed sinc when the rate is below 1), per-band noise weighting as today but without the fixed -18 dB cut above 3.9 kHz, edges from 4.3, then the per-cut chain of section 8.5 (added in wave 3), then K-weighted levelling (`clipGain`, target 0.132, peak cap 0.44). Role trims: anchor 0 dB, head and answer -1 dB, stab -1 dB, sibling -1.5 dB, texture -5 dB.
+
+## 5. Dialogue: performance grammar and cadence
+
+### 5.1 Grid and blocks
+
+A block is one 4-bar phrase (16 beats, 64 sixteenth slots). A footage piece in Lo-Fi spans 8 bars between fill boundaries, so one bank normally covers two blocks. A drum take is four blocks. Slots name the position of the stress accent, not the buffer start:
+
+```text
+start = accentTime + gestureOffset - accentOffset / rate
+```
+
+`gestureOffset` is one value per pattern in -20 to +25 ms. No per-syllable jitter.
+
+### 5.2 Families
+
+Positions are `bar.beat` with `e`, `&`, `a` for the second, third and fourth sixteenth. Each family has two or three seeded placement variants.
+
+| Family | Events in a block | Notes |
+|---|---|---|
+| `anchor` | anchor at 1.3 or 2.1; stab at 3.2a | bar 4 rests |
+| `echo` | head at 1.2&; the same head at 2.2& (identical buffer); sibling at 3.2& or 3.3a | Premier flip-flop; bar 4 rests |
+| `callResponse` | head at 1.2e; at least 2 beats of space; answer with its accent on a backbeat (2.2, 2.4 or 3.2) placed on the snare landmark | optional stab at 4.1a when bar 4 is not the last bar of the piece |
+| `sparseReorder` | answer at 1.3; head at 3.1& | only with a transcript that passes the guards of section 7; otherwise the same placements in source order |
+| `textureFill` | stab at 1.4a; two or three texture slices on off-beat sixteenths in bar 2; stab at 3.4a | at most one block in four; texture is gated |
+| `rest` | nothing, or one anchor | used when no bank exists |
+
+Placement rules
+
+- The first two beats after an 8-bar boundary are empty. The last bar of each 8 is empty (drum fill). At least one empty dialogue bar in every 8.
+- Occupancy (dry audio time over bar time) is at most 0.55 over any 8 bars; an event's echo is not counted, a second intelligible statement is.
+- Two to five phrase events per block plus at most one ornament group. Breakdown blocks have at most two events.
+- A stressed accent sits at least 50 ms from a confident kick attack; if not, the accent moves one sixteenth away. One anchor or answer per 8 bars lands on a snare landmark (the drummer's actual time).
+- A returning theme phrase (`returnTheme`) keeps its first bar free of dialogue so the first notes of the hook are exposed.
+- One dry voice. Events never overlap. A later event chokes the earlier one: the earlier buffer is rendered to end 2 ms before the later start with a 12 ms release. A protected event within 80 ms of its end is not choked; the later event moves one sixteenth later or is dropped.
+- Non-native events are at most 40 percent of events in 8 bars. The anchor is always native.
+
+### 5.3 Development across a take
+
+| Block (section) | Role |
+|---|---|
+| 1 (theme) | establish: `anchor` or `echo` with the piece's bank |
+| 2 (variation or answer) | the block-1 pattern with exactly one change: omit a hit, swap a pad for its sibling, shift one accent by a sixteenth, or answer with `callResponse` |
+| 3 (breakdown) | new piece and bank: sparse establish, at most two events |
+| 4 (returnTheme) | first bar empty; the bank's anchor restated unchanged; one echo; last bar empty |
+
+The family for block 1 comes from a seeded shuffled cycle with no back-to-back repeat between takes. A variation counter advances each take. When a bank recurs (cache hit) its anchor may be reused for at most two pieces in 64 bars, then the next-ranked unit becomes the anchor.
+
+### 5.4 Cadence rule (the 16-bar requirement)
+
+- Fingerprint of a block: the family id and the ordered list of `(padKey, slot)` where `padKey` hashes the source id, the unit frames and the transform.
+- Micro change every 4 bars: consecutive blocks differ in at least one event, except the declared exact repeat inside `echo`.
+- Macro change every 8 bars: the family or the bank changes.
+- Hard ceiling: for consecutive 16-bar windows `W(n-1)`, `W(n)` on the take grid, `1 - |F(n) ∩ F(n-1)| / max(|F(n)|, |F(n-1)|) >= 0.25`. The performer enforces it before returning a plan: if the candidate plan fails, it forces a different family and anchor and records `forcedChange` in the log. Windows without a bank are exempt and logged as `noDialogue`.
+- The plan log carries fingerprints; `scripts/mix-report.py` recomputes them from the scheduled events and fails the capture if any window pair is below 0.25.
+
+### 5.5 Fallback order
+
+Original-order anchor line; a shorter readable phrase; one clearly non-semantic stab; the previous bank for at most one further piece; rest. A piece without usable speech produces no dialogue while film and music continue.
+
+## 6. Scheduling, deadlines and cancellation
+
+### 6.1 Lead-time budget
+
+At 58 to 82 BPM a bar is 4.14 to 2.93 s, a block 16.6 to 11.7 s, 16 bars 66.2 to 46.8 s.
+
+| Step | When |
+|---|---|
+| weaver prepares the incoming piece | 3.0 s before its crossfade starts (poll adds up to 0.5 s) |
+| `scheduleAudio` begins | at least 2.5 s before the piece start, about 2.2 s before the bed is due |
+| bed posted | at its due time; path is decode then wait, nothing else |
+| first dialogue accent allowed | boundary + 2 beats (1.46 to 2.07 s after the boundary) |
+| plan commit margin | 0.30 s before each event |
+| acoustic plan deadline for block 1 | at least 3.6 s after `scheduleAudio` begins (82 BPM worst case) |
+
+Stage budgets (p95, logged per cue): decode 600 ms; native re-decode 600 ms; classification 900 ms (after that the analysis proceeds without it); envelopes, hierarchy and bank 150 ms; plan 30 ms; render 250 ms. Total 2.0 s or less against 3.6 s. Acceptance in section 9: total p95 at most 2000 ms, maximum 3000 ms, every committed event scheduled at least 0.30 s ahead.
+
+A late plan drops whole gestures whose start is earlier than `now + 0.30 s` and begins at the next bar. It never moves audio that is already queued and never touches the bed.
+
+Transcription has its own budget: it may refine block 2 and later. Timeout is `min(8 s, time to the block-2 commit - 1 s)`. A transcript that arrives late is cached with the bank for a later appearance of the same source.
+
+### 6.2 Coordinator
+
+`DialogueCueCoordinator` owns the dialogue work for one cue:
+
+1. `scheduleAudio` decodes, then starts the coordinator task and continues to the existing wait-and-post loop with `chops: []`.
+2. The task classifies (bounded), analyses, builds or fetches the bank, snapshots the transport, plans block by block, renders, checks the cue token and the transport revision, then posts `.archiveChops`.
+3. If the revision changed (tempo or take change, restart), the analysis and bank are kept and the plan is rebuilt against the new snapshot, or discarded when the cue is gone.
+4. When a transcript arrives in time, blocks that start after `now + 0.5 s` are replanned and posted with a higher `revision` and `replaceFrom` at that block's start.
+5. Memory (fingerprints, family cycle, counters) lives in the coordinator's owner and is updated only for committed plans. Thread completion order never selects a phrase.
+
+All of this runs at utility priority. Loops check cancellation. Nothing here runs on the conductor queue except the final post.
+
+### 6.3 ArchiveVoice scheduling
+
+- The chop player keeps one sample timeline per Lo-Fi session (started lazily, anchored once to the host clock; offline it starts at conductor time). It is stopped only on beat-lock off, reset or power down.
+- A plan is stored, not queued whole. Every conductor tick schedules chops whose start is within the next 1.0 s and not yet queued, at `sampleTime = (start - anchor) x rate`. Replacing a plan from `replaceFrom` only swaps unscheduled chops.
+- Chop gain follows the Footage audio setting and beat lock, with its own 50 ms ramp. It no longer follows the bed's fade-in.
+- Drop windows for bed ducking and music ducking are derived from queued chops.
+
+### 6.4 Transport revision
+
+`LofiPlayback` increments `revision` on start, stop, route recovery and whenever a queued take changes tempo. It publishes `LofiTransportInfo` at each take start and when the next take is queued. The timing field for a take is published with it.
+
+## 7. Local transcription and safe reordering
+
+- Backend: `SpeechAnalyzer` with `SpeechTranscriber(locale: en_US, transcriptionOptions: [], reportingOptions: [], attributeOptions: [.audioTimeRange])`, final results only, fed with `AnalyzerInput` buffers converted to `bestAvailableAudioFormat`, results consumed concurrently, `finalizeAndFinish(through:)` at the end, `cancelAndFinishNow()` on deadline. Wrapped in `#if canImport(Speech)` and availability checks.
+- Gates, in order: mode setting; `SpeechTranscriber.isAvailable`; locale in `supportedLocales`; locale in `installedLocales`. Missing assets are downloaded only when the user chose "Download model" (`AssetInventory.assetInstallationRequest`), once, at idle. Any failure, timeout or thrown error is a normal state and leaves the acoustic plan in place. No server fallback exists in this path. Legacy `SFSpeechRecognizer` and Whisper backends are not built (section 13).
+- Setting `archive.dialogueTranscription`: `off`, `installedOnly` (default), `allowDownload`. Debug flag `-LiminalDialogueTranscription <mode>`.
+- Refinement: map words to source frames; snap boundaries to the nearest energy minimum within 60 ms; drop words shorter than 40 ms or longer than 2 s, regions with zero speech weight, speech rates above 7 words per second and any 3-gram repeated three times (hallucination guard). A unit is transcribed when coverage is at least 0.8 and mean confidence is at least 0.5 where confidence exists.
+- Protected spans (NLTagger lexical classes and name types): negation with its predicate; names with their phrase; determiner with noun; pronoun with verb; number with noun. Uncertain spans are protected whole.
+- Reorder templates, each requiring every involved unit to be transcribed: repeat a whole clause; omit a parenthetical bounded by pauses; move an intact leading or trailing adverbial; exchange two independent clauses (not when either starts with a subordinator such as if, when, because, unless, although, or with a pronoun whose referent is in the other clause, or when a negation crosses the join). If no template proves safe, the order is the source order.
+- The plan log records the intended text, the original order and the arranged order for review.
+
+## 8. Mix: spectral slots, per-bus chains and master
+
+### 8.1 Slots
+
+| Band | Owner | Others |
+|---|---|---|
+| 20 to 40 Hz | nobody | high-passed everywhere |
+| 40 to 120 Hz | kick and bass (shared in time by ducking and attack alignment) | mids, lead, space, dialogue, bed at least 12 dB below |
+| 120 to 500 Hz | bass harmonics, snare body, instrument warmth | 2 to 3 dB cuts on mids, lead, dialogue, bed |
+| 500 Hz to 1 kHz | lead and mids body | bed shaped below them |
+| 1 to 4 kHz | dialogue when it plays; lead otherwise | static 2 dB dip in space and bed; mids, lead and space duck under featured chops |
+| 4 to 8 kHz | snare crack, hats, consonants | music buses rolled off |
+| above 8 kHz | hats and air | lo-fi low-pass on lead, mids, space |
+
+### 8.2 Drums (offline, per take, in `LofiDrumTake`)
+
+Landmarks are detected before processing. Chain (*start*): mono below 100 Hz; HPF 32 Hz 12 dB per octave; bell -2.5 dB at 320 Hz Q 1.0; bus compressor 3:1, knee 6 dB, attack 20 ms, release 120 ms, threshold set from the take so peaks see 2 to 3 dB; parallel compressor 8:1, attack 2 ms, release 80 ms, 6 to 10 dB, blended at 20 percent; tape saturation for about 1.5 dB of peak rounding, 2x oversampled; high shelf -2 dB at 11 kHz; trim so the take peaks at or below -4 dBFS. Target crest 10 to 14 dB. Attack time of kick landmarks may grow by at most 20 percent.
+
+### 8.3 Bass (offline, in `LofiRenderer` with `LofiBassVoice`)
+
+Voices, loudness matched within 0.5 dB at MIDI 33:
+
+| Voice | Recipe (*start*) | Use |
+|---|---|---|
+| `classic` | today's sine plus harmonics, bit-identical | comparison and fallback |
+| `roundSub` | sine fundamental, 5 ms rise, pitch settles from +30 cents in 35 ms, 2nd harmonic 0.10, tanh 1.1, release 220 ms | theme, variation |
+| `pluck` | fundamental plus a bright component (2nd to 4th harmonics, band-limited click of 3 ms at -20 dB) that decays in 90 ms over a stable body, release 180 ms | answer, pickups |
+| `longAnswer` | round body, 12 ms rise, 2nd harmonic 0.16 decaying, release 420 ms with a controlled tail | return, breakdown |
+
+One voice per phrase, chosen by section and seed, never per note. Chain: HPF 30 Hz; parallel saturation path high-passed at 120 Hz at 20 percent (harmonics at 150 to 800 Hz for small speakers); compressor 3.5:1, attack 20 ms, release 150 ms, 2 to 4 dB; bell -2 dB at 280 Hz; LPF 4.5 kHz; kick duck up to 3 dB (attack 3 ms, release 100 ms); mono.
+
+Timing: structural accents (beats 0 and 8 of a phrase) align their audible attack to a confident kick attack within 0.12 beats: `noteStart = kickAttack - voice.attackLead`. Pickups keep the pocket offset and take the timing field's interpolated offset. No note is added or moved to an unrelated kick.
+
+### 8.4 Lead, mids and space (offline, in `LofiRenderer`)
+
+| Bus | Chain (*start*) |
+|---|---|
+| lead (`dry`) | HPF 180 Hz; bell -2 dB at 350 Hz; bell +1.5 dB at 2.8 kHz Q 0.8; compressor 2.5:1, attack 15 ms, release 150 ms, 2 to 3 dB; LPF 9 kHz |
+| mids (`texture`) | HPF 160 Hz; bell -3 dB at 400 Hz; bell +1.5 dB at 1.6 kHz; LPF 7 kHz; lower and upper voice panned about 0.3 apart above 300 Hz; level so mids sit 3 to 8 dB under the lead when both play |
+| space (`wet`) | HPF 350 Hz; LPF 4.5 kHz; bell -2 dB at 2.5 kHz; ducked 3 to 5 dB by the dry lead (attack 10 ms, release 250 ms); phrase level at least 3 dB under the lead |
+
+Mids arrangement (in `LofiScore`): two to four shell events per non-breakdown phrase instead of one, chosen from three articulations by where the melody rests: an off-beat short stab (length 0.35, in a gap of at least 0.75 beats), a longer answer after the melody's landing note (length 1.6), or the rolled two-note shell (stagger 0.17). Velocity 0.50 to 0.66, bounded length and send variation, close voice leading kept. A breakdown has at most one soft answer.
+
+Theme return (in `LofiScore` and `LofiRenderer`): the return uses the take's theme program, register, articulation stream and note velocities; its first two notes get +1.5 dB and a send reduced by 40 percent; the carried wet tail is lowered 6 dB for the first two beats; no mid event before beat 2; no virtual-record edit in the first cell; dialogue leaves bar 1 free (5.2).
+
+### 8.5 Dialogue chops
+
+Per cut, offline in `DialogueChopRenderer`: HPF 120 Hz 18 dB per octave; bell -2.5 dB at 300 Hz; bell +3 dB at 3 kHz Q 0.8; de-esser 5 to 8 kHz up to 6 dB; compressor 3:1, attack 8 ms, release 100 ms, 3 to 6 dB on peaks; LPF 7.5 kHz for speech pads and 5.5 kHz for texture; then levelling.
+
+Live in `ArchiveVoice`: dry mono centre; tempo echo (0.75 beat, feedback 0.25) returned through a 400 Hz to 3 kHz band at about -16 dB under dry; small room (decay about 0.9 s, HPF 300 Hz, LPF 4 kHz) at about -20 dB under dry.
+
+Ducking under a featured chop (0.5 s or longer): lead -2 dB, mids -3 dB, space -4 dB on the `LofiBus` faders; bed -3 dB. Attack 30 ms, release 300 ms. Drums and bass are not ducked.
+
+### 8.6 Film bed (live, `ArchiveVoice` and `MixBus`, Lo-Fi only)
+
+HPF 120 Hz; one LPF stage at 6.5 kHz (the second stage opened); static dip -2.5 dB at 2.2 kHz Q 0.7; phaser mix 0.10 to 0.18; dry gain -3 to 0 dB; reverb and echo sends 0.25 to 0.45 (about 10 to 20 percent wet); `MixBus` Lo-Fi voicing raises its master low-pass from 5.4 kHz to 10 kHz. The Footage audio control stays monotonic and zero stays silent. Ambient values are unchanged.
+
+### 8.7 Master
+
+Graph: `input -> glue (Apple, ambient only) -> trim -> limiter (Apple, ambient only) -> LofiMasterFinisher -> output`.
+
+`ambient` profile: today's values, finisher in passthrough. `lofi` profile: the two Apple units are bypassed, the output fader is 0 dB, and the finisher runs (*start*): input gain about +6 dB (calibrated in wave 4); HPF 25 Hz; glue 1.7:1, knee 6 dB, attack 30 ms, release 180 ms, sidechain HPF 100 Hz, 1 to 2 dB on peaks; soft clip, 4x oversampled, at most 2 dB; true-peak limiter with 3 ms lookahead, 4x oversampled detection, min-hold and FIR-smoothed attack, dual release 80 and 350 ms, ceiling -1.0 dBTP with a 0.15 dB internal margin and a final clamp that should never engage.
+
+Slow calibration aims at -12 LUFS, moves at most 1 dB per 16 bars inside -3 to +2 dB, and does not move up while the limiter's mean reduction exceeds 2.5 dB.
+
+## 9. Verification
+
+### 9.1 Commands
+
+```sh
+S=/private/tmp/claude-501/-Users-pj4533-Developer-Liminal/b8f97122-abd8-4cd6-b289-17658fba4b13/scratchpad
+# one capture plus the full report (JSON, Markdown, PNGs) and optional comparison
+DD=$S/dd-<name> scripts/mix-report.sh --out $S/cap-<name> --private-drums --film-reel --bars 32 --seed 1042 --bpm 70 \
+    --baseline $S/baseline/ref [--strict]
+# analysis only, on an existing capture
+python3 scripts/mix-report.py $S/cap-<name> --baseline $S/baseline/ref [--strict]
+# the whole matrix
+DD=$S/dd-<name> scripts/mix-matrix.sh --out $S/matrix-<name> --baseline $S/baseline [--strict]
+python3 scripts/mix-report.py --self-test
+```
+
+Matrix cases (all `--private-drums`): `ref` film reel, 32 bars, seed 1042, 70 BPM; `long` film reel, 64 bars, seed 7, 62 BPM; `fast` film reel, 32 bars, seed 2025, 80 BPM; `same` one film repeated at the same offset (`--same-film`), 64 bars, seed 1042, 70 BPM; `nofilm` no footage, 16 bars.
+
+The baseline of the unmodified audio code lives in `$S/baseline/<case>/` with its own report.
+
+### 9.2 Measurements
+
+Bands: 20-60, 60-120, 120-250, 250-500, 500-1k, 1-2k, 2-4k, 4-8k, 8-16k Hz. Sections map to stems through `manifest.sections`.
+
+| Id | Measurement | Method |
+|---|---|---|
+| M1 | Loudness | BS.1770-4 K-weighting, 400 ms and 3 s windows, gating at -70 LUFS and -10 LU; integrated, momentary and short-term series, LRA; cross-checked with `ffmpeg ebur128` within 0.2 LU |
+| M2 | True peak | ffmpeg `ebur128=peak=true` and an independent 16x windowed-sinc reconstruction |
+| M3 | Crest, PLR, PSR | sample peak minus RMS per bus and master in 1 s windows and overall; true peak minus integrated; true peak minus short-term maximum |
+| M4 | Gain reduction | engine trace `master-gr.csv` (glue, clip, limiter) and an inferred trace from `pre-master` and `master` envelopes (10 ms) |
+| M5 | Pumping | RMS of the master gain in the 0.5 to 8 Hz modulation band; gain dip 20 to 80 ms after kick landmarks |
+| M6 | Spectrograms | STFT at 4096, 1024 and 256 samples, log frequency, per section and master |
+| M7 | Long-term spectrum | third-octave average per section and master; tilt by regression from 250 Hz to 8 kHz; band shares |
+| M8 | Band energy and masking matrix | per band, each section's level minus the sum of the others, overall and in chop-active windows |
+| M9 | Low-band mono | L/R correlation per band; mid/side ratio; loudness of `(L+R)/2` against stereo |
+| M10 | Kick and bass | 0 to 120 ms after each kick landmark: 40 to 120 Hz RMS of drums, bass and their sum; onset lag between bass attack and kick attack at aligned accents; duck depth |
+| M11 | Dialogue intelligibility | per featured chop: band SNR of dialogue against all other sections in octave bands 250 Hz to 8 kHz; SII proxy `sum(w_b * clamp((SNR_b + 15) / 30, 0, 1))` with weights 0.08, 0.14, 0.22, 0.30, 0.20, 0.06; per-chop loudness |
+| M12 | Bed | direct to wet ratio; audibility index (same formula as M11) of the bed against the other sections in gaps between chops; 85 percent roll-off; loudness in gaps |
+| M13 | Mids and lead | 400 Hz to 3 kHz levels of mids and lead in lead-active windows and in lead rests (from `score.json`); mid articulation count per 16 bars |
+| M14 | Theme return | lead salience over the first two return notes (lead minus the sum of mids, space, dialogue, bed in 500 Hz to 4 kHz); onset-envelope correlation between the theme phrase and the return in the lead stem; same program |
+| M15 | Chop cadence | fingerprints per block from scheduled events and from the plan log; 16-bar differences; rests; occupancy; overlaps; lead time and stage timings |
+| M16 | Routing | stems sum to the Lo-Fi bus and to the pre-master within 2e-6 |
+
+### 9.3 Acceptance criteria
+
+`fail` criteria gate `--strict`. `warn` criteria are reported. Thresholds live in `scripts/mix-criteria.json`; a change needs a written reason in `docs/plans/mpc-chopping-measurements.md`.
+
+Master (cases with footage)
+
+| Id | Criterion | Level |
+|---|---|---|
+| C-M1 | integrated loudness -13.0 to -11.0 LUFS on `ref`; -14.0 to -10.5 on the other cases | fail |
+| C-M2 | true peak at most -1.0 dBTP (ffmpeg) and at most -0.9 dBTP by the 16x reconstruction | fail |
+| C-M3 | PLR 9 to 12.5 dB (below 8 fails) | fail |
+| C-M4 | short-term maximum at most -8.5 LUFS; PSR at least 6 dB | warn |
+| C-M5 | master crest 9 to 13 dB | warn |
+| C-M6 | limiter reduction: mean at most 3.0 dB, p95 at most 5.0 dB, maximum at most 8.0 dB, above 3 dB for at most 10 percent of the time | fail |
+| C-M7 | glue reduction: p95 at most 3 dB, mean 0.3 to 2.0 dB | warn |
+| C-M8 | pumping index at most 0.8 dB; kick-synchronous dip at most 1.5 dB | fail |
+| C-M9 | soft clip engaged on at most 3 percent of samples | fail |
+| C-M10 | correlation below 120 Hz at least 0.8; full band at least 0.3; mono loss at most 3 LU | fail |
+| C-M11 | energy below 25 Hz at least 50 dB under the total; tilt -3 to -6.5 dB per octave | warn |
+| C-M12 | LRA 2 to 9 LU | warn |
+
+Buses
+
+| Id | Criterion | Level |
+|---|---|---|
+| C-B1 | in 20 to 120 Hz each of mids, lead, space, dialogue, bed is at least 12 dB under the louder of drums and bass | fail |
+| C-B2 | aligned bass accents: median lag at most 5 ms, p90 at most 12 ms; kick plus bass sum at least -1 dB (median) and -3 dB (worst) against the louder part; duck depth 1.5 to 4.5 dB | fail |
+| C-B3 | bass 60 to 250 Hz within -6 to +3 dB of drums in that band; bass 150 to 800 Hz at most 18 dB under its fundamental band | warn |
+| C-B4 | drum bus crest 10 to 14 dB; peak at most -3 dBFS before the master; kick attack time at most 1.2 times the unprocessed take | warn |
+| C-B5 | mids 3 to 8 dB under the lead when both play; mids at least 3 dB over the lead in lead rests where mids play; at least two mid articulations per 16 bars | fail |
+| C-B6 | return salience at least +6 dB and not below the theme phrase's; theme and return onset correlation at least 0.8; same program | fail |
+| C-B7 | space at least 3 dB under the lead in lead-active phrases | warn |
+| C-B8 | SII proxy mean at least 0.55 and p10 at least 0.40 over featured chops; 1 to 4 kHz SNR mean at least +3 dB (aim +6); per-chop loudness spread at most 2.5 LU | fail |
+| C-B9 | bed direct to wet at least +3 dB; audibility index in gaps 0.20 to 0.55; bed at least 6 dB under dialogue in 1 to 4 kHz during chops; roll-off at least 3 kHz | fail |
+| C-B10 | routing identities hold | fail |
+
+Dialogue performance
+
+| Id | Criterion | Level |
+|---|---|---|
+| C-D1 | every consecutive pair of 16-bar windows with dialogue differs by at least 0.25 | fail |
+| C-D2 | family or bank changes at least every 8 bars | fail |
+| C-D3 | consecutive blocks are not identical apart from declared repeats | warn |
+| C-D4 | an empty bar in every 8; nothing in the last 2 beats before an 8-bar boundary; occupancy at most 0.55 per 8 bars | fail |
+| C-D5 | no overlapping dry events | fail |
+| C-D6 | stage timing total p95 at most 2000 ms and maximum 3000 ms; every committed event at least 0.30 s ahead | fail |
+| C-D7 | the first two statements of a hook are the same pad and transform | warn |
+| C-D8 | at least 90 percent of accents are 50 ms or more from a kick attack | warn |
+
+The baseline is expected to fail C-M1, C-M3, C-B5, C-B9 and others. The report prints baseline and candidate side by side.
+
+### 9.4 Reading the plots
+
+A spectrogram cannot prove intelligibility or punch and a waveform match cannot prove recognition; the proxies above stand in for listening and the listening checks in section 12 remain a human step. `docs/mix-verification.md` (wave 4) explains each figure and criterion.
+
+## 10. Tests (Swift Testing)
+
+| Suite | Covers |
+|---|---|
+| `LofiDSPTests` | filter responses; compressor curve and timing; saturator symmetry and aliasing; de-esser; mono-below; true-peak meter on an fs/4 sine at 45 degrees (+3.01 dB); loudness meter on 997 Hz at -23 LUFS |
+| `LofiMasterKernelTests` | ceiling under 16x reconstruction on bursts, phase-offset high tones, 57 Hz bass, antiphase stereo; block-size invariance; latency; passthrough null; THD at nominal level; meters and trace; AU node equals the kernel in manual rendering; realtime factor at least 10x in Debug |
+| `DialogueEngineTests` | clock mappings; containment; source-order reconstruction; protected spans; stable bank and seeds; accent positions under rate; choke exclusivity; occupancy and rests; cadence property test over 200 seeds and 64 bars; exact repeats; kick spacing; silence, tone and choral inputs; reorder guards |
+| `DialogueRuntimeTests` | bed posted on time with a 5 s analysis delay; late plan starts at the next bar; stale token and stale revision discarded or remapped; replace-from on transcript arrival; cue replacement, stop and restart, tempo change during recognition |
+| `DialogueTranscriptionTests` | unavailable, not installed, timeout, thrown error and cancellation all return nil; fixture provider; time mapping; guards against hallucinated repeats |
+| `LofiRhythmTests` | landmark timing within 2 ms on synthetic takes; ghosts and close doubles; kick, snare, hat classes; private takes required when present; timing field interpolation; bass voice loudness match, tuning, click-free edges, attack lead |
+| `LofiArrangementTests`, `LofiCompositionTests` | bass alignment and unchanged other parts; one voice per phrase; mid answers lie in melody rests; return presentation equals the theme's notes with the planned accents |
+| `LofiStemChainTests` | each chain's response and reduction bounds; drums attack preserved; low band mono; no nonfinite output; preparation time bound |
+| `LofiMasterBusTests`, `LofiMasterCharacterizationTests` | ambient profile unchanged; Lo-Fi profile ceiling and loudness on a stress program; profile switch without discontinuity |
+| `ArchiveVoiceRenderTests`, `LofiLiveBusTests` | incremental chop scheduling at sample accuracy; chop gain independent of the bed fade; ducking depth and timing; bed chain bandwidth and direct level; zero setting is silent |
+
+Private drums: suites that measure real takes use an enabled-if trait on installed assets, and the acceptance commands confirm from the log that they ran.
+
+## 11. Work packages
+
+| Wave | Package | Model | Summary |
+|---|---|---|---|
+| 1 | `verify-tooling` | sonnet | capture hooks, harness v2, analysis library, single command, baseline |
+| 1 | `dsp-core` | opus | DSP toolkit, master kernel and finisher unit |
+| 1 | `dialogue-core` | opus | analysis, hierarchy, bank, grammar, renderer, transcript types and guards |
+| 1 | `rhythm-foundation` | opus | drum landmarks, timing field, bass voices |
+| 2 | `dialogue-runtime` | opus | bed and plan split, coordinator, incremental scheduling, transport info, harness on the new engine |
+| 2 | `music-arrangement` | opus | bass timing and voices, mid answers, theme return |
+| 2 | `transcription` | opus | Apple provider, assets, setting, qualification |
+| 2 | `master-bus` | opus | profiles, finisher integration, calibration, meters |
+| 3 | `stem-chains` | opus | offline chains for drums, bass, lead, mids, space |
+| 3 | `live-bus-chains` | opus | bed chain, chop chain and returns, ducking, MixBus voicing |
+| 3 | `dialogue-tuning` | opus | real-footage tuning, transcript path end to end, cadence and timing acceptance |
+| 3 | `verify-extensions` | sonnet | analysis aligned with the real diagnostics, music metrics, matrix runner polish |
+| 4 | `mix-calibration` | opus | joint balance to the criteria across the matrix, measurements record |
+| 4 | `mix-verification-docs` | sonnet | how to run, read and interpret the verification |
+
+Every package builds for macOS and the visionOS simulator with an explicit destination, uses its own derived data directory, copies the three ignored private paths into its worktree without committing them, and never launches the app without automation flags.
+
+## 12. Risks
+
+| Risk | Mitigation |
+|---|---|
+| Pure Swift realtime unit is slow in Debug or unsafe on the render thread | Accelerate block operations; preallocated memory; realtime-factor test; fallback to the ambient chain if the unit cannot be created |
+| Loudness target unreachable without audible limiting | crest is reduced at the source (drum bus, bass, levels) before the master; C-M6 and C-M8 gate; the target range may be lowered with a written reason |
+| Offline chains make take or phrase preparation late | Accelerate biquads; timing test; the existing repeat-stems fallback stays |
+| New analysis misjudges real film audio | real-footage probe in wave 1, tuning package in wave 3, rejection reasons logged |
+| Transcription API differs from the notes or is absent in the simulator | provider behind a protocol; every failure is a nil result; fixture provider in tests |
+| Parallel captures collide on the single config path | the capture script waits for the lock and the harness checks the checkout that owns the config |
+| Thresholds are hypotheses | baseline measured first; thresholds in one JSON file; changes recorded |
+| No ears in the loop | proxies plus loudness-matched audition files for the user; listening acceptance listed as a human step |
+
+## 13. Deferred, with reasons
+
+| Item (handoff phase 4 unless noted) | Reason |
+|---|---|
+| Pitch-preserving time stretch (WSOLA or phase vocoder) | native cadence with stress-anchor placement removes the need to fit durations; revisit if rejection logs show more than 20 percent of anchors lost to `overTransformed` or deadline misfit |
+| Stem or speech separation | the handoff asks for escalation only after measured landmark or masking failures remain |
+| Whisper backends, legacy `SFSpeechRecognizer`, `DictationTranscriber` | one Apple backend is qualified first; these follow only if it is unavailable or fails its budget on the targets |
+| Sampled bass library | the three synthesized voices are compared first; licensing and tuning work follows a demonstrated palette gap |
+| Additional reorder templates and other locales | English, narrow templates first |
+| Hand-labelled drum attacks | an agent cannot produce hand labels; an independent reference detector and plotted spot checks stand in; hand labels remain a human follow-up |
+| Physical Vision Pro timing, memory and thermal runs | needs hardware; the simulator build and the Mac measurements are done here |
+| Listening acceptance | human step: compare the baseline and candidate `master.wav` at matched loudness and judge recognition, intelligibility and the theme return |
