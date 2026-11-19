@@ -19,7 +19,13 @@ struct LofiCompositionTests {
             for (opening, returning) in [(0, 3), (4, 7)] {
                 let first = melody(score(opening, seed: seed))
                 let reprise = melody(score(returning, seed: seed))
-                #expect(first == reprise)
+                // Same notes, onsets, velocities and articulation; only the reveal of the first two differs.
+                #expect(first.map(\.midi) == reprise.map(\.midi))
+                #expect(first.map(\.beat) == reprise.map(\.beat))
+                #expect(first.map(\.velocity) == reprise.map(\.velocity))
+                #expect(first.map(\.length) == reprise.map(\.length))
+                #expect(first.map(\.articulation) == reprise.map(\.articulation))
+                #expect(Array(first.dropFirst(2)) == Array(reprise.dropFirst(2)))
             }
             #expect(statement.prefix(3).map(\.midi) == varied.prefix(3).map(\.midi))
             #expect(statement.prefix(3).map(\.beat) == varied.prefix(3).map(\.beat))
@@ -51,7 +57,8 @@ struct LofiCompositionTests {
                     #expect(notes.count == 4)
                     #expect(notes.last?.beat ?? 0 > 10)
                 } else {
-                    #expect(mids.filter { $0.part == .texture }.count == 2)
+                    let shells = mids.filter { $0.part == .texture }.count
+                    #expect((4...8).contains(shells) && shells.isMultiple(of: 2))
                 }
             }
         }
@@ -96,6 +103,7 @@ struct LofiCompositionTests {
     }
 
     @Test func bassFollowsNearbyPlayedKicksWithoutAddingOrMovingOtherParts() {
+        // Legacy path: a phrase without a timing field snaps to kicks within 0.075 beats.
         func phrase(_ hits: [Double]) -> LofiScore {
             .make(seed: 42, section: .returnTheme, drift: .init(seed: 42), startBeat: 48, kickBeats: hits)
         }
@@ -108,6 +116,31 @@ struct LofiCompositionTests {
         #expect(abs(after[1].beat - before[1].beat + 0.05) < 1e-9)
         #expect(after[2] == before[2])
         #expect(played.notes.filter { $0.part != .bass } == grid.notes.filter { $0.part != .bass })
+
+        // Timing-field path: structural accents lock their attack to a confident kick within
+        // 0.12 beats; a distant or unconfident kick leaves them on the grid; nothing is added.
+        let clock = LofiClock(tempo: 70, sampleRate: 48_000)
+        func field(_ hits: [(Double, Float)]) -> LofiTimingField {
+            LofiTimingField(landmarks: hits.map { beat, confidence in
+                let frame = 48 * clock.frameCount / 16 + clock.frame(at: beat)
+                return LofiDrumLandmark(kind: .kick, attackFrame: frame, peakFrame: frame + 200,
+                                        strength: 1, confidence: confidence)
+            }, clock: clock)
+        }
+        func timed(_ hits: [(Double, Float)]) -> LofiScore {
+            .make(seed: 42, section: .returnTheme, drift: .init(seed: 42), startBeat: 48, kickBeats: [0.04, 8.24],
+                  timing: field(hits), timingStartBeat: 48, beatSeconds: clock.beatDuration)
+        }
+        let lead = LofiBassVoice.longAnswer.attackLead / clock.beatDuration
+        let locked = timed([(0.10, 0.9), (2.5, 0.9), (8.3, 0.4)])
+        let bass = locked.notes.filter { $0.part == .bass }
+        #expect(bass.count == before.count && bass.map(\.midi) == before.map(\.midi))
+        #expect(abs(bass[0].beat - (Double(clock.frame(at: 0.10)) / clock.framesPerBeat - lead)) < 1e-9)
+        #expect(bass[2].beat == 8)
+        #expect(locked.bassAnchors.count == 1)
+        #expect(locked.notes.filter { $0.part != .bass } == grid.notes.filter { $0.part != .bass })
+        let far = timed([(0.2, 0.95), (7.8, 0.95)]).notes.filter { $0.part == .bass }
+        #expect(far[0].beat == 0 && far[2].beat == 8)
     }
 
     @Test func quietOrganPlaysItsIntendedOctave() throws {

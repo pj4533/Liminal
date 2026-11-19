@@ -22,8 +22,10 @@ nonisolated enum LofiVirtualRecord {
         let gain: Float
     }
 
+    /// `protectedUntil` keeps every edit out of the opening span (the return's first melodic cell).
     static func choose(from notes: [LofiScore.Note], before foreground: Double,
-                       section: LofiScore.Section, program: String, seed: UInt64) -> Edit? {
+                       section: LofiScore.Section, program: String, seed: UInt64,
+                       protectedUntil: Double = 0) -> Edit? {
         guard section == .variation || section == .returnTheme, notes.count >= 2 else { return nil }
         var random = MusicRNG(seed: seed).fork(1239)
         guard random.chance(0.57) else { return nil }
@@ -34,7 +36,7 @@ nonisolated enum LofiVirtualRecord {
         let destinations = notes.enumerated().compactMap { index, note -> Double? in
             let start = ceil(2 * (note.beat + note.length + 0.58)) / 2
             let next = index + 1 < notes.count ? notes[index + 1].beat - 0.37 : foreground - 0.24
-            return start + duration <= next ? start : nil
+            return start + duration <= next && start >= protectedUntil ? start : nil
         }
         guard let destination = destinations.last else { return nil }
         let source = notes[0]

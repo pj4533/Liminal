@@ -118,6 +118,9 @@ nonisolated struct LofiScore: Sendable, Equatable {
     enum Part: Int, Sendable { case texture, bass, lead }
     enum Section: Int, Sendable { case theme, answer, breakdown, returnTheme, variation }
 
+    /// How a note is played. Mids use the three shell gestures; everything else is `normal`.
+    enum Articulation: Int, CaseIterable, Sendable { case normal, stab, answer, rolled }
+
     struct Note: Equatable, Sendable {
         let part: Part
         let midi: Int
@@ -126,6 +129,15 @@ nonisolated struct LofiScore: Sendable, Equatable {
         let velocity: Float
         var color: Double = 0.5
         var send: Float = 0.35
+        /// Linear level applied by the renderer after sample selection. It never changes the layer.
+        var gain: Float = 1
+        var articulation: Articulation = .normal
+    }
+
+    /// A structural bass accent whose audible attack was placed on a played kick (phrase-local beats).
+    struct BassAnchor: Equatable, Sendable {
+        let noteBeat: Double
+        let kickBeat: Double
     }
 
     let section: Section
@@ -137,8 +149,23 @@ nonisolated struct LofiScore: Sendable, Equatable {
     /// The phrase's remaining beats after the last scored pitched note.
     let endingRest: ClosedRange<Double>
     let virtualRecord: LofiVirtualRecord.Edit?
+    /// One bass color for the whole phrase.
+    var bassVoice: LofiBassVoice = .classic
+    /// Bass accents aligned to a timing-field kick, for diagnostics and tests.
+    var bassAnchors: [BassAnchor] = []
 
     static let phrasesPerForm = 8
+    /// Structural bass accents look this far (in beats) for a played kick to lock to.
+    static let bassAccentWindow = 0.12
+    /// Kicks below this confidence never move a structural bass accent.
+    static let bassAccentConfidence: Float = 0.6
+    /// The return's first two lead notes are revealed: +1.5 dB dry, 40 percent less send.
+    static let returnRevealGain: Float = 1.188_502_2
+    static let returnRevealSend: Float = 0.6
+    /// Mid shells stay clear of every lead onset by this many beats.
+    static let midOnsetClearance = 0.12
+    /// Mids end before the fill's build into the next phrase.
+    static let midLatestEnd = 14.5
 
     /// Each intact sixteen-bar drum break has a call, open space, variation and actual return.
     static func section(at phrase: Int) -> Section {
@@ -146,8 +173,13 @@ nonisolated struct LofiScore: Sendable, Equatable {
          .theme, .answer, .breakdown, .returnTheme][phrase % phrasesPerForm]
     }
 
+    /// `timing`, when present, is the drum take's timing field and the source of truth for bass
+    /// placement; `timingStartBeat` is this phrase's first beat in that take and `beatSeconds` the
+    /// take's beat length. Without it, `kickBeats` keeps the original 0.075 beat snap.
     static func make(seed: UInt64, section: Section, drift: LofiDrift, startBeat: Double,
-                     pinnedScale: ScaleType? = nil, kickBeats: [Double] = []) -> Self {
+                     pinnedScale: ScaleType? = nil, kickBeats: [Double] = [],
+                     timing: LofiTimingField? = nil, timingStartBeat: Int = 0,
+                     beatSeconds: Double = 60 / LofiOptions().safeTempo) -> Self {
         let phrase = Int(startBeat / LofiClock.beats)
         let position = phrase % phrasesPerForm
         let record = position / 4
@@ -170,24 +202,59 @@ nonisolated struct LofiScore: Sendable, Equatable {
             line = answer(to: theme, harmony: harmony, short: section == .breakdown, random: phraseRandom)
         }
         let articulation = section == .returnTheme ? root.fork(UInt64(record * 4) + 618) : phraseRandom
-        let lead = articulate(line, for: preset, random: articulation)
+        var lead = articulate(line, for: preset, random: articulation)
+        // The return reveals its first identifying notes: a clearer dry attack, less of the room.
+        let protected = section == .returnTheme ? firstCellBoundary(lead) : 0
+        if section == .returnTheme {
+            for i in lead.indices.prefix(2) {
+                lead[i].gain = returnRevealGain
+                lead[i].send *= returnRevealSend
+            }
+        }
 
-        let bass = bassLine(harmony: harmony, section: section, random: phraseRandom, kickBeats: kickBeats)
+        let voice = bassVoice(seed: seed, section: section, phrase: phrase)
+        let bass = bassLine(harmony: harmony, section: section, random: phraseRandom, kickBeats: kickBeats,
+                            timing: timing, timingStartBeat: timingStartBeat,
+                            attackLeadBeats: voice.attackLead / max(0.001, beatSeconds))
         let reply = section == .answer || section == .variation
         let chordDegree = reply ? harmony.nearest(5, in: scale.intervals) : 0
-        let texture = shell(harmony: harmony, section: section, chordDegree: chordDegree, random: phraseRandom)
+        let quiet = section == .returnTheme ? max(2, protected, lead.count > 1 ? lead[1].beat + 1.5 : 0) : 0
+        let texture = mids(lead: lead, harmony: harmony, section: section, chordDegree: chordDegree,
+                           quietUntil: quiet, random: phraseRandom)
         let ending = (lead + texture).map { $0.beat + $0.length }.max() ?? 0
         let rest = ending...LofiClock.beats
-        let notes = (bass + texture + lead).sorted { lhs, rhs in
+        let notes = (bass.notes + texture + lead).sorted { lhs, rhs in
             if lhs.beat != rhs.beat { return lhs.beat < rhs.beat }
             if lhs.part != rhs.part { return lhs.part.rawValue < rhs.part.rawValue }
             return lhs.midi < rhs.midi
         }
         var edits = phraseRandom.fork(945)
         let virtualRecord = LofiVirtualRecord.choose(from: lead, before: min(15.5, ending + 1.25), section: section,
-                                                     program: preset.sampleGroup, seed: edits.next())
+                                                     program: preset.sampleGroup, seed: edits.next(),
+                                                     protectedUntil: protected)
         return .init(section: section, tonic: tonic, chordRoot: (tonic + chordDegree) % 12, scale: scale, notes: notes,
-                     preset: preset, endingRest: rest, virtualRecord: virtualRecord)
+                     preset: preset, endingRest: rest, virtualRecord: virtualRecord, bassVoice: voice,
+                     bassAnchors: bass.anchors)
+    }
+
+    /// One bass color per phrase: round sub for statements, pluck for the answer, a long round
+    /// answer for the return and breakdown. A quarter of takes play their statements plucked.
+    static func bassVoice(seed: UInt64, section: Section, phrase: Int) -> LofiBassVoice {
+        switch section {
+        case .answer: return .pluck
+        case .returnTheme, .breakdown: return .longAnswer
+        case .theme, .variation:
+            var take = MusicRNG(seed: seed).fork(UInt64(max(0, phrase) / LofiDrumTake.phraseCount) + 733)
+            return take.chance(0.25) ? .pluck : .roundSub
+        }
+    }
+
+    /// The onset of the second melodic cell: the largest gap among the first notes ends the first cell.
+    static func firstCellBoundary(_ lead: [Note]) -> Double {
+        guard lead.count >= 2 else { return lead.first.map { $0.beat + $0.length } ?? 0 }
+        let candidates = 0..<min(3, lead.count - 1)
+        let split = candidates.max { lead[$0 + 1].beat - lead[$0].beat < lead[$1 + 1].beat - lead[$1].beat } ?? 0
+        return lead[split + 1].beat
     }
 
     private struct Harmony {
@@ -337,7 +404,9 @@ nonisolated struct LofiScore: Sendable, Equatable {
         }
     }
 
-    private static func bassLine(harmony: Harmony, section: Section, random: MusicRNG, kickBeats: [Double]) -> [Note] {
+    private static func bassLine(harmony: Harmony, section: Section, random: MusicRNG, kickBeats: [Double],
+                                 timing: LofiTimingField?, timingStartBeat: Int,
+                                 attackLeadBeats: Double) -> (notes: [Note], anchors: [BassAnchor]) {
         var rhythm = random.fork(124)
         let related = rhythm.pick([3, 5, 7, 8, 10])
         let home = harmony.bass(0)
@@ -357,25 +426,135 @@ nonisolated struct LofiScore: Sendable, Equatable {
             figures = [(0, 1.7, home, 0.82), (pickup, 0.55, fifth, 0.63), (8, 1.45, home, 0.80)]
                 + (section == .variation ? [(11.5, 0.65, motion, 0.67)] : [])
         }
-        return figures.map { figure in
-            // Follow nearby played kicks, retaining the phrase's laid-back offset on pickups.
-            // Distant fills and extra kicks never add notes or displace a structural bass entrance.
-            let nearest = kickBeats.min { abs($0 - figure.beat) < abs($1 - figure.beat) }
-            let anchor = nearest.flatMap { abs($0 - figure.beat) <= 0.075 ? $0 : nil } ?? figure.beat
-            return .init(part: .bass, midi: figure.midi, beat: anchor + (figure.beat == 0 ? 0 : pocket),
-                  length: figure.length, velocity: figure.strength, send: 0)
+        guard let timing else {
+            let notes = figures.map { figure in
+                // Follow nearby played kicks, retaining the phrase's laid-back offset on pickups.
+                // Distant fills and extra kicks never add notes or displace a structural bass entrance.
+                let nearest = kickBeats.min { abs($0 - figure.beat) < abs($1 - figure.beat) }
+                let anchor = nearest.flatMap { abs($0 - figure.beat) <= 0.075 ? $0 : nil } ?? figure.beat
+                return Note(part: .bass, midi: figure.midi, beat: anchor + (figure.beat == 0 ? 0 : pocket),
+                            length: figure.length, velocity: figure.strength, send: 0)
+            }
+            return (notes, [])
         }
+        // Structural accents put their audible attack on a confident played kick nearby.
+        // Everything else keeps the pocket and leans with the drummer's local timing.
+        let kicks = timing.kicks(phraseStartBeat: timingStartBeat, minConfidence: bassAccentConfidence)
+        var anchors: [BassAnchor] = []
+        let notes = figures.map { figure -> Note in
+            let beat: Double
+            if figure.beat == 0 || figure.beat == 8 {
+                let kick = kicks.filter { abs($0 - figure.beat) <= bassAccentWindow }
+                    .min { abs($0 - figure.beat) < abs($1 - figure.beat) }
+                if let kick {
+                    beat = max(0, kick - attackLeadBeats)
+                    anchors.append(.init(noteBeat: beat, kickBeat: kick))
+                } else {
+                    beat = figure.beat
+                }
+            } else {
+                let lean = timing.offset(atBeat: Double(timingStartBeat) + figure.beat)
+                beat = figure.beat + pocket + min(bassAccentWindow, max(-bassAccentWindow, lean))
+            }
+            return Note(part: .bass, midi: figure.midi, beat: beat, length: figure.length,
+                        velocity: figure.strength, send: 0)
+        }
+        return (notes, anchors)
     }
 
-    private static func shell(harmony: Harmony, section: Section, chordDegree: Int, random: MusicRNG) -> [Note] {
-        guard section != .breakdown else { return [] }
-        var timing = random.fork(136)
+    /// Two to four shell gestures placed where the melody rests or lands: an off-beat stab in a
+    /// gap, a longer answer after a cell's landing note, or the rolled two-note shell. No mid
+    /// onset doubles a lead attack. A breakdown keeps at most one soft answer.
+    private static func mids(lead: [Note], harmony: Harmony, section: Section, chordDegree: Int,
+                             quietUntil: Double, random: MusicRNG) -> [Note] {
+        var rng = random.fork(136)
         let home = voicing(for: 0, previous: (49, 55), harmony: harmony)
-        let beat = timing.pick([4.25, 5.25, 8.75])
         let voices = chordDegree == 0 ? home : voicing(for: chordDegree, previous: home, harmony: harmony)
-        return [voices.lower, voices.upper].enumerated().map { index, pitch in
-            .init(part: .texture, midi: pitch, beat: beat + Double(index) * 0.17, length: 1.30,
-                  velocity: timing.rangeF(0.37...0.47), color: 0.40, send: 0.73)
+        let onsets = lead.map(\.beat)
+        func clear(_ beat: Double) -> Bool {
+            beat >= quietUntil && onsets.allSatisfy { abs($0 - beat) >= midOnsetClearance - 1e-9 }
+        }
+        // Rests of the line: before the first note, between notes, and after the landing.
+        var gaps: [(start: Double, end: Double)] = []
+        var cursor = 0.0
+        for note in lead {
+            if note.beat > cursor { gaps.append((cursor, note.beat)) }
+            cursor = max(cursor, note.beat + note.length)
+        }
+        if cursor < midLatestEnd { gaps.append((cursor, midLatestEnd)) }
+
+        struct Event { let articulation: Articulation; let beat: Double; var span: Double {
+            switch articulation { case .stab: 0.35; case .answer: 1.6; case .rolled, .normal: 0.17 + 1.3 } } }
+        var candidates: [Articulation: [Double]] = [.stab: [], .answer: [], .rolled: []]
+        for gap in gaps {
+            var beat = ceil(gap.start * 4 - 1e-9) / 4
+            while beat + 0.35 <= gap.end + 1e-9 {
+                let offBeat = abs(beat - beat.rounded()) > 1e-9
+                if gap.end - gap.start >= 0.75, offBeat, clear(beat), beat + 0.35 <= midLatestEnd {
+                    candidates[.stab, default: []].append(beat)
+                }
+                if gap.end - gap.start >= 0.5, beat + 0.17 < gap.end, clear(beat), clear(beat + 0.17),
+                   beat + 0.17 + 1.3 <= midLatestEnd {
+                    candidates[.rolled, default: []].append(beat)
+                }
+                beat += 0.25
+            }
+        }
+        // Landing notes close a cell: the next onset is at least 1.5 beats away, or nothing follows.
+        for (index, note) in lead.enumerated() {
+            let next = index + 1 < lead.count ? lead[index + 1].beat : LofiClock.beats
+            guard next - note.beat >= 1.5 else { continue }
+            for delay in [0.5, 0.75, 1.0] where clear(note.beat + delay) && note.beat + delay + 1.6 <= midLatestEnd {
+                candidates[.answer, default: []].append(note.beat + delay)
+            }
+        }
+
+        var events: [Event] = []
+        func fits(_ event: Event) -> Bool {
+            events.allSatisfy { other in
+                event.beat >= other.beat + other.span + 0.25 || other.beat >= event.beat + event.span + 0.25
+            }
+        }
+        if section == .breakdown {
+            if rng.chance(0.6), let beat = candidates[.answer]?.randomElement(using: &rng) {
+                events.append(.init(articulation: .answer, beat: beat))
+            }
+        } else {
+            let target = rng.int(2...4)
+            let cycle: [Articulation] = [.stab, .answer, .rolled]
+            var turn = rng.int(0...2)
+            var misses = 0
+            while events.count < target, misses < 3 {
+                let kind = cycle[turn % 3]
+                turn += 1
+                let used = events.filter { $0.articulation == kind }.count
+                let options = (candidates[kind] ?? []).filter { fits(.init(articulation: kind, beat: $0)) }
+                guard used < 2, let beat = options.randomElement(using: &rng) else { misses += 1; continue }
+                misses = 0
+                events.append(.init(articulation: kind, beat: beat))
+            }
+        }
+        return events.sorted { $0.beat < $1.beat }.flatMap { event -> [Note] in
+            let soft = section == .breakdown
+            let velocity: Float = soft ? 0.42 : rng.rangeF(0.50...0.66)
+            let send: Float
+            switch event.articulation {
+            case .stab: send = rng.rangeF(0.45...0.56)
+            case .rolled, .normal: send = rng.rangeF(0.55...0.68)
+            case .answer: send = rng.rangeF(0.62...0.75)
+            }
+            return [voices.lower, voices.upper].enumerated().map { index, pitch in
+                let stagger = event.articulation == .rolled ? Double(index) * 0.17 : 0
+                let length: Double
+                switch event.articulation {
+                case .stab: length = 0.35
+                case .answer: length = 1.6
+                case .rolled, .normal: length = 1.30
+                }
+                return Note(part: .texture, midi: pitch, beat: event.beat + stagger, length: length,
+                            velocity: velocity, color: event.articulation == .stab ? 0.46 : 0.40, send: send,
+                            articulation: event.articulation)
+            }
         }
     }
 
@@ -389,7 +568,7 @@ nonisolated struct LofiScore: Sendable, Equatable {
         }
         func cost(_ pair: (lower: Int, upper: Int)) -> Int {
             3 * (abs(pair.lower - previous.lower) + abs(pair.upper - previous.upper))
-                + abs(pair.lower - 49) + abs(pair.upper - 55)
+                + abs(pair.lower - 49) + abs(pair.upper - 55) + 8 * max(0, 48 - pair.lower)
         }
         return pairs.min { cost($0) < cost($1) }
             ?? (choices.first ?? previous.lower, choices.last ?? previous.upper)
