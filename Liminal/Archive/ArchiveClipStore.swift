@@ -4,12 +4,14 @@
 //
 //  Disk cache of downloaded footage (docs/plans/archive-video.md 1.4): films and excerpts in
 //  Application Support/Liminal/ArchiveFootage/ with an index.json. Holds the pinned titles and
-//  two discoveries, within a 3 GB budget.
+//  two discoveries, within a 3 GB budget that includes the pinned titles, and no clip over 600 MB.
+//  At load it deletes files the index does not list (docs/decisions/archive-video.md A31).
 //
 
 import AVFoundation
 import CoreGraphics
 import Foundation
+import os
 
 /// One cached clip.
 nonisolated struct ArchiveClip: Codable, Sendable, Equatable, Identifiable {
@@ -39,7 +41,12 @@ nonisolated struct ArchiveClip: Codable, Sendable, Equatable, Identifiable {
 
 /// Pure eviction rules (unit-tested).
 nonisolated enum ArchiveCachePolicy {
+    /// Total budget for every cached clip, pinned titles included.
     static let capBytes: Int64 = 3_000_000_000
+    /// Largest single file Liminal downloads or keeps (A31). The budget averages 250 MB over twelve
+    /// slots; the largest pinned SD encodes are 0.27-0.35 GB, so 600 MB keeps them whole while no one
+    /// film can take more than a fifth of the budget (VAM026's 1.38 GB 1080p encode is refused).
+    static let maxClipBytes: Int64 = 600_000_000
     static let discoverySlots = 2
     static let discoveryPlayLimit = 2
     static var poolTarget: Int { ArchiveSeedList.pinned.count + discoverySlots }
@@ -77,6 +84,32 @@ nonisolated enum ArchiveCachePolicy {
             out.append(c.id)
             total -= c.bytes
             count -= 1
+        }
+        return out
+    }
+
+    /// Clips to delete at load so the cache honours the per-clip cap and the total budget, pinned clips
+    /// included. Keeps, in order, the protected clips, the pinned clips by use (most used first, then most
+    /// recent), then the discoveries by recency, each one only if it still fits; the rest are returned.
+    static func overBudget(_ clips: [ArchiveClip], capBytes: Int64 = capBytes, maxClipBytes: Int64 = maxClipBytes,
+                           protected: Set<String> = []) -> [String] {
+        let pinned = ArchiveSeedList.pinnedIDs
+        let order = clips.sorted { a, b in
+            let pa = protected.contains(a.id), pb = protected.contains(b.id)
+            if pa != pb { return pa }
+            let ia = pinned.contains(a.id), ib = pinned.contains(b.id)
+            if ia != ib { return ia }
+            if ia && a.useCount != b.useCount { return a.useCount > b.useCount }
+            return a.recency > b.recency
+        }
+        var total: Int64 = 0
+        var out: [String] = []
+        for c in order {
+            if !protected.contains(c.id), c.bytes > maxClipBytes || total + c.bytes > capBytes {
+                out.append(c.id)
+                continue
+            }
+            total += c.bytes
         }
         return out
     }
@@ -143,7 +176,28 @@ actor ArchiveClipStore {
             return !fm.fileExists(atPath: file.path)
         }
         for id in ArchiveCachePolicy.excessDiscoveries(index.clips) { remove(id, rememberDiscovery: true) }
+        enforceBudget()
         if index.clips.count != before { save() }
+        // Files the index does not list (an index that failed to decode, a crash between a move and the
+        // index write, older builds) are never played or evicted: delete them.
+        let swept = ArchiveDiskSweep.remove(ArchiveDiskSweep.orphans(in: directory, indexed: Set(index.clips.map(\.fileName))))
+        if swept.count > 0 {
+            LMLog.visual.info("📼 swept \(swept.count) unindexed files (\(String(format: "%.1f", Double(swept.bytes) / 1e6), privacy: .public) MB) from the footage cache")
+        }
+    }
+
+    /// Applies `ArchiveCachePolicy.overBudget` to the loaded index (a cap change, or a cache written by an
+    /// older build that kept oversized pinned files).
+    private func enforceBudget() {
+        let drop = ArchiveCachePolicy.overBudget(index.clips)
+        guard !drop.isEmpty else { return }
+        for id in drop {
+            guard let c = index.clips.first(where: { $0.id == id }) else { continue }
+            let isPinned = ArchiveSeedList.pinnedIDs.contains(id)
+            let reason = c.bytes > ArchiveCachePolicy.maxClipBytes ? "over the per-clip cap" : "over the cache budget"
+            LMLog.visual.info("📼 dropping \(isPinned ? "pinned" : "discovery", privacy: .public) clip id=\(id, privacy: .public) \(String(format: "%.1f", Double(c.bytes) / 1e6), privacy: .public) MB: \(reason, privacy: .public)")
+            remove(id, rememberDiscovery: !isPinned)
+        }
     }
 
     private func save() {
@@ -167,11 +221,12 @@ actor ArchiveClipStore {
         save()
     }
 
-    enum AddFailure: Error { case insufficientCacheSpace }
+    enum AddFailure: Error { case insufficientCacheSpace, clipTooLarge }
 
     /// Moves a validated file into the store before removing its victims.
     @discardableResult
     func add(_ clip: ArchiveClip, from file: URL, protected: Set<String>) throws -> [String] {
+        guard clip.bytes <= ArchiveCachePolicy.maxClipBytes else { throw AddFailure.clipTooLarge }
         let addingDiscovery = !ArchiveSeedList.pinnedIDs.contains(clip.id)
         let slotsFull = index.clips.filter { !ArchiveSeedList.pinnedIDs.contains($0.id) }.count >= ArchiveCachePolicy.discoverySlots
         let replacement = addingDiscovery && slotsFull ? ArchiveCachePolicy.replacement(index.clips, protected: protected) : nil
@@ -184,6 +239,8 @@ actor ArchiveClipStore {
             throw AddFailure.insufficientCacheSpace
         }
         let dest = directory.appendingPathComponent(clip.fileName)
+        // An unindexed file of the same name would make the move fail on every retry.
+        if !index.clips.contains(where: { $0.fileName == clip.fileName }) { try? FileManager.default.removeItem(at: dest) }
         try FileManager.default.moveItem(at: file, to: dest)
         let victims = [replacement].compactMap { $0 } + evict
         for id in victims { remove(id, rememberDiscovery: true) }
@@ -215,6 +272,77 @@ actor ArchiveClipStore {
         for c in index.clips where !keeping.contains(c.id) { try? FileManager.default.removeItem(at: url(for: c)) }
         index.clips.removeAll { !keeping.contains($0.id) }
         save()
+    }
+}
+
+// MARK: - Disk sweep
+
+/// Launch-time cleanup of files nothing tracks (A31). Pure file-system helpers, run off the main actor:
+/// orphans in the footage directory and stale temporary files in the app's (sandboxed) `tmp/`.
+nonisolated enum ArchiveDiskSweep {
+    /// An interrupted `URLSession` download leaves `CFNetworkDownload_*.tmp` behind; a live one is
+    /// written continuously, so anything untouched for 10 minutes is abandoned.
+    static let downloadAge: TimeInterval = 10 * 60
+    /// Test and automation fixtures (`liminal-*`), left an hour so a running test keeps its own.
+    static let fixtureAge: TimeInterval = 60 * 60
+
+    /// Entries of `directory` other than `index.json` and the indexed file names.
+    static func orphans(in directory: URL, indexed: Set<String>) -> [URL] {
+        let items = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
+        return items.filter { $0.lastPathComponent != "index.json" && !indexed.contains($0.lastPathComponent) }
+    }
+
+    /// Stale CFNetwork download files and old `liminal-*` fixtures in `tmp`.
+    static func staleTemporaryItems(in tmp: URL, now: Date = Date()) -> [URL] {
+        let keys: Set<URLResourceKey> = [.contentModificationDateKey]
+        let items = (try? FileManager.default.contentsOfDirectory(at: tmp, includingPropertiesForKeys: Array(keys))) ?? []
+        return items.filter { url in
+            let name = url.lastPathComponent
+            let age: TimeInterval
+            if name.hasPrefix("CFNetworkDownload_") && name.hasSuffix(".tmp") {
+                age = downloadAge
+            } else if name.lowercased().hasPrefix("liminal") {
+                age = fixtureAge
+            } else {
+                return false
+            }
+            let modified = (try? url.resourceValues(forKeys: keys).contentModificationDate) ?? .distantPast
+            return now.timeIntervalSince(modified) >= age
+        }
+    }
+
+    /// Deletes `urls` and returns how many went and their logical size.
+    @discardableResult
+    static func remove(_ urls: [URL]) -> (count: Int, bytes: Int64) {
+        let fm = FileManager.default
+        var count = 0
+        var bytes: Int64 = 0
+        for url in urls {
+            let size = logicalSize(url)
+            guard (try? fm.removeItem(at: url)) != nil else { continue }
+            count += 1
+            bytes += size
+        }
+        return (count, bytes)
+    }
+
+    /// File size, or the sum over a directory's files (logical bytes, not allocated blocks).
+    static func logicalSize(_ url: URL) -> Int64 {
+        let keys: Set<URLResourceKey> = [.fileSizeKey, .isDirectoryKey]
+        guard let v = try? url.resourceValues(forKeys: keys) else { return 0 }
+        guard v.isDirectory == true else { return Int64(v.fileSize ?? 0) }
+        var total: Int64 = 0
+        let e = FileManager.default.enumerator(at: url, includingPropertiesForKeys: Array(keys))
+        while let f = e?.nextObject() as? URL { total += Int64((try? f.resourceValues(forKeys: keys))?.fileSize ?? 0) }
+        return total
+    }
+
+    /// Sweeps the app's temporary directory (once at launch, detached from the main actor).
+    static func sweepTemporaryDirectory(_ tmp: URL = FileManager.default.temporaryDirectory) {
+        let swept = remove(staleTemporaryItems(in: tmp))
+        if swept.count > 0 {
+            LMLog.visual.info("📼 swept \(swept.count) stale temporary items (\(String(format: "%.1f", Double(swept.bytes) / 1e6), privacy: .public) MB) from tmp")
+        }
     }
 }
 

@@ -116,6 +116,12 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
         let device = MTLCreateSystemDefaultDevice()
         let made = (0..<2).compactMap { _ in device.flatMap { VideoFrameSource(device: $0) } }
         sources = made.count == 2 ? made : []
+        // Launch cleanup off the main actor (A31): the store's load sweeps unindexed footage and applies
+        // the budget; stale CFNetwork downloads and old fixtures go from tmp/.
+        Task.detached(priority: .utility) { [store] in
+            await store.load()
+            ArchiveDiskSweep.sweepTemporaryDirectory()
+        }
     }
 
     static func uptime() -> Double { Double(DispatchTime.now().uptimeNanoseconds) / 1e9 }
@@ -891,16 +897,25 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
             LMLog.visual.info("📼 excluded by metadata: \(id, privacy: .public)")
             return false
         }
-        let files = if let preferredFile = pinned?.preferredFile,
-                       let preferred = meta.files.first(where: { $0.name == preferredFile }) {
-            [preferred]
-        } else {
-            meta.files
+        let cap = ArchiveCachePolicy.maxClipBytes
+        var files = meta.files
+        if let preferredFile = pinned?.preferredFile, let preferred = meta.files.first(where: { $0.name == preferredFile }) {
+            if let b = preferred.bytes, b <= cap {
+                files = [preferred]
+            } else {
+                LMLog.visual.info("📼 preferred file of \(id, privacy: .public) is \(String(format: "%.0f", Double(preferred.bytes ?? 0) / 1e6), privacy: .public) MB, over the \(cap / 1_000_000) MB clip cap: trying a smaller version")
+            }
         }
         guard let file = ArchiveCatalog.pickFile(files, preferSmallest: preferSmallest) else {
             picker.skipped.insert(id)
-            await store.markBad(id)
-            LMLog.visual.info("📼 no playable file in \(id, privacy: .public)")
+            if let smallest = ArchiveCatalog.smallestPlayableBytes(files), smallest > cap {
+                // A size limit, not a content failure: not on the persistent bad list, so a later cap or
+                // a new derivative can bring it back.
+                LMLog.visual.info("📼 skipping \(pinned == nil ? "discovery" : "pinned", privacy: .public) \(id, privacy: .public): smallest playable version is \(String(format: "%.0f", Double(smallest) / 1e6), privacy: .public) MB, over the \(cap / 1_000_000) MB clip cap")
+            } else {
+                await store.markBad(id)
+                LMLog.visual.info("📼 no playable file in \(id, privacy: .public)")
+            }
             return false
         }
         guard Self.hasFreeSpace(store.directory, downloadBytes: file.bytes ?? 0) else {
@@ -920,6 +935,11 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
         do { try await client.download(id: id, file: file.name, to: tmp) } catch let e as ArchiveClientError where e.isContentFailure {
             picker.skipped.insert(id)
             await store.markBad(id); throw e
+        } catch ArchiveClientError.tooLarge(let bytes) {
+            // The listed size was missing or wrong: the transfer stopped at the cap.
+            picker.skipped.insert(id)
+            LMLog.visual.info("📼 download of \(id, privacy: .public) stopped: \(String(format: "%.0f", Double(bytes) / 1e6), privacy: .public) MB is over the \(cap / 1_000_000) MB clip cap")
+            return false
         }
         let sourceBytes = ((try? fm.attributesOfItem(atPath: tmp.path)[.size]) as? NSNumber)?.int64Value
             ?? file.bytes ?? 0
@@ -963,9 +983,9 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
         let evicted: [String]
         do {
             evicted = try await store.add(clip, from: staged, protected: protected)
-        } catch ArchiveClipStore.AddFailure.insufficientCacheSpace {
+        } catch let failure as ArchiveClipStore.AddFailure {
             picker.skipped.insert(id)
-            LMLog.visual.info("📼 not enough cache space for \(id, privacy: .public)")
+            LMLog.visual.info("📼 not enough cache space for \(id, privacy: .public) (\(String(describing: failure), privacy: .public))")
             return false
         }
         let pool = await store.clips.count

@@ -50,7 +50,7 @@ Automated test runs once exceeded the user's monthly Google budget. Any DEBUG la
 - `Liminal/Audio/Lofi/`: `LofiScore` (32-bar forms, motifs), `LofiRenderer` (off-audio-thread phrase render), `LofiPlayback` (transport, phrase queue, late-phrase fallback, clock publishing), `LofiBus`/`LofiMasterBus`, `LofiDrumTake`/`LofiDrumLibrary`/`LofiBeatGrid`, `LofiDialogueSampler`/`LofiSpeechFocus`, effects and sidechains. `InstrumentSamples/` holds the CC0 samples credited in `docs/lofi-samples.md`.
 - `Liminal/Visual/`: `GeminiClient`, `ModelRouter`, `ImageGenerationConfig`, `GenerationBudget`, `Prompt/`, `ImageQueue`/`ImageStore`/`AtomicImageBuffer`, `ImageFraming`, upscalers, `DepthMapGenerator` (Core ML depth), `DepthAnalyzer` (Vision saliency, an actor), `TimerDrivenCrossfade`, `EffectsMetalView` (macOS), `EffectsUniformsComputer`, `MusicReactor`/`MusicModulation`, `Spatial/`.
 - `Liminal/Shaders/`: `EffectsRenderer.metal` (single staged fragment shader), `ArchiveVideo.metal`, `DreamyEffects.metal`. `Liminal/EffectsUniforms.swift` is the CPU-side layout contract.
-- `Liminal/Archive/`: catalog/client/seed list (`archive-seeds.json`), `ArchiveClipStore` (3 GB cache, 10 pinned + 2 rotating), `VideoFrameSource`, `FootageWeaver`, `VideoComposite`, `ArchiveAudio` (decode and cue math).
+- `Liminal/Archive/`: catalog/client/seed list (`archive-seeds.json`), `ArchiveClipStore` (3 GB cache including pinned, 600 MB per clip, 10 pinned + 2 rotating, launch sweep of unindexed and temp files), `VideoFrameSource`, `FootageWeaver`, `VideoComposite`, `ArchiveAudio` (decode and cue math).
 - `Liminal/Services/`: `SettingsService` (persistent settings), `EnvironmentService` (credentials).
 - `Liminal/Utils/DebugLaunchOptions.swift`: every debug launch flag, compiled out of Release. The flag table is in `docs/development.md`.
 - `LiminalTests/`, `LiminalUITests/`; `scripts/` (perf, shader bench, transition/footage clips, music renders and Lo-Fi analysis, archive curation); `tools/` (standalone Swift harnesses).
@@ -81,7 +81,7 @@ Automated test runs once exceeded the user's monthly Google budget. Any DEBUG la
 - Settings live in `ImageGenerationConfig` and caps in `GenerationBudget`. The primary model is `gemini-nano-banana-2.1` and the fallback is `gemini-3.1-flash-lite-image`. Treat these as repo configuration, not verified provider availability.
 - Cache reuse is the fallback whenever generation is capped or unavailable.
 
-**Archive.** Retain each source's credit (`docs/experience.md` film table). Ten pinned films plus two rotating discoveries share a 3 GB cache.
+**Archive.** Retain each source's credit (`docs/experience.md` film table). Ten pinned films plus two rotating discoveries share a 3 GB cache; the budget counts pinned films and no clip may exceed 600 MB (`ArchiveCachePolicy.maxClipBytes`). Files the index does not list are deleted at launch.
 
 ## Never commit
 
