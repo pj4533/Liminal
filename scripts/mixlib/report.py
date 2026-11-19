@@ -916,11 +916,11 @@ def matrix_summary(out, cases, baseline=None, criteria=None):
     lines += ["", "## Failing fail-level criteria (the wave 4 to-do list)", ""]
     for c in cases:
         fails = [cid for cid in ids if by_case[c].get(cid, {}).get("status") == "fail" and levels[cid] == "fail"]
-        lines.append(f"- {c}: {', '.join(fails) or 'none'}")
+        lines.append(f"- {c}: {'no report (the capture failed or was not run)' if docs[c] is None else ', '.join(fails) or 'none'}")
     lines += ["", "Warn-level criteria that warn:", ""]
     for c in cases:
         warns = [cid for cid in ids if by_case[c].get(cid, {}).get("status") == "warn"]
-        lines.append(f"- {c}: {', '.join(warns) or 'none'}")
+        lines.append(f"- {c}: {'no report' if docs[c] is None else ', '.join(warns) or 'none'}")
 
     if baseline:
         lines += ["", "## Against baseline", "",
