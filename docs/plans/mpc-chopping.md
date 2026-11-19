@@ -484,7 +484,7 @@ Timing: structural accents (beats 0 and 8 of a phrase) align their audible attac
 
 Mids arrangement (in `LofiScore`): two to four shell events per non-breakdown phrase instead of one, chosen from three articulations by where the melody rests: an off-beat short stab (length 0.35, in a gap of at least 0.75 beats), a longer answer after the melody's landing note (length 1.6), or the rolled two-note shell (stagger 0.17). Velocity 0.50 to 0.66, bounded length and send variation, close voice leading kept. A breakdown has at most one soft answer.
 
-Theme return (in `LofiScore` and `LofiRenderer`): the return uses the take's theme program, register, articulation stream and note velocities; its first two notes get +1.5 dB and a send reduced by 40 percent; the carried wet tail is lowered 6 dB for the first two beats; no mid event before beat 2; no virtual-record edit in the first cell; dialogue leaves bar 1 free (5.2).
+Theme return (in `LofiScore` and `LofiRenderer`): the return uses the take's theme program, register, articulation stream and note velocities; its first two notes get +1.5 dB and a send reduced by 40 percent; the wet stem (the carried tail and the phrase's own returns) is lowered 6 dB from the downbeat until the second revealed note has sounded (at least two beats, released by beat 4); no mid event before beat 2; no virtual-record edit in the first cell; dialogue leaves bar 1 free (5.2).
 
 ### 8.5 Dialogue chops
 

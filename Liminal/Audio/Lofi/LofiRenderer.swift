@@ -16,14 +16,25 @@ nonisolated enum LofiRenderer {
     static let midsPeakCeiling: Float = 0.6
     /// The mids' contribution to `InstrumentBalance`, at the former 0.31 trim.
     static let midsMeterTrim: Float = 0.31
-    /// The carried wet tail under a return's first two beats, -6 dB.
+    /// The wet stem under a return's opening notes, -6 dB: the carried tail and the phrase's own
+    /// returns dip together, so the room of the first notes blooms after them instead of over them.
     static let returnCarryFloor: Float = 0.501_187
+    /// The dip is released by the start of the second bar at the latest.
+    static let returnRevealLatestHold = 3.5
 
-    /// Smoothly lowers the previous phrase's tail as the return enters: down over the first
-    /// quarter beat (under the downbeat), held through beat 2, back up by beat 2.5.
-    static func returnCarryGain(beat: Double) -> Float {
+    /// How long (in beats) a return holds its wet stem down: through the first two beats, or to
+    /// the end of the second revealed note (at most one second of it) when that falls later.
+    static func returnRevealHold(_ score: LofiScore, clock: LofiClock) -> Double {
+        let second = score.notes.last { $0.part == .lead && $0.gain == LofiScore.returnRevealGain }
+        let end = second.map { $0.beat + min($0.length, 1 / clock.beatDuration) } ?? 0
+        return max(2, min(returnRevealLatestHold, end))
+    }
+
+    /// Smoothly lowers the wet stem as the return enters: down over the first quarter beat (under
+    /// the downbeat), held to `hold`, back up half a beat later.
+    static func returnCarryGain(beat: Double, hold: Double = 2) -> Float {
         func smooth(_ u: Double) -> Float { let x = Float(min(1, max(0, u))); return x * x * (3 - 2 * x) }
-        let down = smooth(beat / 0.25), up = smooth((beat - 2) / 0.5)
+        let down = smooth(beat / 0.25), up = smooth((beat - hold) / 0.5)
         return 1 - (1 - returnCarryFloor) * down * (1 - up)
     }
 
@@ -245,11 +256,12 @@ nonisolated enum LofiRenderer {
         report(score, clock: clock, phrase: Int(startBeat / LofiClock.beats),
                levels: ["leadGain": dryLeadGain, "sendGain": sendGain, "midsGain": midsGain, "balanceTrim": trim])
         let reveal = score.section == .returnTheme
+        let hold = returnRevealHold(score, clock: clock)
         for frame in 0..<n {
             let previous: LofiEffects.Stereo = carry?.sample(frame, at: clock) ?? (0, 0)
-            let carried = reveal ? Self.returnCarryGain(beat: Double(frame) / clock.framesPerBeat) : 1
-            let wet = boundedWet((wetChannels[0][frame] * trim + carried * previous.left,
-                                  wetChannels[1][frame] * trim + carried * previous.right))
+            let revealed = reveal ? Self.returnCarryGain(beat: Double(frame) / clock.framesPerBeat, hold: hold) : 1
+            let wet = boundedWet((revealed * (wetChannels[0][frame] * trim + previous.left),
+                                  revealed * (wetChannels[1][frame] * trim + previous.right)))
             for channel in 0..<2 {
                 dryChannels[channel][frame] *= trim
                 textureChannels[channel][frame] *= trim

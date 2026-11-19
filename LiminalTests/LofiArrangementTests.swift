@@ -218,11 +218,62 @@ struct LofiArrangementTests {
         #expect(abs(LofiRenderer.returnCarryGain(beat: 1.99) - 0.501_187) < 1e-5)
         #expect(LofiRenderer.returnCarryGain(beat: 2.5) == 1)
         #expect(LofiRenderer.returnCarryGain(beat: 8) == 1)
+        // A later second note holds the dip until it has sounded.
+        #expect(abs(LofiRenderer.returnCarryGain(beat: 3.2, hold: 3.25) - 0.501_187) < 1e-5)
+        #expect(LofiRenderer.returnCarryGain(beat: 3.75, hold: 3.25) == 1)
         var previous: Float = 1
         for step in 0...3000 {
             let gain = LofiRenderer.returnCarryGain(beat: Double(step) / 1000)
             #expect(abs(gain - previous) < 0.004)
             previous = gain
+        }
+    }
+
+    /// Dry lead level over the wet and mid stems (dB, roughly 500 Hz to 4 kHz) while the phrase's
+    /// first two lead notes sound: the part of the return's salience (M14) the music stems own.
+    private func openingSalience(_ phrase: LofiRenderer.Phrase) throws -> Float {
+        let clock = phrase.clock, n = clock.frameCount
+        let rate = Float(clock.sampleRate)
+        let high = expf(-2 * .pi * 500 / rate), low = 1 - expf(-2 * .pi * 4_000 / rate)
+        func band(_ buffers: [AVAudioPCMBuffer]) throws -> [Float] {
+            let channels = try buffers.map { try #require($0.floatChannelData) }
+            var x: Float = 0, hp: Float = 0, lp: Float = 0
+            return (0..<n).map { frame in
+                let input = channels.reduce(Float(0)) { $0 + 0.5 * ($1[0][frame] + $1[1][frame]) }
+                hp = high * (hp + input - x)
+                x = input
+                lp += (hp - lp) * low
+                return lp
+            }
+        }
+        let lead = try band([phrase.dry]), rivals = try band([phrase.wet, phrase.texture])
+        var leadPower: Float = 0, rivalPower: Float = 0
+        for note in part(phrase.score, .lead).prefix(2) {
+            let start = clock.frame(at: note.beat)
+            for frame in start..<min(n, clock.frame(at: note.beat + min(note.length, 1 / clock.beatDuration))) {
+                leadPower += lead[frame] * lead[frame]
+                rivalPower += rivals[frame] * rivals[frame]
+            }
+        }
+        return 10 * log10(max(leadPower, 1e-12) / max(rivalPower, 1e-12))
+    }
+
+    @Test(arguments: [(1042, 70.0), (7, 62.0), (462, 81.0)] as [(UInt64, Double)])
+    func theReturnsFirstNotesStandClearOfTheMusicAroundThem(seed: UInt64, tempo: Double) throws {
+        for take in 0..<2 {
+            var tail: LofiRenderer.Tail?
+            var saliences: [Float] = []
+            for phrase in (take * 4)..<(take * 4 + 4) {
+                let rendered = try LofiRenderer.render(seed: seed, section: LofiScore.section(at: phrase),
+                                                       options: .init(tempo: tempo), sampleRate: 16_000,
+                                                       drift: .init(seed: seed), startBeat: Double(phrase) * LofiClock.beats,
+                                                       carry: tail)
+                tail = rendered.tail
+                saliences.append(try openingSalience(rendered))
+            }
+            print("LOFI_RETURN_SALIENCE seed \(seed) take \(take) theme \(saliences[0]) return \(saliences[3])")
+            #expect(saliences[3] >= 10)
+            #expect(saliences[3] >= saliences[0] + 6)
         }
     }
 
