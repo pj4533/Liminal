@@ -321,6 +321,10 @@ nonisolated struct ArchiveSeedList: Decodable, Sendable {
              query: "trippy", color: false),
         Seed(id: "Designfo1956", title: "Design for Dreaming", year: 1956,
              query: "trippy", color: true),
+        Seed(id: "horizons-of-science-thinking-machines", title: "Horizons of Science: Thinking Machines", year: 1959,
+             query: "spaceage", color: true),
+        Seed(id: "sailfilm_hear", title: "Hear Here", year: 1969,
+             query: "spaceage", color: true),
     ]
     static let pinnedIDs = Set(pinned.map(\.id))
 

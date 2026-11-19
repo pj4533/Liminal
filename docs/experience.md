@@ -13,7 +13,7 @@
 - **Indirect Control**: shape the experience through abstract sliders rather than direct manipulation
 
 
-Psychedelic and experimental footage and vintage drug education films get extra weight in the rotating pool. Liminal plays four short excerpts from the pinned films for every discovery when both are available. Two cache slots hold discoveries. After a discovery has played twice, Liminal brings in a new title in the background once the old one has faded out. All pieces use the same visual and audio effects. The cache remembers previous start times and looks for a fresh stretch whenever a film returns.
+Psychedelic and experimental footage and vintage drug education films get extra weight in the rotating pool. Liminal plays four short excerpts from the pinned films for every discovery when both are available. The 12-film cache holds ten pinned films and two rotating discoveries. After a discovery has played twice, Liminal brings in a new title in the background once the old one has faded out. All pieces use the same visual and audio effects. The cache remembers previous start times and looks for a fresh stretch whenever a film returns.
 
 | Pinned film | Year | Source |
 | --- | --- | --- |
@@ -25,6 +25,8 @@ Psychedelic and experimental footage and vintage drug education films get extra 
 | A Conversation on LSD | 1979 | [Timothy Leary Archives](https://archive.org/details/Timothy_Leary_Archives_198) · [Recording date](https://upload.erowid.org/culture/characters/stolaroff_myron/stolaroff_myron_video1.shtml) |
 | Ergot: The Story of a Parasitic Fungus | 1958 | [Wellcome Collection](https://wellcomecollection.org/works/b92v49xa) · [Internet Archive copy](https://archive.org/details/Ergotthestoryofaparasiticfungus-wellcome) |
 | Design for Dreaming | 1956 | [Prelinger Archives](https://archive.org/details/Designfo1956) |
+| Horizons of Science: Thinking Machines | 1959 | [Educational Testing Service via Internet Archive](https://archive.org/details/horizons-of-science-thinking-machines) · [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) |
+| Hear Here | 1969 | [Stanford Artificial Intelligence Laboratory via Internet Archive](https://archive.org/details/sailfilm_hear) |
 
 Liminal prefers smaller playable versions when available and keeps full copies of pinned titles when they fit in the 3 GB cache. For larger discovery downloads it tries to keep an excerpt of up to four minutes and removes the temporary source afterward.
 

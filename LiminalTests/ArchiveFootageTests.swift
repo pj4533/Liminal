@@ -265,6 +265,13 @@ struct ArchiveCachePolicyTests {
             try Data([1]).write(to: staged)
             try await store.add(Self.clip(id, mb: 1, used: nil), from: staged, protected: [])
         }
+        // Fill the pinned slots around the existing discoveries, as on a catalog upgrade.
+        for pin in ArchiveSeedList.pinned {
+            try Data([1]).write(to: staged)
+            try await store.add(Self.clip(pin.id, mb: 1, used: nil), from: staged, protected: [])
+        }
+        #expect(ArchiveSeedList.pinnedIDs.count == 10)
+        #expect(await store.clips.count == 12)
         try Data([1]).write(to: staged)
         let newcomer = Self.clip("c", mb: 1, used: nil)
         await store.markUsed("a", segmentStart: 40)
