@@ -429,6 +429,46 @@ struct DialogueEngineTests {
         }
     }
 
+    // MARK: One film repeated (the `same` matrix case)
+
+    /// 64 bars of one recurring source in 8-bar pieces through the coordinator's core, committed at
+    /// each boundary (the capture harness) or ahead of it (live): the performance develops.
+    @Test(arguments: [false, true]) func aRepeatedFilmDevelopsOverSixtyFourBars(_ atBoundary: Bool) throws {
+        let director = DialogueDirector()
+        let beat = 60.0 / 70
+        var memory = DialoguePerformanceMemory()
+        var blocks: [DialogueBlock] = []
+        var anchors = Set<UInt64>()
+        var hits = 0
+        for piece in 0..<8 {
+            let source = Shared.fixture.source(contentID: "same-film", cueToken: piece + 1, sourceStart: 120)
+            let take = piece / 2
+            let info = LofiTransportInfo(revision: 1, takeIndex: take, phraseAtTakeStart: 4 * take, origin: Double(64 * take) * beat,
+                                         beatDuration: beat, nextBeatDuration: nil, seed: 1042, options: LofiOptions(tempo: 70), timing: nil)
+            let due = Double(32 * piece) * beat
+            let reuse = director.cached(source)
+            if reuse != nil { hits += 1 }
+            let window = DialogueCueCoordinator.window(due: due, span: 30, transport: info)
+            let built = DialogueCueCoordinator.build(source: source, speech: [], transcript: nil, transport: info, window: window,
+                                                     earliestStart: atBoundary ? due + DialogueCueCoordinator.commitMargin : due - 2,
+                                                     memory: memory, seed: 1042 &+ UInt64(piece), reuse: reuse)
+            if reuse == nil { director.store(source, analysis: built.analysis, bank: built.bank) }
+            memory = built.memory
+            blocks += built.plan.blocks
+            if let played = built.played {
+                anchors.formUnion(built.plan.events.filter { $0.padID == played.anchorPadID }.map(\.padKey))
+            }
+        }
+        let families = Set(blocks.filter { !$0.events.isEmpty }.map(\.family))
+        let forced = blocks.filter(\.forcedChange).count
+        print("DIALOGUE-SAME boundary=\(atBoundary) families \(families.map(\.rawValue).sorted()) anchors \(anchors.count) forced \(forced)/\(blocks.count) hits \(hits)")
+        #expect(hits == 7, "the bank is cached after the first piece")
+        #expect(families.count >= 3)
+        #expect(anchors.count >= 2, "a recurring bank hands its anchor to another line")
+        #expect(Double(forced) <= 0.10 * Double(blocks.count))
+        #expect(blocks.filter { $0.phrase % 4 == 0 }.allSatisfy { !$0.events.isEmpty }, "every take opens with dialogue")
+    }
+
     // MARK: Fallback fixtures (handoff acceptance)
 
     /// Invariants that hold for any input: one dry voice, a native protected anchor, events inside
