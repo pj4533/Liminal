@@ -368,11 +368,12 @@ Reading it: **Level** `fail` criteria gate `--strict`; `warn` criteria are repor
 | C-D1 | fail | ref, long, fast, same | footage, dialogue | Every consecutive pair of 16-bar windows with dialogue differs by at least 0.25 | difference >= 0.25 |
 | C-D2 | fail | ref, long, fast, same | footage, dialogue | Family or bank changes at least every 8 bars (plan log; without it, consecutive 8-bar windows must differ) | runBars <= 8 |
 | C-D3 | warn | ref, long, fast, same | footage, dialogue | Consecutive blocks are not identical apart from declared repeats | - |
-| C-D4 | fail | ref, long, fast, same | footage, dialogue | An empty bar in every 8; nothing in the last 2 beats before an 8-bar boundary; occupancy at most 0.55 per 8 bars | emptyBars >= 1; occupancy <= 0.55 |
+| C-D4 | fail | ref, long, fast, same | footage, dialogue | An empty bar in every 8; nothing in the last 2 beats before an 8-bar boundary; occupancy at most 0.55 per 8 bars (grammar mode only; skipped in motif mode, see C-D9) | emptyBars >= 1; occupancy <= 0.55 |
 | C-D5 | fail | ref, long, fast, same | footage, dialogue | No overlapping dry events | - |
 | C-D6 | fail | ref, long, fast, same | footage, dialogue | Stage timing total p95 at most 2000 ms and maximum 3000 ms; every committed event at least 0.30 s ahead | totalMsP95 <= 2000.00; totalMs <= 3000.00; leadSeconds >= 0.30 |
 | C-D7 | warn | ref, long, fast, same | footage, dialogue | The first two statements of a hook are the same pad and transform | - |
 | C-D8 | warn | ref, long, fast, same | footage, dialogue | At least 90 percent of accents are 50 ms or more from a kick attack | fraction >= 0.90 |
+| C-D9 | fail | ref, long, fast, same | footage, dialogue | Motif mode: every bar of every 16-bar loop has a chop onset; the full line plays at most twice per loop; at least 60 percent of events are sub-line pieces; every loop has repeat-stutter and split-with-pause cells; occupancy 0.30 to 0.62 | emptyBars <= 0; fullLine <= 2; subLineShare >= 0.60; cellsEveryLoop stutter to splitPause; occupancy 0.30 to 0.62 |
 
 Note: the table is a snapshot; `scripts/mix-criteria.json` and the command are authoritative. At the time of writing the bed and chop-cadence rows (C-B9, C-D4) still carry the original plan wording, and the plan's two "user direction" notes (a bed that keeps its effected baseline character and sits at least 10 dB under the music plus chops in gaps; a chop in every bar of every 16-bar loop) were not yet reflected in the JSON. If those criteria fail on a capture that follows the user direction, check the plan before changing code.
 
@@ -410,6 +411,7 @@ Note: the table is a snapshot; `scripts/mix-criteria.json` and the command are a
 | C-D6 | Analysis must finish ahead of the schedule, so the film bed and music never wait | The slowest stage in `stageTiming` (usually `classifyMs`, the first cue, or `renderMs`); `DialogueCueCoordinator` budgeting and cancellation |
 | C-D7 | A hook should be stated twice before it develops | Echo-family blocks: the first two events must share pad and transform |
 | C-D8 | Accents should not land on top of a kick attack | The performer's grid and snare placement; the drum landmarks' confidence |
+| C-D9 | In motif mode one line is chopped into word pieces and played in every bar of every 16-bar loop | `DialogueMotif` (line choice, piece split, cell plan) and the `dialoguePlans` blocks for each loop |
 
 ## Reading the figures
 
