@@ -6,6 +6,13 @@ Inputs: [handoff](../research/mpc-chopping-handoff.md), [craft notes](../researc
 
 Status: plan. Numbers marked *start* are tuning hypotheses exposed as named constants. Numbers in section 9 are acceptance criteria.
 
+> **User direction, 19 November 2026 (binding; overrides 8.5, 8.6, C-B6 and C-B9 where they conflict).** The film bed and the dialogue chops are two different layers with different jobs.
+>
+> - **Dialogue chops are the forward layer.** They are part of the beat, woven into the drums, bass, mids and lead, and sit up front in the mix. Do not pull the chops back to make room for other layers. Fix any conflict with the theme return through placement (dialogue leaves the return's first bar free, see 5.2), not by lowering the chops overall.
+> - **The film bed is background only.** It is the unchopped footage audio, heavily effected with tempo-synced processing: echoes at beat divisions such as 1/4 and dotted 1/8; filter, phaser or tremolo LFOs locked to bar or beat rates; generous reverb. It should be clearly mostly wet, a washed-out pad rather than direct audio. It sits well under the beat: in gaps between chops, the bed's loudness is at least 10 dB under the music plus chops (*start*). It must stay audible, so keep the audibility-in-gaps lower bound.
+> - **The bed never drives ducking.** Nothing is sidechained to or ducked by the film bed. Chops may still duck the bed, and the music may stay on top of it, but the bed is never a key signal.
+> - **Criteria changes.** C-B9's "bed direct to wet at least +3 dB" is replaced by "bed wet at least equal to direct (mostly wet)" plus "bed at least 10 dB under the music plus chops in gaps". In C-B6, theme-return salience may be judged against mids, space and bed only. The chops are a featured layer, so failing to clear them is not a defect if the return's first bar is chop-free.
+
 ## 1. Goals and non-goals
 
 Goals
