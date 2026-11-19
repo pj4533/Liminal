@@ -31,6 +31,8 @@ parser.add_argument("--private-drums", action="store_true")
 parser.add_argument("--drum-name", help="Pin an installed take by its filename stem when using --private-drums")
 parser.add_argument("--wait-lock", default=1200, type=int, metavar="SECONDS",
                     help="Wait this long for another capture to release the shared config path (default 1200)")
+parser.add_argument("--capture-attempts", default=4, type=int, choices=range(1, 9), metavar="N",
+                    help="Capture again when a tap drops a block under machine load (default 4 attempts)")
 parser.add_argument("--hook", action="append", default=[], metavar="KEY=VALUE",
                     help="Capture hook option passed to LofiCaptureHooks (repeatable), e.g. masterProfile=ambient")
 parser.add_argument("--max-true-peak", type=float, help="Pass through to analyze-lofi.py (default: the manifest's master ceiling, else -1.5)")
@@ -138,12 +140,29 @@ with ThreadingHTTPServer(("127.0.0.1", 0), Receiver) as server:
         with config_file:
             json.dump(configuration, config_file)
         log_path = out / "xcodebuild.log"
-        with log_path.open("w") as log:
-            xcode = subprocess.run([
-                "xcodebuild", "test", "-scheme", "Liminal", "-destination", "platform=macOS",
-                "-derivedDataPath", os.environ.get("DD", "/private/tmp/liminal-overhaul-mac"),
-                "-parallel-testing-enabled", "NO", "-only-testing:LiminalTests/LofiMixRenderTests",
-            ], stdout=log, stderr=subprocess.STDOUT)
+        # AVAudioEngine delivers tap buffers on its own queue. The offline render does not wait for
+        # it, so on a busy machine a tap can fall behind and drop a block; the test then stops with
+        # `skippedTapFrames`. That failure says nothing about the mix, so wait for the load to fall
+        # and capture again. Every other failure is reported at once.
+        for attempt in range(1, args.capture_attempts + 1):
+            with log_path.open("w") as log:
+                xcode = subprocess.run([
+                    "xcodebuild", "test", "-scheme", "Liminal", "-destination", "platform=macOS",
+                    "-derivedDataPath", os.environ.get("DD", "/private/tmp/liminal-overhaul-mac"),
+                    "-parallel-testing-enabled", "NO", "-only-testing:LiminalTests/LofiMixRenderTests",
+                ], stdout=log, stderr=subprocess.STDOUT)
+            dropped = xcode.returncode and "skippedTapFrames" in log_path.read_text(errors="replace")
+            if not dropped or attempt == args.capture_attempts:
+                break
+            shutil.copyfile(log_path, out / f"xcodebuild-attempt{attempt}.log")
+            for stale in out.iterdir():
+                if stale.suffix in (".wav", ".json", ".csv", ".partial"):
+                    stale.unlink()
+            quiet_by = time.monotonic() + 180
+            while os.getloadavg()[0] > (os.cpu_count() or 4) and time.monotonic() < quiet_by:
+                time.sleep(5)
+            print(f"A capture tap dropped a block on a busy machine (attempt {attempt} of {args.capture_attempts}, "
+                  f"load {os.getloadavg()[0]:.1f}); capturing again", flush=True)
         if xcode.returncode:
             for line in log_path.read_text(errors="replace").splitlines():
                 if re.search(r"error:|recorded an issue|tap .*samples|TEST FAILED", line):

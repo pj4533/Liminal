@@ -13,7 +13,10 @@
 # fail-level criteria per case, baseline deltas) and matrix-summary.json.
 # Exit status: nonzero when a case produced no capture; under --strict also when any case has a strict failure.
 # --prune-wavs deletes the WAVs of long, fast and nofilm after their reports. --baseline DIR compares
-# each case with DIR/<case>/report. Extra check-lofi.sh options can follow a literal "--".
+# each case with DIR/<case>/report. A case directory that already holds a capture is reported on again
+# without capturing; one with a report and pruned WAVs is kept as it is; one without a manifest (a
+# capture that failed part way) is cleared and captured again. check-lofi.sh itself captures again
+# when a tap drops a block under machine load (`skippedTapFrames`, see --capture-attempts). Extra check-lofi.sh options can follow a literal "--".
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
@@ -61,8 +64,15 @@ for name in ${cases//,/ }; do
     fi
     [ -n "$strict" ] && case_args+=(--strict)
     rc=0
-    if [ -e "$out/$name" ] && [ -n "$(ls -A "$out/$name" 2>/dev/null)" ]; then
-        echo "$out/$name is not empty; skipping capture and reusing it (delete it to recapture)"
+    if [ -d "$out/$name" ] && [ ! -f "$out/$name/manifest.json" ]; then
+        # A capture that stopped before its manifest leaves partial WAVs; they are never analysed.
+        echo "$out/$name has no manifest (an earlier capture failed); clearing it and capturing again"
+        rm -rf "$out/$name"
+    fi
+    if [ -f "$out/$name/report/mix-report.json" ] && [ ! -f "$out/$name/master.wav" ]; then
+        echo "$out/$name has a report and pruned WAVs; keeping the report (delete the directory to recapture)"
+    elif [ -f "$out/$name/manifest.json" ]; then
+        echo "$out/$name holds a capture; skipping capture and reporting on it (delete it to recapture)"
         python3 scripts/mix-report.py "$out/$name" --case "$name" ${baseline:+--baseline "$baseline/$name"} $strict || rc=$?
     else
         scripts/mix-report.sh "${case_args[@]}" ${extra[@]+"${extra[@]}"} || rc=$?
