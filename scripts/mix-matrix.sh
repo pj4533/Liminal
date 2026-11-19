@@ -9,9 +9,14 @@
 #   fast   --film-reel --bars 32 --seed 2025 --bpm 80
 #   same   --same-film --bars 64 --seed 1042 --bpm 70
 #   nofilm --no-footage --bars 16 --seed 1042 --bpm 70
-# Output: DIR/<case>/ (capture, report/), DIR/matrix-summary.md and matrix-summary.json.
+# Output: DIR/<case>/ (capture, report/), DIR/matrix-summary.md (counts, criteria-by-case grid, failing
+# fail-level criteria per case, baseline deltas) and matrix-summary.json.
+# Exit status: nonzero when a case produced no capture; under --strict also when any case has a strict failure.
 # --prune-wavs deletes the WAVs of long, fast and nofilm after their reports. --baseline DIR compares
-# each case with DIR/<case>/report. Extra check-lofi.sh options can follow a literal "--".
+# each case with DIR/<case>/report. A case directory that already holds a capture is reported on again
+# without capturing; one with a report and pruned WAVs is kept as it is; one without a manifest (a
+# capture that failed part way) is cleared and captured again. check-lofi.sh itself captures again
+# when a tap drops a block under machine load (`skippedTapFrames`, see --capture-attempts). Extra check-lofi.sh options can follow a literal "--".
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
@@ -58,11 +63,26 @@ for name in ${cases//,/ }; do
         case_args+=(--baseline "$baseline/$name")
     fi
     [ -n "$strict" ] && case_args+=(--strict)
-    if [ -e "$out/$name" ] && [ -n "$(ls -A "$out/$name" 2>/dev/null)" ]; then
-        echo "$out/$name is not empty; skipping capture and reusing it (delete it to recapture)"
-        python3 scripts/mix-report.py "$out/$name" --case "$name" ${baseline:+--baseline "$baseline/$name"} $strict || status=$?
+    rc=0
+    if [ -d "$out/$name" ] && [ ! -f "$out/$name/manifest.json" ]; then
+        # A capture that stopped before its manifest leaves partial WAVs; they are never analysed.
+        echo "$out/$name has no manifest (an earlier capture failed); clearing it and capturing again"
+        rm -rf "$out/$name"
+    fi
+    if [ -f "$out/$name/report/mix-report.json" ] && [ ! -f "$out/$name/master.wav" ]; then
+        echo "$out/$name has a report and pruned WAVs; keeping the report (delete the directory to recapture)"
+    elif [ -f "$out/$name/manifest.json" ]; then
+        echo "$out/$name holds a capture; skipping capture and reporting on it (delete it to recapture)"
+        python3 scripts/mix-report.py "$out/$name" --case "$name" ${baseline:+--baseline "$baseline/$name"} $strict || rc=$?
     else
-        scripts/mix-report.sh "${case_args[@]}" ${extra[@]+"${extra[@]}"} || status=$?
+        scripts/mix-report.sh "${case_args[@]}" ${extra[@]+"${extra[@]}"} || rc=$?
+    fi
+    # A case without a manifest always fails the run; analysis failures only gate --strict.
+    if [ ! -f "$out/$name/manifest.json" ]; then
+        echo "case $name produced no capture; see $out/$name/xcodebuild.log" >&2
+        status=1
+    elif [ -n "$strict" ] && [ "$rc" -ne 0 ]; then
+        status=$rc
     fi
     if [ -n "$prune" ]; then
         case "$name" in long|fast|nofilm)
@@ -71,30 +91,7 @@ for name in ${cases//,/ }; do
     fi
 done
 
-python3 - "$out" "$cases" <<'PY'
-import json, sys
-from pathlib import Path
-out, cases = Path(sys.argv[1]), sys.argv[2].split(",")
-summary, ids = {}, []
-for case in cases:
-    path = out / case / "report" / "mix-report.json"
-    if not path.is_file():
-        summary[case] = None
-        continue
-    doc = json.loads(path.read_text())
-    summary[case] = {r["id"]: {"status": r["status"], "level": r["level"], "values": r.get("values", {})} for r in doc["criteria"]}
-    summary[case]["_summary"] = doc["summary"]
-    for r in doc["criteria"]:
-        if r["id"] not in ids:
-            ids.append(r["id"])
-(out / "matrix-summary.json").write_text(json.dumps(summary, indent=1) + "\n")
-lines = ["# Mix matrix summary", "", "| Criterion | Level | " + " | ".join(cases) + " |", "|---|---|" + "---|" * len(cases)]
-for cid in ids:
-    level = next((v[cid]["level"] for v in summary.values() if v and cid in v), "")
-    row = [(summary[c][cid]["status"] if summary.get(c) and cid in summary[c] else "-") for c in cases]
-    lines.append(f"| {cid} | {level} | " + " | ".join(row) + " |")
-lines += ["", "Strict failures: " + "; ".join(f"{c}: {', '.join(summary[c]['_summary']['strictFailures']) or 'none'}" for c in cases if summary.get(c))]
-(out / "matrix-summary.md").write_text("\n".join(lines) + "\n")
-print("\n".join(lines))
-PY
+summary_status=0
+python3 scripts/mix-report.py --matrix-summary "$out" --cases "$cases" ${baseline:+--baseline "$baseline"} $strict || summary_status=$?
+[ "$summary_status" -ne 0 ] && status=$summary_status
 exit "$status"

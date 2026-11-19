@@ -91,6 +91,7 @@ def envelope_db(x, rate, hop_seconds=0.01):
 
 
 def latency_frames(manifest):
+    """Legacy manifest latency (sum of the reported unit latencies); see `master_latency` for the real one."""
     lat = manifest.get("latencySamples")
     if isinstance(lat, (int, float)):
         return float(lat)
@@ -101,12 +102,44 @@ def latency_frames(manifest):
     return 0.0
 
 
+def estimate_latency(master, pre, rate, seconds=10.0, max_lag=4096):
+    """Latency of `master` behind `pre` in frames, from the cross-correlation of the loudest stretch."""
+    n = min(len(master), len(pre))
+    seg = int(seconds * rate)
+    if n < seg // 2:
+        return None
+    a = np.asarray(pre[:n], dtype=np.float32).mean(axis=1)
+    hop = rate
+    ms = np.array([np.mean(a[i:i + hop] ** 2) for i in range(0, n - hop, hop)])
+    start = int(np.argmax(np.convolve(ms, np.ones(max(1, int(seconds))), "valid"))) * hop if len(ms) else 0
+    stop = min(n, start + seg)
+    x = a[start:stop].astype(np.float64)
+    y = np.asarray(master[start:stop], dtype=np.float32).mean(axis=1).astype(np.float64)
+    c = sps.fftconvolve(y, x[::-1], mode="full")
+    mid = len(x) - 1
+    window = c[mid - 64: mid + max_lag + 1]
+    return int(np.argmax(np.abs(window))) - 64
+
+
+def master_latency(cap):
+    """(frames, source): the engine's `latencyFrames` when the manifest has it, else cross-correlation."""
+    eng = cap.master_dynamics().get("latencyFrames")
+    if isinstance(eng, (int, float)):
+        return int(eng), "engine"
+    master, pre = cap.stem("master"), cap.stem("pre-master")
+    if master is not None and pre is not None:
+        est = estimate_latency(master, pre, cap.rate)
+        if est is not None:
+            return est, "cross-correlation"
+    return int(round(latency_frames(cap.manifest))), "manifest latencySamples"
+
+
 def inferred_gain_trace(cap, hop_seconds=0.01):
     """Master gain in dB per 10 ms (negative = reduction) from master and pre-master envelopes."""
     master, pre = cap.stem("master"), cap.stem("pre-master")
     if master is None or pre is None:
         return None
-    lat = int(round(latency_frames(cap.manifest)))
+    lat, lat_source = master_latency(cap)
     m = np.asarray(master[lat:], dtype=np.float32) if lat > 0 else np.asarray(master)
     p = np.asarray(pre[: len(m)], dtype=np.float32)
     m = m[: len(p)]
@@ -116,7 +149,8 @@ def inferred_gain_trace(cap, hop_seconds=0.01):
     low = active & (ep < np.nanpercentile(ep[active], 40)) if active.any() else active
     static = float(np.nanmedian(gain[low])) if low.any() else 0.0
     trace = np.where(active, gain - static, 0.0)
-    return {"gainDb": trace, "staticGainDb": static, "hopSeconds": hop_seconds, "preEnvDb": ep}
+    return {"gainDb": trace, "staticGainDb": static, "hopSeconds": hop_seconds, "preEnvDb": ep,
+            "latencyFrames": lat, "latencySource": lat_source}
 
 
 def pumping_index(gain_db, hop_seconds):
@@ -150,6 +184,18 @@ def measure_dynamics(cap, trace_data):
     out = {}
     if trace_data is not None:
         out["engine"] = engine_trace_stats(trace_data)
+        meta = cap.master_dynamics()
+        if meta:
+            # Per-sample meters in the manifest against the per-hop trace file: both are engine data.
+            out["engine"]["manifest"] = {k: meta.get(k) for k in ("profile", "ceilingDbtp", "latencyFrames", "glue", "clip", "limiter")}
+            out["engine"]["clipEngagedFractionSamples"] = (meta.get("clip") or {}).get("engagedFraction")
+            diffs = {}
+            for stage in ("glue", "limiter"):
+                for k in ("meanDb", "p95Db", "maxDb"):
+                    mv = (meta.get(stage) or {}).get(k)
+                    if isinstance(mv, (int, float)):
+                        diffs[f"{stage}.{k}"] = float(out["engine"][stage][k] - mv)
+            out["engine"]["traceMinusManifestDb"] = diffs
     inferred = inferred_gain_trace(cap)
     if trace_data is not None:
         # Prefer the engine's own trace for pumping: total reduction averaged to ~10 ms.
@@ -175,7 +221,25 @@ def measure_dynamics(cap, trace_data):
             "maxReductionDb": float(r.max()), "above3dbFraction": float((r > 3).mean()),
             "staticGainDb": inferred["staticGainDb"],
         }
+        out["inferred"]["latencyFrames"] = inferred["latencyFrames"]
+        out["inferred"]["latencySource"] = inferred["latencySource"]
         out["inferred"]["pumpingIndexDb"] = pumping_index(gain, inferred["hopSeconds"])
+        if trace_data is not None:
+            eng_red_raw = -out["_gain"]
+            n = len(red)
+            t_eng = (np.arange(len(eng_red_raw)) + 0.5) * out["_hop"]
+            t_inf = (np.arange(n) + 0.5) * inferred["hopSeconds"]
+            eng_red = np.interp(t_inf, t_eng, eng_red_raw)
+            keep = active[:n]
+            e, i = eng_red[:n][keep], red[:n][keep]
+            out["crossCheck"] = {
+                "engineTotalP95Db": float(np.percentile(e, 95)), "inferredP95Db": float(np.percentile(i, 95)),
+                "p95DisagreementDb": float(abs(np.percentile(e, 95) - np.percentile(i, 95))),
+                "engineTotalMeanDb": float(e.mean()), "inferredMeanDb": float(i.mean()),
+                "engineTotalMaxDb": float(e.max()), "inferredMaxDb": float(i.max()),
+                "correlation": float(np.corrcoef(e, i)[0, 1]) if e.std() > 0 and i.std() > 0 else None,
+                "warn": bool(abs(np.percentile(e, 95) - np.percentile(i, 95)) > 1.0),
+            }
         kd = kick_dip(gain, inferred["hopSeconds"], cap.kick_attack_frames(), cap.rate)
         if kd:
             out["inferred"]["kickDipDb"] = kd[0]

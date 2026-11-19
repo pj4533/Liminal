@@ -45,6 +45,22 @@ def articulation_counts(cap):
     return {str(k): len(v) for k, v in sorted(takes.items())}
 
 
+def engine_articulation_counts(cap):
+    """Distinct mid articulations per 16 bars from `diagnostics.musicLevels[].midArticulations`
+    (one entry per phrase, in phrase order; four phrases make one take)."""
+    levels = cap.diagnostics.get("musicLevels") or []
+    if not levels or not any("midArticulations" in e for e in levels):
+        return None
+    per_take = {}
+    for e in levels:
+        phrase = e.get("phrase")
+        if phrase is None:
+            continue
+        take = int(phrase) // max(1, int(round(cap.take_frames / cap.phrase_frames)))
+        per_take.setdefault(take, set()).update(str(a) for a in e.get("midArticulations", []))
+    return {str(k): len(v) for k, v in sorted(per_take.items())}
+
+
 def measure_mids_lead(cap, grid, grids):
     lead, mids = grids.get("lead"), grids.get("mids")
     if not cap.score or lead is None or mids is None:
@@ -55,8 +71,13 @@ def measure_mids_lead(cap, grid, grids):
     lead_m, tex_m = _mask(grid, lead_iv, nfr), _mask(grid, tex_iv, nfr)
     both, rests = lead_m & tex_m, tex_m & ~lead_m
     out = {"articulationsPer16Bars": articulation_counts(cap)}
+    engine = engine_articulation_counts(cap)
+    if engine:
+        out["articulationsPer16BarsEngine"] = engine
     for label, m in (("bothPlay", both), ("leadRestMidsPlay", rests)):
-        if m.sum() >= 5:
+        if m.sum() < 50:
+            out[label + "Skipped"] = f"{m.sum() * grid.hop / cap.rate:.2f} s of material, need at least 0.5 s"
+        if m.sum() >= 50:
             l, t = band_mean(grid, lead, m, 400, 3000), band_mean(grid, mids, m, 400, 3000)
             out[label] = {"leadDb": float(db10(max(l, 1e-18))), "midsDb": float(db10(max(t, 1e-18))),
                           "leadMinusMidsDb": float(db10(max(l, 1e-18)) - db10(max(t, 1e-18))),
@@ -91,6 +112,8 @@ def measure_theme_return(cap, grid, grids):
         iv = [(int(n["on"]), min(int(n["off"]), int(n["on"]) + int(1.0 * cap.rate))) for n in notes]
         m = _mask(grid, iv, nfr)
         l = band_mean(grid, lead, m, 500, 4000)
+        if l < 1e-10:  # lead silent in these notes (about -100 dBFS): salience is undefined, not very negative
+            return None
         o = sum(band_mean(grid, g, m, 500, 4000) for g in rivals)
         return float(db10(max(l, 1e-18)) - db10(max(o, 1e-18)))
 
