@@ -159,11 +159,11 @@ struct DialogueRuntimeTests {
     @Test func aLateTranscriptChangesNothingButIsCached() async throws {
         let transcript = DialogueFixtures.transcript(Self.fixture)
         let director = DialogueDirector(.neutral(transcriptProvider: {
-            FixtureTranscriptProvider(transcript, delay: .milliseconds(2000))
+            FixtureTranscriptProvider(transcript, delay: .milliseconds(3000))
         }))
         let start = Self.uptime()
-        // The second block starts 2.7 s from now, so a transcript is useful only until 1.4 s.
-        let info = Self.info(origin: start + 2.7 - 16 * Self.beat)
+        // The second block starts 4.0 s from now, so a transcript is useful only until 2.7 s.
+        let info = Self.info(origin: start + 4.0 - 16 * Self.beat)
         let window = (start + 0.2)..<(info.origin + 32 * Self.beat)
         let recorder = Recorder()
         let outcome = await run(director, info: info, window: window, recorder: recorder).value

@@ -16,6 +16,9 @@ nonisolated enum DialogueCueCoordinator {
     static let transcriptReplanMargin = 0.5
     /// A transcript must arrive this long before the second block's commit to be used.
     static let transcriptCommitGap = 1.0
+    /// A first block with less than this many beats left after the bed starts is a stub (its last
+    /// bar is a rest anyway); the transcript then targets the block after the next one.
+    static let stubBlockBeats = 4.0
 
     struct Timings: Sendable, Equatable {
         var classifyMs: Double = 0
@@ -379,7 +382,13 @@ nonisolated final class DialogueDirector: @unchecked Sendable {
         // Transcription runs beside the acoustic path. It may refine the second block and later.
         var reuse = cached(source)
         let firstSnapshot = DialogueCueCoordinator.snapshot(info, window: window)
-        let firstBlock = DialogueCueCoordinator.blocks(firstSnapshot, window: window).lowerBound
+        // A cue whose bed starts inside a block (the fade before the boundary) plays that stub block
+        // as rest; the transcript's target is the block after the first whole one (live tuning: with
+        // the stub counted, a 1 s transcript was always "too late").
+        var firstBlock = DialogueCueCoordinator.blocks(firstSnapshot, window: window).lowerBound
+        if firstSnapshot.time(beat: Double(16 * (firstBlock + 1))) - window.lowerBound < DialogueCueCoordinator.stubBlockBeats * info.beatDuration {
+            firstBlock += 1
+        }
         let secondBlockStart = firstSnapshot.time(beat: Double(16 * (firstBlock + 1)))
         let useDeadline = min(started + config.transcriptCap,
                               secondBlockStart - DialogueCueCoordinator.commitMargin - DialogueCueCoordinator.transcriptCommitGap)
