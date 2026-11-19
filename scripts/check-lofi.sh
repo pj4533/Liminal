@@ -58,7 +58,7 @@ prefix = "/" + token + "/"
 artifacts = {"manifest.json", "score.json", "master.wav", "drums.wav", "bass.wav",
              "dry.wav", "texture.wav", "wet.wav", "footage-dry.wav", "footage-delay.wav",
              "footage-room.wav", "lofi.wav", "footage.wav", "pre-master.wav", "glue.wav",
-             "dialogue-chops.wav", "fx-echo-raw.wav", "fx-room-raw.wav", "fx-color-raw.wav"}
+             "dialogue-chops.wav", "dialogue-fx.wav", "film-soundtrack.wav", "fx-echo-raw.wav", "fx-room-raw.wav", "fx-color-raw.wav"}
 
 
 class Receiver(BaseHTTPRequestHandler):

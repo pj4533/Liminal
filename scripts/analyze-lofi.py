@@ -214,14 +214,20 @@ def analyze(run, true_peak_limit, report):
         "occupancyFloorDbfs": amplitude_db(OCCUPANCY_FLOOR),
     })
 
-    stats = {name: BusStats(rate) for name in BUSES}
+    # Older captures metered chops before their archive effects. Only the new
+    # post-fader tap is a sixth summand of the music bus.
+    dialogue_on_music = manifest.get("dialogueOnMusicBus", False)
+    buses = BUSES + (("dialogue-chops",) if dialogue_on_music else ())
+    if "dialogue-fx" in manifest.get("topology", []):
+        buses += ("dialogue-fx",)
+    stats = {name: BusStats(rate) for name in buses}
     routing_peak = 0.0
     first_bad_frame = None
     stem_peak = 0.0
     first_bad_stem_frame = None
     nonfinite_routing_samples = 0
     with ExitStack() as files:
-        taps = {name: FloatWave(run / f"{name}.wav", files) for name in BUSES}
+        taps = {name: FloatWave(run / f"{name}.wav", files) for name in buses}
         for name, tap in taps.items():
             if tap.rate != rate or tap.frames != frames:
                 raise AudioCheckError(
@@ -233,10 +239,10 @@ def analyze(run, true_peak_limit, report):
             buffers = {name: tap.read(count) for name, tap in taps.items()}
             for name, samples in buffers.items():
                 stats[name].add(samples)
-            # The five explicitly captured music lanes enter the unity Lo-Fi bus.
+            dialogue = buffers.get("dialogue-chops")
             for index, (drums, bass, dry, texture, wet, music) in enumerate(zip(
                     *(buffers[name] for name in ("drums", "bass", "dry", "texture", "wet", "lofi")))):
-                residual = abs(drums + bass + dry + texture + wet - music)
+                residual = abs(drums + bass + dry + texture + wet + (dialogue[index] if dialogue is not None else 0) - music)
                 if math.isfinite(residual):
                     stem_peak = max(stem_peak, residual)
                     if first_bad_stem_frame is None and residual > ROUTING_TOLERANCE:
@@ -266,11 +272,11 @@ def analyze(run, true_peak_limit, report):
         if bus.nonfinite:
             failures.append(f"{name}: {bus.nonfinite} nonfinite samples")
     if first_bad_stem_frame is not None:
-        failures.append(f"lofi differs from the five music stems at frame {first_bad_stem_frame}")
+        failures.append(f"lofi differs from the captured music stems at frame {first_bad_stem_frame}")
     if first_bad_frame is not None:
         failures.append(f"pre-master differs from the lofi + footage sum at frame {first_bad_frame}")
     if not has_footage:
-        for name in FOOTAGE_BUSES:
+        for name in FOOTAGE_BUSES + tuple(n for n in ("dialogue-chops", "dialogue-fx") if n in stats):
             if stats[name].sample_peak > SILENCE_FLOOR:
                 failures.append(f"{name}: audio appeared with hasFootage=false")
     elif stats["footage"].sample_peak <= SILENCE_FLOOR:

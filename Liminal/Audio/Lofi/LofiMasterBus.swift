@@ -117,13 +117,8 @@ nonisolated private final class LofiMasterCapture: @unchecked Sendable {
     }
 }
 
-/// Bounded stereo loudness estimate for slow gain calibration. External meter qualification is separate.
-nonisolated struct LofiMasterMeter {
-    struct Observation {
-        let lufs: Float
-        let samplePeak: Float
-    }
-
+/// K-weighting shared by the finished-mix meter and the per-cut vocal leveler.
+nonisolated struct LofiKWeighting {
     private struct Biquad {
         let b0: Double, b1: Double, b2: Double, a1: Double, a2: Double
         var z1 = 0.0, z2 = 0.0
@@ -136,11 +131,44 @@ nonisolated struct LofiMasterMeter {
         }
     }
 
+    private var shelf: Biquad
+    private var highpass: Biquad
+
+    init(sampleRate: Double) {
+        // Bilinear K-weighting realization gives the published 48 kHz response while adapting to other rates.
+        let shelfOmega = tan(.pi * 1681.974450955533 / sampleRate)
+        let shelfQ = 0.7071752369554196
+        let shelfDamping = shelfOmega / shelfQ
+        let shelfSquared = shelfOmega * shelfOmega
+        let shelfSum = 1 + shelfDamping + shelfSquared
+        let highGain = pow(10, 3.999843853973347 / 20)
+        let middleGain = pow(highGain, 0.4996667741545416)
+        shelf = Biquad(b0: (highGain + middleGain * shelfDamping + shelfSquared) / shelfSum,
+                           b1: 2 * (shelfSquared - highGain) / shelfSum,
+                           b2: (highGain - middleGain * shelfDamping + shelfSquared) / shelfSum,
+                           a1: 2 * (shelfSquared - 1) / shelfSum, a2: (1 - shelfDamping + shelfSquared) / shelfSum)
+        let hpOmega = tan(.pi * 38.13547087602444 / sampleRate)
+        let hpDamping = hpOmega / 0.5003270373238773
+        let hpSquared = hpOmega * hpOmega
+        let hpSum = 1 + hpDamping + hpSquared
+        highpass = Biquad(b0: 1, b1: -2, b2: 1,
+                              a1: 2 * (hpSquared - 1) / hpSum, a2: (1 - hpDamping + hpSquared) / hpSum)
+    }
+
+    mutating func process(_ sample: Double) -> Double { highpass.process(shelf.process(sample)) }
+}
+
+/// Bounded stereo loudness estimate for slow gain calibration. External meter qualification is separate.
+nonisolated struct LofiMasterMeter {
+    struct Observation {
+        let lufs: Float
+        let samplePeak: Float
+    }
+
     private static let maximumHops = 1_200
     private static let absoluteGate = pow(10, (-70.0 + 0.691) / 10)
     private let hopSize: Int
-    private var shelfL: Biquad, shelfR: Biquad
-    private var highpassL: Biquad, highpassR: Biquad
+    private var leftWeight: LofiKWeighting, rightWeight: LofiKWeighting
     private var quarters = [Double](repeating: 0, count: 4)
     private var windows = [Double](repeating: 0, count: maximumHops)
     private var written = 0
@@ -155,28 +183,8 @@ nonisolated struct LofiMasterMeter {
         hopSize = max(1, Int((sampleRate * 0.1).rounded()))
         remainingEpochFrames = Self.frames(seconds: epochSeconds, rate: sampleRate)
         nextEpochFrames = remainingEpochFrames
-        // Bilinear K-weighting realization gives the published 48 kHz response while adapting to other rates.
-        let shelfOmega = tan(.pi * 1681.974450955533 / sampleRate)
-        let shelfQ = 0.7071752369554196
-        let shelfDamping = shelfOmega / shelfQ
-        let shelfSquared = shelfOmega * shelfOmega
-        let shelfSum = 1 + shelfDamping + shelfSquared
-        let highGain = pow(10, 3.999843853973347 / 20)
-        let middleGain = pow(highGain, 0.4996667741545416)
-        let shelf = Biquad(b0: (highGain + middleGain * shelfDamping + shelfSquared) / shelfSum,
-                           b1: 2 * (shelfSquared - highGain) / shelfSum,
-                           b2: (highGain - middleGain * shelfDamping + shelfSquared) / shelfSum,
-                           a1: 2 * (shelfSquared - 1) / shelfSum, a2: (1 - shelfDamping + shelfSquared) / shelfSum)
-        shelfL = shelf
-        shelfR = shelf
-        let hpOmega = tan(.pi * 38.13547087602444 / sampleRate)
-        let hpDamping = hpOmega / 0.5003270373238773
-        let hpSquared = hpOmega * hpOmega
-        let hpSum = 1 + hpDamping + hpSquared
-        let highpass = Biquad(b0: 1, b1: -2, b2: 1,
-                              a1: 2 * (hpSquared - 1) / hpSum, a2: (1 - hpDamping + hpSquared) / hpSum)
-        highpassL = highpass
-        highpassR = highpass
+        leftWeight = LofiKWeighting(sampleRate: sampleRate)
+        rightWeight = leftWeight
     }
 
     static func frames(seconds: Double, rate: Double) -> Int {
@@ -189,8 +197,8 @@ nonisolated struct LofiMasterMeter {
         let a = left.isFinite ? min(2, max(-2, left)) : 0
         let b = right.isFinite ? min(2, max(-2, right)) : 0
         peak = max(peak, abs(a), abs(b))
-        let l = highpassL.process(shelfL.process(Double(a)))
-        let r = highpassR.process(shelfR.process(Double(b)))
+        let l = leftWeight.process(Double(a))
+        let r = rightWeight.process(Double(b))
         accumulated += l * l + r * r
         hopFrames += 1
         remainingEpochFrames -= 1

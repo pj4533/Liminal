@@ -8,7 +8,7 @@ import OSLog
 /// All stems start against one host time. The backing recording is queued once per 64 beats.
 @MainActor
 final class LofiPlayback {
-    private let bus = LofiBus(gain: 0)
+    private let bus: LofiBus
     var output: Fader { bus.output }
     nonisolated let stateBus = MusicStateBus()
     private let sampleRate: Double
@@ -59,7 +59,8 @@ final class LofiPlayback {
         }
     }
 
-    init(seed: UInt64, sampleRate: Double) {
+    init(seed: UInt64, sampleRate: Double, dialogue: Fader) {
+        bus = LofiBus(gain: 0, dialogue: dialogue)
         rng = MusicRNG(seed: seed)
         self.sampleRate = sampleRate
     }

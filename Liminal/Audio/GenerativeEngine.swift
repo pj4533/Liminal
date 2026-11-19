@@ -108,7 +108,7 @@ final class GenerativeEngine: ObservableObject {
         self.archive = archive
         mix = MixBus(layers: layers.flatMap(\.allStrips) + [archive.strip], delayTime: Float(r.range(1.3...2.1)))   // slow, dark echoes (D92)
         conductor = MusicConductor(layers: layers, mix: mix, seed: seed, pinned: nil, archive: archive)
-        lofi = LofiPlayback(seed: initialLofiSeed, sampleRate: archive.format.sampleRate)
+        lofi = LofiPlayback(seed: initialLofiSeed, sampleRate: archive.format.sampleRate, dialogue: archive.chopOutput)
         master = LofiMasterBus(archiveAndAmbient: mix.output, lofi: lofi.output)
         lofi.onPhrase = { [weak conductor, weak master] duration, index, seed in
             conductor?.updateArchiveTempo(beatDuration: duration, phrase: index, seed: seed)

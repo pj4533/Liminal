@@ -32,7 +32,10 @@ nonisolated final class ArchiveVoice {
 
     let source = BufferSource()
     let chops = BufferSource()
-    private let bed: Fader
+    let bed: Fader
+    let chopEcho: VariableDelay
+    let chopWet: Mixer
+    let chopOutput: Fader
     let highpass: HighPassButterworthFilter
     let lowpass: LowPassButterworthFilter
     let lowpass2: LowPassButterworthFilter
@@ -78,6 +81,8 @@ nonisolated final class ArchiveVoice {
         let room: Contour
         let echo: Contour
         let movement: Contour
+        let revealCenter: Double
+        let revealHalfWidth: Double
 
         init(seed: Float, duration: Double) {
             var rng = MusicRNG(seed: UInt64(seed.bitPattern))
@@ -86,19 +91,49 @@ nonisolated final class ArchiveVoice {
             room = Contour(segments: segments + rng.int(0...2), range: 0.95...1.85, rng: &rng)
             echo = Contour(segments: segments + rng.int(0...2), range: 0.95...1.95, rng: &rng)
             movement = Contour(segments: segments + rng.int(0...2), range: 0.12...0.86, rng: &rng)
+            revealCenter = rng.range(0.24...0.79)
+            revealHalfWidth = min(0.20, 1.75 / max(duration, 1))
         }
     }
 
-    // A separate trim for the drum-and-effects mix, with a clearer center under its wet returns.
+    // The music bus receives only scheduled chops. The archive strip carries the film and its returns.
     private var beatLocked = false
     private var cueGain: Float = 1
+
+    private var dropWindows: [Range<Double>] = []
+    private var lastBedGain: Float = 1
+    private var lastChopGain: Float = 0
+
+    private func updateChopGain() {
+        let gain: Float = beatLocked && playing ? min(cueGain, 1.15) * strip.fadeValue : 0
+        guard abs(gain - lastChopGain) > 0.0001 else { return }
+        ParamRamp.setGain(chopOutput, gain, over: 0.05)
+        lastChopGain = gain
+    }
+
+    private func blendSoundtrack(at time: Double) {
+        let underDrop = dropWindows.contains { $0.contains(time + 0.055) }
+        let gain: Float = beatLocked ? (underDrop ? 1.31 : 1.76) : 1
+        guard gain != lastBedGain else { return }
+        ParamRamp.setGain(bed, gain, over: gain < lastBedGain ? 0.065 : 0.15)
+        lastBedGain = gain
+    }
+
+    func setEchoTempo(_ beat: Double) {
+        guard beat.isFinite, (0.35...1.5).contains(beat) else { return }
+        let time = Float(0.75 * beat)
+        guard let parameter = chopEcho.$time.parameter, abs(parameter.value - time) > 0.0001 else { return }
+        ParamRamp.set(chopEcho.$time, time, over: 0.12)
+    }
 
     func setBeatLocked(_ enabled: Bool) {
         if !enabled {
             chops.player.stop()
-            ParamRamp.setGain(bed, 1, over: 0.12)
+            dropWindows.removeAll()
         }
         beatLocked = enabled
+        blendSoundtrack(at: cueStart)
+        updateChopGain()
         if playing { setGain(cueGain) }
     }
 
@@ -123,7 +158,15 @@ nonisolated final class ArchiveVoice {
     init(format: AVAudioFormat = Settings.audioFormat) {
         self.format = format
         bed = Fader(source)
-        highpass = HighPassButterworthFilter(Mixer(bed, chops), cutoffFrequency: Self.highpassHz)
+        let chopDry = Fader(chops, gain: 0.72)
+        chopEcho = VariableDelay(chops, time: 0.64, feedback: 0.33, maximumTime: 2, dryWetMix: 1)
+        let darkEcho = Fader(LowPassButterworthFilter(chopEcho, cutoffFrequency: 2200), gain: 0.48)
+        let room = ZitaReverb(Mixer(chops, darkEcho), predelay: 32, crossoverFrequency: 300,
+                              lowReleaseTime: 1.0, midReleaseTime: 1.9, dampingFrequency: 2500, dryWetMix: 1)
+        let darkRoom = Fader(LowPassButterworthFilter(room, cutoffFrequency: 2750), gain: 0.56)
+        chopWet = Mixer(darkEcho, darkRoom)
+        chopOutput = Fader(Mixer(chopDry, chopWet), gain: 0)
+        highpass = HighPassButterworthFilter(bed, cutoffFrequency: Self.highpassHz)
         lowpass = LowPassButterworthFilter(highpass, cutoffFrequency: Self.lowpassHz)
         lowpass2 = LowPassButterworthFilter(lowpass, cutoffFrequency: Self.lowpassHz)
         spectralSweep = Phaser(lowpass2, notchMinimumFrequency: 200, notchMaximumFrequency: 1300,
@@ -160,7 +203,7 @@ nonisolated final class ArchiveVoice {
         if playing { p.stop() }
         setFilters(running: true)
         cueGain = cue.gain
-        strip.trim = Self.baseTrim * cueGain * (beatLocked ? 1.78 : 1)
+        strip.trim = Self.baseTrim * cueGain
         let seconds = Double(cue.buffer.frameLength) / cue.buffer.format.sampleRate
         cueStart = now
         cueDuration = max(1, seconds - 1)
@@ -189,7 +232,11 @@ nonisolated final class ArchiveVoice {
         let host = mach_absolute_time()
         let anchor = offline ? now : Double(DispatchTime.now().uptimeNanoseconds) / 1e9 + lead + latency
         let valid = beatLocked ? hits.filter { $0.time >= anchor } : []
-        ParamRamp.setGain(bed, valid.isEmpty ? 1 : 0.48, over: 0.075)
+        dropWindows = valid.map { hit in
+            let start = now + (hit.time - anchor) + (offline ? 0 : lead)
+            return start..<(start + Double(hit.buffer.frameLength) / format.sampleRate)
+        }
+        blendSoundtrack(at: now)
         guard !valid.isEmpty else { return }
         for hit in valid {
             let frame = AVAudioFramePosition(((hit.time - anchor) * format.sampleRate).rounded())
@@ -213,7 +260,7 @@ nonisolated final class ArchiveVoice {
     func setGain(_ gain: Float) {
         guard playing else { return }
         cueGain = gain
-        strip.trim = Self.baseTrim * cueGain * (beatLocked ? 1.78 : 1)
+        strip.trim = Self.baseTrim * cueGain
     }
 
     /// Stop at once (engine stop, conductor restart).
@@ -229,7 +276,9 @@ nonisolated final class ArchiveVoice {
             source.player.stop()
             chops.player.stop()
         }
+        dropWindows.removeAll()
         playing = false
+        updateChopGain()
         stopAt = nil
         endAt = nil
         label = nil
@@ -253,10 +302,12 @@ nonisolated final class ArchiveVoice {
             }
             if playing {
                 updateMix(progress: (t - cueStart) / cueDuration)
+                blendSoundtrack(at: t)
                 setPanIfNeeded(t)
             }
         }
         strip.tick(now: t)
+        updateChopGain()
         let window = Int(max(0, t - cueStart) / ArchiveAudioMath.activityWindow)
         speechActivity = playing && activityEnvelope.indices.contains(window) ? presence * activityEnvelope[window] : 0
     }
@@ -266,19 +317,23 @@ nonisolated final class ArchiveVoice {
         let value = cueMix.clarity.value(at: progress)
         // Keep both effects present even at full clarity. The consonants come forward
         // mainly through the wider filter, with only a small dip in the sends.
-        let wetScale = 1 - 0.18 * value
+        let wetScale: Float = (beatLocked ? 1.18 : 1) * (1 - 0.18 * value)
         let reverb = cueMix.room.value(at: progress) * wetScale
         let echo = cueMix.echo.value(at: progress) * wetScale
-        let cutoff = Self.lowpassHz + (beatLocked ? 280 : 0) + 1650 * value
+        // One short clarity swell per picture, with a smooth rise and fall.
+        // Even at its crest, the original film stays below the musical sample.
+        let u = Float(max(0, 1 - abs(progress - cueMix.revealCenter) / cueMix.revealHalfWidth))
+        let reveal = u * u * (3 - 2 * u)
+        let cutoff = beatLocked ? 2100 + 1100 * reveal : Self.lowpassHz + 1650 * value
         let motion = cueMix.movement.value(at: progress)
         ParamRamp.set(spectralSweep.$notchMaximumFrequency, 900 + 970 * motion, over: 0.13)
-        ParamRamp.set(spectralSweep.$dryWetMix, 0.05 + 0.49 * motion * (1 - 0.55 * value), over: 0.13)
-        ParamRamp.set(highpass.$cutoffFrequency, Self.highpassHz - 110 * value, over: 0.12)
+        ParamRamp.set(spectralSweep.$dryWetMix, beatLocked ? 0.36 + 0.22 * motion : 0.05 + 0.49 * motion * (1 - 0.55 * value), over: 0.13)
+        ParamRamp.set(highpass.$cutoffFrequency, beatLocked ? 290 - 85 * reveal : Self.highpassHz - 110 * value, over: 0.12)
         ParamRamp.set(lowpass.$cutoffFrequency, cutoff, over: 0.12)
         ParamRamp.set(lowpass2.$cutoffFrequency, cutoff, over: 0.12)
         if let dry = strip.dryGain {
-            let articulation = beatLocked ? 0.30 + 0.70 * value : value
-            ParamRamp.setGain(dry, Self.dryGain + (Self.clearDryGain - Self.dryGain) * articulation, over: 0.12)
+            let direct = beatLocked ? 0.27 + 0.33 * reveal : Self.dryGain + (Self.clearDryGain - Self.dryGain) * value
+            ParamRamp.setGain(dry, direct, over: 0.12)
         }
         strip.setSends(reverb: reverb, delay: echo, over: 0.12)
     }

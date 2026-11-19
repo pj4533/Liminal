@@ -285,7 +285,7 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
             let due = start + cue.beginAt
             guard let self else { return }
             let chops = sink.takeGrid().map { grid in
-                LofiDialogueSampler.prepare(buffer, grid: grid, cueStart: due, duration: cue.endAt - cue.beginAt,
+                LofiDialogueSampler.prepareFootage(buffer, grid: grid, cueStart: due, duration: cue.endAt - cue.beginAt,
                                            seed: UInt64(piece.seed.bitPattern))
             } ?? []
             let deadline = start + cue.fadeOutAt

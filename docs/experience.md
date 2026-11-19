@@ -44,9 +44,9 @@ For a private build with the Slow Burn Vol. 3 pack, copy the original `AJ_HALL_D
 
 The 25 verified recordings each span 16 bars. Liminal plays each break in its original order at a nearby tempo and chooses the next break after one pass.
 
-Ambient and the footage soundtrack share slowly changing phasing and a second echo that feeds the reverb. In Lo-Fi, the footage voices sit a little further forward. Echo patterns change every four bars, with a main echo, a darker stereo answer, and a reflection that opens into the room. The spacing follows the drums and the taps swell and fade as the pattern changes. The bass makes a little room for strong kicks. The film, instruments, and rhythm share light compression and bounded loudness adjustment at the output.
+Ambient and the footage soundtrack share slowly changing phasing and a second echo that feeds the reverb. In Lo-Fi, the original soundtrack moves beneath the instruments. Echo patterns change every four bars, with a main echo, a darker stereo answer, and a reflection that opens into the room. The spacing follows the drums and the taps swell and fade as the pattern changes. The bass makes a little room for strong kicks. The film, instruments, and rhythm share light compression and bounded loudness adjustment at the output.
 
-With **Footage audio** up, Lo-Fi listens for the rise and fall of syllables in the incoming shot. A few words can become a hook that lands two or three times over two bars. Sometimes the answer is just the last syllable, slowed or sped up. The sampler leaves space for the drummer’s eight-bar fill. It works from the current film locally, including when playback uses the cache offline.
+With **Footage audio** up, Lo-Fi listens for the rise and fall of syllables in the incoming shot. A few words can become a hook that lands two or three times over two bars. The original soundtrack drifts in and out through phaser, echo and reverb. The sampler favors spoken lines, softens each cut to suit the mix, and lets a dark, beat-timed echo and room trail the words. Occasionally a short pickup plays backwards. Sometimes a pickup quotes one syllable, or a repeated line pauses and finishes on an offbeat. When the speaker carries on for a few words, you can hear two pieces in succession and then the whole line together on the downbeat of bar two or four. The sampler leaves space for the drummer’s eight-bar fill. It works from the current film locally, including when playback uses the cache offline.
 
 An excerpt whose audio falls below the silence threshold can play with visuals alone. The music continues while Liminal waits for the next footage cue.
 
@@ -67,7 +67,7 @@ An excerpt whose audio falls below the silence threshold can play with visuals a
 | **Clear All Images** | Wipes every cached image after confirmation and restarts generation |
 | **Archive footage** | Old film always woven subtly into the scene (on by default); turning it off fades picture and sound out in 2 s |
 | **Change speed** | Ambient changes film every 20–30, 12–20, or 8–12 seconds (Slow, Medium, Fast). Lo-Fi follows the eight-bar drum fills. |
-| **Footage audio** | Level of the film soundtrack and its sampled Lo-Fi drops, 0 = silent, 50% = the tuned default, 100% = +6 dB |
+| **Footage audio** | Mutes both the film and its sampled drops at 0%. The mix is tuned at 50%. Turning it up gives the film up to 6 dB more level, while the musical drops gain at most 1.2 dB. |
 | **Clear Footage** | Deletes the cached films (keeps the ones on screen) |
 | **Reset All Settings** | Restores defaults |
 

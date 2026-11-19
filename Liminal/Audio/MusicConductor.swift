@@ -136,6 +136,7 @@ nonisolated final class MusicConductor: @unchecked Sendable {
             let wasArchiveOnly = archiveOnly
             archiveOnly = archiveBeatDuration != nil
             archive?.setBeatLocked(archiveOnly)
+            if let archiveBeatDuration { archive?.setEchoTempo(archiveBeatDuration) }
             mix.syncDelay(toBeatDuration: archiveBeatDuration, pattern: pattern, now: scheduler.now)
             if began, !stopping {
                 if archiveOnly && !wasArchiveOnly {
@@ -172,6 +173,7 @@ nonisolated final class MusicConductor: @unchecked Sendable {
     func updateArchiveTempo(beatDuration: Double, phrase: Int, seed: UInt64) {
         queue.async { [self] in
             guard archiveOnly, began, !stopping else { return }
+            archive?.setEchoTempo(beatDuration)
             mix.syncDelay(toBeatDuration: beatDuration, pattern: .choose(seed: seed, phrase: phrase), now: scheduler.now)
         }
     }
@@ -208,6 +210,7 @@ nonisolated final class MusicConductor: @unchecked Sendable {
         realtime = false
         archiveOnly = archiveBeatDuration != nil
         archive?.setBeatLocked(archiveOnly)
+        if let archiveBeatDuration { archive?.setEchoTempo(archiveBeatDuration) }
         mix.syncDelay(toBeatDuration: archiveBeatDuration, pattern: pattern)
         begin(at: 0)
     }

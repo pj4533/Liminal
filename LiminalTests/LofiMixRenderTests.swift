@@ -71,8 +71,8 @@ struct LofiMixRenderTests {
         let options = LofiOptions(tempo: config.tempo, scale: config.scale)
         let tempo = options.safeTempo
         let clock = LofiClock(tempo: tempo, sampleRate: format.sampleRate)
-        let bus = LofiBus(gain: 1)
         let archive = ArchiveVoice(format: format)
+        let bus = LofiBus(gain: 1, dialogue: archive.chopOutput)
         let mix = MixBus(layers: [archive.strip], delayTime: 1.7)
         let master = LofiMasterBus(archiveAndAmbient: mix.output, lofi: bus.output)
         var limiterID = "system-dynamics-and-peak-limiter"
@@ -219,7 +219,7 @@ struct LofiMixRenderTests {
         let nodes: [(String, AVAudioNode)] = [
             ("drums", bus.drums.player), ("bass", bus.bass.player), ("dry", bus.dryFader.avAudioNode),
             ("texture", bus.textureFader.avAudioNode), ("wet", bus.wetFader.avAudioNode),
-            ("dialogue-chops", archive.chops.player), ("footage-dry", mix.dryBus.avAudioNode), ("footage-delay", mix.delayReturn.avAudioNode),
+            ("dialogue-fx", archive.chopWet.avAudioNode), ("film-soundtrack", archive.bed.avAudioNode), ("dialogue-chops", archive.chopOutput.avAudioNode), ("footage-dry", mix.dryBus.avAudioNode), ("footage-delay", mix.delayReturn.avAudioNode),
             ("footage-room", mix.reverbReturn.avAudioNode), ("lofi", bus.output.avAudioNode),
             ("footage", mix.output.avAudioNode), ("pre-master", master.input.avAudioNode),
             ("glue", master.glue.avAudioNode),
@@ -256,12 +256,12 @@ struct LofiMixRenderTests {
         while cursor < frames {
             let time = Double(cursor) / format.sampleRate
             if cueIndex < cueFrames.count, cursor == cueFrames[cueIndex], let cue = reel.isEmpty ? cue : reel[cueIndex % reel.count].buffer {
-                let hits = LofiDialogueSampler.prepare(cue, grid: .init(origin: 0, beatDuration: clock.beatDuration),
+                let hits = LofiDialogueSampler.prepareFootage(cue, grid: .init(origin: 0, beatDuration: clock.beatDuration),
                     cueStart: time, duration: Double(cue.frameLength) / format.sampleRate,
                     seed: config.seed &+ UInt64(cueIndex))
                 chopEvents += hits.map { hit in
                     ["frame": Int((hit.time * format.sampleRate).rounded()), "sourceStart": hit.source.lowerBound,
-                     "sourceEnd": hit.source.upperBound, "speed": hit.speed, "cue": cueIndex]
+                     "sourceEnd": hit.source.upperBound, "speed": hit.speed, "articulation": hit.articulation.rawValue, "cue": cueIndex, "reversed": hit.reversed]
                 }
                 archive.begin(.init(buffer: cue, gain: 0.9, fadeIn: 0.5, label: "offline fixture",
                                     activity: ArchiveAudioMath.activity(cue), chops: hits), now: time)
@@ -303,7 +303,7 @@ struct LofiMixRenderTests {
         let manifest: [String: Any] = [
             "schema": "liminal-lofi-capture-v1", "frames": frames, "sampleRate": format.sampleRate,
             "block": config.block, "seed": String(config.seed), "bpm": tempo, "beatsPerBar": 4,
-            "masterCalibration": "fixed-nominal", "archiveMix": "conductor",
+            "dialogueOnMusicBus": true, "masterCalibration": "fixed-nominal", "archiveMix": "conductor",
             "clockOriginFrame": 0, "postrollFrames": postroll, "scoredFrames": scoreFrames,
             "filmReel": reel.map { ["title": $0.title, "sourceSeconds": $0.offset] },
             "hasFootage": cue != nil, "footageStartFrame": cueFrames.first ?? clock.frame(at: 5), "footageStartFrames": cueFrames,

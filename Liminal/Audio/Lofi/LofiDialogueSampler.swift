@@ -1,14 +1,19 @@
 import Accelerate
 import AVFoundation
 import Foundation
+import OSLog
 
 /// Samples the decoded soundtrack of one upcoming picture. Analysis and all varispeed
 /// rendering run on the footage worker. The music queue only schedules finished buffers.
 nonisolated enum LofiDialogueSampler {
+    enum Articulation: String { case phrase, extended, pickup, tail, splitHead, splitReply, lineFragment, wholeLine }
+
     struct Hit {
+        let articulation: Articulation
         let time: Double             // Absolute audible time on the supplied transport
         let source: Range<Int>       // Frames in the decoded picture cue
         let speed: Double
+        var reversed = false
         let buffer: AVAudioPCMBuffer
     }
 
@@ -95,21 +100,136 @@ nonisolated enum LofiDialogueSampler {
             }
             guard mid > hiss * 0.65 else { continue }
             let duration = Double(end-start) * Double(analysis.hop) / rate
-            let quality = peak * occupied * Float(1 - 0.45 * abs(duration - 0.79))
+            let quality = sqrtf(peak) * occupied * Float(1 - 0.45 * abs(duration - 0.79))
             result.append(Slice(frames: (start * analysis.hop)..<(end * analysis.hop), score: quality))
         }
         return result
     }
 
+    /// Continue across a nearby consonant only when the speaker carries on.
+    private static func extended(_ frames: Range<Int>, analysis: Analysis) -> Range<Int> {
+        let start = frames.lowerBound / analysis.hop
+        let end = frames.upperBound / analysis.hop
+        guard let next = analysis.cuts.first(where: { $0 >= end - 3 }), next <= end + 12 else { return frames }
+        let limit = min(start + 176, next + 51, analysis.energy.count - 1,
+                        analysis.cuts.first(where: { $0 > next }) ?? analysis.energy.count - 1)
+        guard limit >= max(end + 13, next + 10) else { return frames }
+        let gate = (analysis.energy[next...limit].max() ?? 0) * 0.24
+        let landing = (next + 10...limit).first { analysis.energy[$0] < gate } ?? limit
+        return frames.lowerBound..<max(frames.upperBound, landing * analysis.hop)
+    }
+
+    /// Use an actual syllable onset as the internal edit, keeping a usable word fragment on both sides.
+    private static func splitPoint(_ frames: Range<Int>, analysis: Analysis, rate: Double) -> Int? {
+        let margin = Int(0.145 * rate)
+        let middle = frames.lowerBound + frames.count / 2
+        return analysis.cuts.lazy.map { $0 * analysis.hop }
+            .filter { $0 >= frames.lowerBound + margin && $0 < frames.upperBound - margin }
+            .min { abs($0 - middle) < abs($1 - middle) }
+    }
+
+    /// Follow a promising onset through several syllables. Prefer a breath near
+    /// the end of a two-second thought; stop searching at a break in the delivery.
+    private static func lines(from slices: [Slice], analysis: Analysis) -> [Slice] {
+        let e = analysis.energy
+        let hop = analysis.hop
+        return slices.compactMap { slice in
+            let start = slice.frames.lowerBound / hop
+            let limit = min(e.count, start + 270)
+            let peak = e[start..<(slice.frames.upperBound / hop)].max() ?? 0
+            let quietLevel = peak * 0.22
+            let onsets = analysis.cuts.drop { $0 < start }
+            guard let fourth = onsets.dropFirst(3).first, fourth < limit else { return nil }
+            let lead = e[max(0, start - 12)...start]
+            let cleanStart = Float(lead.filter { $0 <= quietLevel }.count) / Float(lead.count)
+            var quiet = 0
+            var best: Slice?
+            var bestScore: Float = 0
+            for j in start..<limit {
+                quiet = e[j] <= quietLevel ? quiet + 1 : 0
+                if quiet > 28 { break }
+                let end = j - quiet + 3  // retain the release without padding the quote with silence
+                guard quiet >= 3, end >= start + 118, end >= fourth + 8 else { continue }
+                let durationFit = 1 - 0.003 * Float(abs(190 - (end - start)))
+                let score = durationFit * (0.7 + 0.3 * cleanStart) * (1 + Float(min(quiet, 14)) / 18)
+                if score > bestScore {
+                    bestScore = score
+                    best = Slice(frames: start * hop..<end * hop, score: slice.score * score)
+                }
+            }
+            return best
+        }
+    }
+
+    /// Quote two parts of one line, then play it intact on the next downbeat.
+    /// Reserve space for the intact take before choosing the length of its pickups.
+    private static func buildLine(_ pool: [Slice], source: AVAudioPCMBuffer, analysis: Analysis,
+                                  cueStart: Double, earliest: Double, downbeat: Double, beat: Double,
+                                  deadline: Double, previous: Range<Int>?, rng: inout MusicRNG) -> [Hit] {
+        let rate = source.format.sampleRate
+        let room = deadline - downbeat
+        guard downbeat >= earliest, room >= 1 else { return [] }
+        func rank(_ s: Slice) -> Float {
+            let age = abs((downbeat - cueStart) - Double(s.frames.lowerBound) / rate)
+            return s.score / Float(1 + 0.18 * age) * (s.frames == previous ? 0.4 : 1)
+        }
+        let candidates = pool.filter { Double($0.frames.count) / rate <= room * 1.08 }
+        guard let line = candidates.max(by: { rank($0) < rank($1) }) else { return [] }
+        let frames = line.frames
+        let duration = Double(frames.count) / rate
+        let target = max(beat / 2, (duration / (beat / 2)).rounded() * beat / 2)
+        let speed = max(duration / room, min(1.08, max(0.92, duration / target)))
+        guard let whole = sample(source, frames: frames, analysis: analysis, speed: speed, accent: 1) else { return [] }
+        let cuts = analysis.cuts.map { $0 * analysis.hop }.filter { frames.contains($0) }
+        func cut(after start: Int, seconds: Double) -> Int? {
+            let target = start + Int(seconds * rate)
+            return cuts.filter { $0 >= start + Int(0.15 * rate) }.min { abs($0-target) < abs($1-target) }
+        }
+        var hits: [Hit] = []
+        if let first = cut(after: frames.lowerBound, seconds: 0.40),
+           let second = cut(after: first, seconds: 0.66) {
+            let calls = [(downbeat - rng.pick([3.0, 3.5]) * beat, frames.lowerBound..<first, rng.range(0.83...1.20)),
+                         (downbeat - rng.pick([1.5, 2.0]) * beat, first..<second, rng.range(0.9...1.14))]
+            var available = earliest
+            for (i, call) in calls.enumerated() {
+                let (at, part, speed) = call
+                let end = at + Double(part.count) / (speed * rate)
+                let next = i == 0 ? calls[1].0 : downbeat
+                guard at >= available, end + 0.04 <= next,
+                      let buffer = sample(source, frames: part, analysis: analysis, speed: speed, accent: 0.88) else { continue }
+                hits.append(Hit(articulation: .lineFragment, time: at, source: part, speed: speed, buffer: buffer))
+                available = end + 0.04
+            }
+        }
+        hits.append(Hit(articulation: .wholeLine, time: downbeat, source: frames, speed: speed, buffer: whole))
+        return hits
+    }
+
+    static func prepareFootage(_ source: AVAudioPCMBuffer, grid: LofiTakeGrid, cueStart: Double,
+                               duration: Double, seed: UInt64) -> [Hit] {
+        let windows = LofiSpeechFocus.classify(source, seconds: duration)
+        let spoken = windows.filter { $0.speech > max(0.3, $0.singing, $0.music) }.count
+        LMLog.audio.info("Lo-Fi speech analysis: \(spoken) of \(windows.count) windows predominantly spoken")
+        return prepare(source, grid: grid, cueStart: cueStart, duration: duration, seed: seed, speech: windows)
+    }
+
     static func prepare(_ source: AVAudioPCMBuffer, grid: LofiTakeGrid, cueStart: Double,
-                        duration: Double, seed: UInt64) -> [Hit] {
+                        duration: Double, seed: UInt64, speech: [LofiSpeechFocus.Window] = []) -> [Hit] {
         let rate = source.format.sampleRate
         let span = min(32, duration, Double(source.frameLength) / rate)
         guard grid.beatDuration > 0, span > 1, let input = source.floatChannelData?[0],
               let analysis = analyze(input, count: min(Int(source.frameLength), Int(span * rate)), rate: rate)
         else { return [] }
-        let pool = slices(analysis, rate: rate)
+        func ranked(_ candidates: [Slice]) -> [Slice] {
+            candidates.compactMap { slice in
+                let weight = LofiSpeechFocus.weight(slice.frames, rate: rate, windows: speech)
+                return weight > 0 ? Slice(frames: slice.frames, score: slice.score * weight) : nil
+            }
+        }
+        let candidates = slices(analysis, rate: rate)
+        let pool = ranked(candidates)
         guard !pool.isEmpty else { return [] }
+        let linePool = ranked(lines(from: pool, analysis: analysis))
         let turn = grid.origin + 64 * grid.beatDuration
         let nextBeat = grid.nextBeatDuration ?? grid.beatDuration
         func time(_ beat: Double) -> Double {
@@ -119,24 +239,46 @@ nonisolated enum LofiDialogueSampler {
         var group = floor(firstBeat / 8) * 8
         var hits: [Hit] = []
         var rng = MusicRNG(seed: seed)
+        var phrasing = rng.fork(304)
+        var lineRNG = rng.fork(305)
+        let lineGroup = lineRNG.int(0...1)
         var lastEnd = cueStart + 0.18
         var previous: Range<Int>?
+        var previousLine: Range<Int>?
         while time(group) < cueStart + span {
+            defer { group += 8 }
+            if !linePool.isEmpty, (Int(group / 8) - lineGroup).isMultiple(of: 2) {
+                let resolve = group + 4
+                let fillStart = floor(group / 32) * 32 + 30
+                let line = buildLine(linePool, source: source, analysis: analysis, cueStart: cueStart,
+                                     earliest: lastEnd, downbeat: time(resolve), beat: time(resolve + 1) - time(resolve),
+                                     deadline: min(cueStart + span, time(min(group + 8, fillStart)) - 0.04),
+                                     previous: previousLine, rng: &lineRNG)
+                if let whole = line.last {
+                    hits += line
+                    previousLine = whole.source
+                    lastEnd = whole.time + Double(whole.buffer.frameLength) / rate + 0.04
+                    continue
+                }
+            }
             // Two bars of call and response. Leave the drummer the run-up to
             // each eight-bar fill, with a different pocket on the next picture.
             let positions = rng.pick([[1.5, 4, 6.5], [2.0, 3.5, 6.0], [0.5, 3, 4.5], [1, 5]])
-            let slots = positions.compactMap { offset -> Double? in
-                let beat = group + offset
+            let slots = positions.map { group + $0 }.filter { beat in
                 let at = time(beat)
                 guard beat.truncatingRemainder(dividingBy: 32) < 30,
-                      at >= lastEnd, at < cueStart + span - 0.25 else { return nil }
-                return at
+                      at >= lastEnd, at < cueStart + span - 0.25 else { return false }
+                return true
             }
-            defer { group += 8 }
             var slice: Slice?
             var played = 0
             let answerWithTail = rng.chance(0.56)
-            for at in slots {
+            let sustain = phrasing.chance(0.46)
+            let brokenReply = phrasing.chance(0.68)
+            let shortPickup = !sustain && phrasing.chance(0.47)
+            let lateReply = phrasing.chance(0.5)
+            for (index, position) in slots.enumerated() {
+                let at = time(position)
                 if slice == nil {
                     let elapsed = at - cueStart
                     let nearby = pool.filter {
@@ -157,25 +299,73 @@ nonisolated enum LofiDialogueSampler {
                 }
                 guard let slice else { continue }
                 let beat = at < turn ? grid.beatDuration : nextBeat
-                var frames = slice.frames
-                if played == 2, answerWithTail,
-                   let syllable = analysis.cuts.last(where: { cut in
-                       let tail = Double(frames.upperBound - cut * analysis.hop) / rate
-                       return cut * analysis.hop > frames.lowerBound && (0.17...0.48).contains(tail)
-                   }) {
+                var frames = sustain ? extended(slice.frames, analysis: analysis) : slice.frames
+                if frames != slice.frames, LofiSpeechFocus.weight(frames, rate: rate, windows: speech) == 0 {
+                    frames = slice.frames
+                }
+                var articulation: Articulation = frames == slice.frames ? .phrase : .extended
+                let split = splitPoint(frames, analysis: analysis, rate: rate)
+                if played == 0, shortPickup, let split {
+                    frames = frames.lowerBound..<split
+                    articulation = .pickup
+                } else if played == 2, answerWithTail,
+                          let syllable = analysis.cuts.last(where: { cut in
+                              let tail = Double(frames.upperBound - cut * analysis.hop) / rate
+                              return cut * analysis.hop > frames.lowerBound && (0.17...0.48).contains(tail)
+                          }) {
                     frames = (syllable * analysis.hop)..<frames.upperBound
+                    articulation = .tail
                 }
                 let length = Double(frames.count) / rate
                 let target = played == 2 ? (rng.chance(0.5) ? 0.83 : 1.20) : 1.0
                 let quarters = max(1, (length / (beat * 0.25 * target)).rounded())
                 let speed = min(1.38, max(0.72, length / (quarters * beat * 0.25)))
-                guard at >= lastEnd, at + length / speed <= cueStart + span,
-                      let buffer = sample(source, frames: frames, analysis: analysis, speed: speed,
+                let fillStart = floor(position / 32) * 32 + 30
+                let nextSlot = index + 1 < slots.count ? slots[index+1] : group + 8
+                let deadline = min(cueStart + span, time(min(nextSlot, fillStart)) - 0.04)
+                guard at >= lastEnd, at + length / speed <= deadline else { continue }
+
+                if played == 1, brokenReply, let split {
+                    let head = frames.lowerBound..<split, reply = split..<frames.upperBound
+                    let headEnd = at + Double(head.count) / (rate * speed)
+                    // Wait at least a sixth of a beat after the first sound dies.
+                    // Land on an eighth, or a sixteenth later for a softer delayed answer.
+                    let earliest = position + (headEnd - at) / beat + 1.0 / 6
+                    let reentry = time(ceil(earliest * 2) / 2 + (lateReply ? 0.25 : 0))
+                    let replyEnd = reentry + Double(reply.count) / (rate * speed)
+                    if reentry > headEnd, replyEnd <= deadline,
+                       let first = sample(source, frames: head, analysis: analysis, speed: speed, accent: 0.84),
+                       let second = sample(source, frames: reply, analysis: analysis, speed: speed, accent: 0.92) {
+                        hits.append(Hit(articulation: .splitHead, time: at, source: head, speed: speed, buffer: first))
+                        hits.append(Hit(articulation: .splitReply, time: reentry, source: reply, speed: speed, buffer: second))
+                        lastEnd = replyEnd + 0.04
+                        played += 1
+                        previous = slice.frames
+                        continue
+                    }
+                }
+
+                guard let buffer = sample(source, frames: frames, analysis: analysis, speed: speed,
                                           accent: played == 1 ? 0.84 : 1) else { continue }
                 played += 1
                 previous = slice.frames
-                hits.append(Hit(time: at, source: frames, speed: speed, buffer: buffer))
+                hits.append(Hit(articulation: articulation, time: at, source: frames, speed: speed, buffer: buffer))
                 lastEnd = at + Double(buffer.frameLength) / rate + 0.04
+            }
+        }
+        // Reverse one short pickup occasionally, keeping the recognisable returns forward.
+        let pickups = hits.indices.filter { i in
+            [.lineFragment, .pickup, .tail].contains(hits[i].articulation) &&
+                Double(hits[i].buffer.frameLength) / rate < 0.7
+        }
+        if !pickups.isEmpty, phrasing.chance(0.72) {
+            let i = phrasing.pick(pickups)
+            let buffer = hits[i].buffer
+            if let channels = buffer.floatChannelData {
+                for c in 0..<Int(buffer.format.channelCount) {
+                    vDSP_vrvrs(channels[c], 1, vDSP_Length(buffer.frameLength))
+                }
+                hits[i].reversed = true
             }
         }
         return hits
@@ -194,6 +384,7 @@ nonisolated enum LofiDialogueSampler {
         var weights = SIMD3<Float>(repeating: 0.5)
         var lastWindow = -1
         var target = weights
+        var presenceTrim: Float = 1
         for i in 0..<count {
             let p = Double(frames.lowerBound) + Double(i) * speed
             let j = Int(p)
@@ -204,21 +395,48 @@ nonisolated enum LofiDialogueSampler {
                 for b in 0..<3 {
                     target[b] = max(0.18, 1 - 1.4 * analysis.floor[b] / max(power[b], 1e-10))
                 }
+                // Tame a forward presence band in thin or already heavily EQ’d film audio.
+                presenceTrim = 1 - 0.27 * min(1, power.y / max(1e-9, power.x + power.y) * 1.7)
                 lastWindow = window
             }
             weights += (target - weights) * 0.012
             low += (SIMD3(repeating: x) - low) * coef
-            let filtered = (low.y - low.x) * weights.x + (low.z - low.y) * weights.y + (x - low.z) * weights.z * 0.12
+            let filtered = (low.y - low.x) * weights.x + (low.z - low.y) * weights.y * presenceTrim + (x - low.z) * weights.z * 0.12
             let edge = min(1, Float(i) / Float(rate * 0.006), Float(count-1-i) / Float(rate * 0.025))
             out[0][i] = filtered * edge
         }
-        var rms: Float = 0, peak: Float = 0
-        vDSP_rmsqv(out[0], 1, &rms, vDSP_Length(count))
-        vDSP_maxmgv(out[0], 1, &peak, vDSP_Length(count))
-        let gain = accent * min(12, 0.22 / max(0.001, rms), 0.76 / max(0.001, peak))
-        var scale = gain
+        var scale = clipGain(out[0], count: count, rate: rate) * accent
         vDSP_vsmul(out[0], 1, &scale, out[0], 1, vDSP_Length(count))
         for c in 1..<Int(source.format.channelCount) { out[c].update(from: out[0], count: count) }
         return buffer
     }
+
+    /// Level the audible syllables after EQ. Quiet spaces between words must not
+    /// turn a shout up. Short cuts use their actual duration, without zero padding.
+    static func clipGain(_ samples: UnsafePointer<Float>, count: Int, rate: Double) -> Float {
+        guard count > 0 else { return 0 }
+        let hop = max(1, Int(rate * 0.05))
+        var weighting = LofiKWeighting(sampleRate: rate)
+        var powers: [Double] = []
+        var peak: Float = 0
+        for start in stride(from: 0, to: count, by: hop) {
+            let end = min(start + hop, count)
+            var power = 0.0
+            for i in start..<end {
+                let weighted = weighting.process(Double(samples[i]))
+                power += weighted * weighted
+                peak = max(peak, abs(samples[i]))
+            }
+            powers.append(power / Double(end - start))
+        }
+        let loud = powers.sorted()[powers.count * 4 / 5]
+        let width = min(8, powers.count)
+        var momentary = 0.0
+        for i in width...powers.count {
+            momentary = max(momentary, powers[(i-width)..<i].reduce(0, +) / Double(width))
+        }
+        let level = Float(sqrt(max(1e-9, loud, momentary)))
+        return min(5, 0.132 / level, 0.44 / max(0.001, peak))
+    }
+
 }

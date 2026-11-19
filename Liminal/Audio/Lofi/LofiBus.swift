@@ -15,11 +15,11 @@ final class LofiBus {
     let wetFader: Fader
     let output: Fader
 
-    init(gain: Float) {
+    init(gain: Float, dialogue: Fader) {
         dryFader = Fader(dry)
         textureFader = Fader(texture)
         wetFader = Fader(wet)
-        output = Fader(Mixer(drums, bass, dryFader, textureFader, wetFader), gain: gain)
+        output = Fader(Mixer(drums, bass, dryFader, textureFader, wetFader, dialogue), gain: gain)
     }
 
     var players: [AVAudioPlayerNode] { [drums.player, bass.player, dry.player, texture.player, wet.player] }
