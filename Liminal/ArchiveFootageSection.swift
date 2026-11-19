@@ -16,6 +16,7 @@ struct ArchiveFootageSection: View {
     @State private var cache: (count: Int, bytes: Int64)?
     @State private var confirming = false
     @State private var clearing = false
+    @State private var speechStatus: DialogueSpeechStatus?
 
     #if os(visionOS)
     private static let buttonRole: ButtonRole? = nil
@@ -63,6 +64,8 @@ struct ArchiveFootageSection: View {
                         explanation: settings.musicMode == .lofi ? "A clear echo repeats on the Lo-Fi beat, with a softer offbeat reflection."
                             : "The film’s sound drifts between echo, reverb, and clearer voices at original or slowed speed. 0% is silent.")
                 .disabled(!settings.archiveEnabled)
+
+            dialogueUnderstanding
 
             Label(status, systemImage: "info.circle")
                 .font(.callout)
@@ -122,10 +125,46 @@ struct ArchiveFootageSection: View {
         }
     }
 
+    /// "Dialogue understanding" (plan 7): whether Lo-Fi chopping may use the on-device speech model.
+    private var dialogueUnderstanding: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Dialogue understanding").wrapping()
+            Picker("Dialogue understanding", selection: $settings.dialogueTranscription) {
+                ForEach(DialogueTranscriptionMode.allCases, id: \.self) { m in
+                    Text(m.title).tag(m)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .accessibilityIdentifier("dialogueUnderstandingPicker")
+            Text(speechStatus.map { $0.title } ?? "Checking")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .wrapping()
+                .accessibilityIdentifier("dialogueUnderstandingStatus")
+        }
+        .disabled(!settings.archiveEnabled)
+        .onChange(of: settings.dialogueTranscription) { _, mode in
+            if mode == .allowDownload { DialogueSpeechAssets.requestInstallIfAllowed() }
+            Task { speechStatus = await DialogueSpeechAssets.status() }
+        }
+    }
+
     private func refresh() async {
+        speechStatus = await DialogueSpeechAssets.status()
         status = ArchiveFootageService.shared.status
         let c = await ArchiveFootageService.shared.cacheSummary()
         if cache?.count != c.count || cache?.bytes != c.bytes { cache = c }
+    }
+}
+
+extension DialogueTranscriptionMode {
+    var title: String {
+        switch self {
+        case .off: return "Off"
+        case .installedOnly: return "If installed"
+        case .allowDownload: return "Download model"
+        }
     }
 }
 
@@ -158,6 +197,10 @@ struct ArchiveFootageSettingsSync: ViewModifier {
             .onAppear {
                 ArchiveFootageService.shared.attachMusic(audioEngine)
                 apply()
+                // Learn the speech model status once at launch, so the first Lo-Fi cue can use it.
+                // A Download model choice from an earlier launch resumes here (once per launch).
+                DialogueSpeechAssets.refreshStatus()
+                if settings.dialogueTranscription == .allowDownload { DialogueSpeechAssets.requestInstallIfAllowed() }
             }
             .onChange(of: settings.archiveEnabled) { _, _ in apply() }
             .onChange(of: settings.archiveChangeSpeed) { _, _ in apply() }
