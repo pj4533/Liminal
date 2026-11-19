@@ -8,10 +8,16 @@ Status: plan. Numbers marked *start* are tuning hypotheses exposed as named cons
 
 > **User direction, 19 November 2026 (binding; overrides 8.5, 8.6, C-B6 and C-B9 where they conflict).** The film bed and the dialogue chops are two different layers with different jobs.
 >
-> - **Dialogue chops are the forward layer.** They are part of the beat, woven into the drums, bass, mids and lead, and sit up front in the mix. Do not pull the chops back to make room for other layers. Fix any conflict with the theme return through placement (dialogue leaves the return's first bar free, see 5.2), not by lowering the chops overall.
-> - **The film bed is background only.** It is the unchopped footage audio, heavily effected with tempo-synced processing: echoes at beat divisions such as 1/4 and dotted 1/8; filter, phaser or tremolo LFOs locked to bar or beat rates; generous reverb. It should be clearly mostly wet, a washed-out pad rather than direct audio. It sits well under the beat: in gaps between chops, the bed's loudness is at least 10 dB under the music plus chops (*start*). It must stay audible, so keep the audibility-in-gaps lower bound.
+> - **Dialogue chops are the forward layer, loud and very present.** They are part of the beat, woven into the drums, bass, mids and lead, and sit up front in the mix. Do not pull the chops back to make room for other layers. Fix any conflict with the theme return through placement (dialogue leaves the return's first bar free, see 5.2), not by lowering the chops overall.
+> - **The film bed is background only, and it keeps its current effected sound.** It is the unchopped footage audio. The baseline chain at `c42f1b5` is already what the user wants and must be preserved, not made clearer:
+>   - reverb and tape-delay sends at 1.3 × a 0.95–1.95 contour;
+>   - the beat-locked phaser sweep at 0.36–0.58 wet;
+>   - dark band-limiting (high-pass about 205–290 Hz, two low-pass stages at 2.1–3.2 kHz);
+>   - tempo-linked delay.
+>
+>   Do **not** apply 8.6's "clarity" changes: no reduced sends, no opened second low-pass, no 10 kHz `MixBus` low-pass, no drier direct level. Tempo-synced effects may be added but never removed. The bed must stay audible, but it sits well under the beat: in gaps between chops it is at least 10 dB under the music plus chops (*start*).
 > - **The bed never drives ducking.** Nothing is sidechained to or ducked by the film bed. Chops may still duck the bed, and the music may stay on top of it, but the bed is never a key signal.
-> - **Criteria changes.** C-B9's "bed direct to wet at least +3 dB" is replaced by "bed wet at least equal to direct (mostly wet)" plus "bed at least 10 dB under the music plus chops in gaps". In C-B6, theme-return salience may be judged against mids, space and bed only. The chops are a featured layer, so failing to clear them is not a defect if the return's first bar is chop-free.
+> - **Criteria changes.** C-B9's "bed direct to wet at least +3 dB" and "roll-off at least 3 kHz" are dropped. They are replaced by "bed effects chain matches the baseline character (wet at least equal to direct)" and "bed at least 10 dB under the music plus chops in gaps, audibility index in gaps still at least 0.20". In C-B6, theme-return salience may be judged against mids, space and bed only. The chops are a featured layer, so failing to clear them is not a defect if the return's first bar is chop-free.
 
 ## 1. Goals and non-goals
 
