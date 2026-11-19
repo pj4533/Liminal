@@ -482,6 +482,9 @@ The loop is built from eight 2-bar cells. Slots are sixteenths from the cell sta
 |---|---|---|---|---|---|---|
 | seed 2077, 72 BPM | 0 of 32 | 1 to 4 (mean 2.8) | 2, 1 | 0.96, 0.98 | 0.41, 0.36 | 0.64 / 0.51 / +5.3 dB / 2.78 LU |
 | seed 4242, 82 BPM | 0 of 32 | 1 to 4 (mean 2.8) | 1, 1 | 0.98, 0.98 | 0.39, 0.31 | 0.59 / 0.54 / +7.0 dB / 1.00 LU |
+| seed 2077, 72 BPM, `--transcribe` | 0 of 32 | 1 to 4 (mean 2.8) | 2, 1 | 0.96, 0.98 | 0.40, 0.60 | 0.64 / 0.56 / +6.8 dB / 1.39 LU |
+
+- With `--transcribe` (on-device SpeechTranscriber 27.2.1, 0.3 to 0.8 s per cue), loop 1's line was "He's honored, accredited media," cut as "He's" | "honored," | "accredited" ("accre-" | "-dited") | "media,". Loop 2 took "whereas rigidity and hardness" from the Alan Watts cue, cut as "whereas" | "rigidity" ("rigi-" | "-dity") | "and hardness" ("and" | "hardness"). Loop 1 kept its line across the film change at bar 9.
 
 - Before this package, the 72 BPM capture had 20 empty bars of 32, including bars 8 to 17. It played whole lines and one slowed chunk. Its occupancy was 0.17.
 - 84 BPM was requested, but `check-lofi.sh` accepts 58 to 82 BPM, so the second case ran at 82.
