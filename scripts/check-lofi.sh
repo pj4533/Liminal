@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from threading import Thread
 
 parser = argparse.ArgumentParser()
@@ -28,11 +29,17 @@ parser.add_argument("--postroll-beats", default=0, choices=range(0, 17), type=in
 parser.add_argument("--limiter", help="Debug comparison only, use apple-peak-limiter or a qualified FourCC/version")
 parser.add_argument("--private-drums", action="store_true")
 parser.add_argument("--drum-name", help="Pin an installed take by its filename stem when using --private-drums")
+parser.add_argument("--wait-lock", default=1200, type=int, metavar="SECONDS",
+                    help="Wait this long for another capture to release the shared config path (default 1200)")
+parser.add_argument("--hook", action="append", default=[], metavar="KEY=VALUE",
+                    help="Capture hook option passed to LofiCaptureHooks (repeatable), e.g. masterProfile=ambient")
+parser.add_argument("--max-true-peak", type=float, help="Pass through to analyze-lofi.py (default -1.5)")
 parser.add_argument("--next-drum-name", help="Use a second installed performance at the 16-bar switch")
 source = parser.add_mutually_exclusive_group()
 source.add_argument("--footage", type=Path)
 source.add_argument("--cached-footage", action="store_true")
 source.add_argument("--film-reel", action="store_true", help="Change to another locally cached film every eight bars")
+source.add_argument("--same-film", action="store_true", help="Repeat one cached film at the same offset every eight bars")
 source.add_argument("--no-footage", action="store_true")
 args = parser.parse_args()
 if not 58 <= args.bpm <= 82 or not 128 <= args.block <= 4096 or not 0 <= args.seed < 2**64:
@@ -45,6 +52,12 @@ if args.drum_name and not args.private_drums:
     parser.error("--drum-name requires --private-drums")
 if args.footage and not args.footage.is_file():
     parser.error("footage path does not exist")
+hooks = {"masterProfile": "lofi"}
+for item in args.hook:
+    key, sep, value = item.partition("=")
+    if not sep or not key:
+        parser.error("--hook expects KEY=VALUE")
+    hooks[key] = value
 out = args.out.resolve() if args.out else Path(tempfile.mkdtemp(prefix="liminal-lofi-")).resolve()
 if out.is_relative_to(Path.cwd()) or (out.exists() and any(out.iterdir())):
     parser.error("use an empty output directory outside the repository")
@@ -55,10 +68,7 @@ print(f"Lo-Fi capture directory {out}", flush=True)
 # container or changing app entitlements. Nothing listens beyond the lifetime of the test.
 token = secrets.token_urlsafe(24)
 prefix = "/" + token + "/"
-artifacts = {"manifest.json", "score.json", "master.wav", "drums.wav", "bass.wav",
-             "dry.wav", "texture.wav", "wet.wav", "footage-dry.wav", "footage-delay.wav",
-             "footage-room.wav", "lofi.wav", "footage.wav", "pre-master.wav", "glue.wav",
-             "dialogue-chops.wav", "dialogue-fx.wav", "film-soundtrack.wav", "fx-echo-raw.wav", "fx-room-raw.wav", "fx-color-raw.wav"}
+artifact_name = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}\.(wav|json|csv)$")
 
 
 class Receiver(BaseHTTPRequestHandler):
@@ -76,11 +86,11 @@ class Receiver(BaseHTTPRequestHandler):
 
     def do_PUT(self):
         name = self.path.removeprefix(prefix)
-        if name == self.path or name not in artifacts:
+        if name == self.path or not artifact_name.fullmatch(name):
             return self.send_error(404)
         try:
             length = int(self.headers.get("Content-Length", ""))
-            if not 0 < length <= 128 * 1024 * 1024:
+            if not 0 < length <= 256 * 1024 * 1024:
                 return self.send_error(413)
             temp = out / (name + ".partial")
             with temp.open("xb") as file:
@@ -98,7 +108,7 @@ class Receiver(BaseHTTPRequestHandler):
 
 
 config_path = Path(f"/private/tmp/liminal-lofi-audio-config-{os.getuid()}.json")
-configuration = dict(runToken=secrets.token_hex(16),
+configuration = dict(checkout=str(Path.cwd().resolve()), hooks=hooks, sameFilm=args.same_film, runToken=secrets.token_hex(16),
                      revision=subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
                      trackedDiffSHA256=hashlib.sha256(subprocess.check_output(
                          ["git", "diff", "--binary", "HEAD"])).hexdigest(),
@@ -110,11 +120,20 @@ with ThreadingHTTPServer(("127.0.0.1", 0), Receiver) as server:
     configuration["receiver"] = f"http://127.0.0.1:{server.server_port}{prefix}"
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    try:
-        descriptor = os.open(config_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        config_file = os.fdopen(descriptor, "w")
-    except FileExistsError:
-        parser.error(f"another Lo-Fi capture owns {config_path}")
+    deadline = time.monotonic() + args.wait_lock
+    announced = False
+    while True:
+        try:
+            descriptor = os.open(config_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            config_file = os.fdopen(descriptor, "w")
+            break
+        except FileExistsError:
+            if time.monotonic() >= deadline:
+                parser.error(f"another Lo-Fi capture owns {config_path} (waited {args.wait_lock} s)")
+            if not announced:
+                print(f"Waiting for another Lo-Fi capture to release {config_path}", flush=True)
+                announced = True
+            time.sleep(5)
     try:
         with config_file:
             json.dump(configuration, config_file)
@@ -135,5 +154,8 @@ with ThreadingHTTPServer(("127.0.0.1", 0), Receiver) as server:
         server.shutdown()
 if not (out / "manifest.json").is_file():
     sys.exit(f"The test did not export a manifest. See {out / 'xcodebuild.log'}")
-sys.exit(subprocess.run([sys.executable, "scripts/analyze-lofi.py", str(out)]).returncode)
+analysis = [sys.executable, "scripts/analyze-lofi.py", str(out)]
+if args.max_true_peak is not None:
+    analysis += ["--max-true-peak", str(args.max_true_peak)]
+sys.exit(subprocess.run(analysis).returncode)
 PY
