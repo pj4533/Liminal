@@ -13,6 +13,16 @@ sound (A14-A19) and the "Archive Footage" settings card (A20-A22). Phase 6 (floa
 
 The same decoded film cue supplies both the continuous soundtrack and short rhythmic drops. On the footage worker, a three-band background estimate helps locate syllable attacks and quiet cut points. Using the cue already queued for the picture lets Liminal repeat a line on the drum grid without a transcription service, model download, or separate library of quotations. The sampler can borrow a later phrase from the shot to cover a quiet opening. The music queue schedules prepared samples and follows the shared footage gain and fade. The film and still image change together at the eight- and sixteen-bar fills. [Current playback behavior](../experience.md#lo-fi) · [Listening measurements](../research/lofi-handoff-checklist.md#film-sampler-listening-pass)
 
+## A29 (2026-11-18) Keep the film audible underneath its samples
+
+The continuous soundtrack and the musical quotes serve different listening roles. The film drifts through phaser, room and dark delay. Its level dips under a quote and the speech band briefly opens within each shot. The quote has a separate fader on the music bus, its own dotted-eighth echo and a shorter room. Both follow the footage slider and cue fade. Leveling the louder syllables of each cut before the effect sends keeps emphatic archive voices from driving the whole mix into compression.
+
+The sampler uses on-device speech classification to favor conversation over song or choir. A longer line can appear first as two separated fragments and then as an intact phrase on a downbeat. Occasional reversed pickups leave the full line intelligible. [Implementation](../architecture.md#lo-fi-audio) · [Listening measurements](../research/lofi-handoff-checklist.md#spoken-phrases-and-the-final-film-balance)
+
+## A30 (2026-11-18) Ten pinned films and two discovery slots
+
+*Horizons of Science: Thinking Machines* (1959) and *Hear Here* (1969) add early pattern recognition and voice-controlled robotics to the curated pool. The total grows to twelve so the two discovery slots keep turning over. Pins download during online playback and remain available in the disk cache. [Current pool and credits](../experience.md#pinned-films-and-rotating-discoveries)
+
 ## Original implementation summary (A1–A25)
 
 - Queries (all `collection:prelinger`, 1950-1969, `mediatype:movies`, weighted): newsreel / news magazine /

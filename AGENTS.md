@@ -38,7 +38,7 @@ Images use row zero at the top. Preserve consistent crop/orientation across plat
 
 Generation settings live in ImageGenerationConfig; budget caps live in GenerationBudget. Primary model is currently gemini-nano-banana-2.1, fallback gemini-3.1-flash-lite-image. Treat these as repository configuration, not independently verified provider availability. Cache reuse is the fallback when generation is unavailable or capped.
 
-Archive footage weaves changing segments, looks and interaction recipes into the still-image anchor. The continuous archive soundtrack is filtered. Lo-Fi brings short sampled phrases forward on the drum grid. Preserve fades and cache limits. Retain individual archive source credits.
+Archive footage weaves changing segments, looks and interaction recipes into the still-image anchor. The 12-film pool keeps ten pinned sources and two rotating discoveries. In Lo-Fi, the filtered continuous soundtrack and beat-scheduled speech have separate audio paths. The dialogue path levels each cut and includes its own delay and room. Preserve fades and cache limits. Retain individual archive source credits.
 
 ## Safe validation and visual review
 

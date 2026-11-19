@@ -28,7 +28,11 @@
 
 ## Play Lo-Fi
 
-Choose **Lo-Fi** in the Music section to set the BPM and optionally pin a scale. Tempo and scale changes apply at a 16-bar boundary. The app bundles twelve sampled instruments and generates new phrases and bass lines each session. Enable Archive footage and turn up Footage audio to hear sampled film dialogue repeat against the beat. For a private build with your own Slow Burn Vol. 3 recordings, follow the [optional drum setup](experience.md#lo-fi) before building.
+Choose **Lo-Fi** in the Music section to set the BPM and optionally pin a scale. Tempo and scale changes apply at a 16-bar boundary. The app bundles twelve sampled instruments and generates new phrases and bass lines each session. Enable **Archive footage** and leave **Footage audio** at its 50% default to hear the tuned mix. The original film plays in the background while fragments of the same voice land on the beat. The film and main image change together on eight-bar boundaries.
+
+On a first run, play online to fill the film cache. It holds ten pinned titles and two rotating discoveries. Cached footage and its sampled speech can play offline on Mac and Vision Pro. [Pinned films and sources](experience.md#pinned-films-and-rotating-discoveries)
+
+For a private build with your own Slow Burn Vol. 3 recordings, follow the [optional drum setup](experience.md#lo-fi) before building.
 
 
 ## Build from the command line

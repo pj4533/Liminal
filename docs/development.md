@@ -11,7 +11,9 @@ xcodebuild test -scheme Liminal -destination 'platform=macOS' \
   -only-testing:LiminalTests/LofiTests \
   -only-testing:LiminalTests/LofiCompositionTests \
   -only-testing:LiminalTests/LofiProductionTests \
-  -only-testing:LiminalTests/ArchiveVoiceRenderTests
+  -only-testing:LiminalTests/ArchiveVoiceRenderTests \
+  -only-testing:LiminalTests/LofiDialogueSamplerTests \
+  -only-testing:LiminalTests/ArchiveCachePolicyTests
 ```
 
 Run `scripts/check-lofi.sh` with FFmpeg and Python 3 installed for a headless, reproducible 16-bar capture. It writes float stereo WAVs, the exact score and clock, and independent LUFS, true-peak, routing, and energy metrics outside the repository. The default cue is a repeatable test signal. `--no-footage` exercises silence routing, `--footage /path/to/clip.mov` uses a local soundtrack, `--cached-footage` uses an audio-bearing clip from the app cache, and `--private-drums` requires an installed drum pack and keeps its captures local. Use `--drum-name` with the filename stem to reproduce an exact private take. `--block`, `--bpm`, `--scale Dorian` and `--seed` vary a run. Use `--bars 32` for the full form or `--bars 64` for a longer instrument audit. `python3 scripts/measure-lofi-instruments.py /path/to/capture` reports the strongest 400 ms of each instrument, its wet return and their combined level, with the combined sample peak. With private drums, add `--next-drum-name` to audition a different take at the sixteen-bar downbeat and hear the footage cue through each fill. Add up to 16 beats of postroll after a complete take to measure its tail. The capture uses the live conductor’s footage gain and room settings and holds adaptive master trim at nominal for repeatability. The checker verifies both music-stem and pre-master sums and defaults to a −1.5 dBTP ceiling. Debug runs can use `--limiter apple-peak-limiter` for an isolated reference, or a fully qualified provider identity from the AU probe. The live app uses its built-in master. `python3 scripts/analyze-lofi.py --self-test` checks that the analyzer rejects known failures. `--ebu-subset` runs 17 synthetic cases from EBU Tech 3341 and 3342.
@@ -21,6 +23,12 @@ For a dialogue audition, use `--film-reel --bars 32` to change to another locall
 Use `python3 scripts/plot-lofi.py /path/to/capture --auditions` with NumPy, SciPy, and Matplotlib for three spectrogram resolutions, an overlay of planned rests and measured levels, reconstructed peaks at 4×, 8×, and 16×, and copies for listening near −20, −18, and −16 LUFS within headroom. Its JSON and NPZ files retain the energy and spectral measurements. For a paired comparison, add `--against /path/to/reference --comparison-out /path/to/new/directory` and optionally `--candidate-lag-frames <measured>` to override the graph's reported latency. It checks that both captures used the same score and sources, preserves the originals, and writes matched audio and difference plots. These signals expose overlap and decay. Listening still determines whether the speech or music has enough room.
 
 Start with `-audio.musicMode lofi -LiminalAutoPlay YES -LiminalVideoOffline YES` for a cached-footage smoke test. The audio log reports instrument choices, 16-bar take starts, and any preparation misses. `-LiminalTraceLofi YES` also prints exact take sample ranges for a Debug launch. Add `-LiminalProbeLofiProviders YES` to a native Debug launch to log whether the host can discover Pro-C 2, Pro-L 2, and Animoog Z metadata. The probe does not instantiate or route audio to an extension. Physical headset listening and sustained profiling have their own acceptance checks in the [research notes](research/lofi-studio.md).
+
+## README preview
+
+The linked poster and MP4 live in `docs/media/`. The current clip is a live macOS recording of *Thinking Machines* over the Lo-Fi mix. To refresh it, use ScreenCaptureKit to capture only the Liminal app and its stereo output with the microphone disabled. A Debug launch with `-LiminalVideoFile` pointed at a credited film and `-LiminalAllowGeneration NO` makes the source identifiable and reuses cached imagery. Record across a drum fill, crop to the artwork, and export a short H.264 MP4 with AAC stereo and the MP4 index at the front for streaming.
+
+Check the picture change, audio level and both channels in the exported clip. Choose the poster from that export. Update the duration, size, source credit, license and revision in the README playback link, then check the published bytes against the local file. [Current preview](../README.md#see-it-in-motion)
 
 ## Debug launch flags (DEBUG builds only, compiled out of Release)
 

@@ -2,6 +2,12 @@
 
 This ledger follows the November 18 handoff in order. It distinguishes implementation, source review, fixture evidence, device qualification and listening acceptance. The [engineering research](lofi-studio.md) records the primary DSP sources and bench methods. The handoff was written against `a0c3cddc5a7c`. The implementation rows include the subsequent Mac listening passes. The dated bench results below describe their respective builds.
 
+## Spoken phrases and the final film balance
+
+At 70 BPM, a 64-bar replay across eight cached films produced 92 hits, including 16 intact lines and six reversed pickups. The median processed sample sat 8.1 dB below its backing during a hit. The full output measured −17.7 LUFS integrated and −4.63 dBTP. Levels vary with the clip and the arrangement.
+
+The final listener adjustment raised the original film by another 2 dB. A matched eight-bar render from *The Mind-Benders* measured a 1.99 dB rise on the processed footage stem. The sampled dialogue and the Lo-Fi music bus matched the previous render sample for sample; the final master rose 0.04 dB RMS. The later catalog update added *Thinking Machines* and *Hear Here*. Both validated with audio on macOS, filling the 12-film cache. [Listening and capture instructions](../development.md#lo-fi-checks)
+
 ## Film-sampler listening pass
 
 The approved Mac audition used eight different cached film cues over 64 bars at 70 BPM with seed 1042. It scheduled 80 dialogue drops. The median interval was 2.14 seconds and the longest was 5.14 seconds. Source cuts ranged from 0.19 to 1.24 seconds, with a median of 0.66 seconds. The master measured −17.4 LUFS integrated and −4.64 dBTP. A live Mac run at 69 BPM also scheduled ten drops from the first picture. The audio worker detects speech-like cadence, so rhythmic non-speech can qualify too. The isolated sample track and film offsets are available in a local render. [Render instructions](../development.md#lo-fi-checks)

@@ -18,18 +18,19 @@ Liminal pairs evolving ambient music with surreal AI imagery, flowing visual eff
 
 ## See it in motion
 
-[![Play the eight-second Lo-Fi preview with stereo sound](docs/media/lofi-preview.jpg)](https://cdn.jsdelivr.net/gh/pj4533/Liminal@main/docs/media/lofi-preview.mp4)
+[![Play the 10-second Lo-Fi preview with stereo sound](docs/media/lofi-preview.jpg)](https://cdn.jsdelivr.net/gh/pj4533/Liminal@872b0da4607a7c9b1239565da0f929c26c34df8f/docs/media/lofi-preview.mp4)
 
-**[Play with sound · 8 seconds · 1.4 MB](https://cdn.jsdelivr.net/gh/pj4533/Liminal@main/docs/media/lofi-preview.mp4)** · [MP4 in the repository](docs/media/lofi-preview.mp4)
+**[Play with sound · 10 seconds · 1.5 MB](https://cdn.jsdelivr.net/gh/pj4533/Liminal@872b0da4607a7c9b1239565da0f929c26c34df8f/docs/media/lofi-preview.mp4)** · [MP4 in the repository](docs/media/lofi-preview.mp4)
 
-Captured from the macOS app at 69 BPM. Listen for the film dialogue over AJ Hall’s drums as the picture changes on the fill. Film excerpts come from the U.S. Air Force’s *UFO Interview* (1966). [Film source](https://archive.org/details/342-usaf-42990)
+Captured live on macOS at 69 BPM with AJ Hall’s drums. The picture changes on the eight-bar fill. The film layer and sampled voice come from *Horizons of Science: Thinking Machines* (Educational Testing Service, 1959). Liminal composites the picture and filters, chops, and echoes its soundtrack. [Original film](https://archive.org/details/horizons-of-science-thinking-machines) · [Film license (CC BY 4.0)](https://creativecommons.org/licenses/by/4.0/)
 
 ## An atmosphere that keeps changing
 
-- **Two music modes** — slow Ambient scenes, or Lo-Fi with returning acoustic or electric piano hooks, plucked strings, and replies from soft mallets, bass recorder, or pipe organ, deep bass, and optional local 16-bar drum breaks. Lo-Fi chops short lines from the current film and repeats them on the beat.
-- **Living imagery** — generated scenes blend through fluid effects that respond to the music.
+- **Two music modes** — drift through slow Ambient scenes or play Lo-Fi with deep bass and twelve sampled instruments. With a local drum pack, 16-bar takes play through their original fills.
+- **Film dialogue in the beat** — hear the original soundtrack underneath the groove. Liminal picks out spoken phrases on-device, plays pieces of a line across the beat, then brings the words back together on a downbeat. Each cut has its own level, dark echo, and room reverb.
+- **Living imagery** — generated scenes blend through effects that respond to the music. In Lo-Fi, the image and film change together at the eight- and sixteen-bar drum fills.
 - **Immersive space** — depth gives the imagery relief as it wraps around you on Vision Pro.
-- **Traces of old film** — Vintage films from the Internet Archive weave texture, movement, and voices into the scene.
+- **Traces of old film** — Ten pinned films include *Thinking Machines* and Stanford’s *Hear Here*, a 1969 demonstration of speech recognition. Two more slots rotate through discoveries from the Internet Archive. [Film list and credits](docs/experience.md#pinned-films-and-rotating-discoveries)
 - **Make it yours** — choose an Ambient style, set the Lo-Fi BPM, or pin a scale in either mode. Adjust footage volume, visual intensity, and image-generation limits.
 
 <details>
