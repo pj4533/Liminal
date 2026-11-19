@@ -225,6 +225,11 @@ nonisolated enum DebugLaunchOptions {
         return defaults.double(forKey: "LiminalControlsWidth")
     }()
 
+    /// -LiminalDialogueTranscription <off|installedOnly|allowDownload>: use this "Dialogue
+    /// understanding" mode instead of the setting (not saved). allowDownload still downloads only
+    /// through the setting's Download model path (DialogueSpeechAssets.requestInstallIfAllowed).
+    static let dialogueTranscription: String? = defaults.string(forKey: "LiminalDialogueTranscription")
+
     /// True when any shell harness flag is set (they also block generation).
     static var anyShellFlag: Bool {
         defaults.object(forKey: "LiminalShellYaw") != nil || defaults.object(forKey: "LiminalShellPitch") != nil
@@ -242,6 +247,7 @@ nonisolated enum DebugLaunchOptions {
             || anyShellFlag
             || videoForce || videoLook != nil || videoMode != nil || videoFile != nil || videoMix != nil || videoSeed != nil
             || videoOffline || videoOff || controlsScroll != nil || controlsWidth != nil || videoOffAt != nil
+            || dialogueTranscription != nil
     }
 #else
     static let allowGeneration = false
@@ -285,6 +291,7 @@ nonisolated enum DebugLaunchOptions {
     static let controlsScroll: String? = nil
     static let controlsWidth: Double? = nil
     static let videoOffAt: Double? = nil
+    static let dialogueTranscription: String? = nil
 #endif
 
     private static let logOnce: Void = {
@@ -333,6 +340,10 @@ nonisolated enum DebugLaunchOptions {
         if let n = videoSeed { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalVideoSeed=\(n)") }
         if videoOffline { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalVideoOffline=YES (no archive requests)") }
         if videoOff { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalVideoOff=YES (no footage)") }
+        if let m = dialogueTranscription {
+            let ok = DialogueTranscriptionMode(argument: m) != nil
+            LMLog.general.info("🧪 DEBUG FLAG applied: LiminalDialogueTranscription=\(m, privacy: .public)\(ok ? "" : " (unknown mode, ignored)", privacy: .public)")
+        }
         if syncStrength != 1 { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalSyncStrength=\(syncStrength, format: .fixed(precision: 2))") }
 #endif
     }()

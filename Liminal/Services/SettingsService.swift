@@ -28,6 +28,7 @@ final class SettingsService: ObservableObject {
         /// Removed in A27 ("Footage amount" Rare / Normal / Often): deleted on launch.
         static let legacyArchiveAmount = "archive.amount"
         static let archiveAudioLevel = "archive.audioLevel"
+        static let dialogueTranscription = DialogueTranscriptionMode.defaultsKey
     }
 
     // MARK: - Defaults
@@ -125,6 +126,13 @@ final class SettingsService: ObservableObject {
         didSet { defaults.set(archiveAudioLevel, forKey: Keys.archiveAudioLevel) }
     }
 
+    /// "Dialogue understanding": on-device transcription of footage dialogue (plan 7). The
+    /// acoustic chopping never depends on it. Read off the main actor through
+    /// `DialogueTranscriptionMode.current`, which uses the same key.
+    @Published var dialogueTranscription: DialogueTranscriptionMode {
+        didSet { defaults.set(dialogueTranscription.rawValue, forKey: Keys.dialogueTranscription) }
+    }
+
     /// Spending cap: new Gemini images allowed per rolling hour / 24 h (GenerationBudget, D34).
     @Published var maxImagesPerHour: Int {
         didSet { defaults.set(maxImagesPerHour, forKey: GenerationBudget.Keys.perHour) }
@@ -165,6 +173,9 @@ final class SettingsService: ObservableObject {
         defaults.removeObject(forKey: Keys.legacyArchiveAmount)
         self.archiveAudioLevel = min(max(defaults.object(forKey: Keys.archiveAudioLevel) as? Float ?? Self.defaultArchiveAudioLevel, 0), 1)
 
+        self.dialogueTranscription = DialogueTranscriptionMode(rawValue: defaults.string(forKey: Keys.dialogueTranscription) ?? "")
+            ?? DialogueTranscriptionMode.defaultMode
+
         self.maxImagesPerHour = defaults.object(forKey: GenerationBudget.Keys.perHour) as? Int ?? GenerationBudget.defaultPerHour
         self.maxImagesPerDay = defaults.object(forKey: GenerationBudget.Keys.perDay) as? Int ?? GenerationBudget.defaultPerDay
 
@@ -187,6 +198,7 @@ final class SettingsService: ObservableObject {
         archiveEnabled = Self.defaultArchiveEnabled
         archiveChangeSpeed = Self.defaultArchiveChangeSpeed
         archiveAudioLevel = Self.defaultArchiveAudioLevel
+        dialogueTranscription = DialogueTranscriptionMode.defaultMode
         maxImagesPerHour = GenerationBudget.defaultPerHour
         maxImagesPerDay = GenerationBudget.defaultPerDay
         LMLog.state.info("Settings reset to defaults")
