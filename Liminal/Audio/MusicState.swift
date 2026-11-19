@@ -111,6 +111,9 @@ nonisolated final class MusicStateBus: @unchecked Sendable {
     private let sequence = Atomic<UInt64>(0)
     private let startUptimeNs = Atomic<UInt64>(0)
     private let buffer: UnsafeMutablePointer<MusicState>
+    /// Lo-Fi transport side channel (plan 3.6). Variable-size data stays out of `MusicState`; this
+    /// lock is taken by the main actor and the footage worker only, never by a render thread.
+    private let transportInfo = Mutex<LofiTransportInfo?>(nil)
 
     init() {
         buffer = .allocate(capacity: 1)
@@ -123,6 +126,12 @@ nonisolated final class MusicStateBus: @unchecked Sendable {
     }
 
     func setStartUptime(_ ns: UInt64) { startUptimeNs.store(ns, ordering: .releasing) }
+
+    /// Main actor (`LofiPlayback`). Nil clears the transport on stop.
+    func setTransport(_ info: LofiTransportInfo?) { transportInfo.withLock { $0 = info } }
+
+    /// Footage worker and dialogue coordinator. Not for render threads.
+    func transport() -> LofiTransportInfo? { transportInfo.withLock { $0 } }
 
     /// Conductor queue only.
     func publish(_ state: MusicState) {
