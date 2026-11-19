@@ -213,9 +213,7 @@ struct ArchiveVoiceRenderTests {
             }
             return b
         }
-        // The bed and the cut use different tones so each layer is measured on its own. The Lo-Fi bed
-        // now reaches the mix at about the level of a cut (plan 8.6), so a shared tone would only show
-        // how the two happen to add.
+        // The bed and the cut use different tones so each layer is measured on its own.
         let bedHz = 400.0, chopHz = 1000.0
         let bed = try tone(4, hz: bedHz, amplitude: 0.1)
         let chop = try tone(0.6, hz: chopHz, amplitude: 0.1)
@@ -252,10 +250,11 @@ struct ArchiveVoiceRenderTests {
         }
         let bedBefore = level(at: 1.0, hz: bedHz), bedDuring = level(at: 1.7, hz: bedHz)
         let cut = level(at: 1.7, hz: chopHz), echo = level(at: 2.5, hz: chopHz)
-        // The film is clearly audible before the musical cut enters: the 0.1 tone arrives between 0.05
-        // and 0.11 (strip trim 1.06 at the default setting, direct sound -3 to 0 dB, light phasing),
-        // where the old quiet bed was under a quarter of the cut. It stays audible under the cut.
-        #expect(bedBefore > 0.03 && bedBefore < 0.13, "bed before the cut \(bedBefore)")
+        print("softened chops: bed before \(bedBefore) during \(bedDuring) cut \(cut) echo \(echo)")
+        // A quiet direct film remains audible before the musical cut enters: the Lo-Fi bed keeps its
+        // baseline, mostly wet chain (user direction, 19 November 2026), so its direct sound is a
+        // tenth to a quarter of the cut. It stays audible under the cut.
+        #expect(bedBefore > cut * 0.10 && bedBefore < cut * 0.25, "bed before the cut \(bedBefore)")
         #expect(bedDuring > bedBefore * 0.25, "bed under the cut \(bedDuring)")
         // The cut plays through the 0.72 dry path.
         #expect(cut > 0.055 && cut < 0.096, "cut \(cut)")
