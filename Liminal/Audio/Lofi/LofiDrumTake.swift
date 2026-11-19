@@ -38,6 +38,14 @@ nonisolated struct LofiDrumTake: @unchecked Sendable {
             try Self.resample(recording, into: channels, count: count, rate: rate)
         }
         kicks = try Self.detectKicks(channels, count: count, sampleRate: clock.sampleRate)
+        // Independent takes can end well away from zero. Taper just the splice,
+        // leaving the drummer's downbeat position and all interior fills intact.
+        let attack = min(count / 2, max(2, Int(clock.sampleRate * 0.001)))
+        let release = min(count / 2, max(2, Int(clock.sampleRate * 0.004)))
+        for channel in [channels[0], channels[1]] {
+            for i in 0..<attack { channel[i] *= Float(i) / Float(attack - 1) }
+            for i in 0..<release { channel[count - 1 - i] *= Float(i) / Float(release - 1) }
+        }
     }
 
     /// Phrase-local performance times for placing bass attacks. Keep the original take intact.

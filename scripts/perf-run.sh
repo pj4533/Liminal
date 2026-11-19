@@ -15,12 +15,13 @@
 #      JSON summary (also written to <out>/summary.json).
 #
 # Usage
-#   scripts/perf-run.sh [--label NAME] [--seconds N] [--warmup N] [--freeze T] [--split]
+#   scripts/perf-run.sh [--label NAME] [--seconds N] [--warmup N] [--freeze T] [--split] [--lofi]
 #                       [--udid UDID] [--app PATH | --dd DERIVED_DATA_DIR] [--out DIR]
 #     --label    output folder name under $PERF_ROOT (default: run-<timestamp>)
 #     --seconds  collection window in seconds after warm-up (default 30)
 #     --warmup   seconds to ignore after the first PERF line (default 15)
 #     --freeze   pin effect time to T seconds (deterministic screenshots)
+#     --lofi     run with Lo-Fi, archive footage and cached images; check transport continuity
 #     --split    also pass -LiminalPerfSplitPasses YES (no-op since direct-drawable render)
 #     --app      path to Liminal.app (default: <dd>/Build/Products/Debug-xrsimulator/Liminal.app)
 #     --dd       derived-data dir holding the build (default: $SCRATCH/dd-perf)
@@ -49,6 +50,7 @@ SECONDS_N=30
 WARMUP=15
 FREEZE=""
 SPLIT=0
+LOFI=0
 DD="$SCRATCH/dd-perf"
 APP=""
 OUT=""
@@ -62,6 +64,7 @@ while (( $# > 0 )); do
     --freeze) FREEZE=$2; shift 2;;
     --extra) EXTRA=$2; shift 2;;
     --split) SPLIT=1; shift;;
+    --lofi) LOFI=1; shift;;
     --udid) UDID=$2; shift 2;;
     --app) APP=$2; shift 2;;
     --dd) DD=$2; shift 2;;
@@ -93,8 +96,12 @@ xcrun simctl terminate "$UDID" "$BUNDLE" >/dev/null 2>&1
 xcrun simctl install "$UDID" "$APP" || { log "install failed"; exit 1; }
 
 : > "$LOG"
+PREDICATE="subsystem == \"$BUNDLE\""
+if (( LOFI )); then
+  PREDICATE+=' OR (process == "Liminal" AND (eventMessage CONTAINS "skipping cycle due to overload" OR eventMessage CONTAINS "client starting: <AudioQueueObject"))'
+fi
 xcrun simctl spawn "$UDID" log stream --level info --style compact \
-  --predicate "subsystem == \"$BUNDLE\"" >> "$LOG" 2>&1 &
+  --predicate "$PREDICATE" >> "$LOG" 2>&1 &
 LOGPID=$!
 cleanup() { kill $LOGPID 2>/dev/null; wait $LOGPID 2>/dev/null; }
 trap cleanup EXIT INT TERM
@@ -102,6 +109,7 @@ sleep 2
 
 ARGS=(-LiminalAutoPlay YES -LiminalOpenDome YES -LiminalPerfLogInterval 1)
 [[ -n "$FREEZE" ]] && ARGS+=(-LiminalFreezeTime "$FREEZE")
+(( LOFI )) && ARGS+=(-audio.musicMode lofi -archive.enabled YES -LiminalAllowGeneration NO)
 (( SPLIT )) && ARGS+=(-LiminalPerfSplitPasses YES)
 [[ -n "$EXTRA" ]] && ARGS+=(${=EXTRA})
 log "launching with: ${ARGS[*]}"
@@ -133,15 +141,15 @@ END_LINE=$(wc -l < "$LOG")
 xcrun simctl io "$UDID" screenshot "$SHOT" >/dev/null 2>&1 || log "screenshot failed"
 sed -n "$((START_LINE + 1)),${END_LINE}p" "$LOG" | grep "visionOS PERF" > "$PERF"
 
-python3 -I - "$PERF" "$LABEL" "$SHOT" "$FREEZE" > "$OUT/summary.json" <<'PY'
-import json, re, statistics, sys
+python3 -I - "$PERF" "$LABEL" "$SHOT" "$FREEZE" "$LOG" "$START_LINE" "$END_LINE" "$LOFI" "$SECONDS_N" > "$OUT/summary.json" <<'PY'
+import itertools, json, re, statistics, sys
 path, label, shot, freeze = sys.argv[1:5]
 num = r"([0-9.]+)"
 rows = []
 for line in open(path, encoding="utf-8", errors="replace"):
     r = {}
     for key, pat in [("fps", r"fps=" + num), ("render_avg", r"render avg=" + num),
-                     ("dropped", r"dropped=(\d+)"), ("ivl_p95", r"interval p95=" + num),
+                     ("dropped", r"dropped=(\d+)"), ("unsubmitted", r"unsubmitted=(\d+)"), ("ivl_p95", r"interval p95=" + num), ("ivl_max", r"worst=" + num),
                      ("gpu_avg", r"gpu avg=" + num), ("gpu_p95", r"p95=" + num + r"ms max"),
                      ("gpu_max", r"ms max=" + num + r"ms n="), ("gpu_n", r" n=(\d+)")]:
         m = re.search(pat, line)
@@ -164,13 +172,53 @@ out = {
     "label": label, "samples": len(rows), "freeze": float(freeze) if freeze else None,
     "fps_mean": round(statistics.mean(col("fps")), 2) if rows else None,
     "frame_interval_p95_ms": med(col("ivl_p95")),
+    "unsubmitted_frames": int(sum(col("unsubmitted"))) if col("unsubmitted") else None,
+    "frame_interval_max_ms": max(col("ivl_max"), default=None),
     "render_cpu_avg_ms": med(col("render_avg")),
     "gpu_ms_mean": gpu_mean, "gpu_ms_p95": med(col("gpu_p95")),
     "gpu_ms_max": max(col("gpu_max")) if col("gpu_max") else None,
     "dropped_per_5s": round(sum(dropped) / len(dropped) * 5, 2) if dropped else None,
     "per_pass_gpu_ms": per_pass, "screenshot": shot,
 }
+failures = []
+if int(sys.argv[8]):
+    with open(sys.argv[5], encoding="utf-8", errors="replace") as stream:
+        startup = "".join(itertools.islice(stream, int(sys.argv[6])))
+        window = "".join(itertools.islice(stream, int(sys.argv[7]) - int(sys.argv[6])))
+    tempo = re.search(r"Lo-Fi started at ([0-9.]+) BPM", startup + window)
+    turns = len(re.findall(r"started 16-bar drum take [1-9]\d*", window))
+    rests = window.count("prepared a timed rest")
+    gaps = sum(map(int, re.findall(r"Master PCM tap clock discontinuities: (\d+)", window)))
+    # A master-node tap can advance normally while the output device misses a cycle.
+    # Include audible warm-up, and exclude process/graph startup before the score starts.
+    playback = (startup + window).partition("Lo-Fi started at ")[2]
+    overloads = playback.count("IOWorkLoop: skipping cycle due to overload")
+    lead = [float(v) for v in re.findall(r"queued phrase \d+ with (-?[0-9.]+) s", window)]
+    out["lofi"] = dict(outputOverloads=overloads, filmDecoderOutputStarts=playback.count("client starting: <AudioQueueObject"),
+                       repeatedPhrases=window.count("repeated prepared stems"), minQueueLeadSeconds=min(lead, default=None),
+                       takeChanges=turns, imageReveals=window.count("Lo-Fi image reveal at"),
+                       timedRests=rests, masterTapDiscontinuities=gaps,
+                       mixEpochs=window.count("Lo-Fi mix epoch:"), filmCues=window.count("archive audio begin"),
+                       routeRestarts=window.count("Audio route recovered"))
+    # A frozen audio clock can still drive pictures. Check the live transport independently.
+    if not tempo: failures.append("Lo-Fi transport never started")
+    else:
+        # The two different transition lead-ins and log delivery can shift a boundary
+        # slightly across the edge of the observation window.
+        beats = max(0, int(sys.argv[9]) - 0.5) * float(tempo[1]) / 60
+        if turns < int(beats / 64): failures.append("missing 16-bar audio handoffs")
+        if out["lofi"]["imageReveals"] < int(beats / 32): failures.append("missing 8-bar image changes")
+    if not col("ivl_max"): failures.append("missing frame interval measurements")
+    elif out["frame_interval_max_ms"] >= 100: failures.append("visual stall of at least 100 ms")
+    if overloads: failures.append("Core Audio skipped an output cycle during playback")
+    if out["lofi"]["repeatedPhrases"]: failures.append("a phrase missed its preparation deadline")
+    if rests: failures.append("phrase scheduling fell back to silence")
+    if gaps: failures.append("discontinuous master tap sample clock")
+    out["failures"] = failures
 print(json.dumps(out, indent=2))
+sys.exit(1 if failures else 0)
 PY
+result=$?
 cat "$OUT/summary.json"
 log "done -> $OUT"
+exit $result

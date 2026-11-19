@@ -20,8 +20,6 @@ final class EffectsMetalView: MTKView {
     /// Footage interaction-mode variants (effectsFragmentVideo{Keys,Drives,FX}) by variant id, bound only
     /// while a layer needs them (VideoComposite.footageVariant; docs/decisions/footage-fx.md F11).
     private var videoFXPipelineStates: [Int: MTLRenderPipelineState] = [:]
-    private var uniformBuffer: MTLBuffer?
-    private var ghostTapBuffer: MTLBuffer?
 
     // Source texture (from morphPlayer - current/target image)
     private var sourceTexture: MTLTexture?
@@ -43,7 +41,7 @@ final class EffectsMetalView: MTKView {
 
     // Saliency texture (from DepthAnalyzer)
     private var saliencyTexture: MTLTexture?
-    private var lastSaliencyImageHash: Int = 0
+    private var lastSaliencyImage: CGImage?
 
     // Feedback texture for frame-to-frame recursive warping
     private var feedbackTexture: MTLTexture?
@@ -96,7 +94,8 @@ final class EffectsMetalView: MTKView {
     private var totalDrawTime: Double = 0
     private var textureUpdateCount: Int = 0
     private let gpuStats = GPUTimingStats()
-    private var lastDrawStart: Date?
+    private var lastDrawStart: CFTimeInterval?
+    private var lastDrawDuration: Double = 0
     private var frameIntervals: [Double] = []
     private let perfLogInterval = DebugLaunchOptions.perfLogInterval
 
@@ -183,38 +182,27 @@ final class EffectsMetalView: MTKView {
             videoFXPipelineStates[v] = try? device.makeRenderPipelineState(descriptor: pipelineDescriptor)
         }
 
-        // Create uniform buffer
-        uniformBuffer = device.makeBuffer(length: MemoryLayout<EffectsUniforms>.size, options: .storageModeShared)
 
-        if uniformBuffer != nil {
-            LMLog.visual.debug("✅ Uniform buffer created: \(MemoryLayout<EffectsUniforms>.size) bytes")
-        }
-
-        // Create ghost tap buffer (8 taps * 16 bytes each)
-        let ghostTapBufferSize = GhostTapManager.maxTaps * MemoryLayout<GhostTapData>.stride
-        ghostTapBuffer = device.makeBuffer(length: ghostTapBufferSize, options: .storageModeShared)
-        if ghostTapBuffer != nil {
-            LMLog.visual.debug("✅ Ghost tap buffer created: \(ghostTapBufferSize) bytes")
-        }
     }
 
     // MARK: - Texture Management
 
-    func preload(_ image: NSImage?) {
-        guard let image, stagingID != ObjectIdentifier(image), let textureLoader,
-              let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
-        stagingID = ObjectIdentifier(image)
-        let crop = ImageFraming.coverCropRect(width: cg.width, height: cg.height)
-        let framed = ImageFraming.crop(cg, normalized: crop)
-        let options: [MTKTextureLoader.Option: Any] = [.SRGB: false, .generateMipmaps: false]
-        textureLoader.newTexture(cgImage: framed, options: options) { [weak self] texture, _ in
-            nonisolated(unsafe) let texture = texture
-            Task { @MainActor [weak self] in
-                guard let self, self.stagingID == ObjectIdentifier(image), let texture else { return }
-                self.stagedTexture = (image, texture, crop)
+    func preload(_ item: ImageQueue.DisplayItem?) {
+        guard let item, let image = item.image, stagingID != ObjectIdentifier(image), let device else { return }
+        let id = ObjectIdentifier(image)
+        stagingID = id
+        Task.detached(priority: .utility) { [weak self] in
+            let cg = item.cgImage
+            let crop = ImageFraming.coverCropRect(width: cg.width, height: cg.height)
+            let framed = ImageFraming.crop(cg, normalized: crop)
+            if let image = item.image { _ = ImageColorStats.cachedFactors(key: image) { framed } }
+            let options: [MTKTextureLoader.Option: Any] = [.SRGB: false, .generateMipmaps: false]
+            nonisolated(unsafe) let texture = try? await MTKTextureLoader(device: device).newTexture(cgImage: framed, options: options)
+            await MainActor.run { [weak self] in
+                guard let self, stagingID == id, let image = item.image, let texture else { return }
+                stagedTexture = (image, texture, crop)
             }
         }
-        Task.detached { _ = ImageColorStats.cachedFactors(key: image) { framed } }
     }
 
     /// Update the source image from morphPlayer - ONLY if image changed.
@@ -272,7 +260,7 @@ final class EffectsMetalView: MTKView {
         textureLoader.newTexture(cgImage: ImageFraming.crop(rawImage, normalized: sourceCrop), options: options) { @Sendable [weak self] texture, error in
             let message = error?.localizedDescription
             nonisolated(unsafe) let texture = texture
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 self?.sourceTextureLoaded(texture, hash: newHash, error: message, startTime: startTime)
             }
         }
@@ -298,27 +286,13 @@ final class EffectsMetalView: MTKView {
     }
 
     /// Update the saliency map texture - ONLY if image changed
-    func updateSaliencyMap(_ image: NSImage?) {
-        guard let image = image else {
+    func updateSaliencyMap(_ image: CGImage?) {
+        guard let cgImage = image else {
             saliencyTexture = nil
+            lastSaliencyImage = nil
             return
         }
-
-        // Check if saliency map actually changed
-        let newHash = image.hash
-        if newHash == lastSaliencyImageHash && saliencyTexture != nil {
-            return
-        }
-
-        guard let textureLoader = self.textureLoader else {
-            return
-        }
-
-        // Convert NSImage to CGImage
-        guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
-            LMLog.visual.error("❌ Failed to get CGImage from saliency NSImage")
-            return
-        }
+        guard cgImage !== lastSaliencyImage, let textureLoader else { return }
 
         // Load as Metal texture
         do {
@@ -328,7 +302,7 @@ final class EffectsMetalView: MTKView {
             ]
             // Same normalized crop as the colour image so saliency stays registered with it.
             saliencyTexture = try textureLoader.newTexture(cgImage: ImageFraming.crop(cgImage, normalized: sourceCrop), options: options)
-            lastSaliencyImageHash = newHash
+            lastSaliencyImage = cgImage
 
             if let tex = saliencyTexture {
                 LMLog.visual.info("🔍 Saliency texture loaded: \(tex.width)x\(tex.height)")
@@ -364,8 +338,7 @@ final class EffectsMetalView: MTKView {
             return
         }
 
-        guard let device = self.device,
-              let textureLoader = self.textureLoader else {
+        guard let textureLoader = self.textureLoader else {
             return
         }
 
@@ -417,11 +390,7 @@ final class EffectsMetalView: MTKView {
     // MARK: - Rendering
 
     override func draw(_ dirtyRect: NSRect) {
-        let drawStart = Date()
-        if let last = lastDrawStart {
-            frameIntervals.append(drawStart.timeIntervalSince(last) * 1000)
-        }
-        lastDrawStart = drawStart
+        let drawStart = CACurrentMediaTime()
 
         // Early exit checks with logging
         guard hasValidSource else {
@@ -453,22 +422,18 @@ final class EffectsMetalView: MTKView {
             return
         }
 
-        guard let uniformBuffer = uniformBuffer,
-              let ghostTapBuffer = ghostTapBuffer else {
-            LMLog.visual.error("❌ Skipping draw: buffer nil")
-            return
+        if let last = lastDrawStart {
+            let interval = (drawStart - last) * 1000
+            frameIntervals.append(interval)
+            #if DEBUG
+            if interval >= 50 {
+                LMLog.visual.info("Slow Mac frame: interval=\(interval, format: .fixed(precision: 1))ms previous draw=\(self.lastDrawDuration, format: .fixed(precision: 1))ms")
+            }
+            #endif
         }
+        lastDrawStart = drawStart
 
-        // Update ghost taps and get active count for optimized shader loop
         let ghostTapResult = ghostTapManager.updateWithCount(currentTime: uniforms.time)
-
-        // Copy ghost tap data to GPU buffer
-        ghostTapBuffer.contents().copyMemory(
-            from: ghostTapResult.data,
-            byteCount: GhostTapManager.maxTaps * MemoryLayout<GhostTapData>.stride
-        )
-
-        // Copy uniforms to GPU buffer with ghost tap count
         var uniformsCopy = uniforms
         if let beatReveal, previousTexture != nil {
             let now = ArchiveFootageService.uptime()
@@ -491,7 +456,6 @@ final class EffectsMetalView: MTKView {
         if videoTexture == nil { uniformsCopy.videoMix = 0 }
         if videoTextureB == nil { uniformsCopy.videoMixB = 0 }
         let footage = videoTexture != nil || videoTextureB != nil
-        memcpy(uniformBuffer.contents(), &uniformsCopy, MemoryLayout<EffectsUniforms>.size)
 
         guard let commandBuffer = commandQueue.makeCommandBuffer() else {
             LMLog.visual.error("❌ Failed to create command buffer")
@@ -523,8 +487,9 @@ final class EffectsMetalView: MTKView {
             }
             if let videoTexture { encoder.setFragmentTexture(videoTexture, index: 7) }
             if let videoTextureB { encoder.setFragmentTexture(videoTextureB, index: 8) }
-            encoder.setFragmentBuffer(uniformBuffer, offset: 0, index: 0)
-            encoder.setFragmentBuffer(ghostTapBuffer, offset: 0, index: 1)
+            // Metal retains its own copy of these small constants for each in-flight frame.
+            encoder.setFragmentBytes(&uniformsCopy, length: MemoryLayout<EffectsUniforms>.size, index: 0)
+            encoder.setFragmentBytes(ghostTapResult.data, length: ghostTapResult.data.count * MemoryLayout<GhostTapData>.stride, index: 1)
             encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
             encoder.endEncoding()
         }
@@ -550,8 +515,8 @@ final class EffectsMetalView: MTKView {
 
         // Track frame timing
         frameCount += 1
-        let drawTime = Date().timeIntervalSince(drawStart) * 1000
-        totalDrawTime += drawTime
+        lastDrawDuration = (CACurrentMediaTime() - drawStart) * 1000
+        totalDrawTime += lastDrawDuration
 
         // Log performance every second
         let timeSinceLastLog = Date().timeIntervalSince(lastLogTime)
@@ -565,13 +530,14 @@ final class EffectsMetalView: MTKView {
 
             frameIntervals.sort()
             let intervalP95 = GPUTimingStats.percentile(frameIntervals, 0.95)
+            let longestInterval = frameIntervals.last ?? 0
             frameIntervals.removeAll(keepingCapacity: true)
             let gpuFragment = gpuStats.drain().logFragment
 
             if uniformsCopy.videoMix > 0 || uniformsCopy.videoMixB > 0 {
                 LMLog.visual.info("📼 FOOTAGE mix=\(String(format: "%.3f", uniformsCopy.videoMix + uniformsCopy.videoMixB), privacy: .public) A=\(String(format: "%.3f", uniformsCopy.videoMix), privacy: .public)/\(Int(uniformsCopy.videoLook)) B=\(String(format: "%.3f", uniformsCopy.videoMixB), privacy: .public)/\(Int(uniformsCopy.videoLookB))")
             }
-            let perfLine = "📊 METAL PERF: fps=\(String(format: "%.1f", fps)) avgDraw=\(String(format: "%.2f", avgDrawTime))ms src=\(srcW)x\(srcH) texUpdates=\(texUpdates) | interval p95=\(String(format: "%.2f", intervalP95))ms | \(gpuFragment)"
+            let perfLine = "📊 METAL PERF: fps=\(String(format: "%.1f", fps)) avgDraw=\(String(format: "%.2f", avgDrawTime))ms src=\(srcW)x\(srcH) texUpdates=\(texUpdates) | interval p95=\(String(format: "%.2f", intervalP95))ms worst=\(String(format: "%.2f", longestInterval))ms | \(gpuFragment)"
             LMLog.visual.info("\(perfLine, privacy: .public)")
 
             // Reset counters
@@ -598,10 +564,10 @@ final class EffectsMetalView: MTKView {
 
 struct EffectsMetalViewRepresentable: NSViewRepresentable {
     let sourceImage: NSImage?
-    var stagedImage: NSImage? = nil
+    var stagedImage: ImageQueue.DisplayItem? = nil
     var beatReveal: LofiImageReveal? = nil
     let previousImage: NSImage?  // For GPU crossfade blending
-    let saliencyMap: NSImage?
+    let saliencyMap: CGImage?
     let uniforms: EffectsUniforms  // Single struct - matches visionOS pattern
     var ghostBurstSerial: UInt32 = 0  // MusicModulation.ghostBurstSerial (scene-change trail burst)
 

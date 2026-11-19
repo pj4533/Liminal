@@ -290,7 +290,7 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
 
     /// Reserve a distinct picture well ahead of the audio deadline. A slow generator
     /// can finish normally while the local cache or bundled art covers this edit.
-    func reserveForFill(excluding currentID: UUID?) async -> DisplayItem? {
+    @concurrent func reserveForFill(excluding currentID: UUID?) async -> DisplayItem? {
         #if DEBUG
         if DebugLaunchOptions.testPattern || (DebugLaunchOptions.testImagePath != nil && DebugLaunchOptions.testImageDirectoryFiles == nil) { return nil }
         #endif

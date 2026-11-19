@@ -20,6 +20,9 @@ nonisolated enum DebugLaunchOptions {
     /// -LiminalAutoPlay YES: start audio + visual playback as soon as the controls appear.
     static let autoPlay: Bool = defaults.bool(forKey: "LiminalAutoPlay")
 
+    /// Replay a live score from the unsigned seed printed when its graph was built.
+    static let musicSeed = defaults.string(forKey: "LiminalMusicSeed").flatMap { UInt64($0) }
+
     /// -LiminalOpenDome YES (visionOS): open the immersive space ("liminalSpace") once the window appears.
     static let openDome: Bool = defaults.bool(forKey: "LiminalOpenDome")
 
@@ -231,7 +234,7 @@ nonisolated enum DebugLaunchOptions {
 
     static var blocksImageGeneration: Bool {
         guard !allowGeneration else { return false }
-        return autoPlay || openDome || freezeTime != nil || testPattern || testImagePath != nil
+        return autoPlay || openDome || musicSeed != nil || freezeTime != nil || testPattern || testImagePath != nil
             || defaults.object(forKey: "LiminalPerfLogInterval") != nil || splitPasses
             || forceStereoFlatDepth || forceMonoMaterial || noEffects || syncLog
             || defaults.object(forKey: "LiminalSyncStrength") != nil || effectIntensity != nil
@@ -244,6 +247,7 @@ nonisolated enum DebugLaunchOptions {
     static let allowGeneration = false
     static let blocksImageGeneration = false
     static let autoPlay = false
+    static let musicSeed: UInt64? = nil
     static let openDome = false
     static let freezeTime: Float? = nil
     static let perfLogInterval: Double = 1.0

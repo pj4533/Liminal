@@ -28,10 +28,10 @@ final class LofiBus {
         drums.player.scheduleBuffer(take.buffer)
     }
 
-    func schedule(_ phrase: LofiRenderer.Phrase) {
+    func schedule(_ phrase: LofiRenderer.Phrase, wet override: AVAudioPCMBuffer? = nil) {
         bass.player.scheduleBuffer(phrase.bass)
         dry.player.scheduleBuffer(phrase.dry)
         texture.player.scheduleBuffer(phrase.texture)
-        wet.player.scheduleBuffer(phrase.wet)
+        wet.player.scheduleBuffer(override ?? phrase.wet)
     }
 }

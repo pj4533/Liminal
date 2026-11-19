@@ -22,7 +22,7 @@
 
 import CoreGraphics
 
-enum ImageFraming {
+nonisolated enum ImageFraming {
 
     /// Width / height of the displayed image on every platform: the macOS visual area and the
     /// visionOS dome (horizontalArc / verticalArc = 112.5° / 75°). Generated images are 3:2.

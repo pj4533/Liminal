@@ -383,15 +383,20 @@ struct VisualDisplayView: View {
     /// Visuals -> music: describe the image whose crossfade just started (or the first image).
     private func postMood(for image: PlatformImage, imageChanged: Bool) {
         // Atomic read: the two @Published mirrors (image, metadata) have no ordering guarantee (C10).
-        let metadata = visualEngine.imageBuffer.loadCurrentWithMetadata().metadata
-        ArchiveFootageService.shared.displayedImage(metadata)
-        let mood = VisualMoodBuilder.mood(metadata: metadata,
-                                          image: image.cgImageRepresentation.map { ImageFraming.coverCrop($0) })
-        music.setVisualMood(mood)
-        // Twice the swap time: the conductor lands its chord change at half of it, i.e. on the swap.
+        let buffer = visualEngine.imageBuffer
+        let snapshot = buffer.loadCurrentWithMetadata()
+        ArchiveFootageService.shared.displayedImage(snapshot.metadata)
         if imageChanged { music.imageDidChange(transitionDuration: sync.transition.musicDuration) }
-        sync.lastMood = mood
-        LMLog.visual.info("🎼 setVisualMood b=\(String(format: "%.2f", mood.brightness), privacy: .public) w=\(String(format: "%.2f", mood.warmth), privacy: .public) s=\(String(format: "%.2f", mood.saturation), privacy: .public) e=\(String(format: "%.2f", mood.energy), privacy: .public) words=\(mood.moodWords.joined(separator: ","), privacy: .public) imageDidChange=\(imageChanged)")
+        let cg = snapshot.image ?? image.cgImageRepresentation
+        Task {
+            let mood = await Task.detached(priority: .utility) {
+                VisualMoodBuilder.mood(metadata: snapshot.metadata, image: cg.map { ImageFraming.coverCrop($0) })
+            }.value
+            guard buffer.loadCurrentWithMetadata().generation == snapshot.generation else { return }
+            music.setVisualMood(mood)
+            sync.lastMood = mood
+            LMLog.visual.info("🎼 setVisualMood b=\(mood.brightness) w=\(mood.warmth) s=\(mood.saturation) e=\(mood.energy) words=\(mood.moodWords.joined(separator: ",")) imageDidChange=\(imageChanged)")
+        }
     }
 
     var body: some View {
@@ -405,7 +410,7 @@ struct VisualDisplayView: View {
                     let params = frameParams()
                     EffectsMetalViewRepresentable(
                         sourceImage: transitionManager.currentFrame,
-                        stagedImage: visualEngine.stagedImage?.image,
+                        stagedImage: visualEngine.stagedImage,
                         beatReveal: transitionManager.isMorphing ? transitionManager.beatReveal : nil,
                         previousImage: transitionManager.previousFrame,  // GPU crossfade blending
                         saliencyMap: transitionManager.currentSaliencyMap,
@@ -459,6 +464,9 @@ struct VisualDisplayView: View {
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
             .clipped()
+        }
+        .onReceive(visualEngine.$stagedImage) { staged in
+            if let staged, let image = staged.image { transitionManager.prepareSaliency(for: image, pixels: staged.cgImage) }
         }
         .onChange(of: visualEngine.currentImage) { _, newImage in
             if let image = newImage {

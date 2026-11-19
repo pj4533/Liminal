@@ -23,6 +23,7 @@ final class LofiPlayback {
     private var rendered: [PlayingPhrase] = []
     private var queuedFrames: AVAudioFramePosition = 0
     private var transportOrigin: Double = 0
+    private var outputLatency: Double = 0
     private var audibleStartSample: AVAudioFramePosition?
     private var onset: (time: Double, velocity: Float) = (-1000, 0)
     private var nextKickIndex = 0
@@ -34,7 +35,8 @@ final class LofiPlayback {
     private struct PlayingPhrase {
         let request: Request
         let breakAudio: LofiPhraseBank.Take
-        let music: LofiRenderer.Phrase?
+        let music: LofiRenderer.Phrase
+        let repeated: Bool
         let start: AVAudioFramePosition
     }
 
@@ -76,7 +78,10 @@ final class LofiPlayback {
                 let next = try await bank.prepare(first, sampleRate: sampleRate)
                 guard !Task.isCancelled, epoch == token else { return }
                 enqueue(next.phrase, take: next.take, request: first)
-                let lead = max(0.09, bus.drums.player.outputPresentationLatency + 0.025)
+                // This getter synchronously queries the audio device. The graph is
+                // fixed for this transport and reacquires latency when the route restarts.
+                outputLatency = bus.drums.player.outputPresentationLatency
+                let lead = max(0.09, outputLatency + 0.025)
                 let start = AVAudioTime(hostTime: mach_absolute_time() + AVAudioTime.hostTime(forSeconds: lead))
                 let startNs = DispatchTime.now().uptimeNanoseconds + UInt64(lead * 1e9)
                 transportOrigin = Double(startNs) / 1e9
@@ -132,18 +137,11 @@ final class LofiPlayback {
         }
     }
 
-    private func enqueue(_ phrase: LofiRenderer.Phrase?, take: LofiPhraseBank.Take, request: Request,
-                         fallbackWet override: AVAudioPCMBuffer? = nil) {
+    private func enqueue(_ phrase: LofiRenderer.Phrase, take: LofiPhraseBank.Take, request: Request,
+                         repeated: Bool = false, wet: AVAudioPCMBuffer? = nil) {
         if request.drumPhraseIndex == 0 { bus.schedule(take.drums) }
-        if let phrase {
-            bus.schedule(phrase)
-        } else {
-            for player in [bus.bass.player, bus.dry.player, bus.texture.player] {
-                player.scheduleBuffer(take.rest)
-            }
-            bus.wet.player.scheduleBuffer(override ?? take.rest)
-        }
-        rendered.append(.init(request: request, breakAudio: take, music: phrase, start: queuedFrames))
+        bus.schedule(phrase, wet: wet)
+        rendered.append(.init(request: request, breakAudio: take, music: phrase, repeated: repeated, start: queuedFrames))
         queuedFrames += AVAudioFramePosition(take.drums.clock.frameCount)
     }
 
@@ -170,8 +168,15 @@ final class LofiPlayback {
                 }
             }
             do {
+                #if DEBUG
+                // Deterministic slow-producer test. Only the second take's preparation waits.
+                if target.index == LofiDrumTake.phraseCount, Self.delayedTakeSeconds > 0 {
+                    LMLog.audio.notice("QA delaying take preparation by \(Self.delayedTakeSeconds)s")
+                    try await Task.sleep(for: .seconds(Self.delayedTakeSeconds))
+                }
+                #endif
                 let next = try await bank.prepare(target, sampleRate: sampleRate, previous: last.breakAudio,
-                                                  carry: last.music?.tail)
+                                                  carry: last.repeated ? nil : last.music.tail)
                 guard !Task.isCancelled, epoch == token, preparationID == job else { return }
                 prepared = (target, next)
             } catch {
@@ -187,18 +192,24 @@ final class LofiPlayback {
         let frame = max(0, playerTime.sampleTime)
         let remaining = Double(queuedFrames - frame) / sampleRate
         let target = last.request.next(options: options)
-        if remaining < 4, let (key, phrase) = prepared, key == target {
+        // Queue the next interior phrase as soon as it is ready, then use the spare
+        // phrase of runway to prepare the following one. Keep the four-second commit
+        // window at take changes so pending tempo and scale edits still apply.
+        let canQueue = remaining < 4 || (rendered.count == 1 && target.drumPhraseIndex != 0)
+        if canQueue, let (key, phrase) = prepared, key == target {
+            LMLog.audio.info("Lo-Fi queued phrase \(key.index) with \(remaining, format: .fixed(precision: 3)) s of audio remaining")
             enqueue(phrase.phrase, take: phrase.take, request: key)
             prepared = nil
         } else if remaining < 1 {
-            // The current recording is already queued. If a take misses its deadline,
-            // use a whole take at the next boundary and reserve a timed musical rest.
+            // Carry a late worker across this boundary with existing, edge-tapered
+            // performances on the committed grid. Let the outgoing effects decay once.
             let fallback = last.request.next(options: last.request.options)
-            enqueue(nil, take: last.breakAudio, request: fallback, fallbackWet: last.music?.fallbackWet)
+            let wet = last.repeated ? last.breakAudio.rest : last.music.fallbackWet
+            enqueue(last.music, take: last.breakAudio, request: fallback, repeated: true, wet: wet)
             prepared = nil
-            LMLog.audio.warning("Lo-Fi prepared a timed rest while filling the upcoming phrase")
+            LMLog.audio.warning("Lo-Fi repeated prepared stems for phrase \(fallback.index), frames=\(last.music.bass.frameLength) headroom=\(remaining, format: .fixed(precision: 3))s")
             #if DEBUG
-            Self.trace("timed-rest sample=\(queuedFrames) phrase=\(fallback.index)")
+            Self.trace("repeated-stems sample=\(queuedFrames) phrase=\(fallback.index)")
             #endif
         }
         planNext(token: token)
@@ -210,9 +221,7 @@ final class LofiPlayback {
             if current.request.index > 0 {
                 onPhrase?(current.breakAudio.drums.clock.beatDuration, current.request.index, current.request.seed)
             }
-            if let score = current.music?.score {
-                LMLog.audio.info("Lo-Fi lead: \(score.preset.name, privacy: .public), sampled notes=\(current.music?.leadSampleCount ?? 0)")
-            }
+            LMLog.audio.info("Lo-Fi lead: \(current.music.score.preset.name, privacy: .public), sampled notes=\(current.music.leadSampleCount)")
             if current.request.drumPhraseIndex == 0 {
                 nextKickIndex = 0
                 LMLog.audio.info("Lo-Fi started 16-bar drum take \(current.request.drumBreakIndex), recorded=\(current.breakAudio.drums.name != nil)")
@@ -221,17 +230,18 @@ final class LofiPlayback {
                 #endif
             }
         }
-        publish(current, frame: frame, outputLatency: player.outputPresentationLatency)
+        publish(current, frame: frame)
     }
 
     #if DEBUG
+    private static let delayedTakeSeconds = min(60, max(0, UserDefaults.standard.double(forKey: "LiminalDelaySecondTake")))
     private static let traceEnabled = UserDefaults.standard.bool(forKey: "LiminalTraceLofi")
     private static func trace(_ message: @autoclosure () -> String) {
         if traceEnabled { print("Liminal Lo-Fi QA \(message())") }
     }
     #endif
 
-    private func publish(_ current: PlayingPhrase, frame: AVAudioFramePosition, outputLatency: Double) {
+    private func publish(_ current: PlayingPhrase, frame: AVAudioFramePosition) {
         let now = stateBus.now()
         let take = current.breakAudio.drums
         let offset = max(0, frame - current.start)
@@ -261,16 +271,15 @@ final class LofiPlayback {
         state.brightness = 0.38
         let absoluteBeat = Double(current.request.index) * LofiClock.beats + beat
         state.density = LofiDrift(seed: current.request.seed).at(absoluteBeat).density * 0.65
-        if let score = current.music?.score {
-            state.tonic = UInt8(score.tonic)
-            state.chordRoot = UInt8(score.chordRoot)
-            state.scaleMask = score.scale.pitchClassMask(tonic: score.tonic)
-            let notes = score.notes.filter { $0.beat <= beat && beat < $0.beat + $0.length }
-            state.chordMask = notes.reduce(0) { $0 | (UInt16(1) << ($1.midi % 12)) }
-            state.setLevel(.pad, notes.contains { $0.part == .texture } ? 0.42 : 0)
-            state.setLevel(.drone, notes.contains { $0.part == .bass } ? 0.40 : 0)
-            state.setLevel(.lead, notes.contains { $0.part == .lead } ? 0.26 : 0)
-        }
+        let score = current.music.score
+        state.tonic = UInt8(score.tonic)
+        state.chordRoot = UInt8(score.chordRoot)
+        state.scaleMask = score.scale.pitchClassMask(tonic: score.tonic)
+        let notes = score.notes.filter { $0.beat <= beat && beat < $0.beat + $0.length }
+        state.chordMask = notes.reduce(0) { $0 | (UInt16(1) << ($1.midi % 12)) }
+        state.setLevel(.pad, notes.contains { $0.part == .texture } ? 0.42 : 0)
+        state.setLevel(.drone, notes.contains { $0.part == .bass } ? 0.40 : 0)
+        state.setLevel(.lead, notes.contains { $0.part == .lead } ? 0.26 : 0)
         let takeStart = current.start - Int64(current.request.drumPhraseIndex * take.clock.frameCount)
         let nextTake = rendered.last.flatMap { $0.request.drumBreakIndex > current.request.drumBreakIndex ? $0.breakAudio : nil }
         state.lofiTakeGrid = LofiTakeGrid(origin: transportOrigin + Double(takeStart) / sampleRate + outputLatency,

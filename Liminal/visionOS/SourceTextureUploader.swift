@@ -61,6 +61,30 @@ nonisolated final class SourceTextureUploader: @unchecked Sendable {
         // Lossless re-layout for faster sampling. Committed before the texture is handed to the
         // render loop, so every render command buffer that uses it is committed after this one on
         // the same (in-order) queue.
+        optimize(texture, label: label)
+        return texture
+    }
+
+    /// Build a fresh R8 texture so the CPU never overwrites depth in use by an older frame.
+    func makeDepthTexture(from image: CGImage) -> MTLTexture? {
+        let width = image.width, height = image.height
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r8Unorm, width: width,
+                                                                  height: height, mipmapped: false)
+        descriptor.usage = .shaderRead
+        descriptor.storageMode = .shared
+        guard let texture = device.makeTexture(descriptor: descriptor),
+              let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
+                                      bytesPerRow: 0, space: CGColorSpaceCreateDeviceGray(),
+                                      bitmapInfo: CGImageAlphaInfo.none.rawValue),
+              let pixels = context.data else { return nil }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        texture.replace(region: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0,
+                        withBytes: pixels, bytesPerRow: context.bytesPerRow)
+        optimize(texture, label: "depth")
+        return texture
+    }
+
+    private func optimize(_ texture: MTLTexture, label: String) {
         if let commandBuffer = commandQueue.makeCommandBuffer(),
            let blit = commandBuffer.makeBlitCommandEncoder() {
             commandBuffer.label = "Optimize \(label) texture"
@@ -68,7 +92,6 @@ nonisolated final class SourceTextureUploader: @unchecked Sendable {
             blit.endEncoding()
             commandBuffer.commit()
         }
-        return texture
     }
 }
 

@@ -24,6 +24,8 @@ final class GenerativeEngine: ObservableObject {
     /// The archive film's sound strip (docs/plans/archive-video.md 4).
     let archive: ArchiveVoice
     let seed: UInt64
+    private var configurationObserver: AnyCancellable?
+    private var recovery: Task<Void, Never>?
     private let lofi: LofiPlayback
     nonisolated private let lofiActive = Atomic<Bool>(false)
 
@@ -38,7 +40,7 @@ final class GenerativeEngine: ObservableObject {
     @Published private(set) var isRunning = false
     @Published private(set) var isPlaybackReady = false
     @Published var musicMode: MusicMode = .ambient {
-        didSet { if isRunning && oldValue != musicMode { activateMusicMode() } }
+        didSet { if isRunning && recovery == nil && oldValue != musicMode { activateMusicMode() } }
     }
 
     func applyLofi(_ options: LofiOptions) {
@@ -97,7 +99,7 @@ final class GenerativeEngine: ObservableObject {
         LofiProviderProbe.runIfRequested()
         #endif
         let t0 = Date()
-        let seed = seed ?? UInt64.random(in: 1...UInt64.max)
+        let seed = seed ?? DebugLaunchOptions.musicSeed ?? UInt64.random(in: 1...UInt64.max)
         self.seed = seed
         let initialLofiSeed = seed ^ 0x4C4F4649
         let layers: [MusicLayer] = [DroneLayer(), PadLayer(), LeadLayer(), DripsLayer(),
@@ -115,6 +117,9 @@ final class GenerativeEngine: ObservableObject {
             master?.setCalibrationBeatDuration(duration)
         }
         engine.output = master.output
+        configurationObserver = NotificationCenter.default.publisher(for: .AVAudioEngineConfigurationChange, object: engine.avEngine)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.recoverStoppedGraph() }
         conductor.onNote = GenerativeEngine.noteForwarder(shimmerNotePlayed)
         let ms = Date().timeIntervalSince(t0) * 1000
         LMLog.audio.info("🎛️ Music graph built in \(String(format: "%.0f", ms)) ms, seed \(seed)")
@@ -168,9 +173,39 @@ final class GenerativeEngine: ObservableObject {
         }
     }
 
+    /// A route reconfiguration can stop AVAudioEngine and discard the players' schedules.
+    /// Re-arm the score and its visual clock together once the replacement route is ready.
+    private func recoverStoppedGraph() {
+        guard isRunning, !engine.avEngine.isRunning, recovery == nil else { return }
+        LMLog.audio.warning("Audio route changed while playing; rebuilding playback schedules")
+        isPlaybackReady = false
+        lofiActive.store(false, ordering: .relaxed)
+        lofi.stop(immediately: true)
+        conductor.stop(fade: 0)
+        master.stopCalibration()
+        recovery = Task { [weak self] in
+            for delay in [0.15, 0.4, 1.0] {
+                do { try await Task.sleep(for: .seconds(delay)) } catch { return }
+                guard let self, isRunning else { return }
+                do {
+                    if !engine.avEngine.isRunning { try engine.start() }
+                    recovery = nil
+                    activateMusicMode()
+                    LMLog.audio.info("Audio route recovered; playback restarted")
+                    return
+                } catch {
+                    LMLog.audio.warning("Audio route restart failed: \(error.localizedDescription, privacy: .public)")
+                }
+            }
+            self?.stop()
+        }
+    }
+
     /// Fades out over 2 s; the audio engine keeps running so a restart is instant.
     func stop() {
         guard isRunning else { return }
+        recovery?.cancel()
+        recovery = nil
         conductor.stop(fade: 2.0)
         lofi.stop()
         master.stopCalibration()
@@ -181,6 +216,8 @@ final class GenerativeEngine: ObservableObject {
     }
 
     func shutdown() {
+        recovery?.cancel()
+        recovery = nil
         conductor.stop(fade: 0.05)
         lofi.stop(immediately: true)
         master.stopCalibration()

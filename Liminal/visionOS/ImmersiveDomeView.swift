@@ -96,6 +96,19 @@ nonisolated struct PreparedImage: @unchecked Sendable {
 
 /// Hand-off from the preparation task to the render loop (latest result wins).
 nonisolated final class PreparedImageSlot: Sendable {
+    struct Depth: Sendable {
+        let image: CGImage
+        let field: DepthReliefField
+        let texture: MTLTexture?
+    }
+
+    let generation: UInt64
+    init(generation: UInt64) { self.generation = generation }
+
+    private let depth = Mutex<Depth?>(nil)
+    func storeDepth(_ prepared: Depth) { depth.withLock { $0 = prepared } }
+    func takeDepth() -> Depth? { depth.withLock { v in defer { v = nil }; return v } }
+
     private let value = Mutex<PreparedImage?>(nil)
     func store(_ prepared: PreparedImage) { value.withLock { $0 = prepared } }
     func take() -> PreparedImage? { value.withLock { v in defer { v = nil }; return v } }
@@ -119,9 +132,6 @@ struct ImmersiveDomeView: View {
     @State private var isSetupComplete = false
     @State private var renderTask: Task<Void, Never>?
     @State private var loadingState: String = "Initializing..."
-
-    // Animation state
-    @State private var effectTime: Float = 0
 
     // Simple CGImage transition tracking (no @Observable overhead)
     @State private var transitionState = CGImageTransitionState()
@@ -444,9 +454,10 @@ struct ImmersiveDomeView: View {
         // 3. Explicit Task.yield() after each frame
         renderTask = Task { @MainActor in
             var frameCount = 0
+            var submittedFrames = 0
 
             // Performance tracking
-            var lastFrameTime = Date()
+            var lastFrameTime: Date?
             var totalRenderTime: Double = 0
             var totalMeshTime: Double = 0
             var lastReliefK: Float = 0
@@ -463,7 +474,6 @@ struct ImmersiveDomeView: View {
 
             // Detailed frame timing for stutter investigation
             var consecutiveSlowFrames = 0
-            var lastYieldTime: Date = Date()
 
             // Music <-> visuals coupling (docs/plans/av-coupling.md); local to this loop, no locks.
             var reactor = MusicReactor(strength: DebugLaunchOptions.syncStrength)
@@ -482,9 +492,9 @@ struct ImmersiveDomeView: View {
             var lastBreathing: Float = 0
             // Image change: prepared off the main actor, applied when ready (no long frame).
             var preparingGeneration: UInt64 = 0
-            let preparedSlot = PreparedImageSlot()
+            var preparedSlot = PreparedImageSlot(generation: 0)
             var stagedRaw: CGImage?
-            var stagedSlot = PreparedImageSlot()
+            var stagedSlot = PreparedImageSlot(generation: 0)
             // Archive footage (docs/plans/archive-video.md): prefetch and the footage pieces run off the main actor;
             // this loop only reads the current frame and reports what the weaver listens to.
             let footage = ArchiveFootageService.shared
@@ -493,24 +503,24 @@ struct ImmersiveDomeView: View {
             var lastVideoMixes: (Float, Float) = (0, 0)
 
             while !Task.isCancelled {
+                let iterationStart = CACurrentMediaTime()
+                let monoDrawable = stereoMaterialBuilder == nil ? await effectsRenderer?.acquireDrawable() : nil
+                guard !Task.isCancelled else { return }
                 frameCount += 1
                 let frameStartTime = Date()
 
                 // Track frame interval (time since last frame started)
-                let frameInterval = frameStartTime.timeIntervalSince(lastFrameTime) * 1000
-                // Track yield time (time spent in Task.yield + any MainActor contention)
-                let yieldDuration = frameStartTime.timeIntervalSince(lastYieldTime) * 1000
+                let frameInterval = lastFrameTime.map { frameStartTime.timeIntervalSince($0) * 1000 } ?? 0
                 lastFrameTime = frameStartTime
-                if frameCount > 1 { frameIntervals.append(frameInterval) }
+                if frameInterval > 0 { frameIntervals.append(frameInterval) }
 
-                // Detailed logging for slow frames
-                if frameInterval > 15 && frameCount > 1 {
+                if frameInterval > 15 {
                     droppedFrames += 1
                     consecutiveSlowFrames += 1
 
                     // Log individual slow frames to find patterns
                     if consecutiveSlowFrames <= 5 || consecutiveSlowFrames % 10 == 0 {
-                        LMLog.visual.warning("⚠️ SLOW FRAME #\(frameCount): interval=\(String(format: "%.1f", frameInterval))ms yield=\(String(format: "%.1f", yieldDuration))ms consecutive=\(consecutiveSlowFrames)")
+                        LMLog.visual.warning("⚠️ SLOW FRAME #\(frameCount): interval=\(String(format: "%.1f", frameInterval))ms consecutive=\(consecutiveSlowFrames)")
                     }
                 } else {
                     if consecutiveSlowFrames > 0 {
@@ -527,7 +537,7 @@ struct ImmersiveDomeView: View {
                     playbackEpoch = nil
                     footage.stop()
                 }
-                effectTime = DebugLaunchOptions.effectTime(
+                let effectTime = DebugLaunchOptions.effectTime(
                     playbackEpoch.map { Float(frameStartTime.timeIntervalSince($0)) } ?? 0)
 
                 // Tag this frame's command buffers (eyes) for GPU timing
@@ -545,25 +555,15 @@ struct ImmersiveDomeView: View {
                 let (rawImage, metadata, newGeneration) = visualEngine.imageBuffer.loadCurrentWithMetadata()
                 if let staged = visualEngine.stagedImage, stagedRaw !== staged.cgImage {
                     stagedRaw = staged.cgImage
-                    stagedSlot = PreparedImageSlot()
-                    let slot = stagedSlot
-                    let uploader = effectsRenderer?.textureUploader
-                    Task.detached(priority: .userInitiated) {
-                        slot.store(Self.prepareImage(staged.cgImage, metadata: staged.metadata,
-                                                     generation: newGeneration &+ 1, uploader: uploader))
-                    }
+                    stagedSlot = prepareForDisplay(staged.cgImage, metadata: staged.metadata, generation: newGeneration &+ 1)
                 }
                 if let rawImage, newGeneration != transitionState.lastGeneration, newGeneration != preparingGeneration {
                     preparingGeneration = newGeneration
-                    if stagedRaw === rawImage, let ready = stagedSlot.take(), ready.generation == newGeneration {
-                        preparedSlot.store(ready)
+                    if stagedRaw === rawImage, stagedSlot.generation == newGeneration {
+                        preparedSlot = stagedSlot
                         stagedRaw = nil
                     } else {
-                        let uploader = effectsRenderer?.textureUploader
-                        let slot = preparedSlot
-                        Task.detached(priority: .userInitiated) {
-                            slot.store(Self.prepareImage(rawImage, metadata: metadata, generation: newGeneration, uploader: uploader))
-                        }
+                        preparedSlot = prepareForDisplay(rawImage, metadata: metadata, generation: newGeneration)
                     }
                 }
                 // A result for an older generation (superseded while preparing) is dropped.
@@ -573,7 +573,6 @@ struct ImmersiveDomeView: View {
                     let framedImage = prepared.framed
                     let generation = prepared.generation
                     let metadata = prepared.metadata
-                    let depthOverride = prepared.depthOverride
                     if let texture = prepared.texture { effectsRenderer?.registerPreparedTexture(texture, for: framedImage) }
                     let wasFirst = transitionState.currentImage == nil
                     transitionState.lastGeneration = generation
@@ -593,28 +592,15 @@ struct ImmersiveDomeView: View {
                     // Visuals -> music at the crossfade start.
                     postVisualMood(metadata: metadata, image: framedImage, imageChanged: !wasFirst,
                                    musicDuration: transitionState.spec.musicDuration)
+                }
 
-                    // Trigger depth map generation in background (~31ms, images change every ~30s)
-                    if let depthGen = depthGenerator, !DebugLaunchOptions.forceStereoFlatDepth {
-                        let imageBuffer = visualEngine.imageBuffer
-                        Task.detached {
-                            do {
-                                let depth: CGImage
-                                if let d = depthOverride { depth = d } else { depth = try await depthGen.generateDepth(from: framedImage) }
-                                let field = Self.buildRelief(depth, generation: generation)
-                                await MainActor.run {
-                                    imageBuffer.storeDepth(depth)
-                                    self.effectsRenderer?.updateDepthTexture(from: depth)
-                                    self.lastDepthGeneration = imageBuffer.loadDepthWithGeneration().generation
-                                    self.relief.depthArrived(field.q, generation: generation, now: Date().timeIntervalSince1970)
-                                }
-                            } catch {
-                                await MainActor.run {
-                                    LMLog.visual.error("🗺️ Depth generation failed: \(error.localizedDescription)")
-                                }
-                            }
-                        }
+                if preparedSlot.generation == transitionState.lastGeneration, let ready = preparedSlot.takeDepth() {
+                    visualEngine.imageBuffer.storeDepth(ready.image)
+                    if let texture = ready.texture {
+                        effectsRenderer?.depthTexture = texture
+                        lastDepthGeneration = visualEngine.imageBuffer.loadDepthWithGeneration().generation
                     }
+                    relief.depthArrived(ready.field.q, generation: preparedSlot.generation, now: frameStartTime.timeIntervalSince1970)
                 }
 
                 // Poll depth buffer and upload to renderer when new
@@ -748,13 +734,14 @@ struct ImmersiveDomeView: View {
                 let renderStartTime = Date()
                 let previousImage = transitionState.isTransitioning ? transitionState.previousImage : nil
 
+                let submitted: Bool
                 if let stereoBuilder = stereoMaterialBuilder,
                    let leftQueue = stereoBuilder.leftDrawableQueue,
                    let rightQueue = stereoBuilder.rightDrawableQueue {
                     // DEBUG A/B: left/right drawable queues with texture-space depth parallax
                     let stereoOsc = SmoothOscillator.value(at: effectTime)
                     let stereoOffset = 0.003 + 0.007 * stereoOsc  // Subtle stereo separation
-                    _ = renderer.renderStereoAndPresent(
+                    submitted = renderer.renderStereoAndPresent(
                         sourceImage: cgImage,
                         previousImage: previousImage,
                         uniforms: uniforms,
@@ -762,9 +749,13 @@ struct ImmersiveDomeView: View {
                         rightQueue: rightQueue,
                         stereoOffset: stereoOffset
                     )
+                } else if let monoDrawable {
+                    submitted = renderer.renderAndPresent(drawable: monoDrawable, sourceImage: cgImage,
+                                                          previousImage: previousImage, uniforms: uniforms)
                 } else {
-                    _ = renderer.renderAndPresent(sourceImage: cgImage, previousImage: previousImage, uniforms: uniforms)
+                    submitted = false
                 }
+                if submitted { submittedFrames += 1 }
                 let renderTime = Date().timeIntervalSince(renderStartTime) * 1000
                 totalRenderTime += renderTime
                 maxRenderTime = max(maxRenderTime, renderTime)
@@ -773,7 +764,7 @@ struct ImmersiveDomeView: View {
                 let timeSinceStats = Date().timeIntervalSince(lastStatsTime)
                 if timeSinceStats >= perfLogInterval {
                     let avgRenderTime = totalRenderTime / Double(frameCount)
-                    let actualFPS = Double(frameCount) / timeSinceStats
+                    let actualFPS = Double(submittedFrames) / timeSinceStats
                     let fpsPercent = (actualFPS / 60.0) * 100
 
                     let hasDepth = effectsRenderer?.depthTexture != nil
@@ -783,7 +774,7 @@ struct ImmersiveDomeView: View {
                     let intervalP95 = GPUTimingStats.percentile(frameIntervals, 0.95)
                     let gpuFragment = effectsRenderer?.gpuStats.drain().logFragment ?? "gpu n=0"
 
-                    let perfLine = "📊 visionOS PERF: fps=\(String(format: "%.1f", actualFPS)) (\(String(format: "%.0f", fpsPercent))% of 60) | render avg=\(String(format: "%.1f", avgRenderTime))ms max=\(String(format: "%.1f", maxRenderTime))ms | dropped=\(droppedFrames) | transition=\(String(format: "%.0f", transitionState.transitionProgress * 100))% | interval p95=\(String(format: "%.2f", intervalP95))ms | \(gpuFragment)"
+                    let perfLine = "📊 visionOS PERF: fps=\(String(format: "%.1f", actualFPS)) (\(String(format: "%.0f", fpsPercent))% of 60) | render avg=\(String(format: "%.1f", avgRenderTime))ms max=\(String(format: "%.1f", maxRenderTime))ms | dropped=\(droppedFrames) unsubmitted=\(frameCount - submittedFrames) | transition=\(String(format: "%.0f", transitionState.transitionProgress * 100))% | interval p95=\(String(format: "%.2f", intervalP95))ms worst=\(String(format: "%.2f", frameIntervals.last ?? 0))ms | \(gpuFragment)"
                     LMLog.visual.info("\(perfLine, privacy: .public)")
                     if lastVideoMix > 0 {
                         LMLog.visual.info("📼 FOOTAGE mix=\(String(format: "%.3f", lastVideoMix), privacy: .public) A=\(String(format: "%.3f", lastVideoMixes.0), privacy: .public) \(footageFrame.state.a?.resolvedRecipe.name ?? "-", privacy: .public) B=\(String(format: "%.3f", lastVideoMixes.1), privacy: .public) \(footageFrame.state.b?.resolvedRecipe.name ?? "-", privacy: .public)")
@@ -791,6 +782,7 @@ struct ImmersiveDomeView: View {
                     LMLog.visual.info("🔮 3D STATUS: depth=\(hasDepth) textureStereo=\(hasStereo) gen=\(transitionState.lastGeneration) mesh avg=\(String(format: "%.3f", totalMeshTime / Double(max(frameCount, 1))), privacy: .public)ms relief k=\(String(format: "%.3f", lastReliefK), privacy: .public) breath=\(String(format: "%.3f", lastBreathing), privacy: .public)m w=\(String(format: "%.2f", lastReliefW), privacy: .public) fields=\(relief.previous != nil ? 1 : 0)+\(relief.current != nil ? 1 : 0)")
 
                     frameCount = 0
+                    submittedFrames = 0
                     totalRenderTime = 0
                     totalMeshTime = 0
                     maxRenderTime = 0
@@ -807,13 +799,11 @@ struct ImmersiveDomeView: View {
                 // Without this, we render at 175fps but compositor only consumes at 90Hz,
                 // causing nextDrawable() to block 15-27ms waiting for free textures
                 let targetFrameTimeNs: UInt64 = 11_111_111  // ~90fps (11.1ms)
-                let frameElapsedNs = UInt64(Date().timeIntervalSince(frameStartTime) * 1_000_000_000)
+                let frameElapsedNs = UInt64((CACurrentMediaTime() - iterationStart) * 1_000_000_000)
                 if frameElapsedNs < targetFrameTimeNs {
                     let sleepTime = targetFrameTimeNs - frameElapsedNs
                     try? await Task.sleep(nanoseconds: sleepTime)
                 }
-
-                lastYieldTime = Date()  // Track when yield returns for next frame's timing
             }
         }
     }
@@ -905,6 +895,29 @@ struct ImmersiveDomeView: View {
             load(item.image).map { ($0, item.depth.flatMap(load)) }
         }
     }()
+
+    /// Stage colour first. Inference and mesh preparation can use the remaining
+    /// lead time before the fill. A late depth result only belongs to its own slot.
+    private func prepareForDisplay(_ raw: CGImage, metadata: ImageMetadata?, generation: UInt64) -> PreparedImageSlot {
+        let slot = PreparedImageSlot(generation: generation)
+        let uploader = effectsRenderer?.textureUploader
+        let generator = DebugLaunchOptions.forceStereoFlatDepth ? nil : depthGenerator
+        Task.detached(priority: .userInitiated) {
+            let image = Self.prepareImage(raw, metadata: metadata, generation: generation, uploader: uploader)
+            slot.store(image)
+            guard let generator else { return }
+            do {
+                let depth: CGImage
+                if let fixture = image.depthOverride { depth = fixture }
+                else { depth = try await generator.generateDepth(from: image.framed) }
+                slot.storeDepth(.init(image: depth, field: Self.buildRelief(depth, generation: generation),
+                                      texture: uploader?.makeDepthTexture(from: depth)))
+            } catch {
+                LMLog.visual.error("Depth generation failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+        return slot
+    }
 
     /// Off the main actor: frame the image, cache its vibrance factors, build its source texture.
     nonisolated private static func prepareImage(_ raw: CGImage, metadata: ImageMetadata?, generation: UInt64,

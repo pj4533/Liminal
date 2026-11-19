@@ -11,6 +11,7 @@
 import Foundation
 import Metal
 import CoreGraphics
+import QuartzCore
 import RealityKit
 import OSLog
 
@@ -45,7 +46,7 @@ final class OffscreenEffectsRenderer {
     private var loggedDrawableSize = false
     private var loggedDrawableSizeMismatch = false
     private var saliencyTexture: MTLTexture?
-    private(set) var depthTexture: MTLTexture?  // ML depth map (r8Unorm)
+    var depthTexture: MTLTexture?  // ML depth map (r8Unorm)
 
     private static let renderSize = 2048
     private let outputSize: Int = OffscreenEffectsRenderer.renderSize  // Output texture resolution
@@ -75,7 +76,6 @@ final class OffscreenEffectsRenderer {
 
     // MARK: - Ghost Taps
 
-    private var ghostTapBuffer: MTLBuffer?
     private let ghostTapManager = GhostTapManager()
 
     /// Music scene change: forward to the ghost tap manager (cheap compare; call every frame with
@@ -103,9 +103,9 @@ final class OffscreenEffectsRenderer {
     private var totalTextureUpdateTime: Double = 0
     private var totalGPURenderTime: Double = 0
     private var totalPresentTime: Double = 0
-    private var totalSemaphoreWaitTime: Double = 0
+    private let drawableWorker = DispatchQueue(label: "Liminal.drawable", qos: .userInitiated)
+    private var gpuBusyFrames = 0
     private var totalDrawableWaitTime: Double = 0
-    private var maxSemaphoreWait: Double = 0
     private var maxDrawableWait: Double = 0
     private var perfFrameCount: Int = 0
     private var lastPerfLogTime: Date = Date()
@@ -241,10 +241,6 @@ final class OffscreenEffectsRenderer {
             return nil
         }
         self.samplerState = sampler
-
-        // Create ghost tap buffer (8 taps * 16 bytes each)
-        let ghostTapBufferSize = GhostTapManager.maxTaps * MemoryLayout<GhostTapData>.stride
-        self.ghostTapBuffer = device.makeBuffer(length: ghostTapBufferSize, options: .storageModeShared)
 
         // 1x1 black feedback placeholder (never sampled with weight: feedbackMix is 0 when it is bound)
         let blackDescriptor = MTLTextureDescriptor.texture2DDescriptor(
@@ -533,7 +529,24 @@ final class OffscreenEffectsRenderer {
         return true
     }
 
-    // DEBUG: Bypass shader to isolate if issue is texture update or shader
+    /// RealityKit can hold all drawables while the compositor is busy. Wait on a
+    /// serial worker, before sampling this frame's image, music clock or uniforms.
+    func acquireDrawable() async -> TextureResource.Drawable? {
+        // This serial worker is the only consumer of the mono queue during playback.
+        guard let queue = drawableQueue else { return nil }
+        nonisolated(unsafe) let drawableQueue = queue
+        let started = CACurrentMediaTime()
+        let drawable: TextureResource.Drawable? = await withCheckedContinuation { continuation in
+            drawableWorker.async {
+                continuation.resume(returning: try? drawableQueue.nextDrawable())
+            }
+        }
+        let ms = (CACurrentMediaTime() - started) * 1000
+        totalDrawableWaitTime += ms
+        maxDrawableWait = max(maxDrawableWait, ms)
+        return drawable
+    }
+
     /// DEBUG -LiminalNoEffects: render the bare image (passthroughFragment) instead of effects.
     private let bypassShaderForDebug = DebugLaunchOptions.noEffects
 
@@ -543,47 +556,19 @@ final class OffscreenEffectsRenderer {
     ///   - previousImage: Optional previous image for GPU crossfade blending during transitions
     ///   - uniforms: Effect parameters (includes transitionProgress for blending)
     /// - Returns: True if rendering succeeded
-    func renderAndPresent(sourceImage: CGImage, previousImage: CGImage? = nil, uniforms: EffectsUniforms) -> Bool {
+    func renderAndPresent(drawable: TextureResource.Drawable, sourceImage: CGImage, previousImage: CGImage? = nil, uniforms: EffectsUniforms) -> Bool {
         renderCount += 1
         perfFrameCount += 1
         let shouldLog = renderCount == 1 || renderCount % 300 == 0
 
         // Track timing for each phase
-        let phaseStartTime = Date()
         var textureUpdateTime: Double = 0
         var gpuRenderTime: Double = 0
         var presentTime: Double = 0
 
-        guard let drawableQueue = drawableQueue else {
-            LMLog.visual.warning("⚠️ No drawable queue (render \(self.renderCount))")
+        guard inFlightSemaphore.wait(timeout: .now()) == .success else {
+            gpuBusyFrames += 1
             return false
-        }
-
-        // TIMING: Measure semaphore wait (blocks when 3 frames in flight)
-        let semaphoreWaitStart = Date()
-        inFlightSemaphore.wait()
-        let semaphoreWaitTime = Date().timeIntervalSince(semaphoreWaitStart) * 1000
-
-        // TIMING: Measure nextDrawable wait (blocks when compositor hasn't consumed)
-        let drawableWaitStart = Date()
-        guard let drawable = try? drawableQueue.nextDrawable() else {
-            inFlightSemaphore.signal()  // Release since we're returning early
-            if shouldLog {
-                LMLog.visual.warning("⚠️ No drawable available (render \(self.renderCount))")
-            }
-            return false
-        }
-        let drawableWaitTime = Date().timeIntervalSince(drawableWaitStart) * 1000
-
-        // Track wait times for periodic logging
-        totalSemaphoreWaitTime += semaphoreWaitTime
-        totalDrawableWaitTime += drawableWaitTime
-        maxSemaphoreWait = max(maxSemaphoreWait, semaphoreWaitTime)
-        maxDrawableWait = max(maxDrawableWait, drawableWaitTime)
-
-        // Log blocking waits (these are the likely stutter culprits)
-        if semaphoreWaitTime > 5.0 || drawableWaitTime > 5.0 {
-            LMLog.visual.warning("⏱️ BLOCKING WAIT #\(self.renderCount): semaphore=\(String(format: "%.1f", semaphoreWaitTime))ms drawable=\(String(format: "%.1f", drawableWaitTime))ms")
         }
 
         if shouldLog {
@@ -668,21 +653,14 @@ final class OffscreenEffectsRenderer {
         // TIMING: GPU render phase
         let gpuRenderStart = Date()
 
-        guard let sourceTexture = sourceTexture,
-              let ghostTapBuffer = ghostTapBuffer else {
+        guard let sourceTexture else {
             inFlightSemaphore.signal()
-            LMLog.visual.warning("⚠️ Source texture or ghost tap buffer is nil")
+            LMLog.visual.warning("⚠️ Source texture is nil")
             return false
         }
 
         // Update ghost taps and get active count for optimized shader loop
         let ghostTapResult = ghostTapManager.updateWithCount(currentTime: uniforms.time)
-
-        // Copy ghost tap data to GPU buffer
-        ghostTapBuffer.contents().copyMemory(
-            from: ghostTapResult.data,
-            byteCount: GhostTapManager.maxTaps * MemoryLayout<GhostTapData>.stride
-        )
 
         guard let commandBuffer = commandQueue.makeCommandBuffer() else {
             inFlightSemaphore.signal()
@@ -712,7 +690,7 @@ final class OffscreenEffectsRenderer {
         encoder.setFragmentBytes(&mutableUniforms, length: MemoryLayout<EffectsUniforms>.size, index: 0)
 
         // Set ghost tap buffer
-        encoder.setFragmentBuffer(ghostTapBuffer, offset: 0, index: 1)
+        encoder.setFragmentBytes(ghostTapResult.data, length: ghostTapResult.data.count * MemoryLayout<GhostTapData>.stride, index: 1)
 
         // Set textures
         encoder.setFragmentTexture(sourceTexture, index: 0)
@@ -759,22 +737,20 @@ final class OffscreenEffectsRenderer {
             let avgTextureUpdate = totalTextureUpdateTime / Double(perfFrameCount)
             let avgGPURender = totalGPURenderTime / Double(perfFrameCount)
             let avgPresent = totalPresentTime / Double(perfFrameCount)
-            let avgSemaphoreWait = totalSemaphoreWaitTime / Double(perfFrameCount)
             let avgDrawableWait = totalDrawableWaitTime / Double(perfFrameCount)
             let totalAvg = avgTextureUpdate + avgGPURender + avgPresent
 
             LMLog.visual.info("🔧 RENDERER TIMING: texture=\(String(format: "%.2f", avgTextureUpdate))ms | gpu=\(String(format: "%.2f", avgGPURender))ms | present=\(String(format: "%.2f", avgPresent))ms | TOTAL=\(String(format: "%.2f", totalAvg))ms/frame | syncUploads=\(self.syncUploadCount)")
 
             // Log wait times separately - these are the stutter culprits
-            LMLog.visual.info("⏱️ WAIT TIMES: semaphore avg=\(String(format: "%.2f", avgSemaphoreWait))ms max=\(String(format: "%.1f", self.maxSemaphoreWait))ms | drawable avg=\(String(format: "%.2f", avgDrawableWait))ms max=\(String(format: "%.1f", self.maxDrawableWait))ms")
+            LMLog.visual.info("⏱️ WAIT TIMES: GPU busy skips=\(self.gpuBusyFrames) | drawable avg=\(avgDrawableWait, format: .fixed(precision: 2))ms max=\(self.maxDrawableWait, format: .fixed(precision: 1))ms")
 
             // Reset perf counters
             totalTextureUpdateTime = 0
             totalGPURenderTime = 0
             totalPresentTime = 0
-            totalSemaphoreWaitTime = 0
+            gpuBusyFrames = 0
             totalDrawableWaitTime = 0
-            maxSemaphoreWait = 0
             maxDrawableWait = 0
             perfFrameCount = 0
             lastPerfLogTime = Date()
@@ -815,15 +791,7 @@ final class OffscreenEffectsRenderer {
 
         // Update ghost taps
         let ghostTapResult = ghostTapManager.updateWithCount(currentTime: uniforms.time)
-        if let ghostTapBuffer = ghostTapBuffer {
-            ghostTapBuffer.contents().copyMemory(
-                from: ghostTapResult.data,
-                byteCount: GhostTapManager.maxTaps * MemoryLayout<GhostTapData>.stride
-            )
-        }
-
-        guard let sourceTexture = sourceTexture,
-              let ghostTapBuffer = ghostTapBuffer else {
+        guard let sourceTexture else {
             return false
         }
 
@@ -846,7 +814,7 @@ final class OffscreenEffectsRenderer {
                 left: leftDrawable,
                 right: rightDrawable,
                 sourceTexture: sourceTexture,
-                ghostTapBuffer: ghostTapBuffer,
+                ghostTaps: ghostTapResult.data,
                 uniforms: uniforms,
                 ghostTapCount: ghostTapResult.activeCount,
                 stereoOffset: stereoOffset
@@ -863,7 +831,7 @@ final class OffscreenEffectsRenderer {
         let leftOk = leftDrawable.map { renderEyeToDrawable(
             drawable: $0,
             sourceTexture: sourceTexture,
-            ghostTapBuffer: ghostTapBuffer,
+            ghostTaps: ghostTapResult.data,
             uniforms: uniforms,
             ghostTapCount: ghostTapResult.activeCount,
             eyeOffset: -stereoOffset,  // Left eye shifts left
@@ -873,7 +841,7 @@ final class OffscreenEffectsRenderer {
         let rightOk = rightDrawable.map { renderEyeToDrawable(
             drawable: $0,
             sourceTexture: sourceTexture,
-            ghostTapBuffer: ghostTapBuffer,
+            ghostTaps: ghostTapResult.data,
             uniforms: uniforms,
             ghostTapCount: ghostTapResult.activeCount,
             eyeOffset: stereoOffset,  // Right eye shifts right
@@ -906,7 +874,7 @@ final class OffscreenEffectsRenderer {
         left: TextureResource.Drawable,
         right: TextureResource.Drawable,
         sourceTexture: MTLTexture,
-        ghostTapBuffer: MTLBuffer,
+        ghostTaps: [GhostTapData],
         uniforms: EffectsUniforms,
         ghostTapCount: Int,
         stereoOffset: Float
@@ -941,7 +909,7 @@ final class OffscreenEffectsRenderer {
         lastOutput = [leftTarget, rightTarget]
         encoder.setFragmentBytes(&mutableUniforms, length: MemoryLayout<EffectsUniforms>.size, index: 0)
 
-        encoder.setFragmentBuffer(ghostTapBuffer, offset: 0, index: 1)
+        encoder.setFragmentBytes(ghostTaps, length: ghostTaps.count * MemoryLayout<GhostTapData>.stride, index: 1)
         encoder.setFragmentTexture(sourceTexture, index: 0)
         encoder.setFragmentTexture(saliencyTexture, index: 2)
         encoder.setFragmentTexture(previousTexture ?? sourceTexture, index: 3)
@@ -966,7 +934,7 @@ final class OffscreenEffectsRenderer {
     private func renderEyeToDrawable(
         drawable: TextureResource.Drawable,
         sourceTexture: MTLTexture,
-        ghostTapBuffer: MTLBuffer,
+        ghostTaps: [GhostTapData],
         uniforms: EffectsUniforms,
         ghostTapCount: Int,
         eyeOffset: Float,
@@ -997,7 +965,7 @@ final class OffscreenEffectsRenderer {
         lastOutput[eye] = target
         encoder.setFragmentBytes(&mutableUniforms, length: MemoryLayout<EffectsUniforms>.size, index: 0)
 
-        encoder.setFragmentBuffer(ghostTapBuffer, offset: 0, index: 1)
+        encoder.setFragmentBytes(ghostTaps, length: ghostTaps.count * MemoryLayout<GhostTapData>.stride, index: 1)
         encoder.setFragmentTexture(sourceTexture, index: 0)
         encoder.setFragmentTexture(saliencyTexture, index: 2)
         encoder.setFragmentTexture(previousTexture ?? sourceTexture, index: 3)
@@ -1173,66 +1141,7 @@ final class OffscreenEffectsRenderer {
     /// Update the depth texture from a depth map CGImage.
     /// The depth map is grayscale (0=far, 1=near).
     func updateDepthTexture(from cgImage: CGImage) {
-        let width = cgImage.width
-        let height = cgImage.height
-
-        // Create or recreate texture if needed
-        if depthTexture == nil ||
-           depthTexture?.width != width ||
-           depthTexture?.height != height {
-
-            let descriptor = MTLTextureDescriptor.texture2DDescriptor(
-                pixelFormat: .r8Unorm,
-                width: width,
-                height: height,
-                mipmapped: false
-            )
-            descriptor.usage = .shaderRead
-            descriptor.storageMode = .shared
-
-            depthTexture = device.makeTexture(descriptor: descriptor)
-            LMLog.visual.info("🗺️ Created depth texture \(width)x\(height)")
-        }
-
-        guard let texture = depthTexture else { return }
-
-        // Convert to single-channel grayscale
-        let bytesPerRow = width
-        var pixelData = [UInt8](repeating: 0, count: width * height)
-
-        guard let context = CGContext(
-            data: &pixelData,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: bytesPerRow,
-            space: CGColorSpaceCreateDeviceGray(),
-            bitmapInfo: CGImageAlphaInfo.none.rawValue
-        ) else { return }
-
-        // No flip: row 0 = top, same as the source texture, so depth aligns with colour.
-        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
-
-        texture.replace(
-            region: MTLRegionMake2D(0, 0, width, height),
-            mipmapLevel: 0,
-            withBytes: pixelData,
-            bytesPerRow: bytesPerRow
-        )
-        optimizeForGPUAccess(texture, label: "Optimize depth texture")
-    }
-
-    /// Re-layout a CPU-written shared texture for faster GPU sampling (lossless; may enable
-    /// framebuffer-style compression on Apple GPUs). Runs once per image upload, not per frame.
-    /// Committed on `commandQueue` before the frame's render command buffer is created, so
-    /// Metal's in-order queue execution guarantees the render pass sees the optimized texture.
-    private func optimizeForGPUAccess(_ texture: MTLTexture, label: String) {
-        guard let commandBuffer = commandQueue.makeCommandBuffer(),
-              let blit = commandBuffer.makeBlitCommandEncoder() else { return }
-        commandBuffer.label = label
-        blit.optimizeContentsForGPUAccess(texture: texture)
-        blit.endEncoding()
-        commandBuffer.commit()
+        if let texture = textureUploader.makeDepthTexture(from: cgImage) { depthTexture = texture }
     }
 }
 

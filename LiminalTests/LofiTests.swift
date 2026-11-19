@@ -196,7 +196,7 @@ struct LofiTests {
         #expect(requests.map(\.drumStartBeat) == [0, 16, 32, 48, 0, 16, 32, 48, 0])
     }
 
-    @Test func takePreservesEverySampleIncludingTheThreeInteriorJoins() throws {
+    @Test func independentTakesMeetAtZeroAndPreserveTheInteriorPerformance() throws {
         let clock = LofiClock(tempo: 80, sampleRate: 4_000)
         let frames = clock.frameCount * 4
         let ramp = (0..<frames).map { Float($0 % 113) * 0.002 + 0.19 }
@@ -208,7 +208,13 @@ struct LofiTests {
                                    clock: clock)
         #expect(take.buffer.frameLength == frames)
         let channels = try #require(take.buffer.floatChannelData)
-        for frame in [0, frames - 1] + (1...3).flatMap({
+        for channel in [channels[0], channels[1]] {
+            #expect(channel[0] == 0)
+            #expect(channel[frames - 1] == 0)
+        }
+        #expect(channels[0][1] > 0 && channels[0][1] < ramp[1] * 0.5)
+        #expect(channels[0][frames - 2] > 0 && channels[0][frames - 2] < ramp[frames - 2] * 0.5)
+        for frame in [4, frames - 17] + (1...3).flatMap({
             let boundary = clock.frameCount * $0
             return [boundary - 1, boundary, boundary + 1]
         }) {

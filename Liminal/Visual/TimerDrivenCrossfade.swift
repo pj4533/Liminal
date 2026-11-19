@@ -27,11 +27,10 @@ final class TimerDrivenCrossfade: ObservableObject {
     /// The previous image (what we're transitioning FROM) - for GPU shader blending
     @Published private(set) var previousFrame: PlatformImage?
     /// Saliency map for current target image
-    @Published private(set) var currentSaliencyMap: PlatformImage?
+    @Published private(set) var currentSaliencyMap: CGImage?
     @Published private(set) var isMorphing = false
     /// Transition progress 0-1, passed to GPU shader for crossfade blending
     @Published private(set) var transitionProgress: Double = 0
-    @Published private(set) var poolSize = 0
 
     // MARK: - Private State
 
@@ -40,9 +39,9 @@ final class TimerDrivenCrossfade: ObservableObject {
     private var crossfadeStartTime: Date?
     private(set) var beatReveal: LofiImageReveal?
     private var displayLink: Timer?
-
-    private var imageHistory: [PlatformImage] = []
-    private let maxHistorySize = 10
+    private var saliencyTarget: PlatformImage?
+    private var preparedSaliency: CGImage?
+    private var saliencyTask: Task<Void, Never>?
 
     // MARK: - Public API
 
@@ -60,12 +59,8 @@ final class TimerDrivenCrossfade: ObservableObject {
     func setInitialImage(_ image: PlatformImage) {
         LMLog.visual.info("Setting initial image")
         currentFrame = image
-        addToHistory(image)
-        poolSize = imageHistory.count
 
-        Task {
-            await generateSaliencyMap(for: image)
-        }
+        applySaliency(for: image)
     }
 
     /// - Returns: true when a crossfade started (false for the first image and for the same image).
@@ -74,13 +69,9 @@ final class TimerDrivenCrossfade: ObservableObject {
     func transitionTo(_ newImage: PlatformImage, reveal: LofiImageReveal? = nil, duration: () -> Double = { VisualMoodBuilder.crossfadeDuration }) -> Bool {
         guard let current = currentFrame else {
             currentFrame = newImage
-            addToHistory(newImage)
-            poolSize = imageHistory.count
             LMLog.visual.info("First image displayed (no transition needed)")
 
-            Task {
-                await generateSaliencyMap(for: newImage)
-            }
+            applySaliency(for: newImage)
             return false
         }
 
@@ -99,15 +90,11 @@ final class TimerDrivenCrossfade: ObservableObject {
         }
 
         toImage = newImage
-        addToHistory(newImage)
-        poolSize = imageHistory.count
         crossfadeDuration = max(duration(), 0.1)
         beatReveal = reveal
         startCrossfade()
 
-        Task {
-            await generateSaliencyMap(for: newImage)
-        }
+        applySaliency(for: newImage)
         return true
     }
 
@@ -126,23 +113,18 @@ final class TimerDrivenCrossfade: ObservableObject {
         currentSaliencyMap = nil
         isMorphing = false
         transitionProgress = 0
-        poolSize = 0
         fromImage = nil
         toImage = nil
         crossfadeStartTime = nil
         beatReveal = nil
-        imageHistory.removeAll()
+        saliencyTask?.cancel()
+        saliencyTask = nil
+        saliencyTarget = nil
+        preparedSaliency = nil
         LMLog.visual.info("TimerDrivenCrossfade reset")
     }
 
     // MARK: - Private
-
-    private func addToHistory(_ image: PlatformImage) {
-        imageHistory.append(image)
-        while imageHistory.count > maxHistorySize {
-            imageHistory.removeFirst()
-        }
-    }
 
     private func startDisplayLink() {
         displayLink?.invalidate()
@@ -201,17 +183,26 @@ final class TimerDrivenCrossfade: ObservableObject {
 
     // MARK: - Saliency Analysis
 
-    private func generateSaliencyMap(for image: PlatformImage) async {
-        let startTime = Date()
+    func prepareSaliency(for image: PlatformImage, pixels: CGImage) {
+        guard saliencyTarget !== image else { return }
+        saliencyTask?.cancel()
+        saliencyTarget = image
+        preparedSaliency = nil
+        saliencyTask = Task { [weak self] in
+            guard !Task.isCancelled else { return }
+            let map = await DepthAnalyzer.shared.analyzeDepth(from: pixels)
+            guard !Task.isCancelled, let self, saliencyTarget === image else { return }
+            preparedSaliency = map
+            if currentFrame === image { currentSaliencyMap = map }
+        }
+    }
 
-        if let saliencyMap = await DepthAnalyzer.shared.analyzeDepth(from: image) {
-            await MainActor.run {
-                self.currentSaliencyMap = saliencyMap
-            }
-            let elapsed = Date().timeIntervalSince(startTime) * 1000
-            LMLog.visual.info("Saliency map generated in \(String(format: "%.0f", elapsed))ms")
+    private func applySaliency(for image: PlatformImage) {
+        if saliencyTarget === image {
+            currentSaliencyMap = preparedSaliency
         } else {
-            LMLog.visual.warning("Failed to generate saliency map")
+            currentSaliencyMap = nil
+            if let pixels = image.cgImageRepresentation { prepareSaliency(for: image, pixels: pixels) }
         }
     }
 }

@@ -158,8 +158,8 @@ half3 colorBlended = shiftedRgb * (originalLuma / shiftedLuma);
 ### Pipeline
 
 ```
-Image → DepthAnalyzer.analyzeDepth() → Saliency Map (grayscale NSImage)
-    → MorphPlayer.currentSaliencyMap → EffectsMetalView → MTLTexture
+Staged CGImage → DepthAnalyzer → native-resolution saliency map
+    → TimerDrivenCrossfade.currentSaliencyMap → EffectsMetalView → MTLTexture
     → EffectsRenderer.metal samples at each pixel
 ```
 
@@ -269,10 +269,9 @@ half3 trailsBlended = mix(currentColor, feedback.rgb, effectiveAmount);
 | Property | Type | Description |
 |----------|------|-------------|
 | `currentFrame` | NSImage? | Currently displayed frame |
-| `currentSaliencyMap` | NSImage? | Saliency map for current target |
+| `currentSaliencyMap` | CGImage? | Saliency map for current target |
 | `isMorphing` | Bool | True during transition |
 | `transitionProgress` | Double | 0-1, for effects to react |
-| `poolSize` | Int | Images in history |
 
 ### Easing Function
 ```swift

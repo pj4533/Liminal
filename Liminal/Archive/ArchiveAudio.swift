@@ -8,6 +8,8 @@
 //
 
 import AVFoundation
+import AudioToolbox
+import OSLog
 import Foundation
 
 /// When a piece's sound plays (decision A27): it comes in a little after the piece starts to fade in and
@@ -201,9 +203,27 @@ nonisolated enum ArchiveAudioDecoder {
     static func decode(url: URL, sourceStart: Double, sourceLength: Double, rate: Float,
                        format: AVAudioFormat) async throws -> AVAudioPCMBuffer {
         let asset = AVURLAsset(url: url)
-        guard let track = try await asset.loadTracks(withMediaType: .audio).first else { throw Failure.noAudioTrack }
+        let tracks = try await asset.loadTracks(withMediaType: .audio)
+        guard let track = tracks.first else { throw Failure.noAudioTrack }
         let sr = format.sampleRate
-        let mono = try read(asset: asset, track: track, start: sourceStart, length: sourceLength, sampleRate: sr)
+        let mono: [Float]
+        // The local-file decoder uses an AudioConverter. AVAssetReader's PCM output
+        // starts and stops an AudioQueue output client even for an offline AAC read.
+        let segments = try? await track.load(.segments)
+        let media = segments?.filter { !$0.isEmpty } ?? []
+        if tracks.count == 1, let segment = media.first, media.count == 1,
+           segment.timeMapping.source.duration == segment.timeMapping.target.duration,
+           sourceStart >= segment.timeMapping.target.start.seconds,
+           sourceStart + sourceLength <= CMTimeRangeGetEnd(segment.timeMapping.target).seconds,
+           let samples = try? readFile(url, start: sourceStart - segment.timeMapping.target.start.seconds,
+                                       length: sourceLength, rate: sr) {
+            mono = samples
+            LMLog.audio.debug("Film PCM read from local file: \(samples.count) frames")
+        } else {
+            try Task.checkCancellation()
+            LMLog.audio.info("Film PCM using track-timeline decoder")
+            mono = try read(asset: asset, track: track, start: sourceStart, length: sourceLength, sampleRate: sr)
+        }
         try Task.checkCancellation()
         guard let y = ArchiveAudioMath.prepare(mono, sampleRate: sr, rate: rate) else { throw Failure.silent }
         guard let buf = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(y.count)),
@@ -214,6 +234,45 @@ nonisolated enum ArchiveAudioDecoder {
             for c in 0..<channels { ch[c].update(from: src.baseAddress!, count: y.count) }
         }
         return buf
+    }
+
+    /// Seek in source frames. Read in playback-rate frames so the converter retains
+    /// its resampling state across blocks, including the final partial block.
+    static func readFile(_ url: URL, start: Double, length: Double, rate: Double) throws -> [Float] {
+        var handle: ExtAudioFileRef?
+        func check(_ status: OSStatus) throws {
+            guard status == noErr else { throw Failure.readFailed("ExtAudioFile status \(status)") }
+        }
+        try check(ExtAudioFileOpenURL(url as CFURL, &handle))
+        guard let file = handle else { throw Failure.noBuffer }
+        defer { ExtAudioFileDispose(file) }
+        var source = AudioStreamBasicDescription()
+        var size = UInt32(MemoryLayout.size(ofValue: source))
+        try check(ExtAudioFileGetProperty(file, kExtAudioFileProperty_FileDataFormat, &size, &source))
+        guard let mono = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 1),
+              start.isFinite, start >= 0, start * source.mSampleRate < Double(Int64.max),
+              length.isFinite, length > 0, length * rate < Double(UInt32.max) else { throw Failure.noBuffer }
+        try check(ExtAudioFileSetProperty(file, kExtAudioFileProperty_ClientDataFormat, size, mono.streamDescription))
+        try check(ExtAudioFileSeek(file, Int64((start * source.mSampleRate).rounded())))
+        let capacity = Int((length * rate).rounded())
+        var samples = [Float](repeating: 0, count: capacity)
+        let count = try samples.withUnsafeMutableBufferPointer { output -> Int in
+            guard let base = output.baseAddress else { return 0 }
+            var position = 0
+            while position < capacity {
+                try Task.checkCancellation()
+                var frames = UInt32(min(8192, capacity - position))
+                var list = AudioBufferList(mNumberBuffers: 1, mBuffers: AudioBuffer(
+                    mNumberChannels: 1, mDataByteSize: frames * 4, mData: base + position))
+                try check(ExtAudioFileRead(file, &frames, &list))
+                if frames == 0 { break }
+                position += Int(frames)
+            }
+            return position
+        }
+        guard count > 0 else { throw Failure.readFailed("empty audio segment") }
+        samples.removeLast(capacity - count)
+        return samples
     }
 
     /// Mono float samples at `sampleRate` (AVAssetReader downmixes and resamples).

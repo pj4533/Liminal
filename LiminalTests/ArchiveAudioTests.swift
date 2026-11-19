@@ -85,6 +85,30 @@ struct ArchiveAudioCueTests {
 }
 
 struct ArchiveAudioMathTests {
+    @Test func fileDecoderSeeksInSourceFramesAndStopsAtEOF() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".caf")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let rate = 24_000.0
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: rate, channels: 2))
+        let pcm = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 36_000))
+        pcm.frameLength = pcm.frameCapacity
+        let ch = try #require(pcm.floatChannelData)
+        for i in 0..<Int(pcm.frameLength) {
+            // An isolated pulse after a known seek on both channels.
+            ch[0][i] = i == 30_000 ? 0.4 : 0
+            ch[1][i] = ch[0][i]
+        }
+        do {
+            let file = try AVAudioFile(forWriting: url, settings: format.settings)
+            try file.write(from: pcm)
+        }
+        let samples = try ArchiveAudioDecoder.readFile(url, start: 1, length: 0.75, rate: 48_000)
+        #expect(abs(samples.count - 24_000) <= 2)
+        let peak = try #require(samples.indices.max { abs(samples[$0]) < abs(samples[$1]) })
+        #expect(abs(peak - 12_000) <= 2)
+        #expect(samples[peak] > 0.1)
+    }
+
 
     @Test func resampleSlowsByTheRate() {
         let x = (0..<1000).map { Float($0) }

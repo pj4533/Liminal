@@ -54,6 +54,8 @@ final class LofiMasterBus {
             while !Task.isCancelled {
                 do { try await Task.sleep(for: .seconds(1)) } catch { return }
                 guard let self else { return }
+                let gaps = capture.takeClockGaps()
+                if gaps > 0 { LMLog.audio.warning("Master PCM tap clock discontinuities: \(gaps)") }
                 if let observation = capture.takeObservation() { applyObservation(observation) }
             }
         }
@@ -83,6 +85,10 @@ nonisolated private final class LofiMasterCapture: @unchecked Sendable {
     private var meter: LofiMasterMeter
     private let requestedFrames = Atomic<Int>(0)
     private let latest = Atomic<UInt64>(0)
+    private var nextSample: AVAudioFramePosition?
+    private let clockGaps = Atomic<Int>(0)
+
+    func takeClockGaps() -> Int { clockGaps.exchange(0, ordering: .relaxed) }
 
     init(sampleRate: Double, beatDuration: Double) {
         self.sampleRate = sampleRate
@@ -94,7 +100,13 @@ nonisolated private final class LofiMasterCapture: @unchecked Sendable {
     }
 
     var tap: AVAudioNodeTapBlock {
-        { [self] buffer, _ in
+        { [self] buffer, timestamp in
+            if timestamp.isSampleTimeValid {
+                if let nextSample, nextSample != timestamp.sampleTime {
+                    clockGaps.wrappingAdd(1, ordering: .relaxed)
+                }
+                nextSample = timestamp.sampleTime + AVAudioFramePosition(buffer.frameLength)
+            }
             guard buffer.format.sampleRate == sampleRate, buffer.format.channelCount == 2,
                   !buffer.format.isInterleaved, let channels = buffer.floatChannelData else { return }
             let left = channels[0], right = channels[1]

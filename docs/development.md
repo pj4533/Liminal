@@ -40,6 +40,8 @@ Pass as launch arguments, for example `-LiminalAutoPlay YES`. Defined in `Limina
 |------|--------|
 | `-LiminalAutoPlay YES` | Start playback at launch |
 | `-LiminalAllowGeneration YES` | Let an automated launch generate new images (off by default) |
+| `-LiminalMusicSeed <n>` | Replay a score from the unsigned seed printed in the `Music graph built` log line |
+| `-LiminalDelaySecondTake <s>` | Delay preparation of the second drum take (up to 60 s) to exercise the late-phrase fallback |
 | `-LiminalOpenDome YES` | Open the immersive space automatically (visionOS) |
 | `-LiminalShellYaw <deg>`, `-LiminalShellPitch <deg>` | Rotate the immersive scene so that direction faces the fixed simulator camera (negative angles as positive equivalents, e.g. 304) |
 | `-LiminalShellHeadOffset "x,y,z"`, `-LiminalShellDepth <0...1>` | Imitate a head offset (parallax in the simulator) / override the Depth setting |
@@ -70,7 +72,7 @@ Pass as launch arguments, for example `-LiminalAutoPlay YES`. Defined in `Limina
 
 | Script | Purpose |
 |--------|---------|
-| `perf-run.sh` | Repeatable visionOS Simulator capture: launches with the debug flags, collects fps and GPU timing, writes a JSON summary and screenshot |
+| `perf-run.sh` | Repeatable visionOS Simulator capture: launches with the debug flags, collects fps and GPU timing, writes a JSON summary and screenshot. `--lofi` also checks drum and picture changes, phrase deadlines, master-tap continuity and Core Audio overloads, and exits non-zero on a failure |
 | `shader-bench.sh` | Deterministic Mac-GPU benchmark of the visionOS eye pass, with interleaved A/B of two shader files and parity PNG comparison |
 | `sim-tap.sh X Y` | Click the visionOS Simulator at 3840x2160 screenshot pixel coordinates via Peekaboo |
 | `sim-drag.sh` | Drag in the Simulator (needed for sliders) |

@@ -5,6 +5,30 @@ import Testing
 @testable import Liminal
 
 struct LofiProductionTests {
+    #if os(macOS)
+    @Test @MainActor func routeResetRestartsPlaybackAndHonorsStop() async throws {
+        let music = GenerativeEngine(seed: 71)
+        let av = music.engine.avEngine
+        try av.enableManualRenderingMode(.offline, format: Settings.audioFormat, maximumFrameCount: 1024)
+        defer { music.shutdown() }
+        music.start()
+        try #require(av.isRunning && music.isPlaybackReady)
+
+        av.stop()
+        NotificationCenter.default.post(name: .AVAudioEngineConfigurationChange, object: av)
+        let deadline = ContinuousClock.now + .seconds(30)
+        while !av.isRunning && ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        #expect(av.isRunning && music.isPlaybackReady)
+
+        av.stop()
+        NotificationCenter.default.post(name: .AVAudioEngineConfigurationChange, object: av)
+        await Task.yield()
+        music.stop()
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(!av.isRunning && !music.isRunning && !music.isPlaybackReady)
+    }
+    #endif
+
     @Test(arguments: [8_000.0, 48_000.0])
     func actualKickDucksBassEvenWhenDrumChannelsOppose(sampleRate: Double) {
         func run(frequency: Double) -> (minimum: Float, after: Float) {

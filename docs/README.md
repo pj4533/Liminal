@@ -14,5 +14,6 @@
 | [Development reference](development.md) | Debug flags, automation scripts and contributing |
 | [Decision records](decisions/README.md) | Design rationale and review index |
 | [Agent guide](../AGENTS.md) | Repository map and working conventions |
+| [Claude Code guide](../CLAUDE.md) | Agent guide plus concurrency, audio and rendering contracts for Claude Code |
 
 Implementation plans live in [plans](plans/), and investigations in [research](research/). These include historical and proposed work; consult source and decision records for current behavior.

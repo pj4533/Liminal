@@ -895,3 +895,56 @@ Full tables and the ranked plan are in `docs/plans/performance.md` ("Round 2b").
   per change at 60 fps with 1264x843 fixtures (macOS before-numbers not measured).
 - **Cost**: up to three 16 MB textures alive briefly (was two), one 16 MB transient CPU buffer per
   image on the background task.
+
+## Lo-Fi playback at eight- and sixteen-bar changes (November 2026)
+
+Several independent drum recordings end mid-waveform, producing a step when the next recording starts. Across 25 local takes, the largest final sample magnitude was 0.221 full scale before gain staging. Each take now has a 1 ms attack and 4 ms release at its outer edges. The sample clock, take length and three interior phrase joins are preserved. The regression test checks both stereo endpoints and the original interior samples.
+
+A Mac process sample caught the main thread synchronously querying Core Audio device properties from the 40 ms music-state tick. Playback now reads the route latency once when arming its transport. When an output configuration change actually stops the engine, Liminal re-arms playback and the visual clock together. A user Stop cancels a pending restart.
+
+On visionOS the compositor can make a drawable unavailable for hundreds of milliseconds. The mono render loop now suspends while a serial worker waits for it, then reads the current music and transition state. GPU saturation can skip a submission without blocking the music scheduler. Image selection runs off the main actor. The staged picture owns its colour texture, depth inference, depth texture and relief field. Colour can land on the beat while a late depth result stays associated with its own picture. On macOS, the crossfade previously ran a synchronous Vision saliency request on the main thread and enlarged its result to the full picture size. The staged picture now starts that request on a separate actor. Metal samples the native-resolution map with the same normalized crop. Both renderers copy their small per-frame shader parameters into each command buffer.
+
+### Reproducing the playback check
+
+With a Debug simulator build, cached images and archive clips, run the immersive scene across several complete takes. The graph startup log prints the music seed for replaying a specific arrangement.
+
+```sh
+scripts/perf-run.sh --lofi --seconds 180 --warmup 25 \
+  --app "$DD/Build/Products/Debug-xrsimulator/Liminal.app" \
+  --extra '-LiminalMusicSeed 11326529587325209514 -LiminalVideoSeed 19'
+```
+
+Check the longest frame interval alongside the typical interval and frame submissions. The Lo-Fi check fails on a frame interval of 100 ms or more, a missed picture or drum change, a missed accompaniment preparation deadline, a gap in the master tap’s sample clock, or a Core Audio output overload during playback. The summary separately counts film cues, decoder output-client starts and route restarts. A quiet output device or a compositor that repeats a submitted frame requires separate observation. On macOS, correlate Liminal’s draw-midpoint log with Core Audio’s `skipping cycle due to overload` events. A process sample can itself cause a missed deadline, so keep its interval identifiable in comparisons.
+
+For a sample-exact check, render two different installed drum takes through the finished mix. The manifest gives the join in `drumTakeFrames`. In the 32-bar Draymond-to-Rochester render, both stereo frames either side of the join were zero, with a master true peak of −4.75 dBTP and integrated loudness of −17.6 LUFS.
+
+### Live playback measurements, November 18
+
+The final visionOS simulator run used the seeds above, the private drums, cached images and archive footage. During the 180-second measurement window it completed three drum changes, six picture changes and seven film cues. There were zero missed frame submissions, timed rests or master-tap discontinuities. It averaged 82.9 submitted frames/s. The median of the one-second p95 frame intervals was 12.34 ms and the longest interval was 50.15 ms. The original trace contained stalls over 100 ms, but also included process sampling and a route change that stopped its audio transport, which limits direct comparison.
+
+A 37-second stereo recording of the Mac app covered both the eight-bar and sixteen-bar cuts. Its AAC timestamps were continuous to the precision of the packet report. The mix measured −17.8 LUFS integrated and −4.7 dBTP. No interior interval fell below −60 dB for 10 ms or longer. The recording ended with 12 ms of silence.
+
+On the Mac, replaying the same 69 BPM score through four drum changes gave eight picture cuts. For each cut we took the longest frame interval in the one-second report containing the start of its transition. The median across those eight reports fell from 65.4 ms with synchronous saliency to 19.3 ms in the final build. The individual final values ranged from 17.8 to 49.3 ms. All eight transitions crossed their visual midpoint within 13 ms of the audio downbeat. The run averaged 59.7 frames/s and recorded zero master-tap clock gaps, timed rests or Core Audio overload notifications.
+
+The Mac still recorded one burst of long display intervals four seconds before a drum change. The longest was 295 ms. The preceding draw took 0.4 ms and the GPU work in that reporting window peaked at 6.4 ms. The host logged a burst of background synchronization in the same second. The cause of this isolated burst remains uncertain. Debug builds now log individual Mac frame intervals above 50 ms alongside the preceding draw duration so a later recording can distinguish time spent drawing from time between draw calls. The Mac also passes the queue’s decoded pixels directly to its background worker for cropping, colour measurements and texture preparation.
+
+### Reproducing a late take and checking audio at the output
+
+In a Debug Mac build, delay preparation of the second drum take without disturbing the audio thread. The score below runs at 69 BPM. Let it play through the first sixteen-bar change and the following four bars.
+
+```sh
+open -n "$DD/Build/Products/Debug/Liminal.app" --args \
+  -audio.musicMode lofi -LiminalAutoPlay YES -LiminalAllowGeneration NO \
+  -LiminalVideoOffline YES -LiminalMusicSeed 11326529587325209514 \
+  -LiminalDelaySecondTake 22
+```
+
+Before the scheduler change, the log reported 667,826 silent frames on bass, dry instruments and texture at phrase 4. The drums and master tap kept running through that 13.9-second hole. With the same 22-second delay and earlier interior scheduling, the new take was queued 2.55 seconds before the downbeat. With a 40-second delay, the player logged `repeated prepared stems` with 0.996 seconds of audio still queued. Phrase 5 recovered with 12.6 seconds to spare. In a 48 kHz stereo capture of the Mac app, the longest run with both channels below −80 dBFS in the six seconds around this forced repeat was one sample.
+
+The simulator also logged a temporary Core Audio output client starting and stopping at each of eight film preparations with AVAssetReader. The OS reported its first skipped output cycle one millisecond after the first client stopped. Both skipped cycles during that cue were invisible to the master tap. Cached movies with a single continuous audio segment now use ExtAudioFile for local PCM conversion. Edited intervals and unsupported files retain the track-timeline reader. Across twelve cached titles, the new and old excerpts correlated above 0.98 after alignment. A separate random-seek comparison to a continuous decode agreed within one output sample on a 44.1 kHz title converted to 48 kHz.
+
+An isolated 190-second run on the visionOS simulator crossed seven picture changes and three full drum changes. It logged six film cues, zero decoder output-client starts, zero Core Audio overloads, zero repeated phrases and zero master-tap gaps. The shortest scheduling lead was 3.979 seconds. Frame submissions averaged 79.2 fps and the longest interval was 52.74 ms. A separate run overlapping a Mac build and live playback did log two skipped output cycles and a 1.36-second visual stall. The isolated measurements apply to this workload.
+
+A second arrangement on native macOS (music seed 71345, footage seed 31, 69 BPM) produced 251.52 seconds of captured stereo PCM across four drum changes. All 12,576 audio packets had continuous timestamps. After excluding one second at each end, there were no repeated stereo frames, and the longest run below −80 dBFS on both channels was one sample. All nine picture transition midpoints landed within 13.1 ms of the downbeat. Core Audio reported zero skipped cycles.
+
+To investigate a new report, compare the queued phrase's lead time, any repeated stems, film preparation, Core Audio skipped cycles and the visual frame intervals on the same clock. A gap-free master tap can still contain silent instruments or precede a missed device deadline.
