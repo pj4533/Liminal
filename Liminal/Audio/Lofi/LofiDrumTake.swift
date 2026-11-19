@@ -10,6 +10,10 @@ nonisolated struct LofiDrumTake: @unchecked Sendable {
     let clock: LofiClock
     let name: String?
     let kicks: [Kick]
+    /// Multiband attack landmarks of the unprocessed take, sorted by attack frame.
+    let landmarks: [LofiDrumLandmark]
+    /// Sparse timing evidence built from `landmarks` on this take's clock.
+    let timing: LofiTimingField
 
     struct Kick: Equatable, Sendable {
         let frame: Int
@@ -23,6 +27,8 @@ nonisolated struct LofiDrumTake: @unchecked Sendable {
         name = recording?.entry.name
         guard let recording, let channels = buffer.floatChannelData else {
             kicks = []
+            landmarks = []
+            timing = LofiTimingField(landmarks: [], clock: clock)
             return
         }
         let sourceCount = recording.left.count
@@ -37,6 +43,9 @@ nonisolated struct LofiDrumTake: @unchecked Sendable {
         } else {
             try Self.resample(recording, into: channels, count: count, rate: rate)
         }
+        landmarks = try LofiDrumLandmarks.detect(left: channels[0], right: channels[1], count: count,
+                                                 sampleRate: clock.sampleRate)
+        timing = LofiTimingField(landmarks: landmarks, clock: clock)
         kicks = try Self.detectKicks(channels, count: count, sampleRate: clock.sampleRate)
         // Independent takes can end well away from zero. Taper just the splice,
         // leaving the drummer's downbeat position and all interior fills intact.
