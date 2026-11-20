@@ -131,9 +131,10 @@ struct LofiCompositionTests {
             .make(seed: 42, section: .returnTheme, drift: .init(seed: 42), startBeat: 48, kickBeats: [0.04, 8.24],
                   timing: field(hits), timingStartBeat: 48, beatSeconds: clock.beatDuration)
         }
-        let lead = LofiBassVoice.longAnswer.attackLead / clock.beatDuration
         let locked = timed([(0.10, 0.9), (2.5, 0.9), (8.3, 0.4)])
         let bass = locked.notes.filter { $0.part == .bass }
+        // A synthetic landmark's low-band rise is its attack; the voice's own low-band rise leads it.
+        let lead = locked.bassVoice.lowRiseLead(midi: bass[0].midi) / clock.beatDuration
         #expect(bass.count == before.count && bass.map(\.midi) == before.map(\.midi))
         #expect(abs(bass[0].beat - (Double(clock.frame(at: 0.10)) / clock.framesPerBeat - lead)) < 1e-9)
         #expect(bass[2].beat == 8)

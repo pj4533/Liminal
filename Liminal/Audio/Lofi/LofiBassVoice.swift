@@ -15,8 +15,8 @@ nonisolated enum LofiBassVoice: Int, CaseIterable, Sendable {
     case longAnswer
 
     /// Seconds from note start until the voice's envelope reaches 20 percent of its peak:
-    /// the audible attack landmark that aligns with a kick attack (`noteStart = kick - attackLead`).
-    /// Measured by `LofiRhythmTests`.
+    /// the audible attack landmark. The capture diagnostics place `attackFrame` here; placement on a
+    /// kick uses `lowRiseLead`. Measured by `LofiRhythmTests`.
     var attackLead: Double {
         switch self {
         case .classic: 0.0085
@@ -24,6 +24,30 @@ nonisolated enum LofiBassVoice: Int, CaseIterable, Sendable {
         case .pluck: 0.0014
         case .longAnswer: 0.0038
         }
+    }
+
+    /// Seconds from note start until the voice's 40-160 Hz envelope reaches half its peak, measured on
+    /// the voice itself at `midi` with `LofiDrumLandmarks.lowBandRise`, the measure used for a kick's
+    /// `lowRiseFrame`. A structural bass accent starts this far before the kick's low-band rise, so the
+    /// two bodies rise together (aligning the 20 percent point to the kick's broadband attack put the
+    /// bass 8.5 to 15 ms ahead of the kick in the audio). Rendered off the audio thread, about 20 ms
+    /// of synthesis.
+    func lowRiseLead(midi: Int, sampleRate: Double = 48_000) -> Double {
+        // A tenth of a second of silence first: the zero-phase measure sees the filter's run-up before
+        // the note, as it does for a note inside a phrase.
+        let clock = LofiClock(tempo: 60, sampleRate: sampleRate)
+        let preroll = clock.frame(at: 0.1)
+        let frames = Int(0.5 * sampleRate)
+        var left = [Float](repeating: 0, count: frames), right = left
+        let note = LofiScore.Note(part: .bass, midi: midi, beat: 0.1, length: 0.3, velocity: 0.8, send: 0)
+        left.withUnsafeMutableBufferPointer { l in
+            right.withUnsafeMutableBufferPointer { r in Self.add(note, voice: self, clock: clock, left: l, right: r) }
+        }
+        let center = preroll + Int((attackLead * sampleRate).rounded())
+        let rise = left.withUnsafeBufferPointer {
+            LofiDrumLandmarks.lowBandRise($0.baseAddress!, count: frames, around: center, sampleRate: sampleRate)
+        }
+        return Double((rise ?? center) - preroll) / sampleRate
     }
 
     static func add(_ note: LofiScore.Note, voice: LofiBassVoice, clock: LofiClock,
