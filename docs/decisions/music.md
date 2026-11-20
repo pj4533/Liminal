@@ -643,12 +643,45 @@ Made while building PASS 1 (conductor, harmony, scenes, mix bus, drone/pad/lead/
 - Evidence: the 16-bar change (C-D1) measures 0.91 to 1.00 across ref, long, fast and same (bound 0.25). C-D4 (rests) is not applicable in motif mode and C-D9 checks the loop shape instead. C-D8 (accents 50 ms from a kick) is warn-level at 0.56 to 0.70, because motif pieces land on downbeats by design.
 - Alternatives: grammar only (leaves empty bars); motif only (no fallback when speech is too thin).
 
-## D109. Reversed pickups every 2 to 4 bars are declined for now (2026-11-19)
-- What: the user's direction asked for reversed pickups every two to four bars. The renderer supports a `reversed` effect and one motif cell variant uses it, but `DialogueMotif.reversedChance` is declared and not read, so no scheduled cadence exists. Echo throws are implemented in the motif cells.
-- Why: the other direction items (a piece in every bar, glued and effected chops, intelligibility) were met first, and a reversed pickup's effect on word recognition is a listening judgment. The effect ends 30 ms before its slot (`reversedLeadSeconds`).
-- Revisit: wire `reversedChance` into the cell choice and add a cadence check beside C-D9.
+## D109. Reversed pickups by cell, not by a random cadence (2026-11-19, revised the same day)
+- What:
+  - Reversed pickups are written into the motif cells. Every turnaround has one (it was every second), and so do one split-pause variant and one sparse variant.
+  - Echo throws sit on most cell endings, with five repeats at -3, -6, -9, -13 and -17 dB over a 3.5-beat tail.
+  - `DialogueMotif.reversedChance` is still not read: the cell arrangement decides.
+- Why: the user asked for heavier chop effects ("echo more, more repeats, more occasional reverse, more reverb"). The pickup ends 30 ms before its slot (`reversedLeadSeconds`).
+- Evidence: the 72 BPM approval capture has 10 to 12 echo throws and 2 to 3 reversed pickups in 32 bars (`docs/plans/mpc-chopping-measurements.md`, "Heavier chop effects and the line refresh").
+
+## D111. A fresh line every 16-bar loop, with a crate of recent films (2026-11-19)
+- What:
+  - `DialogueMotif.resolve` ranks lines for every cue, whether or not the pad bank exists.
+  - When the loop's own film has no usable line, the loop digs a fresh, unblocked line from `DialoguePerformanceMemory.motifCrate`: the last four films heard, newest first, with their PCM, analysis and transcript.
+  - A loop that could only carry the previous line takes a fresh line from a later cue in the same loop.
+  - `scripts/analyze-lofi.py` fails any capture in which a loop's main bank is the previous loop's.
+- Why: the user's direction was "I want there to always be fresh samples to use. That's the whole point." A capture played one line for all 32 bars. Its second loop opened on "Design for Dreaming", whose narration over music has zero clarity against the music floor, so it had no bank and the loop carried.
+- Evidence:
+  - `DialogueMotifTests.aLoopWhoseFilmHasNoLineDigsAFreshLineFromTheCrate` and `aCarriedLoopTakesAFreshLineFromTheNextSpokenCue` both fail without the fix.
+  - The approval capture plays a UFO Interview line in bars 1 to 16 and an Ergot line (from the crate) in bars 17 to 32.
+- Alternatives:
+  - Trusting the transcript over the acoustic speech checks. Tried: the narration still scored zero clarity.
+  - A non-word fallback that ranks musical, non-speech segments by spectral fit. The user's idea, deferred; it is described in the measurements document.
+
+## D112. Chops tucked into the mix (2026-11-19)
+- What:
+  - **Chop chain:** high-pass 200 Hz, -4 dB at 300 Hz, -4 dB at 2.8 kHz (it was a +4.5 dB presence boost at 3.4 kHz), low-pass 4.2 kHz.
+  - **Levels:** dry chop path 0.72 to 0.28 (-8.2 dB). Echo about 5 dB under dry (feedback 0.55), with a long, dark room about 5 dB under dry.
+  - **Music duck under featured chops:** about -1 dB (it was -3 to -5).
+  - **C-B8:** 1 to 4 kHz SNR between -3 and +2.5 dB, SII proxy mean at least 0.30.
+- Why: after the calibrated clip the user said the chops were "way too loud... they need to fit into the mids and melody better. They just stick out frequency wise." The chops measured 9 to 15 dB over the melodic stems in 250 Hz to 4 kHz. Ducking the music under a vocal is the technique for putting the vocal on top, the opposite of this direction.
+- Evidence: in the approval capture the chops are within about 1 dB of the melodic stems in 250 to 500 Hz, and level with the drums in 2 to 4 kHz. The film bed is 10.2 dB under the mix in gaps (C-B9). The user approved it by ear.
 
 ## D110. Deferred human and hardware steps, and phase 4 items (2026-11-19)
 - Not done here: hand-labelled drum attacks (`scripts/drum-landmark-reference.py` stands in, with plotted spot checks); the physical Vision Pro timing, memory and thermal run; listening acceptance at matched loudness, including bass density and the two-line rotation on a repeated film.
 - Phase 4 and not started: pitch-preserving time stretch, stem or speech separation, Whisper and legacy Speech backends, a sampled bass library, whole-utterance fitting, and locales other than English.
 - The checklist is in the plan's section 13 and the listening checks are in the measurements document.
+
+## D113. Theme-return dip from the transport, and route recovery retires the cue's chops (2026-11-19)
+- What: the film bed's return dip (`LofiBed.returnDip*`, unchanged: 18 dB for one bar from 3 beats early) takes the theme return downbeat from the transport first. The cue carries `LofiTransportInfo`; `ArchiveVoice.noteReturnStarts(_:)` marks every phrase of the take (and the queued next take) that `LofiScore.section(at:)` names `.returnTheme`, the fourth of each 16-bar take. The conductor's phrase callback (`notePhrase`) adds an estimate one phrase ahead that a precise time replaces. Plan events remain the fallback for the offline capture, whose cues carry no transport. The bed's effects chain, its levels and the `ChopBus`/`MusicDuck` constants are unchanged.
+- Why: with only plan events, a film with no speech got no chops and so no dip, and its return competed with the bed (the open item in `mpc-chopping-measurements.md`).
+- What: `ArchiveVoice.powerDown` (conductor reset, as on the restart after `GenerativeEngine.recoverStoppedGraph`) retires the current cue's token like `archiveChopsCancel`. Found by the new `DialogueRuntimeTests.aRouteRecoveryRearmSchedulesNoChopFromTheStalePlan`: replaying the director's plans from a re-arm into an offline voice left 21 chops of that cue stored after the reset (the stale revision-0 plan delivered late, and its rebuild), with the bed stopped and the chop fader closed, so they could only open duck windows under inaudible chops. Now nothing of that cue is stored, queued, audible or ducking after the reset; its chops before the re-arm still play. The next cue's new token starts clean.
+- Tests: `ArchiveVoiceRenderTests.theThemeReturnDipsTheBedWithoutAnyDialoguePlan` (transport only) and `thePhraseCallbackAloneDipsTheBedUnderTheReturnWithNoChops` (no transport, no chops), each at least 8 dB of dip; the runtime test above.
+- Alternatives: carry the transport revision in `ChopPlan` and make the voice compare it with the live one. The voice has no live revision feed, and after a reset the cue cannot sound anyway, so retiring the token is the smaller change.

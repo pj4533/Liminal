@@ -1,4 +1,5 @@
 import AVFoundation
+import AudioKit
 import Foundation
 import Synchronization
 import Testing
@@ -482,6 +483,105 @@ struct DialogueRuntimeTests {
         }
     }
 
+    /// End to end through `ArchiveVoice`: the director's plans from a route-recovery bump are replayed
+    /// into an offline engine whose voice is reset at the re-arm (`recoverStoppedGraph` stops the
+    /// conductor, whose restart resets the voice). The stale revision's chops before the re-arm play;
+    /// after it nothing of that cue is stored, queued, audible or ducking: neither the stale plan
+    /// delivered late (still in flight across the restart) nor the rebuild for the bed that is gone.
+    @MainActor @Test func aRouteRecoveryRearmSchedulesNoChopFromTheStalePlan() async throws {
+        let transcript = DialogueFixtures.transcript(Self.fixture)
+        let director = DialogueDirector(.neutral(transcriptProvider: {
+            FixtureTranscriptProvider(transcript, delay: .milliseconds(700))
+        }))
+        let start = Self.uptime()
+        let old = Self.info(origin: start, revision: 1)
+        let rearmed = Self.info(origin: start + 0.37, revision: 2)
+        let window = DialogueCueCoordinator.window(due: start + 0.2, span: 8 * Self.bar, transport: old)
+        let posted = Mutex(false)
+        let recorder = Recorder()
+        let source = Self.fixture.source(contentID: "runtime", cueToken: 1)
+        _ = await Task.detached(priority: .utility) {
+            await director.run(source: source, window: window, seed: 9,
+                               transport: { posted.withLock { $0 } ? rearmed : old }, isCurrent: { true },
+                               post: { recorder.add($0); posted.withLock { $0 = true } })
+        }.value
+        let plans = recorder.plans
+        try #require(plans.count == 2, "the stale plan, then its rebuild")
+        let stale = plans[0], rebuild = plans[1]
+        try #require(stale.chops.count >= 2)
+
+        // Offline the transport is conductor seconds: shift the plans so the first stale chop lands at
+        // 1.0 s, with impulses for buffers so an onset is one sample.
+        let engine = GenerativeEngine(seed: 21)
+        let format = engine.archiveFormat
+        let rate = format.sampleRate
+        let impulse = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 64))
+        impulse.frameLength = 64
+        for c in 0..<Int(format.channelCount) {
+            for i in 0..<64 { impulse.floatChannelData![c][i] = i == 0 ? 1 : 0 }
+        }
+        let bed = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(8 * rate)))
+        bed.frameLength = bed.frameCapacity
+        for c in 0..<Int(format.channelCount) { bed.floatChannelData![c].update(repeating: 0, count: Int(bed.frameLength)) }
+        let firstStale = try #require(stale.chops.map(\.event.startTime).min())
+        let shift = 1.0 - firstStale
+        func moved(_ plan: ArchiveVoice.ChopPlan) -> ArchiveVoice.ChopPlan {
+            let chops = plan.chops.map { chop -> DialogueChop in
+                let e = chop.event
+                let event = DialogueEvent(padID: e.padID, role: e.role, block: e.block, slot: e.slot,
+                                          accentTime: e.accentTime + shift, startTime: e.startTime + shift,
+                                          duration: 64 / rate, gainDB: 0, protected: false, chokeAt: nil, text: nil,
+                                          transform: .native, padKey: e.padKey, snareLanded: false)
+                return DialogueChop(event: event, buffer: impulse)
+            }
+            return .init(token: plan.token, revision: plan.revision, replaceFrom: plan.replaceFrom + shift,
+                         chops: chops, bedDuck: plan.bedDuck)
+        }
+        let stalePlan = moved(stale), rebuildPlan = moved(rebuild)
+        let first = 1.0, rearm = 1.4, seconds = 3.2
+        let staleAfter = stalePlan.chops.map(\.event.startTime).filter { $0 > rearm + 0.05 && $0 < seconds - 0.1 }
+
+        engine.engine.output = Mixer(engine.archive.strip.outputs.dry, engine.archive.chopOutput)
+        var steps = Set<String>()
+        func once(_ key: String, _ body: () -> Void) { if steps.insert(key).inserted { body() } }
+        var queuedBefore = 0
+        var countsAfter: (stored: Int, queued: Int)?
+        var duckedAfterRearm = false
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rearm-\(UUID().uuidString).wav")
+        defer {
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.removeItem(at: url.deletingPathExtension().appendingPathExtension("score.json"))
+        }
+        try engine.renderOffline(seconds: seconds, to: url, archiveBeatDuration: Self.beat) { t in
+            if t >= 0.2 { once("bed") { engine.post(.archiveBegin(ArchiveVoice.Cue(buffer: bed, gain: 1, fadeIn: 0.1, label: "rearm", token: 1))) } }
+            if t >= 0.3 { once("stale") { engine.post(.archiveChops(stalePlan)) } }
+            if t >= first + 0.1 { once("queued") { queuedBefore = engine.archive.chopCounts.queued } }
+            if t >= rearm { once("rearm") { engine.archive.reset(now: t) } }
+            // The stale plan was still in flight across the restart, then the rebuild arrives.
+            if t >= rearm + 0.05 { once("late") { engine.post(.archiveChops(stalePlan)) } }
+            if t >= rearm + 0.1 { once("rebuild") { engine.post(.archiveChops(rebuildPlan)) } }
+            if t >= rearm + 0.3 { once("counts") { countsAfter = engine.archive.chopCounts } }
+            if t > rearm + 0.05 && engine.archive.isMusicDucked { duckedAfterRearm = true }
+        }
+        let file = try AVAudioFile(forReading: url)
+        let pcm = try #require(AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)))
+        try file.read(into: pcm)
+        let x = Array(UnsafeBufferPointer(start: pcm.floatChannelData![0], count: Int(pcm.frameLength)))
+        let threshold = 0.75 * ArchiveVoice.ChopBus.dryGain
+        func onset(near time: Double) -> Int? {
+            let lo = max(0, Int((time - 0.05) * rate)), hi = min(x.count, Int((time + 0.05) * rate))
+            return (lo..<hi).first { abs(x[$0]) > threshold }
+        }
+        #expect(queuedBefore >= 1, "the stale plan was live before the re-arm")
+        #expect(onset(near: first) != nil, "its chop before the re-arm plays")
+        let counts = try #require(countsAfter)
+        #expect(counts.stored == 0 && counts.queued == 0, "nothing of the cue is scheduled after the re-arm: \(counts)")
+        #expect(!duckedAfterRearm, "no inaudible chop ducks the music")
+        #expect(staleAfter.allSatisfy { onset(near: $0) == nil }, "no stale chop sounds after the re-arm")
+        let tail = x[Int((rearm + 0.05) * rate)...]
+        #expect(!tail.contains { abs($0) > threshold }, "the chop output stays below the dry line after the re-arm")
+    }
+
     @Test func theBankCacheKeepsOneEntryPerPlaybackRate() throws {
         let director = DialogueDirector()
         let native = Self.fixture.source(contentID: "film", sourceStart: 12.5, rate: 1)
@@ -545,7 +645,7 @@ struct DialogueRuntimeTests {
 /// scheduling, so classification returns no windows (neutral weights), as when it times out.
 extension DialogueDirector.Settings {
     static func neutral(transcriptProvider: @escaping @Sendable () -> any TranscriptProvider,
-                        analysisDelay: Duration = .zero, transcriptCap: Double = DialogueCueCoordinator.transcriptCap) -> Self {
+                        analysisDelay: Swift.Duration = .zero, transcriptCap: Double = DialogueCueCoordinator.transcriptCap) -> Self {
         var s = Self(transcriptProvider: transcriptProvider, analysisDelay: analysisDelay, transcriptCap: transcriptCap)
         s.classify = { _, _, _ in [] }
         return s
