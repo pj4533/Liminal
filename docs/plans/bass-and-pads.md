@@ -347,3 +347,16 @@ Then `scripts/mix-matrix.sh --strict`: no failure in any of the five cases.
 - **C-B5** now measures a long overlap instead of 1.44 s; the 6.5 dB target sits mid-window on purpose.
 - **Render time:** more bass notes and granular pads; cache `lowRiseLead`, reuse the pad render for its send, and check the phrase budget test.
 - **Phrase-boundary breath** on the pad: gated in 3.7, with P7 as the fix.
+
+## Outcome (2026-11-20)
+
+Built as planned: the two-layer riddim bass (synthesized phase-exact sub plus a Karoryfer Sneakybass or Swagbass body, anchored to the take's kicks, split kick duck, dub throws into the wet stem) is D116; the held granular pad with one answer shell is D117; the rebalance is D118. Section 5.5 gates all pass on the seed 2077 capture (`cap-mix-14`) against `final-main`, with no strict failure, drums identical, bass -17.9 LUFS at 49 % active, chords -23.6 LUFS at 89 %, master -12.40 LUFS, true peak -1.20 dBTP.
+
+Differences from the plan:
+- Sneakybass `ghost` and `mute` are unpitched thumps and were not bundled. `upright` has only short and long strokes, and an upright ghost plays the short note softly. The sample pitch estimator needed bass changes (30 Hz floor, narrower search, partial averaging, iterated `--retune`).
+- The anchoring share of the kick's low rise moved from 0.47 to 0.40 after the matrix showed the 70 BPM takes sitting about 5 ms late. Kick target error across all takes is still up to 24 ms late (p90) on slow kicks; an exact fix needs a smooth-rise landmark.
+- The pad's 500-1200 Hz centroid target could not hold with this melody and sits under the lead's centroid instead. Instrument balance meters the pad's reverb, so theme phrases come down 0.5 to 0.9 dB (plan 0.2). P7 (dry pad carry across phrases) was not needed by the boundary gate.
+- The rebalance used two controls outside plan 4.3 (the shell 1.6 kHz boost, removed, and `bassKickRiseShare`). Debug render time forced `while` loops on the phrase render path.
+- Not met: `mix-matrix.sh --strict` still fails in `long`, `fast` and `same`, all on criteria that also fail on the pre-merge main (C-B8, C-D6, C-D9, C-B6). C-B7 aim 2.5 dB reached 2.43 dB (warn, as in the baseline).
+- Thin margins: C-B5 0.03 dB, C-B11 0.09 dB, bass 120-300 Hz 0.11 dB, chords 1-4 kHz 0.12 dB, chords 300-800 Hz 0.25 dB, bass 1-4 kHz 0.27 dB.
+- No listening check was done by the agents; that is the next step.

@@ -26,7 +26,7 @@ Lo-Fi at 72 BPM with AJ Hall’s drums. The audio is the app’s own offline ren
 
 ## An atmosphere that keeps changing
 
-- **Two music modes** — drift through slow Ambient scenes or play Lo-Fi with deep bass and twenty sampled acoustic programs: pianos, plucked strings and guitars that strum and fingerpick. With a local drum pack, 16-bar takes play through their original fills.
+- **Two music modes** — drift through slow Ambient scenes or play Lo-Fi with a riddim bass locked to the drummer's kicks (with dub throws), a held pad under the melody, and twenty sampled acoustic programs: pianos, plucked strings and guitars that strum and fingerpick. With a local drum pack, 16-bar takes play through their original fills.
 - **Film dialogue, chopped like an MPC** — each 16-bar loop takes a fresh line from the films and cuts it into word and syllable pieces. The pieces repeat, pause, reorder and land on the beat in every bar, with echo throws, reversed pickups and a long dark room. The chops sit inside the music while the original soundtrack plays far behind as an effected bed.
 - **Living imagery** — generated scenes blend through effects that respond to the music. In Lo-Fi, the picture warps through one of a dozen transition styles during the drum fill and lands on the new image on the downbeat.
 - **Immersive space** — depth gives the imagery relief as it wraps around you on Vision Pro.
