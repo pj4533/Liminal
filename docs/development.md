@@ -115,6 +115,7 @@ Pass as launch arguments, for example `-LiminalAutoPlay YES`. Defined in `Limina
 | `analyze-archive-audio.py` | Level, spectrum, fades and limiter check of the archive sound in a render |
 | `archive-curate.py`, `archive-fetch-fixture.sh` | Build the bundled Prelinger seed list / download one fixture clip to a scratch folder |
 | `mix-report.sh`, `mix-matrix.sh` | Capture Lo-Fi audio offline and measure the mix against `mix-criteria.json` (one capture or the five-case matrix); `mixlib/` holds the analysis modules. See Mix verification above |
+| `solo-stems.py` | Turn a capture into a full-mix file plus one file per channel (drums, bass, chords, melody, reverb-echo, chops, film footage) at its level in the final mix, through the same master gain trace, so the stems sum to `master.wav`. `scripts/solo-stems.py CAPTURE OUT [--wav]` |
 | `av-coupling-check.sh` | Offline check of the audio-visual coupling |
 
 Simulator automation notes: `research/visionos-sim-automation/README.md`.

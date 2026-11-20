@@ -633,6 +633,10 @@ DD=$S/dd-docs scripts/mix-matrix.sh --out $S/docs-matrix --baseline $S/baseline 
 
 `same` plays one film repeated at the same source offset every eight bars for 64 bars. With one source eight times the cue analysis sees identical material, so a performance that depends only on the source would repeat; the cadence criteria then test whether the performer develops the material (bank rotation, family changes, variation) rather than re-deriving the same blocks. C-D1 has three window pairs here (the run above reported `minDifference=0.78, pairs=3`), and C-D3 is the check that blocks do not repeat verbatim. `--prune-wavs` deletes the WAVs of `long`, `fast` and `nofilm` only; `same` and `ref` keep theirs. The summary lands in `$S/docs-matrix/matrix-summary.md`.
 
+## Solo stems for listening
+
+`scripts/solo-stems.py CAPTURE OUT` writes `01-full-mix` and one file per section (drums, bass, chords from `texture`, melody from `dry`, reverb-echo from `wet`, chops, film footage). Each stem goes through the pre-master staging gain, the master latency and 25 Hz high-pass, the fitted finisher gain and the glue, clip and limiter reduction from `master-gr.csv`, so each file has the level that part has in the final mix and the seven stems sum back to `master.wav` (about -47 dB residual; the clipper's distortion is the remainder). It prints each stem's loudness while it plays and how much of the time it is active.
+
 ## Adding a stem or a diagnostic
 
 Everything is registered through `LofiCaptureHooks` (`Liminal/Audio/Lofi/LofiCaptureHooks.swift`). The hooks are inert in the app (`isEnabled` is false) and lock-guarded; never call them from a render thread.
