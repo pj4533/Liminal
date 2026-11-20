@@ -44,12 +44,42 @@ class ControllerAudioSourceContract(unittest.TestCase):
         for name in ['dryFader', 'textureFader', 'wetFader']:
             self.assertNotIn(name, text)
 
-    def test_manual_audio_is_truthfully_unavailable(self):
+    def test_manual_readiness_requires_assets_and_source_isolation(self):
         coordinator = source('Liminal/Controller/ControllerCoordinator.swift')
-        self.assertIn('"performance_audio": .bool(false)', coordinator)
-        self.assertIn('"manual_notes": .bool(false)', coordinator)
+        self.assertIn('"performance_audio": .bool(manualReady)', coordinator)
+        self.assertIn('"manual_notes": .bool(manualReady)', coordinator)
+        self.assertIn('engine?.controllerModeReady(id) == true && instrument?.ready == true', coordinator)
         engine = source('Liminal/Audio/GenerativeEngine.swift')
         self.assertIn('[ControllerChannel.chops, .lofiSpace, .ambientSpace, .film]', engine)
+
+    def test_onset_hot_path_never_builds_or_renders_instruments(self):
+        bank = source('Liminal/Controller/ControllerVoiceBank.swift')
+        onset = bank.split('func noteOn(')[1].split('private var pending:')[0]
+        for forbidden in ['LofiBassVoice.render', 'LofiPadVoice.render', 'addInstrument(', 'AVAudioPCMBuffer(', 'ControllerAmbientVoice(', 'addInput(']:
+            self.assertNotIn(forbidden, onset)
+        worker = source('Liminal/Controller/ControllerLofiCache.swift')
+        for required in ['LofiBassVoice.render', 'LofiPadVoice.render', 'LofiRenderer.addInstrument', 'try Task.checkCancellation()', 'ControllerPCMReservation']:
+            self.assertIn(required, worker)
+
+    def test_lifecycle_releases_captured_tokens_and_preserves_disconnect_mix(self):
+        coordinator = source('Liminal/Controller/ControllerCoordinator.swift')
+        disconnect = coordinator.split('private func disconnect(')[1].split('private func release(')[0]
+        self.assertIn('release(onsets.releaseAll(session: session))', disconnect)
+        self.assertNotIn('controllerReset', disconnect)
+        self.assertNotIn('controllerSetAutomatic', disconnect)
+        self.assertIn('if automatic { release(onsets.releaseAll(channel: channel), over: 0.03) }', coordinator)
+        self.assertIn('engine.controllerVoices.pressure(onset.voiceToken', coordinator)
+        self.assertIn('engine?.controllerVoices.release(onset.voiceToken', coordinator)
+
+    def test_actual_audible_score_and_source_owned_manual_wet(self):
+        playback = source('Liminal/Audio/Lofi/LofiPlayback.swift')
+        descriptor = playback.split('var controllerInstruments:')[1].split('private struct PlayingPhrase')[0]
+        self.assertIn('$0.music.score', descriptor)
+        self.assertNotIn('$0.request', descriptor)
+        bus = source('Liminal/Audio/Lofi/LofiBus.swift')
+        wet = bus.split('var manualWetInputs:')[1].split('private func sourceIndex')[0]
+        self.assertIn('isolatedStrips[0].manualInput', wet)
+        self.assertNotIn('legacyWet', wet)
 
 
 if __name__ == '__main__':

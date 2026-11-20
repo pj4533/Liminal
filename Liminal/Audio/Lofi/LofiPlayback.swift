@@ -36,6 +36,11 @@ final class LofiPlayback {
     var options = LofiOptions()
     var onPhrase: ((Double, Int, UInt64) -> Void)?
 
+    /// The score belongs to the actual PCM; fallback repetitions retain this same descriptor.
+    var controllerInstruments: [ControllerLofiInstrument] {
+        rendered.prefix(2).map { .init(score: $0.music.score, clock: $0.music.clock) }
+    }
+
     private struct PlayingPhrase {
         let request: Request
         let breakAudio: LofiPhraseBank.Take

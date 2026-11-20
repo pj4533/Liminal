@@ -18,7 +18,7 @@ nonisolated final class GrainLayer: BaseLayer {
     private let amp: Float = 0.5
 
     init() {
-        oscs = (0..<GrainLayer.poolSize).map { _ in Oscillator(waveform: Table(.sine), frequency: 880, amplitude: 0) }
+        oscs = (0..<GrainLayer.poolSize).map { _ in GrainLayer.makeOscillator() }
         let o = oscs
         let groups: [Mixer] = (0..<4).map { g in
             let m = Mixer(stride(from: g, to: GrainLayer.poolSize, by: 4).map { o[$0] })
@@ -97,4 +97,11 @@ nonisolated final class GrainLayer: BaseLayer {
     override func didSilence(fade: Double, ctx: LayerContext) {
         for o in oscs { ParamRamp.set(o.$amplitude, 0, over: max(0.05, fade)) }
     }
+    override func controllerTimbre(ctx: LayerContext) -> ControllerAmbientTimbre? {
+        .init(name: "Mist swell", attack: 0.42, release: 1.4, decay: 2.0, trim: strip.trim)
+    }
+    static func makeOscillator() -> Oscillator {
+        Oscillator(waveform: Table(.sine), frequency: 880, amplitude: 0)
+    }
+
 }

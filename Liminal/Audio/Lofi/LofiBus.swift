@@ -49,6 +49,11 @@ final class LofiBus {
     func controlsReady(_ channel: ControllerChannel) -> Bool {
         ![ControllerChannel.bass, .lead, .mids].contains(channel) || (isolatedPreparationEnabled && isolatedReady)
     }
+    /// Manual returns enter source-owned wet controls and the common Space strip; never legacy wet.
+    var manualWetInputs: [ControllerChannel: Mixer] {
+        [.lead: isolatedStrips[0].manualInput, .mids: isolatedStrips[1].manualInput,
+         .bass: isolatedStrips[2].manualInput]
+    }
     private func sourceIndex(_ channel: ControllerChannel) -> Int? {
         switch channel { case .lead: return 0; case .mids: return 1; case .bass: return 2; default: return nil }
     }

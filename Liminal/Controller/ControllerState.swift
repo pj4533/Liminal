@@ -88,6 +88,10 @@ nonisolated struct ControllerOnsets: Sendable {
     mutating func release(session: String, noteID: String) -> Onset? {
         held.removeValue(forKey: Key(session: session, noteID: noteID))
     }
+    mutating func release(token: UUID) -> Onset? {
+        guard let key = held.first(where: { $0.value.voiceToken == token })?.key else { return nil }
+        return held.removeValue(forKey: key)
+    }
     mutating func releaseAll(session: String? = nil, channel: ControllerChannel? = nil) -> [Onset] {
         let removed = held.values.filter { (session == nil || $0.session == session) && (channel == nil || $0.channel == channel) }
         for onset in removed { held.removeValue(forKey: Key(session: onset.session, noteID: onset.noteID)) }

@@ -13,7 +13,8 @@ nonisolated final class DroneLayer: BaseLayer {
     private var lfos: [ParameterDrift.Channel] = []
     private var beatLFO = ParameterDrift.Channel(period: 47, phase: 0)
     /// Base amplitude per partial (sum about 1; the strip trim sets the layer peak).
-    private let base: [Float] = [0.22, 0.22, 0.22, 0.10, 0.08, 0.10]
+    static let partialLevels: [Float] = [0.22, 0.22, 0.22, 0.10, 0.08, 0.10]
+    private let base = DroneLayer.partialLevels
     private var pedal: Int = 0                // MIDI currently sounding
     private var glide = SoftEnv(1)            // dip during pedal moves
     private var roamEnv = SoftEnv(0)
@@ -48,11 +49,7 @@ nonisolated final class DroneLayer: BaseLayer {
     }
 
     init() {
-        let soft = PadTables.softDrone
-        oscs = P.allCases.map { p in
-            let table = (p == .rootA || p == .rootB || p == .fifth) ? soft : Table(.sine)
-            return Oscillator(waveform: table, frequency: 110, amplitude: 0)
-        }
+        oscs = Self.makeOscillators()
         let mix = Mixer(oscs)
         filter = LowPassButterworthFilter(mix, cutoffFrequency: 500)
         let strip = LayerStrip(source: mix, filter: filter, trim: dbToGain(-27.5) * 1.414 / 0.45,
@@ -160,5 +157,21 @@ nonisolated final class DroneLayer: BaseLayer {
     override func didSilence(fade: Double, ctx: LayerContext) {
         gliding = false
         glide = SoftEnv(1)
+    }
+    static func makeOscillators() -> [Oscillator] {
+        P.allCases.map { p in
+            let table = (p == .rootA || p == .rootB || p == .fifth) ? PadTables.softDrone : Table(.sine)
+            return Oscillator(waveform: table, frequency: 110, amplitude: 0)
+        }
+    }
+    override func controllerTimbre(ctx: LayerContext) -> ControllerAmbientTimbre? {
+        let depth = 0.3 + 0.4 * ctx.intensity
+        let levels = base.enumerated().map { i, value in
+            let lfo = lfos.isEmpty ? 0.5 : lfos[i].unit(at: ctx.time)
+            return value * (1 - depth + depth * lfo) * sceneGain.value
+        }
+        return .init(name: "Pedal partials", cutoff: expMap(ctx.bedBrightness, 220, 1100),
+              detune: 0.05 + 0.25 * beatLFO.unit(at: ctx.time), attack: 0.3, release: 2,
+              partials: levels, offsets: [-12, 0, 0, Float(fifthOffset), 12, Float(roamOffset)], trim: strip.trim)
     }
 }

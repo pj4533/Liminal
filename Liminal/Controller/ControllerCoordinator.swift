@@ -2,8 +2,8 @@
 import Foundation
 import Combine
 
-/// Controls independently owned performance strips. Manual voice and qualified Lo-Fi isolation
-/// capabilities remain unavailable until their preparation adapters are installed and validated.
+/// Controls independently owned performance strips and onset-owned native manual voices.
+/// Lo-Fi isolation remains unavailable until native qualification completes.
 /// No remote command may acknowledge a mode or mix change that did not reach the audio graph.
 @MainActor
 final class ControllerCoordinator: ObservableObject {
@@ -17,6 +17,7 @@ final class ControllerCoordinator: ObservableObject {
     private var revision: Int64 = 0
     private var timer: Task<Void, Never>?
     private var onsets = ControllerOnsets()
+    private var windows: [ControllerChannel: (base: Int, request: String)] = [:]
     private var modeTransitions: [ControllerChannel: (previous: Bool, deadline: Double, request: String)] = [:]
 
 
@@ -36,7 +37,7 @@ final class ControllerCoordinator: ObservableObject {
 
     func setEnabled(_ value: Bool) {
         if !value {
-            enabled = false; server.stop(); timer?.cancel(); timer = nil
+            enabled = false; server.stop(); panic(); timer?.cancel(); timer = nil
             return
         }
         guard ControllerAddress.isPrivate(address), let portNumber = UInt16(port), portNumber > 0 else {
@@ -50,6 +51,11 @@ final class ControllerCoordinator: ObservableObject {
             while !Task.isCancelled {
                 do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
                 guard let self else { return }
+                let now = ProcessInfo.processInfo.systemUptime
+                if let engine {
+                    for token in engine.controllerVoices.tick(now: now) { _ = onsets.release(token: token) }
+                    engine.controllerVoices.refresh(engine.musicMode == .lofi ? engine.lofi.controllerInstruments : [])
+                }
                 if connected { server.publish(snapshot()) }
             }
         }
@@ -61,19 +67,24 @@ final class ControllerCoordinator: ObservableObject {
     }
     private func disconnect(_ session: String) {
         // A late callback from a replaced socket cannot release the new session's onsets.
-        _ = onsets.releaseAll(session: session)
+        release(onsets.releaseAll(session: session))
         guard self.session == session else { return }
         self.session = nil; connected = false
+        engine?.controllerVoices.resetWindows(); windows.removeAll()
     }
-    func panic() { _ = onsets.releaseAll() }
+    private func release(_ released: [ControllerOnsets.Onset], over duration: Double? = nil) {
+        let now = ProcessInfo.processInfo.systemUptime
+        for onset in released { engine?.controllerVoices.release(onset.voiceToken, over: duration, now: now) }
+    }
+    func panic() { release(onsets.releaseAll()) }
     func reset() {
         panic()
         for channel in ControllerChannel.allCases { engine?.controllerReset(channel) }
-        modeTransitions.removeAll()
+        modeTransitions.removeAll(); windows.removeAll(); engine?.controllerVoices.resetWindows()
     }
 
     /// App stop/recovery calls this too. This must grow with native manual audio ownership, not transport.
-    func transportDidStop() { panic() }
+    func transportDidStop() { panic(); engine?.controllerVoices.invalidate() }
 
     private func execute(_ command: ControllerWire.Command) -> ControllerServer.Fields {
         var reply: ControllerServer.Fields = ["type": .string("ack"), "seq": .integer(command.seq), "ok": .bool(true)]
@@ -81,10 +92,13 @@ final class ControllerCoordinator: ObservableObject {
             guard command.session == session else { throw ControllerWire.Failure.stale_session }
             try command.validate()
             guard let engine, let action = command.action else { throw ControllerWire.Failure.unavailable }
+            let currentMusic = engine.musicState.read()
+            let currentScale = ScaleType.allCases.indices.contains(Int(currentMusic.modeIndex)) ? ScaleType.allCases[Int(currentMusic.modeIndex)] : .major
+            engine.controllerVoices.updateHarmony(tonic: Int(currentMusic.tonic), intervals: currentScale.intervals)
             // Channel identity is validated independently of whether its adapter is ready.
             if let value = command.fields["channel"] {
                 guard let id = value.string.flatMap(ControllerChannel.init(rawValue:)) else { throw ControllerWire.Failure.invalid_channel }
-                if action != .reset && action != .all_notes_off && !isActive(id) { throw ControllerWire.Failure.inactive_channel }
+                if ![ControllerWire.Action.reset, .all_notes_off, .note_off, .pad_off, .pressure].contains(action) && !isActive(id) { throw ControllerWire.Failure.inactive_channel }
             }
             switch action {
             case .transport:
@@ -92,18 +106,20 @@ final class ControllerCoordinator: ObservableObject {
             case .snapshot: break
             case .all_notes_off:
                 let channel = command.fields["channel"]?.string.flatMap(ControllerChannel.init(rawValue:))
-                _ = onsets.releaseAll(session: command.session, channel: channel)
+                release(onsets.releaseAll(session: command.session, channel: channel))
             case .note_off, .pad_off:
-                _ = onsets.release(session: command.session, noteID: try command.string("note_id"))
+                if let onset = onsets.release(session: command.session, noteID: try command.string("note_id")) { release([onset]) }
             case .pressure:
-                // No held onset is a harmless success. No audio-onset adapter is advertised yet.
-                guard onsets.onset(session: command.session, noteID: try command.string("note_id")) == nil else { throw ControllerWire.Failure.unavailable }
+                if let onset = onsets.onset(session: command.session, noteID: try command.string("note_id")) {
+                    engine.controllerVoices.pressure(onset.voiceToken, value: Float(try command.normalized()))
+                }
             case .reset:
                 if command.fields["scope"]?.string == "channel", let raw = command.fields["channel"]?.string,
                    let channel = ControllerChannel(rawValue: raw) {
-                    _ = onsets.releaseAll(channel: channel)
+                    release(onsets.releaseAll(channel: channel))
                     engine.controllerReset(channel)
                     modeTransitions.removeValue(forKey: channel)
+                    windows.removeValue(forKey: channel); engine.controllerVoices.resetWindows(channel)
                 } else { reset() }
             case .parameter:
                 guard let channel = ControllerChannel(rawValue: try command.string("channel")) else { throw ControllerWire.Failure.invalid_channel }
@@ -114,15 +130,46 @@ final class ControllerCoordinator: ObservableObject {
             case .mode:
                 guard let channel = ControllerChannel(rawValue: try command.string("channel")) else { throw ControllerWire.Failure.invalid_channel }
                 let previous = effectiveAutomatic(channel)
-                guard engine.controllerSetAutomatic(channel, enabled: try command.string("mode") == "auto") else { throw ControllerWire.Failure.unavailable }
+                let automatic = try command.string("mode") == "auto"
+                guard engine.controllerSetAutomatic(channel, enabled: automatic) else { throw ControllerWire.Failure.unavailable }
+                if automatic { release(onsets.releaseAll(channel: channel), over: 0.03) }
                 let request = UUID().uuidString
                 modeTransitions[channel] = (previous, ProcessInfo.processInfo.systemUptime + 0.03, request)
                 reply["status"] = .string("pending"); reply["request_id"] = .string(request)
 
-            case .note_on, .pad_on:
+            case .pad_window:
+                guard let channel = ControllerChannel(rawValue: try command.string("channel")) else { throw ControllerWire.Failure.invalid_channel }
+                let music = engine.musicState.read()
+                let scale = ScaleType.allCases.indices.contains(Int(music.modeIndex)) ? ScaleType.allCases[Int(music.modeIndex)] : .major
+                try engine.controllerVoices.setWindow(channel, base: Int(try command.integer("base_midi", in: 0...127)),
+                                                      tonic: Int(music.tonic), intervals: scale.intervals)
+                let request = UUID().uuidString
+                windows[channel] = (Int(try command.integer("base_midi", in: 0...127)), request)
+                reply["status"] = .string(ControllerVoiceBank.ambient.contains(channel) ? "applied" : "pending")
+                reply["request_id"] = .string(request)
+            case .note_on:
                 guard engine.isRunning && engine.isPlaybackReady else { throw ControllerWire.Failure.not_playing }
-                if let raw = command.fields["channel"]?.string, let channel = ControllerChannel(rawValue: raw),
-                   effectiveAutomatic(channel) { throw ControllerWire.Failure.wrong_mode }
+                guard let channel = ControllerChannel(rawValue: try command.string("channel")) else { throw ControllerWire.Failure.invalid_channel }
+                if effectiveAutomatic(channel) || engine.controllerStrips(channel).first?.automatic != false { throw ControllerWire.Failure.wrong_mode }
+                guard engine.controllerModeReady(channel) else { throw ControllerWire.Failure.not_ready }
+                engine.controllerVoices.refresh(engine.musicMode == .lofi ? engine.lofi.controllerInstruments : [])
+                let noteID = try command.string("note_id")
+                guard onsets.onset(session: command.session, noteID: noteID) == nil else { throw ControllerWire.Failure.bad_message }
+                let instrumentRevision = try command.integer("instrument_revision", in: 0...Int64.max)
+                let voice = try engine.controllerVoices.noteOn(channel: channel,
+                    midi: Int(try command.integer("midi", in: 0...127)),
+                    velocity: Float(try command.integer("velocity", in: 1...127)) / 127,
+                    revision: instrumentRevision, now: ProcessInfo.processInfo.systemUptime)
+                for token in voice.stolen { _ = onsets.release(token: token) }
+                do {
+                    try onsets.insert(.init(session: command.session, noteID: noteID, channel: channel,
+                        instrumentRevision: instrumentRevision, bankRevision: nil, voiceToken: voice.token))
+                } catch {
+                    engine.controllerVoices.release(voice.token, now: ProcessInfo.processInfo.systemUptime)
+                    throw error
+                }
+            case .pad_on:
+                guard engine.isRunning && engine.isPlaybackReady else { throw ControllerWire.Failure.not_playing }
                 throw ControllerWire.Failure.not_ready
             default: throw ControllerWire.Failure.unavailable
             }
@@ -157,27 +204,45 @@ final class ControllerCoordinator: ObservableObject {
 
     private func snapshot() -> ControllerServer.Fields {
         revision += 1
+        engine?.controllerVoices.refresh(engine?.musicMode == .lofi ? (engine?.lofi.controllerInstruments ?? []) : [])
         let music = engine?.musicState.read() ?? MusicState()
         let transport = engine?.musicState.transport()
         let scale = ScaleType.allCases.indices.contains(Int(music.modeIndex)) ? ScaleType.allCases[Int(music.modeIndex)] : .major
+        engine?.controllerVoices.updateHarmony(tonic: Int(music.tonic), intervals: scale.intervals)
         let channels: [ControllerWire.Value] = ControllerChannel.allCases.map { id in
+            let instrument = engine?.controllerVoices.instrument(id)
+            let ready = isActive(id) && engine?.controllerModeReady(id) == true && instrument?.ready == true
+            let pendingWindow: ControllerWire.Value
+            if let window = windows[id] {
+                let status = instrument?.base == window.base && instrument?.ready == true ? "applied"
+                    : (engine?.controllerVoices.preparationError == nil ? "preparing" : "failed")
+                pendingWindow = .object(["request_id": .string(window.request), "base_midi": .integer(Int64(window.base)), "status": .string(status)])
+            } else { pendingWindow = .null }
             let parameters: [ControllerWire.Value] = ControllerParameter.allCases.map { p in
                 .object(["id": .string(p.rawValue), "label": .string(p.label), "value": .number(engine?.controllerStrips(id).first?.values[p] ?? p.defaultValue),
                          "default": .number(p.defaultValue), "display": .string(p.display(engine?.controllerStrips(id).first?.values[p] ?? p.defaultValue)), "enabled": .bool(isActive(id) && engine?.controllerMixReady(id) == true)])
             }
             return .object(["id": .string(id.rawValue), "label": .string(id.label), "kind": .string(id.kind),
-                            "active": .bool(isActive(id)), "mode": .string(effectiveAutomatic(id) ? "auto" : "manual"), "pending_mode": modeTransition(id), "ready": .bool(false),
+                            "active": .bool(isActive(id)), "mode": .string(effectiveAutomatic(id) ? "auto" : "manual"), "pending_mode": modeTransition(id), "ready": .bool(ready),
                             "mix_ready": .bool(engine?.controllerMixReady(id) == true),
                             "mode_ready": .bool(engine?.controllerModeReady(id) == true),
-                            "status": .string("Manual voices unavailable; Lo-Fi source isolation awaits native qualification"),
-                            "instrument": .string("Unavailable"), "instrument_revision": .integer(0), "base_midi": .integer(id == .bass ? 24 : 48),
+                            "status": .string(ready ? "Ready" : (engine?.controllerVoices.preparationError ?? "Preparing or awaiting native qualification")),
+                            "instrument": .string(instrument?.name ?? "Unavailable"),
+                            "instrument_revision": .integer(instrument?.revision ?? 0),
+                            "base_midi": .integer(Int64(instrument?.base ?? (id == .bass ? 24 : 36))),
+                            "root_midi": .integer(60 + Int64(music.tonic)),
+                            "octave_offset": .integer(Int64(((instrument?.base ?? (36 + Int(music.tonic))) - 36 - Int(music.tonic)) / 12)),
+                            "pending_window": pendingWindow,
                             "parameters": .array(parameters), "pad_bank": .null])
+        }
+        let manualReady = ControllerVoiceBank.melodic.contains { id in
+            isActive(id) && engine?.controllerModeReady(id) == true && engine?.controllerVoices.instrument(id).ready == true
         }
         let playing = engine?.isRunning == true
         return ["type": .string("state"), "revision": .integer(revision),
-                "capabilities": .object(["transport": .bool(true), "snapshot": .bool(true), "performance_audio": .bool(false),
+                "capabilities": .object(["transport": .bool(true), "snapshot": .bool(true), "performance_audio": .bool(manualReady),
                                           "channel_mix": .bool(true), "channel_effects": .bool(true),
-                                          "automatic_gates": .bool(true), "manual_notes": .bool(false),
+                                          "automatic_gates": .bool(true), "manual_notes": .bool(manualReady),
                                           "isolated_lofi_wet": .bool(LofiBus.isolatedPreparationQualified)]),
                 "transport": .object(["state": .string(playing ? "playing" : "stopped"),
                                       "ready": .bool(engine?.isPlaybackReady == true),
@@ -186,7 +251,7 @@ final class ControllerCoordinator: ObservableObject {
                                       "beat": .number(transport.map { max(0, (ProcessInfo.processInfo.systemUptime - $0.origin) / $0.beatDuration) } ?? 0),
                                       "take_index": .integer(Int64(transport?.takeIndex ?? 0)),
                                       "transport_revision": .integer(Int64(transport?.revision ?? 0))]),
-                "harmony": .object(["tonic": .integer(Int64(music.tonic)), "scale_name": .string(scale.rawValue),
+                "harmony": .object(["root_midi": .integer(60 + Int64(music.tonic)), "tonic": .integer(Int64(music.tonic)), "scale_name": .string(scale.rawValue),
                                     "pitch_classes": .array((0..<12).filter { music.scaleMask & (1 << (($0 + Int(music.tonic)) % 12)) != 0 }.map { .integer(Int64($0)) })]),
                 "channels": .array(channels), "drums": .object(["choices": .array([]), "current_id": .null, "pending": .null])]
     }

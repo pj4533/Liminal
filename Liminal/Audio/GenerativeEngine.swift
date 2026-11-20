@@ -34,6 +34,7 @@ final class GenerativeEngine: ObservableObject {
     private var configurationObserver: AnyCancellable?
     private var recovery: Task<Void, Never>?
     let lofi: LofiPlayback
+    private(set) var controllerVoices: ControllerVoiceBank!
     nonisolated private let lofiActive = Atomic<Bool>(false)
 
     // MARK: - Events
@@ -126,6 +127,10 @@ final class GenerativeEngine: ObservableObject {
             conductor?.updateArchiveTempo(beatDuration: duration, phrase: index, seed: seed)
             master?.setCalibrationBeatDuration(duration)
         }
+        let inputs = Dictionary(uniqueKeysWithValues: ControllerVoiceBank.melodic.compactMap { channel in
+            controllerStrips(channel).first.map { (channel, $0.manualInput) }
+        })
+        controllerVoices = ControllerVoiceBank(inputs: inputs, wetInputs: lofi.bus.manualWetInputs, timbres: conductor.controllerTimbres)
         engine.output = master.output
         configurationObserver = NotificationCenter.default.publisher(for: .AVAudioEngineConfigurationChange, object: engine.avEngine)
             .receive(on: DispatchQueue.main)
@@ -301,6 +306,9 @@ final class GenerativeEngine: ObservableObject {
     }
 
     private func activateMusicMode() {
+        #if os(macOS)
+        controller.transportDidStop()
+        #endif
         if musicMode == .ambient {
             lofi.stop()
             master.stopCalibration()

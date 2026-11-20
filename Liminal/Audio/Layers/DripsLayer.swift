@@ -21,8 +21,7 @@ nonisolated final class DripsLayer: BaseLayer {
 
     init() {
         oscs = (0..<DripsLayer.poolSize).map { _ in
-            FMOscillator(waveform: Table(.sine), baseFrequency: 440, carrierMultiplier: 1,
-                         modulatingMultiplier: 1, modulationIndex: 0, amplitude: 0)
+            KeysLayer.makeOscillator()
         }
         // Fixed per-voice pans via Mixer.pan; a note picks the voice nearest its random pan (D68).
         let o = oscs
@@ -127,5 +126,10 @@ nonisolated final class DripsLayer: BaseLayer {
 
     override func didSilence(fade: Double, ctx: LayerContext) {
         for o in oscs { ParamRamp.set(o.$amplitude, 0, over: max(0.05, fade)) }
+    }
+    override func controllerTimbre(ctx: LayerContext) -> ControllerAmbientTimbre? {
+        .init(name: "Soft motes", cutoff: expMap(ctx.brightness, 1000, 1800),
+              index: min(0.15, (0.04 + 0.12 * ctx.brightness) * ctx.coupling.fmScale),
+              attack: 0.4, release: 0.4, decay: 3.75, trim: strip.trim)
     }
 }

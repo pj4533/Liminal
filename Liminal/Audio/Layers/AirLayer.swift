@@ -27,8 +27,8 @@ nonisolated final class AirLayer: BaseLayer {
         // was mostly rumble; white noise through one band-pass has a -6 dB/oct tail to 20 kHz that read as
         // hiss and pushed the spectral centroid to 3-4 kHz. The cascade gives -12 dB/oct on both sides.
         pink = WhiteNoise(amplitude: 0)
-        band = BandPassButterworthFilter(pink, centerFrequency: 1200, bandwidth: 800)
-        band2 = BandPassButterworthFilter(band, centerFrequency: 1200, bandwidth: 800)
+        let bands = Self.makeBands(pink)
+        band = bands[0]; band2 = bands[1]
         let strip = LayerStrip(source: band2, trim: dbToGain(-22) * 1.414, reverb: 0.5, delay: 0)
         super.init(id: .air, strip: strip, entryThreshold: 0.2)
         generators = [pink]
@@ -107,4 +107,13 @@ nonisolated final class AirLayer: BaseLayer {
         strip.setPan(0.7 * panWalk.value(at: t) * (1 - r), over: 0.12)
         strip.setSends(reverb: 0.5 + 0.4 * rv, delay: 0, over: 0.12)
     }
+    override func controllerTimbre(ctx: LayerContext) -> ControllerAmbientTimbre? {
+        .init(name: "Breath texture", ratio: 0.3 + 0.5 * width.unit(at: ctx.time),
+              attack: 0.3, release: 1, partials: [0.5], trim: strip.trim)
+    }
+    static func makeBands(_ noise: WhiteNoise) -> [BandPassButterworthFilter] {
+        let first = BandPassButterworthFilter(noise, centerFrequency: 1200, bandwidth: 800)
+        return [first, BandPassButterworthFilter(first, centerFrequency: 1200, bandwidth: 800)]
+    }
+
 }

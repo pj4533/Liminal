@@ -24,10 +24,14 @@ paths = [
     'Liminal/Controller/ControllerChannelStrip.swift',
     'LiminalTests/ControllerAudioRoutingTests.swift',
 ]
+paths += [str(path.relative_to(root)) for path in (root / 'Liminal/Controller').glob('*.swift')]
+paths += [str(path.relative_to(root)) for path in (root / 'Liminal/Audio/Layers').glob('*.swift')]
+paths += ['Liminal/Audio/MusicConductor.swift', 'LiminalTests/ControllerInstrumentTests.swift']
+paths = sorted(set(paths))
 parser = Parser(Language(tree_sitter_swift.language()))
 failed = []
 for path in paths:
-    data = (root / path).read_text().replace('nonisolated(unsafe) let', 'let')
+    data = (root / path).read_text().replace('nonisolated(unsafe)', '')
     data = '\n'.join(line for line in data.splitlines()
                      if not line.strip().startswith(('#if', '#else', '#endif')))
     if parser.parse(data.encode()).root_node.has_error:

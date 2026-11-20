@@ -26,6 +26,7 @@ nonisolated enum MusicControl {
 /// loop. Never touches MainActor.
 nonisolated final class MusicConductor: @unchecked Sendable {
     let stateBus = MusicStateBus()
+    let controllerTimbres = ControllerAmbientTimbres()
     let queue = DispatchQueue(label: "liminal.music", qos: .userInitiated)
 
     private let scheduler = MusicScheduler()
@@ -505,6 +506,11 @@ nonisolated final class MusicConductor: @unchecked Sendable {
         let accentGain = dbToGain(-3 * archiveDuck)
         for strip in accentStrips { strip.tilt = accentGain }
         for l in layers { l.modulate(dt: dt, ctx: ctx) }
+        controllerTimbres.publish(Dictionary(uniqueKeysWithValues: layers.compactMap { layer in
+            guard let channel = ControllerAmbientTimbres.channel(layer.id),
+                  let timbre = layer.controllerTimbre(ctx: ctx) else { return nil }
+            return (channel, timbre)
+        }))
 
         if spaceDirty || modulateCount % 5 == 0 {
             mix.setSpace(space, delayAmount: delayAmount, brightness: ctx.brightness, shimmerScale: shimmerScale,

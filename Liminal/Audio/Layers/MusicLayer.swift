@@ -221,6 +221,7 @@ nonisolated protocol MusicLayer: AnyObject {
     func silence(fade: Double, ctx: LayerContext)
     /// Stop generators (zero CPU) after a completed stop fade.
     func powerDown()
+    func controllerTimbre(ctx: LayerContext) -> ControllerAmbientTimbre?
 }
 
 /// Shared layer behaviour: activation fades, generator power management, cancellation of
@@ -346,6 +347,8 @@ nonisolated class BaseLayer: MusicLayer {
         loopGeneration = generation
         start()
     }
+
+    func controllerTimbre(ctx: LayerContext) -> ControllerAmbientTimbre? { nil }
 
     // MARK: hooks
     func didActivate(ctx: LayerContext) {}

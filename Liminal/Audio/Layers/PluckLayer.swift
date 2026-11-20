@@ -18,7 +18,7 @@ nonisolated final class PluckLayer: BaseLayer {
     private let amp: Float = 0.5
 
     init() {
-        oscs = (0..<PluckLayer.poolSize).map { _ in Oscillator(waveform: PluckLayer.table, frequency: 220, amplitude: 0) }
+        oscs = (0..<PluckLayer.poolSize).map { _ in PluckLayer.makeOscillator() }
         let mix = Mixer(oscs)
         filter = LowPassButterworthFilter(mix, cutoffFrequency: 1200)
         let strip = LayerStrip(source: mix, filter: filter, trim: dbToGain(-19) * 1.414 / 0.5,
@@ -99,4 +99,12 @@ nonisolated final class PluckLayer: BaseLayer {
     override func didSilence(fade: Double, ctx: LayerContext) {
         for o in oscs { ParamRamp.set(o.$amplitude, 0, over: max(0.05, fade)) }
     }
+    override func controllerTimbre(ctx: LayerContext) -> ControllerAmbientTimbre? {
+        .init(name: "Soft harp", cutoff: expMap(ctx.brightness, 600, 1450),
+              attack: 0.24, release: 0.3, decay: 3.25, trim: strip.trim)
+    }
+    static func makeOscillator() -> Oscillator {
+        Oscillator(waveform: PluckLayer.table, frequency: 220, amplitude: 0)
+    }
+
 }

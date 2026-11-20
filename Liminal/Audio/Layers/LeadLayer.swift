@@ -19,12 +19,13 @@ nonisolated final class LeadLayer: BaseLayer {
     private var nextVoice = 0
     private var panLFO = ParameterDrift.Channel(period: 53, phase: 0)
     private let peak: Float = 0.5
+    private var controllerAttack = 1.0
+    private var controllerRelease = 5.0
     static let loopBounds: ClosedRange<Double> = 18...34
     static let top = 76
 
     init() {
-        let cfg = VoiceLayer.Config(oscillatorCount: 2, detuneAmount: 0.0015, attackTime: 1.0, releaseTime: 5,
-                                    amplitude: 0.5, waveforms: [Table(.sine), Table(.triangle)], mix: [1, 0.18])
+        let cfg = Self.voiceConfiguration
         voices = [VoiceLayer(config: cfg), VoiceLayer(config: cfg)]
         var acfg = cfg
         acfg.waveforms = [Table(.sine), Table(.sine)]
@@ -61,6 +62,7 @@ nonisolated final class LeadLayer: BaseLayer {
         loop.reroll(bounds: LeadLayer.loopBounds, rng: &rng)
         developer.sceneChanged(rng: &rng)
         let attack = rng.rangeF(0.6...1.8), release = rng.rangeF(4...7)
+        controllerAttack = Double(attack); controllerRelease = Double(release)
         voices.forEach { $0.setEnvelope(attack: attack, release: release) }
         answers.forEach { $0.setEnvelope(attack: attack * 1.3, release: release * 1.2) }
     }
@@ -154,5 +156,13 @@ nonisolated final class LeadLayer: BaseLayer {
     override func didSilence(fade: Double, ctx: LayerContext) {
         voices.forEach { $0.closeGate() }
         answers.forEach { $0.closeGate() }
+    }
+    static var voiceConfiguration: VoiceLayer.Config {
+        .init(oscillatorCount: 2, detuneAmount: 0.0015, attackTime: 1.0, releaseTime: 5,
+              amplitude: 0.5, waveforms: [Table(.sine), Table(.triangle)], mix: [1, 0.18])
+    }
+    override func controllerTimbre(ctx: LayerContext) -> ControllerAmbientTimbre? {
+        .init(name: "Soft lead", cutoff: expMap(ctx.brightness, 750, 1900),
+              attack: controllerAttack, release: controllerRelease, trim: strip.trim)
     }
 }

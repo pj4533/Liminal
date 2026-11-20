@@ -33,8 +33,8 @@ nonisolated final class PadLayer: BaseLayer {
     private let perOsc: Float = 0.11
 
     init() {
-        left = (0..<PadLayer.voiceCount).map { _ in MorphingOscillator(waveformArray: PadTables.tables, amplitude: 0) }
-        right = (0..<PadLayer.voiceCount).map { _ in MorphingOscillator(waveformArray: PadTables.tables, amplitude: 0) }
+        left = (0..<PadLayer.voiceCount).map { _ in PadLayer.makeOscillator() }
+        right = (0..<PadLayer.voiceCount).map { _ in PadLayer.makeOscillator() }
         // Fixed pair spread via Mixer.pan (no Panner nodes, decision D68).
         let lp = Mixer(left); lp.pan = -0.6
         let rp = Mixer(right); rp.pan = 0.6
@@ -180,4 +180,15 @@ nonisolated final class PadLayer: BaseLayer {
     }
 
     override func didSilence(fade: Double, ctx: LayerContext) { voiced = false }
+    static func makeOscillator() -> MorphingOscillator {
+        MorphingOscillator(waveformArray: PadTables.tables, amplitude: 0)
+    }
+    override func controllerTimbre(ctx: LayerContext) -> ControllerAmbientTimbre? {
+        let b = min(1, ctx.bedBrightness + ctx.padBrightnessBoost)
+        let width = 0.7 + 0.3 * widthLFO.unit(at: ctx.time) + 0.15 * (ctx.activity - 0.5)
+        return .init(name: "Morphing pad", cutoff: expMap(b, 400, 3250),
+                     index: min(3, max(0, 0.2 + 2 * b + 0.55 * voices[0].indexLFO.value(at: ctx.time))),
+                     detune: (4 + 5 * voices[0].detuneLFO.unit(at: ctx.time)) * width,
+                     attack: 2, release: 3, trim: strip.trim)
+    }
 }
