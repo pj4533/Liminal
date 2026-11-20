@@ -25,10 +25,10 @@ nonisolated enum LofiRenderer {
     static let midsMatchSeconds = 0.1
     /// The per-phrase mids gain stays within this factor of `midsTrim` either way.
     static let midsGainRange: Float = 2.5
-    /// Plucked attacks never push the dry mids above 0 dBFS before the instrument balance (-4.4 dBFS, 0.6,
-    /// before mix calibration, where it rather than the match set most plucked phrases' gain). The texture
-    /// stem still peaks more than 10 dB under the drums.
-    static let midsPeakCeiling: Float = 1.0
+    /// Plucked attacks never push the dry mids above -4.4 dBFS before the instrument balance. Mix
+    /// calibration tried 1.0: C-B5 held, but plucked shells then peaked at 0 dBFS on the texture stem and
+    /// the pre-master peak rose 2 dB, so the ceiling stayed.
+    static let midsPeakCeiling: Float = 0.6
     /// The mids' contribution to `InstrumentBalance`, at the former 0.31 trim.
     static let midsMeterTrim: Float = 0.31
     /// The wet stem under a return's opening notes, -9 dB (-6 dB before mix calibration): the carried tail
