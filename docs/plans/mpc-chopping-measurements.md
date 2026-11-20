@@ -179,7 +179,7 @@ The user's direction of 19 November 2026 asked for chops glued into the beat (fi
 The baseline effected chain is kept as the user directed: sends at 1.18 × the room and echo contours, phaser 0.36 to 0.58 wet, HPF 290 to 205 Hz, two low-pass stages at 2.1 to 3.2 kHz, direct 0.27 to 0.60, tempo-linked delay. Direct minus wet stays -9.9 to -10.6 dB.
 
 - Level: Lo-Fi context gain 1.76 → 2.35 and under-chop gain 1.31 → 1.749 (+2.5 dB both). The bed is 10.8 to 11.6 dB under the music in gaps and its audibility index rose from 0.12 to 0.13 to 0.21.
-- *Structural:* the return dip. Under each theme return's opening bar the bed steps down 18 dB (`returnDipGain` 0.126 of the context gain), from 3 beats before the downbeat (`returnDipLeadBeats`; the bed is mostly reverb and tape echo, and its tail needs that long to fall) to beat 4, down over 0.3 s and up over 0.4 s. `ArchiveVoice` derives the return time from the plan's events (every event carries its global phrase and sixteenth slot; the return is the fourth phrase of each take). The bed keys nothing: this is the music staying on top of the bed, which the user direction allows. Without it the bed was the only rival of the returning hook in 500 Hz to 4 kHz (C-B6 read -2.5 to 6.3 dB); with it the lowest return salience is 8.6 dB.
+- *Structural:* the return dip. Under each theme return's opening bar the bed steps down 18 dB (`returnDipGain` 0.126 of the context gain), from 3 beats before the downbeat (`returnDipLeadBeats`; the bed is mostly reverb and tape echo, and its tail needs that long to fall) to beat 4, down over 0.3 s and up over 0.4 s. `ArchiveVoice` derived the return time from the plan's events (every event carries its global phrase and sixteenth slot; the return is the fourth phrase of each take). Since 2026-11-19 it comes from the transport the cue carries and the conductor's phrase callback, with the plan's events as a fallback (D111). The bed keys nothing: this is the music staying on top of the bed, which the user direction allows. Without it the bed was the only rival of the returning hook in 500 Hz to 4 kHz (C-B6 read -2.5 to 6.3 dB); with it the lowest return salience is 8.6 dB.
 
 ### Master (`LofiMasterBus`, `LofiMasterKernel`, unchanged)
 
@@ -331,7 +331,7 @@ A possible shape:
 ## Remaining risks
 
 - The pre-master sum peaks at +0.9 dBFS on `ref` (it was +0.1 at `d6cdb1d` and +1.7 at the baseline). The graph is floating point and the finisher's input gain, glue, clip and limiter come after it, so nothing clips, but the gain staging is 2 dB hotter than the brief's guide. Lowering the Lo-Fi bus and raising the finisher input by the same amount would fix it without changing the sound; that touches `LofiPlayback` and the profile switch, outside this package.
-- The return dip relies on the motif plan's block and slot fields. A take that plays no chops (no speech) has no dip, and its return then competes with the bed as before.
+- Resolved 2026-11-19 (D111): the return dip no longer relies on the motif plan's block and slot fields. A take that plays no chops (no speech) dips from the transport or the phrase callback.
 - C-B9 audibility (0.13 to 0.21) is close to its new floor on `same`. A brighter or louder film can move it either way; the 10 dB rule has 0.8 dB of margin on `ref`.
 - C-B5 measures short overlaps (0.2 to 0.7 s per phrase), so single notes move it by several dB; the matrix spread is 6.4 to 7.1 dB.
 - The ambient film-reel capture differs by 0.38 LU, from the Lo-Fi input (see Ambient safety).

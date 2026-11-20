@@ -351,14 +351,14 @@ struct ArchiveVoiceRenderTests {
         }
 
         /// Renders the chop output (and the silent bed, so its player is attached) and returns channel 0.
-        func render(seconds: Double, onStep: @escaping (Double) -> Void) throws -> [Float] {
+        func render(seconds: Double, beat: Double = 0.8, onStep: @escaping (Double) -> Void) throws -> [Float] {
             engine.engine.output = Mixer(engine.archive.strip.outputs.dry, engine.archive.chopOutput)
             let url = FileManager.default.temporaryDirectory.appendingPathComponent("chop-probe-\(UUID().uuidString).wav")
             defer {
                 try? FileManager.default.removeItem(at: url)
                 try? FileManager.default.removeItem(at: url.deletingPathExtension().appendingPathExtension("score.json"))
             }
-            try engine.renderOffline(seconds: seconds, to: url, archiveBeatDuration: 0.8, onStep: onStep)
+            try engine.renderOffline(seconds: seconds, to: url, archiveBeatDuration: beat, onStep: onStep)
             let file = try AVAudioFile(forReading: url)
             let pcm = try #require(AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)))
             try file.read(into: pcm)
@@ -536,6 +536,43 @@ struct ArchiveVoiceRenderTests {
         let before = rms(0.9, 1.4), during = rms(2.4, 3.3)
         #expect(before > -60, "the bed is audible before the dip (\(before) dB)")
         #expect(during < before - 8, "the bed dips under the return with no chops: \(before) -> \(during) dB")
+    }
+
+    /// The live fallback when a cue carries no transport and no chop is ever planned: the conductor's
+    /// phrase callback alone (`notePhrase`, polled from `LofiPlayback.onPhrase`) places the return.
+    @Test func thePhraseCallbackAloneDipsTheBedUnderTheReturnWithNoChops() throws {
+        let probe = try ChopProbe(seed: 10)
+        let rate = probe.rate
+        let n = AVAudioFrameCount(9 * rate)
+        let bed = try #require(AVAudioPCMBuffer(pcmFormat: probe.engine.archiveFormat, frameCapacity: n))
+        bed.frameLength = n
+        for c in 0..<Int(bed.format.channelCount) {
+            for i in 0..<Int(n) { bed.floatChannelData![c][i] = 0.3 * Float(sin(2 * Double.pi * 900 * Double(i) / rate)) }
+        }
+        // 150 BPM keeps the render short. Phrase 2 (the breakdown) becomes audible at 0.4 s, so the
+        // return's downbeat is one phrase (16 beats, 6.4 s) later, at 6.8 s; the dip opens 3 beats early.
+        let beat = 0.4, phraseAt = 0.4
+        var begun = false, noted = false
+        let x = try probe.render(seconds: 7.9, beat: beat) { t in
+            if !begun, t >= 0.2 {
+                begun = true
+                probe.engine.post(.archiveBegin(ArchiveVoice.Cue(buffer: bed, gain: 1, fadeIn: 0.1, label: "no speech", token: 1)))
+            }
+            if !noted, t >= phraseAt {
+                noted = true
+                probe.engine.archive.notePhrase(2, beatDuration: beat, now: t)
+            }
+        }
+        let counts = probe.engine.archive.chopCounts
+        #expect(counts.stored == 0 && counts.queued == 0, "no chop at all")
+        func rms(_ a: Double, _ b: Double) -> Double {
+            let slice = x[Int(a * rate)..<Int(b * rate)]
+            return 10 * log10(max(slice.reduce(0) { $0 + Double($1 * $1) } / Double(slice.count), 1e-20))
+        }
+        let returnAt = phraseAt + 16 * beat
+        let before = rms(3.0, 4.5), during = rms(returnAt - 0.6, returnAt + 0.6)
+        #expect(before > -60, "the bed is audible before the dip (\(before) dB)")
+        #expect(during < before - 8, "the phrase callback alone dips the bed: \(before) -> \(during) dB")
     }
 }
 
