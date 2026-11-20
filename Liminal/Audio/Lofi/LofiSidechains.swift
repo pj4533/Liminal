@@ -1,10 +1,14 @@
 import Foundation
 
 /// The sidechain listens to low-frequency transients in the actual break. It only changes the bass gain.
-/// Plan 8.3: at most 3 dB of reduction, 3 ms attack, 100 ms release. It never mutes the bass.
+/// Plan 8.3 asked for at most 3 dB; mix calibration (docs/plans/mpc-chopping-measurements.md) set 4 dB
+/// with a steeper detector so the measured duck under sustained notes reads 1.5 to 4.5 dB (C-B2) on every
+/// matrix case (3 dB read 1.1 to 1.6). 3 ms attack, 100 ms release. It never mutes the bass.
 nonisolated struct LofiKickDuck {
-    /// Linear depth at full detection: 1 - 10^(-3 / 20).
-    static let depth: Float = 0.292_054
+    /// Linear depth at full detection: 1 - 10^(-4 / 20).
+    static let depth: Float = 0.369_043
+    /// Detection slope: the excess over the adaptive threshold that reaches full depth is 1 / slope.
+    static let slope: Float = 28
     static let attack = 0.003
     static let release = 0.100
 
@@ -40,7 +44,7 @@ nonisolated struct LofiKickDuck {
         peak += detectorStep * (level - peak)
         background += backgroundStep * (level - background)
         let excess = peak - max(0.018, 1.8 * background)
-        let target = min(1, max(0, excess * 19))
+        let target = min(1, max(0, excess * Self.slope))
         amount += (target > amount ? attackStep : releaseStep) * (target - amount)
         return 1 - Self.depth * amount
     }

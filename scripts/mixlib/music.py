@@ -102,20 +102,39 @@ def measure_theme_return(cap, grid, grids):
         return {"skipped": "score.json or lead stem missing"}
     nfr = len(lead["PL"])
     lead_sig = cap.section_signal("lead")
-    rivals = [grids.get(s) for s in ("mids", "space", "dialogue", "bed")]
-    rivals = [g for g in rivals if g is not None]
+    # User direction of 19 November 2026 (docs/plans/mpc-chopping.md): the chops are a featured layer, so
+    # salience is judged against mids, space and bed; the value with the dialogue as a rival is reported too.
+    rivals = [g for g in (grids.get(s) for s in ("mids", "space", "bed")) if g is not None]
+    rivals_dialogue = rivals + [g for g in (grids.get("dialogue"),) if g is not None]
+    chops = cap.chop_intervals(dry=True) if cap.has_section("dialogue") else []
 
-    def salience(phrase):
+    def hook_windows(phrase):
         notes = sorted(_notes(phrase, "lead"), key=lambda n: n["on"])[:2]
-        if not notes:
+        return [(int(n["on"]), min(int(n["off"]), int(n["on"]) + int(1.0 * cap.rate))) for n in notes]
+
+    def salience(phrase, rival_set):
+        iv = hook_windows(phrase)
+        if not iv:
             return None
-        iv = [(int(n["on"]), min(int(n["off"]), int(n["on"]) + int(1.0 * cap.rate))) for n in notes]
         m = _mask(grid, iv, nfr)
         l = band_mean(grid, lead, m, 500, 4000)
         if l < 1e-10:  # lead silent in these notes (about -100 dBFS): salience is undefined, not very negative
             return None
-        o = sum(band_mean(grid, g, m, 500, 4000) for g in rivals)
+        o = sum(band_mean(grid, g, m, 500, 4000) for g in rival_set)
         return float(db10(max(l, 1e-18)) - db10(max(o, 1e-18)))
+
+    def hook_chop_free(phrase):
+        """No dry chop overlaps the first two return notes (the salience window). The motif's returnOpen
+        cell places one quiet piece late in the return's first bar, after the hook has opened (plan 5.3)."""
+        return not any(s < b and e > a for s, e in chops for a, b in hook_windows(phrase))
+
+    def band_levels(phrase):
+        iv = hook_windows(phrase)
+        if not iv:
+            return None
+        m = _mask(grid, iv, nfr)
+        return {s: round(float(db10(max(band_mean(grid, grids[s], m, 500, 4000), 1e-18))), 2)
+                for s in ("lead", "mids", "space", "bed", "dialogue") if grids.get(s) is not None}
 
     takes = {}
     for i, ph in enumerate(cap.score):
@@ -129,7 +148,9 @@ def measure_theme_return(cap, grid, grids):
         env_r = onset_envelope(lead_sig, cap.rate, *ret["range"])
         n = min(len(env_t), len(env_r))
         corr = float(np.corrcoef(env_t[:n], env_r[:n])[0, 1]) if n > 10 and env_t[:n].std() > 0 and env_r[:n].std() > 0 else None
-        results.append({"take": take, "themeSalienceDb": salience(theme), "returnSalienceDb": salience(ret),
+        results.append({"take": take, "themeSalienceDb": salience(theme, rivals), "returnSalienceDb": salience(ret, rivals),
+                        "returnSalienceWithDialogueDb": salience(ret, rivals_dialogue),
+                        "returnHookChopFree": hook_chop_free(ret), "returnBandLevelsDb": band_levels(ret),
                         "onsetCorrelation": corr, "themeProgram": theme.get("program"),
                         "returnProgram": ret.get("program"), "sameProgram": theme.get("program") == ret.get("program")})
     if not results:

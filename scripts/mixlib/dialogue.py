@@ -121,6 +121,15 @@ def measure_bed(cap, grid, grids):
         bsig = cap.section_signal("bed")
         parts = np.concatenate([np.asarray(bsig[a:b], dtype=np.float64) for a, b in gaps], axis=0)
         out["gapLufs"] = float(-0.691 + db10(np.sum(np.mean(k_weighted(parts, cap.rate) ** 2, axis=0))))
+        # Music plus chops in the same gaps (every section but the bed), for "bed at least 10 dB under".
+        rest = [s for s in SECTION_ORDER if s != "bed" and cap.has_section(s)]
+        if rest:
+            msig = np.asarray(cap.section_signal(rest[0]), dtype=np.float64)
+            for s in rest[1:]:
+                msig = msig + np.asarray(cap.section_signal(s), dtype=np.float64)
+            mparts = np.concatenate([msig[a:b] for a, b in gaps], axis=0)
+            out["mixInGapsLufs"] = float(-0.691 + db10(np.sum(np.mean(k_weighted(mparts, cap.rate) ** 2, axis=0))))
+            out["bedUnderMixInGapsDb"] = out["mixInGapsLufs"] - out["gapLufs"]
     else:
         out["gapsSkipped"] = "no gaps of at least 0.5 s between chops"
     if chops and grids.get("dialogue") is not None:

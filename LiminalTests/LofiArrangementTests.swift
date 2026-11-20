@@ -205,7 +205,7 @@ struct LofiArrangementTests {
                     }
                     #expect(t.gain == 1)
                 }
-                #expect(abs(20 * log10(LofiScore.returnRevealGain) - 1.5) < 0.001)
+                #expect(abs(20 * log10(LofiScore.returnRevealGain) - 3) < 0.001)
                 #expect(part(reprise, .texture).allSatisfy { $0.beat >= 2 })
                 let boundary = LofiScore.firstCellBoundary(b)
                 #expect(boundary >= b[1].beat)
@@ -221,12 +221,14 @@ struct LofiArrangementTests {
 
     @Test func theCarriedTailDipsSmoothlyUnderTheReturn() {
         #expect(LofiRenderer.returnCarryGain(beat: 0) == 1)
-        #expect(abs(LofiRenderer.returnCarryGain(beat: 1) - 0.501_187) < 1e-5)
-        #expect(abs(LofiRenderer.returnCarryGain(beat: 1.99) - 0.501_187) < 1e-5)
+        // At least 6 dB down (9 dB since mix calibration).
+        #expect(20 * log10(LofiRenderer.returnCarryFloor) <= -6)
+        #expect(abs(LofiRenderer.returnCarryGain(beat: 1) - LofiRenderer.returnCarryFloor) < 1e-5)
+        #expect(abs(LofiRenderer.returnCarryGain(beat: 1.99) - LofiRenderer.returnCarryFloor) < 1e-5)
         #expect(LofiRenderer.returnCarryGain(beat: 2.5) == 1)
         #expect(LofiRenderer.returnCarryGain(beat: 8) == 1)
         // A later second note holds the dip until it has sounded.
-        #expect(abs(LofiRenderer.returnCarryGain(beat: 3.2, hold: 3.25) - 0.501_187) < 1e-5)
+        #expect(abs(LofiRenderer.returnCarryGain(beat: 3.2, hold: 3.25) - LofiRenderer.returnCarryFloor) < 1e-5)
         #expect(LofiRenderer.returnCarryGain(beat: 3.75, hold: 3.25) == 1)
         var previous: Float = 1
         for step in 0...3000 {

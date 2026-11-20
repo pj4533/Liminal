@@ -253,13 +253,14 @@ struct ArchiveVoiceRenderTests {
         print("softened chops: bed before \(bedBefore) during \(bedDuring) cut \(cut) echo \(echo)")
         // A quiet direct film remains audible before the musical cut enters: the Lo-Fi bed keeps its
         // baseline, mostly wet chain (user direction, 19 November 2026), so its direct sound is a
-        // tenth to a quarter of the cut. It stays audible under the cut.
-        #expect(bedBefore > cut * 0.10 && bedBefore < cut * 0.25, "bed before the cut \(bedBefore)")
+        // tenth to a third of the cut (mix calibration raised the Lo-Fi context gain 2.5 dB; about 0.3).
+        // It stays audible under the cut.
+        #expect(bedBefore > cut * 0.10 && bedBefore < cut * 0.36, "bed before the cut \(bedBefore)")
         #expect(bedDuring > bedBefore * 0.25, "bed under the cut \(bedDuring)")
         // The cut plays through the 0.72 dry path.
         #expect(cut > 0.055 && cut < 0.096, "cut \(cut)")
         // The 0.6-second cut has stopped; its dotted-eighth repeat is still audible. The echo return is
-        // band-passed and about 16 dB under the dry line (plan 8.5; 0.16 of it, plus a little room).
+        // band-passed and about 11 dB under the dry line since mix calibration (16 dB in plan 8.5), plus room.
         #expect(echo > cut * 0.08 && echo < cut * 0.35, "echo \(echo) against the cut \(cut)")
         #expect(level(at: 1.0, hz: chopHz) < 0.0005)
         #expect(peak(at: 3.25) < 0.0001)

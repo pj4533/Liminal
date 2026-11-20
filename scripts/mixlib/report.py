@@ -359,6 +359,12 @@ def ev_C_B6(m, b, c):
         k = f"take{t['take']}"
         r, th, co = t["returnSalienceDb"], t["themeSalienceDb"], t["onsetCorrelation"]
         c.test(f"{k}ReturnSalienceDb", r, None if r is None else r >= b["returnSalienceDbMin"])
+        if "returnHookChopFree" in t:
+            free = t["returnHookChopFree"]
+            if b.get("returnHookChopFree"):
+                c.test(f"{k}ReturnHookChopFree", free, free)
+            if t.get("returnSalienceWithDialogueDb") is not None:
+                c.values[f"{k}ReturnSalienceWithDialogueDb"] = t["returnSalienceWithDialogueDb"]
         c.test(f"{k}ReturnMinusThemeDb", None if (r is None or th is None) else r - th,
                None if (r is None or th is None) else r - th >= 0)
         c.test(f"{k}OnsetCorrelation", co, None if co is None else co >= b["onsetCorrelationMin"])
@@ -388,16 +394,31 @@ def ev_C_B9(m, b, c):
     if bed.get("skipped"):
         c.test("bed", None, None, bed["skipped"])
         return
+    # Bounds absent from the criteria file are reported without gating (the user direction of 19 November
+    # 2026 replaced "direct to wet at least +3 dB" and "roll-off at least 3 kHz", see the measurements doc).
+    def opt(key, v, ok):
+        if ok is None:
+            c.values[key] = None if v is None else round(float(v), 4)
+        else:
+            c.test(key, v, ok)
     v = bed.get("directToWetDb")
-    c.test("directToWetDb", v, None if v is None else v >= b["directToWetDbMin"], bed.get("directToWetSkipped"))
+    if "directToWetDbMax" in b:
+        c.test("directToWetDb", v, None if v is None else v <= b["directToWetDbMax"], bed.get("directToWetSkipped"))
+    elif "directToWetDbMin" in b:
+        c.test("directToWetDb", v, None if v is None else v >= b["directToWetDbMin"], bed.get("directToWetSkipped"))
+    else:
+        opt("directToWetDb", v, None)
     v = bed.get("audibilityIndex")
     c.test("audibilityIndex", v, _in(v, b["audibilityIndex"]), bed.get("gapsSkipped"))
+    v = bed.get("bedUnderMixInGapsDb")
+    if "bedUnderMixInGapsDbMin" in b:
+        c.test("bedUnderMixInGapsDb", v, None if v is None else v >= b["bedUnderMixInGapsDbMin"], bed.get("gapsSkipped"))
     v = bed.get("dialogueOverBed1to4kDb")
     c.test("dialogueOverBed1to4kDb", v, None if v is None else v >= b["dialogueOverBedDbMin"])
     v = bed.get("rolloff85HzBedPost", bed.get("rolloff85Hz"))
     if bed.get("rolloff85HzBedPost") is not None:
         c.values["rolloffSource"] = "bed-post"
-    c.test("rolloff85Hz", v, None if v is None else v >= b["rolloffHzMin"])
+    opt("rolloff85Hz", v, None if "rolloffHzMin" not in b else v is not None and v >= b["rolloffHzMin"])
 
 
 def ev_C_B10(m, b, c):
@@ -461,7 +482,7 @@ def ev_C_D3(m, b, c):
 def ev_C_D4(m, b, c):
     cad = _cad(m)
     if cad.get("motif"):
-        c.test("rests", None, None, "motif mode: the user direction of 19 November 2026 puts a piece in every bar (C-D9)")
+        c.test("rests", None, None, "not applicable in motif mode: the user direction of 19 November 2026 puts a piece in every bar (C-D9 gates it)")
         return
     if "restsPer8Bars" not in cad:
         c.test("rests", None, None, "no cadence")
@@ -585,7 +606,7 @@ def summarize(results):
         counts[r["status"]] += 1
     strict_failures = [r["id"] for r in results if r["level"] == "fail" and (
         r["status"] == "fail" or (r["status"] == "skipped" and r.get("reason") not in SKIP_OK
-                                  and not str(r.get("reason", "")).startswith("not applicable")))]
+                                  and "not applicable" not in str(r.get("reason", ""))))]
     return {"counts": counts, "strictFailures": strict_failures}
 
 

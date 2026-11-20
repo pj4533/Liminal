@@ -55,8 +55,9 @@ nonisolated enum DialogueMotifTuning {
     static let returnPieceDB: Float = -3
     /// Echo throw: repeats every 0.75 beat at these levels, band-limited, inside the following space.
     static let echoDelayBeats = 0.75
-    static let echoGainsDB: [Float] = [-7, -13]
-    static let echoTailBeats = 1.6
+    /// Three repeats (two at -7 and -13 dB before; user direction of 19 November 2026: more echo).
+    static let echoGainsDB: [Float] = [-6, -10, -15]
+    static let echoTailBeats = 2.4
     static let minimumEchoTailSeconds = 0.25
     static let echoBand = (low: 400.0, high: 3000.0)
     /// The filtered repeat: a 600 Hz to 2.8 kHz band, loudness-matched to the dry piece with at most this make-up.

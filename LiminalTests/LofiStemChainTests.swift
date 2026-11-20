@@ -362,7 +362,8 @@ struct LofiStemChainTests {
         #expect(finite)
     }
 
-    @Test func kickDuckIsBoundedToThreeDecibels() {
+    /// At most `LofiKickDuck.depth` (4 dB since mix calibration; 3 dB before), 1.5 to 4.5 dB after each kick.
+    @Test func kickDuckIsBounded() {
         let fixture = Self.drumFixture(seconds: 4)
         var duck = LofiKickDuck(sampleRate: Self.rate)
         let gains = zip(fixture.left, fixture.right).map { duck.gain(drumLeft: $0, drumRight: $1) }
