@@ -1,3 +1,4 @@
+import Accelerate
 import Foundation
 
 /// The sidechain listens to low-frequency transients in the actual break. It only changes the bass gain.
@@ -96,6 +97,51 @@ nonisolated struct LofiKickDuck {
             if i >= preroll { gains[i - preroll] = 1 - depth * amount }
         }
         return gains
+    }
+
+    /// True when the raw bass is silent just before phrase frame `kick` (20 ms ending 2 ms before it) and
+    /// sounds in the 40 ms after it: a note anchored to that kick starts there.
+    static func noteStarts(on kick: Int, bass: UnsafePointer<Float>, count: Int, sampleRate: Double) -> Bool {
+        let before = kick - Int(0.022 * sampleRate), gap = kick - Int(0.002 * sampleRate)
+        let after = kick + Int(0.040 * sampleRate)
+        guard before >= 0, after <= count, kick >= 0 else { return false }
+        var quiet: Float = 0, loud: Float = 0
+        vDSP_maxmgv(bass + before, 1, &quiet, vDSP_Length(gap - before))
+        vDSP_maxmgv(bass + kick, 1, &loud, vDSP_Length(after - kick))
+        return loud > 1e-3 && quiet < 0.02 * loud
+    }
+
+    // MARK: Split duck
+
+    /// The duck is split at this frequency (plan 2.3): full depth below, so the kick clears the sub, and
+    /// `upperShare` of the depth above, so the body keeps sounding through the kick.
+    static let splitHz = 150.0
+    static let upperShare: Float = 1.0 / 3
+
+    /// Applies per-frame duck gains `g` to the mono bass in place: `g` below `splitHz` and
+    /// `1 - (1 - g) upperShare` above. The split is complementary (low = 2nd-order low-pass, high = the
+    /// rest), so with no duck the bass is unchanged sample for sample. Offline, on the renderer's thread.
+    static func applySplit(_ gains: [Float], to bass: UnsafeMutablePointer<Float>, count: Int, sampleRate: Double) {
+        let n = min(count, gains.count)
+        guard n > 0 else { return }
+        // Zero phase (forward, then backward): the bands keep the bass's timing exactly.
+        var low = Array(UnsafeBufferPointer(start: bass, count: n))
+        let kinds: [LofiBiquad.Kind] = [.lowpass(hz: splitHz, q: 0.707_106_781_186_547_5)]
+        low.withUnsafeMutableBufferPointer { b in
+            var forward = LofiFilterChain(kinds, sampleRate: sampleRate)
+            forward.process(b.baseAddress!, count: n)
+            vDSP_vrvrs(b.baseAddress!, 1, vDSP_Length(n))
+            var backward = LofiFilterChain(kinds, sampleRate: sampleRate)
+            backward.process(b.baseAddress!, count: n)
+            vDSP_vrvrs(b.baseAddress!, 1, vDSP_Length(n))
+        }
+        // upper = 1 - (1 - g) share, low gain g: out = upper x + (g - upper) low, as two vector ramps.
+        // g - upper = (1 - share)(g - 1).
+        var share = upperShare, oneMinus = 1 - upperShare, rest = 1 - upperShare, minusRest = upperShare - 1
+        var upper = [Float](repeating: 0, count: n), lowGain = upper
+        vDSP_vsmsa(gains, 1, &share, &oneMinus, &upper, 1, vDSP_Length(n))
+        vDSP_vsmsa(gains, 1, &rest, &minusRest, &lowGain, 1, vDSP_Length(n))
+        vDSP_vmma(bass, 1, upper, 1, low, 1, lowGain, 1, bass, 1, vDSP_Length(n))
     }
 
     private struct DetectorChannel {

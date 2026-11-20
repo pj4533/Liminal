@@ -236,7 +236,7 @@ nonisolated struct LofiScore: Sendable, Equatable {
         let voice = bassVoice(seed: seed, section: section, phrase: phrase)
         let bass = bassLine(harmony: harmony, section: section, random: phraseRandom, kickBeats: kickBeats,
                             timing: timing, timingStartBeat: timingStartBeat, voice: voice,
-                            beatSeconds: max(0.001, beatSeconds))
+                            beatSeconds: max(0.001, beatSeconds), seed: seed, phrase: phrase)
         let reply = section == .answer || section == .variation
         let chordDegree = reply ? harmony.nearest(5, in: scale.intervals) : 0
         // Guitar programs add their own strings around the unchanged melody.
@@ -263,19 +263,7 @@ nonisolated struct LofiScore: Sendable, Equatable {
                                                      protectedUntil: protected)
         return .init(section: section, tonic: tonic, chordRoot: (tonic + chordDegree) % 12, scale: scale, notes: notes,
                      preset: preset, endingRest: rest, virtualRecord: virtualRecord, bassVoice: voice,
-                     bassAnchors: bass.anchors)
-    }
-
-    /// One bass color per phrase: round sub for statements, pluck for the answer, a long round
-    /// answer for the return and breakdown. A quarter of takes play their statements plucked.
-    static func bassVoice(seed: UInt64, section: Section, phrase: Int) -> LofiBassVoice {
-        switch section {
-        case .answer: return .pluck
-        case .returnTheme, .breakdown: return .longAnswer
-        case .theme, .variation:
-            var take = MusicRNG(seed: seed).fork(UInt64(max(0, phrase) / LofiDrumTake.phraseCount) + 733)
-            return take.chance(0.25) ? .pluck : .roundSub
-        }
+                     bassAnchors: bass.anchors, bassSweep: bass.sweep)
     }
 
     /// The onset of the second melodic cell: the largest gap among the first notes ends the first cell.

@@ -39,7 +39,8 @@ struct LofiTests {
                 let melody = score.notes.filter { $0.part == .lead }
                 #expect((3...6).contains(melody.count))
                 #expect(melody.allSatisfy { $0.beat + $0.length <= score.endingRest.lowerBound })
-                #expect(score.notes.filter { $0.part == .bass }.allSatisfy { (27...43).contains($0.midi) })
+                // The riddim line's octave pickups reach MIDI 53 (plan 2.5); structural notes stay in 28...41.
+                #expect(score.notes.filter { $0.part == .bass }.allSatisfy { (27...53).contains($0.midi) })
                 #expect(score.notes.allSatisfy { $0.beat + $0.length <= LofiClock.beats })
             }
         }

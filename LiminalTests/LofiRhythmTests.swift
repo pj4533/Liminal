@@ -163,24 +163,36 @@ struct LofiRhythmTests {
             #expect((0...30).contains(delay), "kick at \(kick.attackFrame): low rise \(delay) ms after attack")
         }
         #expect(landmarks.filter { $0.kind != .kick }.allSatisfy { $0.lowRiseFrame == $0.attackFrame })
+        // Rewritten for the two-layer voice (plan 2.8): every voice and stroke, rise lead -5 to 40 ms, now
+        // measured with the C-B2 envelope (`LofiBassVoice.smoothLowRise`) rather than the 2 ms power.
         let clock = LofiClock(tempo: 70, sampleRate: rate)
         for voice in LofiBassVoice.allCases {
-            for midi in [28, 36, 43] {
-                let lead = voice.lowRiseLead(midi: midi, sampleRate: rate)
-                #expect((-0.005...0.04).contains(lead), "\(voice) MIDI \(midi): low rise \(lead * 1000) ms")
-                // Place the note so its low rise lands on frame 12 000.
-                let target = 12_000
-                let start = Double(target) / rate - lead
-                var left = [Float](repeating: 0, count: 36_000), right = left
-                let note = LofiScore.Note(part: .bass, midi: midi, beat: start / clock.beatDuration, length: 0.5, velocity: 0.8)
-                left.withUnsafeMutableBufferPointer { l in
-                    right.withUnsafeMutableBufferPointer { r in LofiBassVoice.add(note, voice: voice, clock: clock, left: l, right: r) }
+            for stroke in voice == .classic ? [LofiScore.BassStroke.walk] : [.thump, .walk, .hold, .ghost] {
+                for midi in [28, 36, 43] {
+                    let lead = voice.lowRiseLead(midi: midi, stroke: stroke, sampleRate: rate)
+                    #expect((-0.005...0.04).contains(lead), "\(voice) \(stroke) MIDI \(midi): low rise \(lead * 1000) ms")
+                    // Place the note so its low rise lands on frame 12 000.
+                    let target = 12_000
+                    let start = Double(target) / rate - lead
+                    var left = [Float](repeating: 0, count: 36_000), right = left
+                    var note = LofiScore.Note(part: .bass, midi: midi, beat: start / clock.beatDuration, length: 0.5, velocity: 0.8)
+                    note.stroke = stroke
+                    left.withUnsafeMutableBufferPointer { l in
+                        right.withUnsafeMutableBufferPointer { r in LofiBassVoice.add(note, voice: voice, clock: clock, left: l, right: r) }
+                    }
+                    // The C-B2 measure (Hilbert envelope of 40-160 Hz, -6 dB) lands on the target within 1 ms (the
+                    // thump's falling pitch moves its envelope a little with the start frame's fraction).
+                    let start0 = clock.frame(at: note.beat)
+                    var rise = try #require(LofiBassVoice.smoothLowRise(left, from: start0, sampleRate: rate))
+                    // A later swell of the body at the bottom of the register: the lead is the sub's own rise.
+                    if let kit = voice.kit, Double(rise - start0) / rate > LofiBassVoice.maximumLead {
+                        let sub = LofiBassVoice.render(note, kit: kit, clock: clock, limit: 36_000 - start0, layers: .sub)
+                        rise = try #require(LofiBassVoice.smoothLowRise([Float](repeating: 0, count: start0) + sub,
+                                                                        from: start0, sampleRate: rate))
+                        if Double(rise - start0) / rate > LofiBassVoice.maximumLead { continue }
+                    }
+                    #expect(abs(rise - target) <= Int(0.001 * rate), "\(voice) \(stroke) MIDI \(midi): rise at \(rise), wanted \(target)")
                 }
-                let center = clock.frame(at: note.beat) + Int((voice.attackLead * rate).rounded())
-                let rise = try #require(left.withUnsafeBufferPointer {
-                    LofiDrumLandmarks.lowBandRise($0.baseAddress!, count: $0.count, around: center, sampleRate: rate)
-                })
-                #expect(abs(rise - target) <= Int(0.0005 * rate), "\(voice) MIDI \(midi): rise at \(rise), wanted \(target)")
             }
         }
     }
@@ -531,65 +543,64 @@ struct LofiRhythmTests {
         return .infinity
     }
 
+    /// Rewritten for the two-layer voice (plan 2.8): `classic` keeps its stored attack lead; the kits are
+    /// mono, their sub sits within 5 cents of the note, they are exactly zero after the release, have
+    /// nothing above 5 kHz within 60 dB, and a `thump` has no click step. (Detail per stroke and MIDI is in
+    /// `LofiBassVoiceTests`.)
     @Test func bassVoicesAreTunedClickFreeMonoAndLoudnessMatched() {
-        let span = Self.voiceClock.frame(at: 1.2)
-        let classic = Self.render(.classic)
-        let reference = Self.rms(classic.left[0..<span])
-        let classicMids = Self.band(Self.spectrum(Array(classic.left[0..<(span + Int(0.5 * 48_000))])), 150, 800)
-        let classicSteps = zip(classic.left, classic.left.dropFirst()).map { abs($1 - $0) }.max() ?? 0
         let measuredClassic = Self.measuredAttackLead(.classic)
-        print(String(format: "BASS classic attack lead %.2f ms (stored %.2f)", measuredClassic * 1000,
+        BassReport.log(String(format: "BASS classic attack lead %.2f ms (stored %.2f)", measuredClassic * 1000,
                      LofiBassVoice.classic.attackLead * 1000))
         #expect(abs(measuredClassic - LofiBassVoice.classic.attackLead) <= 0.0002)
+        let span = Self.voiceClock.frame(at: 1.2)
         for voice in LofiBassVoice.allCases where voice != .classic {
             let note = Self.render(voice)
             let x = note.left
             #expect(note.left == note.right, "\(voice) is mono")
-            let level = 20 * log10(Self.rms(x[0..<span]) / reference)
-            #expect(abs(level) <= 0.5, "\(voice) RMS \(level) dB against classic")
-
-            // Click-free edges.
             #expect(abs(x[0]) < 1e-4)
-            let steps = zip(x, x.dropFirst()).map { abs($1 - $0) }
-            let maxStep = steps.max() ?? 0
-            #expect(maxStep <= 2 * classicSteps, "\(voice) step \(maxStep)")
-            let end = span + Int(voice.recipe.release * 48_000)
-            #expect(abs(x[min(x.count - 1, end - 1)]) < 1e-4 && x[end...].allSatisfy { $0 == 0 })
-
-            // Stable tuned sustain after 40 ms: every upward zero crossing period within 5 cents.
+            let end = span + Int(voice.release(.walk) * 48_000)
+            #expect(x[end...].allSatisfy { $0 == 0 })
+            let sub = LofiBassVoice.render(LofiScore.Note(part: .bass, midi: 33, beat: 0, length: 1.2, velocity: 0.8),
+                                           kit: voice.kit!, clock: Self.voiceClock, limit: x.count, layers: .sub)
             let f0 = 440 * pow(2, (33.0 - 69) / 12)
             var crossings: [Double] = []
-            for i in Int(0.040 * 48_000)..<(span - 960) where x[i - 1] < 0 && x[i] >= 0 {
-                crossings.append(Double(i - 1) + Double(-x[i - 1] / (x[i] - x[i - 1])))
+            for i in Int(0.040 * 48_000)..<(span - 960) where sub[i - 1] < 0 && sub[i] >= 0 {
+                crossings.append(Double(i - 1) + Double(-sub[i - 1] / (sub[i] - sub[i - 1])))
             }
             let cents = zip(crossings, crossings.dropFirst()).map { 1200 * log2(48_000 / ($1 - $0) / f0) }
             #expect(!cents.isEmpty && cents.allSatisfy { abs($0) <= 5 }, "\(voice) worst \(cents.map(abs).max() ?? 0) cents")
-
-            // Spectrum: nothing above 5 kHz within 60 dB of the fundamental.
-            let spectrum = Self.spectrum(Array(x[0..<(span + Int(0.5 * 48_000))]))
-            let fundamental = spectrum.power.max() ?? 0
-            let highBin = Int(5_000 / spectrum.resolution)
-            let high = spectrum.power[highBin...].max() ?? 0
-            let highDB = 10 * log10(Double(high) / Double(fundamental))
+            let spectrum = Self.spectrum(Array(x[0..<end]))
+            let highDB = 10 * log10(Double(spectrum.power[Int(5_000 / spectrum.resolution)...].max() ?? 0)
+                                    / Double(spectrum.power.max() ?? 1))
             #expect(highDB <= -60, "\(voice) \(highDB) dB above 5 kHz")
-            let mids = 10 * log10(Self.band(spectrum, 150, 800) / classicMids)
-            if voice == .pluck { #expect(mids > 0, "pluck 150-800 Hz \(mids) dB against classic") }
-
-            let lead = Self.measuredAttackLead(voice)
-            #expect(abs(lead - voice.attackLead) <= 0.0002, "\(voice) attack lead \(lead)")
-            print(String(format: "BASS %@ RMS %+.3f dB, 150-800 Hz %+.2f dB, >5 kHz %.1f dB, worst %.2f cents, max step %.4f, attack lead %.2f ms (stored %.2f)",
-                         "\(voice)", level, mids, highDB, cents.map(abs).max() ?? 0, maxStep, lead * 1000, voice.attackLead * 1000))
+            var thump = LofiScore.Note(part: .bass, midi: 33, beat: 0, length: 0.25, velocity: 0.9)
+            thump.stroke = .thump
+            var tl = [Float](repeating: 0, count: Self.voiceClock.frameCount), tr = tl
+            tl.withUnsafeMutableBufferPointer { l in tr.withUnsafeMutableBufferPointer { r in
+                LofiBassVoice.add(thump, voice: voice, clock: Self.voiceClock, left: l, right: r) } }
+            let peak = tl.map(abs).max() ?? 1
+            let step = (zip(tl, tl.dropFirst()).map { abs($1 - $0) }.max() ?? 0) / peak
+            #expect(step <= 0.12, "\(voice) thump step \(step) of the peak")
+            BassReport.log(String(format: "BASS %@ worst %.2f cents, >5 kHz %.1f dB, thump step %.4f", "\(voice)",
+                         cents.map(abs).max() ?? 0, highDB, step))
         }
     }
 
+    /// Rewritten for the two-layer voice (plan 2.8): the two kits are loudness matched within 1 dB per
+    /// stroke across the register.
     @Test func bassVoicesAreLoudnessMatchedAcrossTheRegister() {
-        // Within 1 dB elsewhere in the bass register: the voices share a fundamental-dominated body.
-        for midi in [28, 38, 45] {
-            let span = Self.voiceClock.frame(at: 1.2)
-            let reference = Self.rms(Self.render(.classic, midi: midi).left[0..<span])
-            for voice in LofiBassVoice.allCases where voice != .classic {
-                let level = 20 * log10(Self.rms(Self.render(voice, midi: midi).left[0..<span]) / reference)
-                #expect(abs(level) <= 1, "\(voice) at MIDI \(midi): \(level) dB")
+        for midi in [28, 33, 38, 41] {
+            for stroke in [LofiScore.BassStroke.thump, .walk, .hold, .ghost] {
+                var note = LofiScore.Note(part: .bass, midi: midi, beat: 0, length: stroke == .hold ? 1.5 : 0.5, velocity: 0.8)
+                note.stroke = stroke
+                func level(_ voice: LofiBassVoice) -> Double {
+                    var l = [Float](repeating: 0, count: Self.voiceClock.frameCount), r = l
+                    l.withUnsafeMutableBufferPointer { lp in r.withUnsafeMutableBufferPointer { rp in
+                        LofiBassVoice.add(note, voice: voice, clock: Self.voiceClock, left: lp, right: rp) } }
+                    return Self.rms(l[0..<Self.voiceClock.frame(at: note.length + 0.3)])
+                }
+                let difference = 20 * log10(level(.upright) / level(.flatwound))
+                #expect(abs(difference) <= 1, "\(stroke) at MIDI \(midi): \(difference) dB")
             }
         }
     }

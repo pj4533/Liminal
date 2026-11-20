@@ -1,3 +1,4 @@
+import Accelerate
 import AVFoundation
 import Foundation
 import Testing
@@ -32,102 +33,95 @@ struct LofiArrangementTests {
 
     // MARK: Bass
 
-    @Test(arguments: [62.0, 70.0, 81.0])
-    func structuralBassAccentsLandTheirAttackOnAConfidentKick(tempo: Double) throws {
+    /// Rewritten for the riddim line (plan 2.8): every anchored note, not only beats 0 and 8, puts its
+    /// 40-160 Hz rise within 2 ms of its kick's low rise; the other parts are identical with and without
+    /// the timing field.
+    @Test(arguments: [62.0, 70.0, 72.0, 81.0])
+    func everyAnchoredBassNoteLandsItsRiseOnItsKick(tempo: Double) throws {
         let clock = LofiClock(tempo: tempo, sampleRate: 48_000)
         var voices = Set<LofiBassVoice>()
+        var anchored = 0
         for seed in 0..<24 as Range<UInt64> {
+            let timing = LofiBassLineTests.take(seed: seed, clock: clock)
             for phrase in 0..<8 {
-                let start = Double((phrase % 4) * 16)
-                // Late and early played kicks inside the window, plus an unrelated ghost.
-                let timing = field([(start + 0.07, 0.9), (start + 3.3, 0.95), (start + 7.93, 0.8)], clock: clock)
                 let current = score(phrase, seed: seed, timing: timing, clock: clock)
                 let plain = score(phrase, seed: seed, clock: clock)
                 voices.insert(current.bassVoice)
                 let bass = part(current, .bass)
-                #expect(bass.count == part(plain, .bass).count)
-                #expect(bass.map(\.midi) == part(plain, .bass).map(\.midi))
-                for (accent, kickBeat) in [(0.0, 0.07), (8.0, 7.93)] {
-                    guard let note = bass.first(where: { abs($0.beat - accent) < 0.2 }) else { continue }
-                    // The voice's own 40-160 Hz rise lands on the kick's (a synthetic landmark's low-band
-                    // rise is its attack frame).
-                    let lead = current.bassVoice.lowRiseLead(midi: note.midi) * clock.sampleRate
-                    let kickFrame = Double(clock.frame(at: kickBeat))
-                    // A slow voice whose rise is longer than the kick's offset into the phrase starts on the
-                    // phrase's first frame instead (the round sub needs about 70 ms; the kick is 68 ms in at 62 BPM).
+                for anchor in current.bassAnchors {
+                    let note = try #require(bass.first { $0.beat == anchor.noteBeat })
+                    let lead = current.bassVoice.lowRiseLead(midi: note.midi, stroke: note.stroke) * clock.sampleRate
+                    let kickFrame = anchor.kickLowRiseBeat * clock.framesPerBeat
+                    // A note whose rise is longer than its kick's offset into the phrase starts on frame 0.
                     if lead > kickFrame {
                         #expect(note.beat == 0)
                         continue
                     }
-                    let attack = Double(clock.frame(at: note.beat)) + lead
-                    #expect(abs(attack - kickFrame) / clock.sampleRate < 0.002,
-                            "seed \(seed) phrase \(phrase) accent \(accent): \(attack - kickFrame) frames, \(current.bassVoice)")
+                    let rise = Double(clock.frame(at: note.beat)) + lead
+                    #expect(abs(rise - kickFrame) / clock.sampleRate < 0.002,
+                            "seed \(seed) phrase \(phrase) note \(note.beat): \(rise - kickFrame) frames, \(current.bassVoice)")
+                    anchored += 1
                 }
                 #expect(current.notes.filter { $0.part != .bass } == plain.notes.filter { $0.part != .bass })
                 #expect(bass.allSatisfy { $0.beat >= 0 && $0.beat + $0.length <= LofiClock.beats })
             }
         }
-        #expect(voices == [.roundSub, .pluck, .longAnswer])
+        BassReport.log("ARRANGEMENT anchored bass notes at \(tempo) BPM: \(anchored)")
+        #expect(voices == [.upright, .flatwound])
     }
 
-    @Test func bassAccentsStayOnTheGridForDistantOrUnconfidentKicks() {
+    /// Rewritten for the riddim line (plan 2.8): unconfident kicks never anchor, a note is never left
+    /// within 0.20 beats of a confident kick (it moves onto it), and the downbeat stays on the grid when no
+    /// confident kick is near it.
+    @Test func bassNotesIgnoreUnconfidentKicksAndKeepClearOfConfidentOnes() {
         let clock = LofiClock(tempo: 70, sampleRate: 48_000)
         for seed in 0..<24 as Range<UInt64> {
             for phrase in 0..<8 {
                 let start = Double((phrase % 4) * 16)
-                let distant = field([(start + 0.13, 0.95), (start + 8.2, 0.95)], clock: clock)
+                let distant = field([(start + 0.3, 0.95), (start + 8.35, 0.95)], clock: clock)
                 let unsure = field([(start + 0.05, 0.59), (start + 8.04, 0.3)], clock: clock)
-                for timing in [distant, unsure] {
+                for (name, timing) in [("distant", distant), ("unsure", unsure)] {
                     let current = score(phrase, seed: seed, timing: timing, clock: clock)
                     let bass = part(current, .bass)
-                    #expect(current.bassAnchors.isEmpty)
-                    for accent in [0.0, 8.0] where LofiScore.section(at: phrase) != .breakdown || accent == 8 {
-                        #expect(bass.contains { $0.beat == accent }, "seed \(seed) phrase \(phrase) beat \(accent)")
+                    if name == "unsure" { #expect(current.bassAnchors.isEmpty) }
+                    #expect(bass.first?.beat == 0, "seed \(seed) phrase \(phrase) \(name): downbeat at \(bass.first?.beat ?? -1)")
+                    let kicks = timing.kicks(phraseStartBeat: Int(start), minConfidence: LofiScore.bassAccentConfidence)
+                    for note in bass where !current.bassAnchors.contains(where: { $0.noteBeat == note.beat }) {
+                        #expect(kicks.allSatisfy { abs($0 - note.beat) > LofiScore.bassKickSafety - 1e-9 })
                     }
-                    // Pickups keep their pocket and never move more than the window.
-                    let plain = part(score(phrase, seed: seed, clock: clock), .bass)
-                    for (a, b) in zip(bass, plain) { #expect(abs(a.beat - b.beat) <= LofiScore.bassAccentWindow + 1e-9) }
                 }
             }
         }
     }
 
-    @Test func eachPhraseHasOneBassVoiceChosenBySection() throws {
-        var pluckedTakes = 0, takes = 0
+    /// Rewritten for the two kits (plan 2.8): one kit per sixteen-bar take for every section, both kits
+    /// in use, and the rendered bass stem equals `addBass` plus the chain sample for sample.
+    @Test func eachTakeHasOneBassKitAndTheStemIsTheVoiceThroughTheChain() throws {
+        var kits: [LofiBassVoice: Int] = [:]
         for seed in 0..<100 as Range<UInt64> {
-            var statements: [Int: LofiBassVoice] = [:]
-            for phrase in 0..<8 {
-                let current = score(phrase, seed: seed)
-                switch current.section {
-                case .answer: #expect(current.bassVoice == .pluck)
-                case .returnTheme, .breakdown: #expect(current.bassVoice == .longAnswer)
-                case .theme, .variation:
-                    #expect([.roundSub, .pluck].contains(current.bassVoice))
-                    let take = phrase / 4
-                    #expect(statements[take, default: current.bassVoice] == current.bassVoice)
-                    statements[take] = current.bassVoice
-                }
+            for take in 0..<2 {
+                let voices = Set((0..<4).map { score(take * 4 + $0, seed: seed).bassVoice })
+                #expect(voices.count == 1)
+                kits[voices.first!, default: 0] += 1
             }
-            takes += statements.count
-            pluckedTakes += statements.values.filter { $0 == .pluck }.count
         }
-        let share = Double(pluckedTakes) / Double(takes)
-        #expect((0.15...0.35).contains(share), "plucked statement share \(share)")
+        let share = Double(kits[.upright, default: 0]) / 200
+        #expect((0.35...0.65).contains(share), "upright take share \(share)")
 
-        // The renderer plays every bass note of the phrase with the score's single voice.
         let phrase = try LofiRenderer.render(seed: 5, section: .answer, options: .init(tempo: 70), sampleRate: 8_000,
                                              drift: .init(seed: 5), startBeat: 80)
-        #expect(phrase.score.bassVoice == .pluck)
         let n = phrase.clock.frameCount
         var left = [Float](repeating: 0, count: n), right = left
         left.withUnsafeMutableBufferPointer { l in
             right.withUnsafeMutableBufferPointer { r in
                 for note in part(phrase.score, .bass) {
-                    LofiBassVoice.add(note, voice: .pluck, clock: phrase.clock, left: l, right: r)
+                    LofiRenderer.addBass(note, score: phrase.score, clock: phrase.clock, samples: .bundled, left: l, right: r)
                 }
-                // Since the stem chains (plan 8.3) the rendered bass is the voice through the
-                // offline bass chain; the comparison keeps its intent: one voice for every note.
-                _ = LofiStemChains.applyBass(l.baseAddress!, count: n, sampleRate: phrase.clock.sampleRate)
+                vDSP_vadd(l.baseAddress!, 1, r.baseAddress!, 1, l.baseAddress!, 1, vDSP_Length(n))
+                var half: Float = 0.5
+                vDSP_vsmul(l.baseAddress!, 1, &half, l.baseAddress!, 1, vDSP_Length(n))
+                _ = LofiStemChains.applyBass(l.baseAddress!, count: n, sampleRate: phrase.clock.sampleRate,
+                                             beatSeconds: phrase.clock.beatDuration)
             }
         }
         let rendered = try #require(phrase.bass.floatChannelData)

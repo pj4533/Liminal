@@ -274,7 +274,7 @@ nonisolated enum LofiRenderer {
         }
         // Space: filtered once over phrase plus tail, so the carried tail is never filtered again,
         // then ducked under the dry lead. The duck applies to this phrase's frames (own and carried).
-        addBassThrow(score: score, clock: clock, frames: n, into: (left, right))
+        addBassThrow(score: score, clock: clock, frames: frames, spaceLeft: &spaceL, spaceRight: &spaceR)
         let spaceStats = LofiStemChains.applySpace(left: &spaceL, right: &spaceR, sampleRate: sampleRate)
         let duck = Self.spaceDuck(lead: lead, gain: dryLeadGain, frames: n, sampleRate: sampleRate,
                                   onsets: Self.leadOnsets(score, clock: clock))

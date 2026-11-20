@@ -48,7 +48,11 @@ struct LofiCompositionTests {
                 let mids = current.notes.filter { $0.part != .bass }
                 #expect(mids.allSatisfy { $0.beat + $0.length <= current.endingRest.lowerBound })
                 #expect(notes.allSatisfy { (53...72).contains($0.midi) })
-                #expect(current.notes.filter { $0.part == .bass }.allSatisfy { (28...41).contains($0.midi) })
+                // Rewritten for the riddim line (plan 2.8): structural notes in 28...41, octave ornaments up to 53.
+                let bassNotes = current.notes.filter { $0.part == .bass }
+                #expect(bassNotes.allSatisfy { (28...53).contains($0.midi) })
+                #expect(bassNotes.filter { $0.midi > 41 }.allSatisfy { $0.stroke == .thump || $0.stroke == .ghost })
+                #expect(bassNotes.filter { $0.midi > 41 }.count <= 2)
                 #expect(zip(notes, notes.dropFirst()).allSatisfy { first, second in
                     second.beat - first.beat >= 0.49 && first.beat + first.length < second.beat
                 })
@@ -113,23 +117,23 @@ struct LofiCompositionTests {
         }
     }
 
-    @Test func bassFollowsNearbyPlayedKicksWithoutAddingOrMovingOtherParts() {
-        // Legacy path: a phrase without a timing field snaps to kicks within 0.075 beats.
+    /// Rewritten for the riddim line (plan 2.8). Legacy path: without a timing field, notes on the kick
+    /// grid snap to played kicks within 0.075 beats and nothing else moves. Timing-field path: an
+    /// unconfident kick never anchors; a confident one anchors its note by its low-band rise; no other
+    /// part moves.
+    @Test func bassFollowsNearbyPlayedKicksWithoutAddingOrMovingOtherParts() throws {
         func phrase(_ hits: [Double]) -> LofiScore {
             .make(seed: 42, section: .returnTheme, drift: .init(seed: 42), startBeat: 48, kickBeats: hits)
         }
-        let grid = phrase([])
         let played = phrase([0.04, 2.5, 3.95, 8.24])
-        let before = grid.notes.filter { $0.part == .bass }
+        let grid = phrase([0, 2.5, 4, 8.25])
         let after = played.notes.filter { $0.part == .bass }
-        #expect(before.map(\.midi) == after.map(\.midi))
-        #expect(abs(after[0].beat - before[0].beat - 0.04) < 1e-9)
-        #expect(abs(after[1].beat - before[1].beat + 0.05) < 1e-9)
-        #expect(after[2] == before[2])
+        let before = grid.notes.filter { $0.part == .bass }
+        #expect(after.map(\.midi) == before.map(\.midi))
+        #expect(abs(after[0].beat - 0.04) < 1e-9)
+        for (a, b) in zip(after, before) { #expect(abs(a.beat - b.beat) <= 0.075 + 1e-9) }
         #expect(played.notes.filter { $0.part != .bass } == grid.notes.filter { $0.part != .bass })
 
-        // Timing-field path: structural accents lock their attack to a confident kick within
-        // 0.12 beats; a distant or unconfident kick leaves them on the grid; nothing is added.
         let clock = LofiClock(tempo: 70, sampleRate: 48_000)
         func field(_ hits: [(Double, Float)]) -> LofiTimingField {
             LofiTimingField(landmarks: hits.map { beat, confidence in
@@ -145,14 +149,11 @@ struct LofiCompositionTests {
         let locked = timed([(0.10, 0.9), (2.5, 0.9), (8.3, 0.4)])
         let bass = locked.notes.filter { $0.part == .bass }
         // A synthetic landmark's low-band rise is its attack; the voice's own low-band rise leads it.
-        let lead = locked.bassVoice.lowRiseLead(midi: bass[0].midi) / clock.beatDuration
-        #expect(bass.count == before.count && bass.map(\.midi) == before.map(\.midi))
-        #expect(abs(bass[0].beat - (Double(clock.frame(at: 0.10)) / clock.framesPerBeat - lead)) < 1e-9)
-        #expect(bass[2].beat == 8)
-        #expect(locked.bassAnchors.count == 1)
+        let lead = locked.bassVoice.lowRiseLead(midi: bass[0].midi, stroke: bass[0].stroke) / clock.beatDuration
+        #expect(abs(bass[0].beat - max(0, Double(clock.frame(at: 0.10)) / clock.framesPerBeat - lead)) < 1e-9)
+        #expect(locked.bassAnchors.count >= 1 && locked.bassAnchors.first?.noteBeat == bass[0].beat)
+        #expect(!locked.bassAnchors.contains { abs($0.kickBeat - 8.3) < 0.01 })
         #expect(locked.notes.filter { $0.part != .bass } == grid.notes.filter { $0.part != .bass })
-        let far = timed([(0.2, 0.95), (7.8, 0.95)]).notes.filter { $0.part == .bass }
-        #expect(far[0].beat == 0 && far[2].beat == 8)
     }
 
     @Test(arguments: ["kawai", "osiris", "uprightkw", "nylon", "steel", "archtop", "jazzbox", "flatwound", "upright"])
