@@ -68,7 +68,7 @@ struct LofiArrangementTests {
             }
         }
         BassReport.log("ARRANGEMENT anchored bass notes at \(tempo) BPM: \(anchored)")
-        #expect(voices == [LofiBassTone.standard.voice])
+        #expect(voices.isSubset(of: Set(LofiBassTone.allCases.map(\.voice))))
     }
 
     /// Rewritten for the riddim line (plan 2.8): unconfident kicks never anchor, a note is never left
@@ -95,15 +95,28 @@ struct LofiArrangementTests {
         }
     }
 
-    /// Rewritten for the bass tones (plan bass-tone-redo 7): every phrase plays `LofiBassTone.standard`,
-    /// and the rendered bass stem equals `addBass` plus the chain sample for sample.
-    @Test func everyPhrasePlaysTheStandardToneAndTheStemIsTheVoiceThroughTheChain() throws {
+    /// Bass tone rotation (D120): each sixteen-bar break (four phrases) keeps one tone, the next break
+    /// always changes it, every tone turns up, and the order replays for a seed.
+    @Test func theBassToneChangesAtEverySixteenBarBreak() throws {
+        var seen = Set<LofiBassVoice>()
         for seed in 0..<100 as Range<UInt64> {
-            for phrase in 0..<8 {
-                #expect(score(phrase, seed: seed).bassVoice == LofiBassTone.standard.voice)
+            var previous: LofiBassVoice?
+            for block in 0..<12 {
+                let voices = (0..<LofiBassTone.phrasesPerTone).map {
+                    score(block * LofiBassTone.phrasesPerTone + $0, seed: seed).bassVoice
+                }
+                #expect(Set(voices).count == 1, "seed \(seed) block \(block): \(voices)")
+                if let previous { #expect(voices[0] != previous, "seed \(seed) block \(block) repeats \(previous)") }
+                #expect(LofiBassTone.tone(seed: seed, phrase: block * 4).voice == voices[0])
+                previous = voices[0]
+                seen.insert(voices[0])
             }
         }
+        #expect(seen == Set(LofiBassTone.allCases.map(\.voice)))
+    }
 
+    /// The rendered bass stem equals `addBass` plus the chain sample for sample.
+    @Test func theStemIsTheVoiceThroughTheChain() throws {
         let phrase = try LofiRenderer.render(seed: 5, section: .answer, options: .init(tempo: 70), sampleRate: 8_000,
                                              drift: .init(seed: 5), startBeat: 80)
         let n = phrase.clock.frameCount

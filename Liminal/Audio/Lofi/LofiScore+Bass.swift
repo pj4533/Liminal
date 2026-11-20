@@ -51,9 +51,9 @@ nonisolated extension LofiScore {
         var sweep: ClosedRange<Double>?
     }
 
-    /// Every phrase plays one tone (`LofiBassTone.current`: `standard` in the app, plan bass-tone-redo 2).
+    /// The phrase's tone: a new one of the three at each sixteen-bar break (`LofiBassTone.tone`, D120).
     static func bassVoice(seed: UInt64, section: Section, phrase: Int) -> LofiBassVoice {
-        LofiBassTone.current.voice
+        LofiBassTone.tone(seed: seed, phrase: phrase).voice
     }
 
     /// The strike of a note anchored to a kick: full on the downbeat, kick and weight notes, lighter on an

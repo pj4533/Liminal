@@ -2,9 +2,10 @@ import Accelerate
 import Foundation
 import Synchronization
 
-/// The bass tone every phrase plays (plan bass-tone-redo 2): one tone for every take, chosen by this
-/// constant. Captures may pick another with the `bassTone` hook; the hooks are inert in the app, so the
-/// app always plays `standard`.
+/// The bass tone of a phrase (plan bass-tone-redo 2, rotation D120): the three tones take turns, a new
+/// one at each sixteen-bar drum break (every four phrases, the form's big change), never the same tone
+/// twice in a row. The order is seeded, so a seed replays the same tones. Captures may pin one tone with
+/// the `bassTone` hook; the hooks are inert in the app.
 nonisolated enum LofiBassTone: String, CaseIterable, Sendable {
     /// Flatwound electric with the tone rolled off; a real string pluck as the strike.
     case round
@@ -13,10 +14,26 @@ nonisolated enum LofiBassTone: String, CaseIterable, Sendable {
     /// No samples: the sub's harmonic series continued, with a synthesized strike.
     case synth
 
+    /// The first block's fallback and the tone the tests treat as the reference.
     static let standard: LofiBassTone = .round
+    /// Phrases per tone: one sixteen-bar drum break.
+    static let phrasesPerTone = 4
 
-    static var current: LofiBassTone {
-        LofiCaptureHooks.option("bassTone").flatMap(LofiBassTone.init(rawValue:)) ?? standard
+    /// The capture hook's pinned tone, if any.
+    static var pinned: LofiBassTone? {
+        LofiCaptureHooks.option("bassTone").flatMap(LofiBassTone.init(rawValue:))
+    }
+
+    /// The tone `phrase` plays for `seed`: block `phrase / phrasesPerTone` takes a seeded tone that differs
+    /// from the block before it.
+    static func tone(seed: UInt64, phrase: Int) -> LofiBassTone {
+        if let pinned { return pinned }
+        let block = max(0, phrase) / phrasesPerTone
+        let all = allCases
+        var random = MusicRNG(seed: seed).fork(0xBA55_70E5)
+        var index = Int(random.next() % UInt64(all.count))
+        for _ in 0..<block { index = (index + 1 + Int(random.next() % UInt64(all.count - 1))) % all.count }
+        return all[index]
     }
 
     var voice: LofiBassVoice {
