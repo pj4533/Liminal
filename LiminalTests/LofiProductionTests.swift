@@ -52,7 +52,7 @@ struct LofiProductionTests {
         }
         let kick = run(frequency: 68)
         let bright = run(frequency: 1_800)
-        #expect(kick.minimum < 0.83 && kick.minimum >= 0.70)
+        #expect(kick.minimum < 0.83 && kick.minimum >= 1 - LofiKickDuck.depth - 0.005)
         #expect(kick.after > 0.99)
         #expect(bright.minimum > 0.97)
     }

@@ -118,8 +118,20 @@ nonisolated final class ArchiveVoice {
     /// clarity pass (drier direct sound, smaller sends, an opened low-pass) is not applied.
     enum LofiBed {
         /// Context gain outside and under a chop that ducks the bed (chops may duck the bed; the bed keys nothing).
-        static let contextGain: Float = 1.76
-        static let underChopGain: Float = 1.31
+        /// Mix calibration raised both by 2.5 dB (1.76 and 1.31 at the baseline): the bed stays at least
+        /// 10 dB under the music in gaps on every matrix case while its audibility index rises.
+        static let contextGain: Float = 2.35
+        static let underChopGain: Float = 1.749
+        /// Under the theme return's opening bar the bed steps down so the hook is heard over it (C-B6);
+        /// the music stays on top of the bed, the bed still keys nothing. Gain relative to `contextGain`.
+        static let returnDipGain: Float = 0.126
+        /// Beats of the return's first bar the dip covers (the revealed notes sound by beat 3.5). It starts
+        /// `returnDipLeadBeats` before the downbeat: the bed is mostly reverb and tape echo, and its tail
+        /// needs that long to fall away under the hook.
+        static let returnDipBeats = 4.0
+        static let returnDipLeadBeats = 3.0
+        static let returnDipDown = 0.3
+        static let returnDipUp = 0.4
         static let duckDown = 0.065
         static let duckUp = 0.15
     }
@@ -128,23 +140,27 @@ nonisolated final class ArchiveVoice {
     enum ChopBus {
         static let dryGain: Float = 0.72
         static let echoBeats: Float = 0.75
-        static let echoFeedback: Float = 0.25
+        /// Heavier chop effects (user direction of 19 November 2026): more echo with more repeats (0.25
+        /// feedback at -16 dB before), and a clearly audible room tail (0.9 s at 0.17 before).
+        static let echoFeedback: Float = 0.42
         static let echoBand: (low: Float, high: Float) = (400, 3000)
-        static let echoUnderDryDB: Float = -16
+        static let echoUnderDryDB: Float = -11
         static let roomBand: (low: Float, high: Float) = (300, 4000)
-        static let roomMidRelease: Float = 0.9
-        static let roomLowRelease: Float = 0.6
-        static let roomDamping: Float = 2200
-        /// Return gain that puts the room's energy about 20 dB under the dry path for a 1 kHz line
-        /// (0.2 measured 18.5 dB under).
-        static let roomReturnGain: Float = 0.17
+        static let roomMidRelease: Float = 1.5
+        static let roomLowRelease: Float = 0.8
+        static let roomDamping: Float = 3000
+        /// Return gain that puts the room's energy about 14 dB under the dry path for a 1 kHz line
+        /// (0.2 measured 18.5 dB under with the 0.9 s room; 0.17 was the baseline).
+        static let roomReturnGain: Float = 0.32
     }
 
     /// Ducking of the Lo-Fi music buses under a featured chop (plan 8.5). Drums and bass are not ducked.
     enum MusicDuck {
-        static let leadDB: Float = -2
-        static let midsDB: Float = -3
-        static let spaceDB: Float = -4
+        /// One dB deeper than plan 8.5 (-2, -3, -4): the chops sit in the beat by a light duck of the
+        /// music rather than more chop level (user direction of 19 November 2026).
+        static let leadDB: Float = -3
+        static let midsDB: Float = -4
+        static let spaceDB: Float = -5
         static let attack = 0.03
         static let lead = 0.02
         static let release = 0.3
@@ -206,6 +222,9 @@ nonisolated final class ArchiveVoice {
     private var musicDuck: (lead: Fader, mids: Fader, space: Fader)?
     private var musicDucked = false
     private var lastBedGain: Float = 1
+    /// Beat seconds of the Lo-Fi transport (from `setEchoTempo`) and the theme returns it implies.
+    private var chopBeat: Double?
+    private var returnStarts: [Double] = []
     private var lastChopGain: Float = 0
     /// Not yet queued chops, sorted by start, and the ones already on the player (pruned).
     private var storedChops: [ScheduledChop] = []
@@ -237,10 +256,40 @@ nonisolated final class ArchiveVoice {
     private func blendSoundtrack(at time: Double) {
         let ahead = time + 0.01 + LofiBed.duckDown
         let underDrop = dropWindows.contains { ahead >= $0.lowerBound && time + 0.01 < $0.upperBound }
-        let gain: Float = beatLocked ? (underDrop ? LofiBed.underChopGain : LofiBed.contextGain) : 1
+        let inReturn = beatLocked && inReturnDip(at: time)
+        var gain: Float = beatLocked ? (underDrop ? LofiBed.underChopGain : LofiBed.contextGain) : 1
+        if inReturn { gain = min(gain, LofiBed.contextGain * LofiBed.returnDipGain) }
         guard gain != lastBedGain else { return }
-        ParamRamp.setGain(bed, gain, over: gain < lastBedGain ? LofiBed.duckDown : LofiBed.duckUp)
+        let returning = inReturn || lastBedGain < LofiBed.underChopGain * 0.99
+        let over = gain < lastBedGain ? (returning ? LofiBed.returnDipDown : LofiBed.duckDown)
+                                      : (returning ? LofiBed.returnDipUp : LofiBed.duckUp)
+        ParamRamp.setGain(bed, gain, over: over)
         lastBedGain = gain
+    }
+
+    /// Whether conductor time `t` lies in the opening bar of a theme return, from the stored return
+    /// starts (transport seconds) on the chop timeline. The dip starts `returnDipLeadBeats` early.
+    private func inReturnDip(at t: Double) -> Bool {
+        guard let timeline, let beat = chopBeat, !returnStarts.isEmpty else { return false }
+        let now = timeline.anchor + (t + 0.01 - timeline.conductorAnchor)
+        let length = LofiBed.returnDipBeats * beat, lead = LofiBed.returnDipLeadBeats * beat
+        return returnStarts.contains { now + lead >= $0 && now < $0 + length }
+    }
+
+    /// Return starts (transport seconds) implied by a plan's events: every event knows its block (the
+    /// global phrase) and sixteenth slot, and the return is the fourth phrase of each 16-bar take
+    /// (`LofiScore`). Events of the take's first three blocks place it before it begins.
+    private func noteReturnStarts(_ events: [DialogueEvent]) {
+        guard let beat = chopBeat else { return }
+        for event in events where event.block >= 0 {
+            let position = event.block % 4
+            let blockStart = event.accentTime - Double(event.slot) * beat / 4
+            let start = blockStart + Double(3 - position) * 16 * beat
+            guard start.isFinite, !returnStarts.contains(where: { abs($0 - start) < 0.25 }) else { continue }
+            returnStarts.append(start)
+        }
+        let horizon = (returnStarts.max() ?? 0) - 600
+        returnStarts.removeAll { $0 < horizon }
     }
 
     /// The Lo-Fi lead, mids and space faders this voice ducks under featured chops. Call once after
@@ -280,6 +329,7 @@ nonisolated final class ArchiveVoice {
 
     func setEchoTempo(_ beat: Double) {
         guard beat.isFinite, (0.35...1.5).contains(beat) else { return }
+        chopBeat = beat
         let time = Float(0.75 * beat)
         guard let parameter = chopEcho.$time.parameter, abs(parameter.value - time) > 0.0001 else { return }
         ParamRamp.set(chopEcho.$time, time, over: 0.12)
@@ -430,6 +480,7 @@ nonisolated final class ArchiveVoice {
                           texture: $0.event.role == .texture)
         }.filter { $0.start >= plan.replaceFrom && $0.start >= queuedEnd }
         store(incoming)
+        noteReturnStarts(plan.chops.map(\.event))
         LMLog.audio.info("Lo-Fi dialogue plan cue=\(plan.token) revision=\(plan.revision) stored \(incoming.count) chops")
         blendSoundtrack(at: now)
         updateChopGain(at: now)
@@ -476,6 +527,7 @@ nonisolated final class ArchiveVoice {
         queuedChops.removeAll()
         planRevisions.removeAll()
         dropWindows.removeAll()
+        returnStarts.removeAll()
         releaseMusicDuck()
     }
 

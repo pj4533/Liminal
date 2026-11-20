@@ -12,19 +12,29 @@ nonisolated enum LofiRenderer {
     /// Used when a phrase has too little lead and mid overlap to measure (`midsLevel`).
     /// Raised from 2.2 with the mids chain (plan 8.4), which takes about 2.7 dB off the shells
     /// (high-pass 160 Hz, -3 dB at 400 Hz): the nominal level is the same as before the chain.
-    static let midsTrim: Float = 3.0
+    /// Mix calibration raised it from 3.0 (+1.6 dB): a breakdown's soft answer, the one phrase that keeps
+    /// it, read 9 dB under the lead in the reference capture.
+    static let midsTrim: Float = 3.6
     /// Where lead and mids sound together, the mids sit this far under the lead in 400 Hz to 3 kHz
     /// (M13 asks for 3 to 8 dB). Chosen by measurement on the reference captures.
-    static let midsUnderLeadDB: Float = 5.5
+    /// 5.5 read 6.1 to 8.2 dB on the matrix (long above 8; the bus ducks under featured chops take the
+    /// mids 1 dB further down than the lead, and loud lead notes over decaying shells dominate the measure), so mix calibration set 3.5.
+    static let midsUnderLeadDB: Float = 3.5
+    /// Shortest lead and mid overlap in a phrase that sets the matched level. 0.25 s left every phrase of
+    /// the short-overlap first take at `midsTrim`, about 1 dB under the lead (mix calibration).
+    static let midsMatchSeconds = 0.1
     /// The per-phrase mids gain stays within this factor of `midsTrim` either way.
     static let midsGainRange: Float = 2.5
-    /// Plucked attacks never push the dry mids above -4.4 dBFS before the instrument balance.
-    static let midsPeakCeiling: Float = 0.6
+    /// Plucked attacks never push the dry mids above 0 dBFS before the instrument balance (-4.4 dBFS, 0.6,
+    /// before mix calibration, where it rather than the match set most plucked phrases' gain). The texture
+    /// stem still peaks more than 10 dB under the drums.
+    static let midsPeakCeiling: Float = 1.0
     /// The mids' contribution to `InstrumentBalance`, at the former 0.31 trim.
     static let midsMeterTrim: Float = 0.31
-    /// The wet stem under a return's opening notes, -6 dB: the carried tail and the phrase's own
-    /// returns dip together, so the room of the first notes blooms after them instead of over them.
-    static let returnCarryFloor: Float = 0.501_187
+    /// The wet stem under a return's opening notes, -9 dB (-6 dB before mix calibration): the carried tail
+    /// and the phrase's own returns dip together, so the room of the first notes blooms after them instead
+    /// of over them. The deeper dip keeps a low-register hook salient (C-B6, case `long`).
+    static let returnCarryFloor: Float = 0.354_813
     /// The dip is released by the start of the second bar at the latest.
     static let returnRevealLatestHold = 3.5
 
@@ -581,7 +591,7 @@ nonisolated enum LofiRenderer {
             }
         }
         var gain = midsTrim
-        if count >= Int(0.25 * clock.sampleRate), midPower > 1e-14, leadPower > 1e-14 {
+        if count >= Int(midsMatchSeconds * clock.sampleRate), midPower > 1e-14, leadPower > 1e-14 {
             let matched = Float(sqrt(leadPower / midPower)) * powf(10, -midsUnderLeadDB / 20)
             gain = min(midsTrim * midsGainRange, max(midsTrim / midsGainRange, matched))
         }

@@ -411,8 +411,10 @@ struct LofiLiveBusTests {
             #expect(room[hz]! - dry[hz]! <= room[1000]! - dry[1000]! - 12, "room at \(hz) Hz")
         }
         let echoUnder = echo[1000]! - dry[1000]!, roomUnder = room[1000]! - dry[1000]!
-        #expect(echoUnder >= -19 && echoUnder <= -13, "echo \(echoUnder) dB under dry")
-        #expect(roomUnder >= -24 && roomUnder <= -16, "room \(roomUnder) dB under dry")
+        // Heavier returns since mix calibration (user direction, 19 November 2026): echo about 11 dB and
+        // room about 14 dB under the dry line (16 and 20 before); both stay clearly under it.
+        #expect(echoUnder >= -14 && echoUnder <= -8, "echo \(echoUnder) dB under dry")
+        #expect(roomUnder >= -18 && roomUnder <= -10, "room \(roomUnder) dB under dry")
     }
 
     // MARK: Per-cut chain (plan 8.5)
@@ -439,7 +441,8 @@ struct LofiLiveBusTests {
         let design = { DialogueChopChain.magnitudeDB(at: $0, texture: false, sampleRate: Self.rate) }
         #expect(design(60) < -15)                              // 18 dB per octave below 120 Hz
         #expect(design(300) < -1.5 && design(300) > -3.5)      // the boxiness cut
-        #expect(design(3000) > 2 && design(3000) < 3.6)        // presence
+        #expect(design(3400) > 3.5 && design(3400) < 5.1)      // presence (+4.5 dB at 3.4 kHz since mix calibration)
+        #expect(design(3000) > 2)
         #expect(design(9000) < -3)                             // 7.5 kHz low-pass
         #expect(DialogueChopChain.magnitudeDB(at: 7000, texture: true, sampleRate: Self.rate) < design(7000) - 3)
     }

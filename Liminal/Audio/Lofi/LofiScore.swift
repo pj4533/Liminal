@@ -159,8 +159,9 @@ nonisolated struct LofiScore: Sendable, Equatable {
     static let bassAccentWindow = 0.12
     /// Kicks below this confidence never move a structural bass accent.
     static let bassAccentConfidence: Float = 0.6
-    /// The return's first two lead notes are revealed: +1.5 dB dry, 40 percent less send.
-    static let returnRevealGain: Float = 1.188_502_2
+    /// The return's first two lead notes are revealed: +3 dB dry (+1.5 dB before mix calibration; a
+    /// low-register hook read under 6 dB of salience, C-B6), 40 percent less send.
+    static let returnRevealGain: Float = 1.412_537_5
     static let returnRevealSend: Float = 0.6
     /// Mid shells stay clear of every lead onset by this many beats.
     static let midOnsetClearance = 0.12

@@ -142,8 +142,10 @@ nonisolated enum DialogueTuning {
     static let filterWarmupSeconds = 0.010
     static func roleTrimDB(_ role: DialoguePad.Role) -> Float {
         switch role {
-        case .anchor: 0
-        case .head, .answer, .stab: -1
+        // Mix calibration: stabs as loud as the line (-1 dB before), so a motif's pieces and its full line
+        // land at one level (C-B8 per-chop spread; user direction of 19 November 2026: consistent, forward).
+        case .anchor, .stab: 0
+        case .head, .answer: -1
         case .sibling: -1.5
         case .texture: -5
         }

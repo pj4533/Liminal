@@ -174,6 +174,7 @@ nonisolated enum DialogueChopRenderer {
         out[full - 1] = 0
         // Level the full statement once; a choked copy keeps the same gain. The statement is levelled
         // by loudness, and a soft shoulder then holds the few peaks above it under the ceiling.
+        DialogueChopChain.limitCrest(&out, sampleRate: sr)
         var levelling: Float
         if let cached = level {
             levelling = cached
@@ -182,10 +183,14 @@ nonisolated enum DialogueChopRenderer {
                 LofiDialogueSampler.clipGain($0.baseAddress!, count: full, rate: sr, level: DialogueChopChain.levelTarget,
                                              peak: DialogueChopChain.rawPeakLimit, maxGain: DialogueChopChain.maxLevelGain)
             }
+            if levelling.isFinite, levelling > 0 {
+                levelling *= DialogueChopChain.densityGain(out, gain: levelling, sampleRate: sr)
+            }
             level = levelling
         }
         if !levelling.isFinite { levelling = 0 }
         vDSP_vsmul(out, 1, &levelling, &out, 1, vDSP_Length(full))
+        DialogueChopChain.limitCrest(&out, sampleRate: sr, absolute: DialogueChopChain.limiterCeiling)
         for i in 0..<full {
             out[i] = LofiSaturation.softClip(out[i], threshold: DialogueChopChain.peakKnee, ceiling: DialogueChopChain.peakCeiling)
         }
@@ -319,12 +324,16 @@ nonisolated enum DialogueChopChain {
 
     static let highpassHz = 120.0
     static let mudHz = 300.0, mudQ = 1.0, mudDB = -2.5
-    static let presenceHz = 3000.0, presenceQ = 0.8, presenceDB = 3.0
+    /// Mix calibration moved the presence bell up and raised it (3 kHz, +3 dB before) and eased the
+    /// de-esser (5.5 dB before): the 4 kHz octave carried the lowest SNR of the SII proxy (C-B8).
+    static let presenceHz = 3400.0, presenceQ = 0.8, presenceDB = 4.5
     static let deEssBand = 5_000.0...8_000.0
-    static let deEssMaxDB: Float = 5.5
-    static let ratio: Float = 3, kneeDB: Float = 6, attack = 0.008, release = 0.100
-    /// Threshold below the cut's own peak: the loudest syllables see about 6 dB at 3:1, the body 0 to 3 dB.
-    static let thresholdBelowPeakDB: Float = 9
+    static let deEssMaxDB: Float = 4.5
+    /// Firmer than plan 8.5's 3:1 at 9 dB under the peak (user direction of 19 November 2026: the chops glued
+    /// into the beat with a consistent level). 4:1 from 13 dB under the cut's own peak with a 3 ms attack:
+    /// the loudest syllables see about 9 dB, the body 2 to 5 dB, so short and long pieces level alike.
+    static let ratio: Float = 4, kneeDB: Float = 6, attack = 0.003, release = 0.090
+    static let thresholdBelowPeakDB: Float = 13
     static let speechLowpassHz = 7_500.0, textureLowpassHz = 5_500.0
     /// Low-frequency group delay of the chain in whole samples (mostly the low-pass), removed by the renderer.
     static let delayFrames = 1
@@ -337,10 +346,124 @@ nonisolated enum DialogueChopChain {
     /// (under 1 percent of samples, residual below -35 dB in the reference capture) instead of
     /// setting the gain. `rawPeakLimit` bounds how far a single spike may be pushed into the shoulder.
     static let levelTarget: Float = 0.28
-    static let peakKnee: Float = 0.7
+    /// Mix calibration: the shoulder starts lower (0.7 before) and a spike may reach further into it (1.5
+    /// before), so a peaky piece is limited rather than levelled down; quiet sources may gain up to 32 dB
+    /// (20 before). Per-chop loudness spread on the matrix fell from up to 7 LU (C-B8).
+    static let peakKnee: Float = 0.6
     static let peakCeiling: Float = 1.0
-    static let rawPeakLimit: Float = 1.5
-    static let maxLevelGain: Float = 10
+    static let rawPeakLimit: Float = 2.2
+    static let maxLevelGain: Float = 40
+
+    /// Peak limiter before the levelling (user direction of 19 November 2026: a peak limiter for a consistent
+    /// chop level). Samples more than `maxCrestDB` over the piece's RMS are held down with a 1.5 ms
+    /// look-ahead and a 40 ms release, so a plosive or one loud syllable over a soft tail no longer caps
+    /// the levelling gain of a short piece. A full line's peaks sit about 13 dB over its RMS already.
+    static let maxCrestDB: Float = 13
+    static let limiterLookahead = 0.0015, limiterRelease = 0.040
+
+    /// Extra levelling gain for a piece whose loud part is short: the 80th-percentile measure levels the
+    /// loudest syllable, so a piece that is mostly a soft tail read 3 to 4 LU under a full statement (C-B8
+    /// spread). The piece's K-weighted integrated level is raised toward `densityTargetDB` under the
+    /// levelling target, by at most `densityMaxDB`; the look-ahead limiter after the gain holds the peaks.
+    static let densityTargetDB: Float = -2
+    static let densityMaxDB: Float = 6
+    /// The post-gain limiter's ceiling; the soft shoulder from `peakKnee` to `peakCeiling` follows it.
+    static let limiterCeiling: Float = 0.9
+
+    static func densityGain(_ x: [Float], gain: Float, sampleRate: Double) -> Float {
+        // The levelling put the loud part (the 80th percentile of 50 ms powers) at the target, so the
+        // piece's integrated level against that loud part is its distance from the target. Accelerate,
+        // unweighted: the ratio, not the absolute level, is what matters here.
+        let n = x.count
+        let hop = max(1, Int(sampleRate * 0.05))
+        guard n > 0 else { return 1 }
+        var powers: [Float] = []
+        powers.reserveCapacity(n / hop + 1)
+        x.withUnsafeBufferPointer { p in
+            var start = 0
+            while start < n {
+                var v: Float = 0
+                vDSP_measqv(p.baseAddress! + start, 1, &v, vDSP_Length(min(hop, n - start)))
+                powers.append(v)
+                start += hop
+            }
+        }
+        var mean: Float = 0
+        x.withUnsafeBufferPointer { vDSP_measqv($0.baseAddress!, 1, &mean, vDSP_Length(n)) }
+        let loud = powers.sorted()[powers.count * 4 / 5]
+        guard loud > 1e-12, mean > 1e-14, gain > 0 else { return 1 }
+        let density = 10 * log10f(mean / loud)
+        return min(powf(10, densityMaxDB / 20), max(1, powf(10, (densityTargetDB - density) / 20)))
+    }
+
+    /// `absolute` limits to a fixed level instead of `maxCrestDB` over the piece's loud level.
+    static func limitCrest(_ x: inout [Float], sampleRate: Double, absolute: Float? = nil) {
+        let n = x.count
+        let hop = max(1, Int(sampleRate * 0.05))
+        guard n > hop else { return }
+        let threshold: Float
+        if let absolute {
+            threshold = absolute
+        } else {
+            var power: Float = 0
+            x.withUnsafeBufferPointer { vDSP_measqv($0.baseAddress!, 1, &power, vDSP_Length(n)) }
+            let rms = sqrtf(power)
+            guard rms > 1e-6 else { return }
+            threshold = rms * powf(10, maxCrestDB / 20)
+        }
+        var peak: Float = 0
+        x.withUnsafeBufferPointer { vDSP_maxmgv($0.baseAddress!, 1, &peak, vDSP_Length(n)) }
+        guard peak > threshold else { return }
+        // Accelerate: need = min(1, threshold / |x|), then a running minimum over the look-ahead span
+        // (shifted minima, doubling the span each pass), so only the forward one-pole is a sample loop,
+        // and it runs only from the first need to where the gain has recovered.
+        var need = [Float](repeating: 0, count: n)
+        x.withUnsafeBufferPointer { vDSP_vabs($0.baseAddress!, 1, &need, 1, vDSP_Length(n)) }
+        var floor: Float = 1e-9, one: Float = 1, zero: Float = 0
+        vDSP_vthr(need, 1, &floor, &need, 1, vDSP_Length(n))
+        var t = threshold
+        vDSP_svdiv(&t, need, 1, &need, 1, vDSP_Length(n))
+        vDSP_vclip(need, 1, &zero, &one, &need, 1, vDSP_Length(n))
+        let ahead = max(1, Int(limiterLookahead * sampleRate))
+        var span = 1
+        var shifted = need
+        while span < ahead {
+            let step = min(span, ahead - span)
+            // next[i] = min(shifted[i], shifted[i + step]); the last `step` samples keep their own need.
+            var next = shifted
+            shifted.withUnsafeBufferPointer { b in
+                next.withUnsafeMutableBufferPointer { o in
+                    vDSP_vmin(b.baseAddress!, 1, b.baseAddress! + step, 1, o.baseAddress!, 1, vDSP_Length(n - step))
+                }
+            }
+            shifted = next
+            span += step
+        }
+        var firstNeed: vDSP_Length = 0, minimum: Float = 1
+        vDSP_minvi(shifted, 1, &minimum, &firstNeed, vDSP_Length(n))
+        guard minimum < 1 else { return }
+        let start = shifted.firstIndex { $0 < 1 } ?? 0
+        let releaseStep = Float(1 - exp(-1 / (limiterRelease * sampleRate)))
+        let attackStep = Float(1 - exp(-1 / (0.3 * limiterLookahead * sampleRate)))
+        var gain: Float = 1
+        shifted.withUnsafeBufferPointer { held in
+            x.withUnsafeMutableBufferPointer { out in
+                var k = start
+                while k < n {
+                    let target = held[k]
+                    gain += (target < gain ? attackStep : releaseStep) * (target - gain)
+                    out[k] *= gain
+                    k += 1
+                    // Once fully recovered and nothing further needs limiting nearby, stop early.
+                    if gain > 0.99995, target >= 1, k < n, held[k] >= 1 {
+                        guard let next = (k..<n).first(where: { held[$0] < 1 }) else { return }
+                        k = next
+                        gain = 1
+                    }
+                }
+            }
+        }
+    }
 
     /// The linear stages before the dynamics.
     static func preFilters(sampleRate: Double) -> [LofiBiquad.Kind] {
