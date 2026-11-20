@@ -139,54 +139,81 @@ struct LofiArrangementTests {
 
     // MARK: Mids
 
-    @Test func midsAnswerTheMelodyWithoutDoublingItsAttacks() {
-        var everyTakeVaries = true
+    /// Rewritten for the held pad (D117, plan 3.1): the chord channel is a held two- or three-voice pad
+    /// with one legato revoicing, plus at most one answer shell per phrase and one or two per take. The old
+    /// invariants (two to four shell gestures, stabs, pairs only) described the sparse shells it replaces.
+    @Test func midsHoldAPadAndAnswerTheMelodyWithoutDoublingItsAttacks() {
+        let clock = LofiClock(tempo: 70, sampleRate: 48_000)
+        let end = LofiScore.padEnd(beatSeconds: clock.beatDuration)
+        var threeVoices = 0, pads = 0
         for seed in 0..<100 as Range<UInt64> {
+            var takeShells: [Int: Int] = [:]
             var takeArticulations: [Int: Set<LofiScore.Articulation>] = [:]
             for phrase in 0..<8 {
-                let current = score(phrase, seed: seed)
+                let current = score(phrase, seed: seed, clock: clock)
                 let mids = part(current, .texture)
                 let lead = part(current, .lead)
-                #expect(mids.count.isMultiple(of: 2))
-                let events = mids.count / 2
+                let pad = mids.filter { $0.articulation == .pad }
+                let shells = mids.filter { $0.articulation != .pad }
+                let label: Comment = "seed \(seed) phrase \(phrase)"
+                // Pad: voices from its first beat, one revoicing note later, every voice in the register.
+                let start = pad.map(\.beat).min() ?? 0
+                let held = pad.filter { abs($0.beat - start) < 1e-9 }.sorted { $0.midi < $1.midi }
+                let moved = pad.filter { $0.beat > start + 1e-9 }
+                pads += 1
+                if held.count == 3 { threeVoices += 1 }
                 if current.section == .breakdown {
-                    #expect(events <= 1)
-                    #expect(mids.allSatisfy { $0.articulation == .answer && $0.velocity == 0.42 })
+                    #expect(held.count == 2, "seed \(seed) phrase \(phrase): \(held.count) breakdown voices")
                 } else {
-                    #expect((2...4).contains(events), "seed \(seed) phrase \(phrase): \(events)")
-                    #expect(mids.allSatisfy { (0.50...0.66).contains($0.velocity) })
-                    for kind in [LofiScore.Articulation.stab, .answer, .rolled] {
-                        #expect(mids.filter { $0.articulation == kind }.count <= 4, "one articulation three times")
-                    }
-                    takeArticulations[phrase / 4, default: []].formUnion(mids.map(\.articulation))
+                    #expect((2...3).contains(held.count), "seed \(seed) phrase \(phrase): \(held.count) voices")
                 }
+                #expect(moved.count <= 1, label)
+                #expect(pad.allSatisfy { LofiScore.padRegister.contains($0.midi) }, label)
+                #expect(zip(held, held.dropFirst()).allSatisfy { (2...9).contains($1.midi - $0.midi) }, label)
+                if let next = moved.first {
+                    // The inner voice hands over with a quarter beat of overlap.
+                    #expect(pad.contains { abs($0.beat + $0.length - (next.beat + LofiScore.padRevoiceOverlap)) < 1e-9 }, label)
+                    #expect(abs(next.beat - LofiScore.padRevoiceBeat) <= 0.5 + 1e-9, label)
+                }
+                // The release ends inside the phrase.
+                #expect(pad.allSatisfy { $0.beat + $0.length <= end + 1e-9 }, label)
+                #expect(end + LofiScore.padReleaseSeconds / clock.beatDuration <= LofiClock.beats)
+                #expect(pad.filter { abs($0.beat - start) < 1e-9 }.contains { abs($0.beat + $0.length - end) < 1e-9 }, label)
+                #expect(pad.allSatisfy { (0.60...0.75).contains($0.send) }, label)
+                // Shells: at most one gesture, only after a landing, in the shell-eligible sections.
+                #expect(shells.count == 0 || shells.count == 2, label)
+                if [.breakdown, .returnTheme].contains(current.section) { #expect(shells.isEmpty, label) }
                 for note in mids {
                     #expect(lead.allSatisfy { abs($0.beat - note.beat) >= LofiScore.midOnsetClearance - 1e-9 },
                             "seed \(seed) phrase \(phrase): mid at \(note.beat) doubles a lead attack")
+                }
+                for note in shells {
                     #expect((45...62).contains(note.midi))
-                    #expect((0.45...0.75).contains(note.send))
-                    #expect(note.articulation != .normal)
+                    #expect((0.50...0.66).contains(note.velocity))
+                    #expect((0.55...0.75).contains(note.send))
                     #expect(note.beat + note.length <= LofiScore.midLatestEnd + 1e-9)
                     switch note.articulation {
-                    case .stab:
-                        #expect(note.length == 0.35)
-                        #expect(abs(note.beat - note.beat.rounded()) > 1e-9, "stab on a downbeat")
                     case .answer: #expect(note.length == 1.6)
                     case .rolled: #expect(note.length == 1.30)
-                    case .normal, .pad: break
+                    default: Issue.record("seed \(seed) phrase \(phrase): shell articulation \(note.articulation)")
                     }
                 }
-                // Each event is a close two-voice shell; rolled shells stagger by 0.17 beats.
-                let lower = mids.map(\.midi).min() ?? 0, upper = mids.map(\.midi).max() ?? 0
-                #expect(mids.isEmpty || (3...10).contains(upper - lower))
-                #expect(Set(mids.map(\.midi)).count <= 2)
-                for note in mids where note.articulation == .rolled && note.midi == upper {
-                    #expect(mids.contains { $0.midi == lower && abs(note.beat - $0.beat - 0.17) < 1e-9 })
+                if let upper = shells.map(\.midi).max(), let lower = shells.map(\.midi).min() {
+                    #expect((3...10).contains(upper - lower))
+                    for note in shells where note.articulation == .rolled && note.midi == upper {
+                        #expect(shells.contains { $0.midi == lower && abs(note.beat - $0.beat - 0.17) < 1e-9 })
+                    }
                 }
+                takeShells[phrase / 4, default: 0] += shells.count / 2
+                takeArticulations[phrase / 4, default: []].formUnion(mids.map(\.articulation))
             }
-            if takeArticulations.values.contains(where: { $0.count < 2 }) { everyTakeVaries = false }
+            for (take, count) in takeShells {
+                #expect((1...2).contains(count), "seed \(seed) take \(take): \(count) shells")
+            }
+            #expect(takeArticulations.values.allSatisfy { $0.count >= 2 }, "seed \(seed)")
         }
-        #expect(everyTakeVaries)
+        // Three voices wherever the register under the melody allows it.
+        #expect(Double(threeVoices) / Double(pads) >= 0.4, "\(threeVoices) of \(pads)")
     }
 
     // MARK: Return

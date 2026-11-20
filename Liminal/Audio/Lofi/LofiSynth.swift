@@ -45,4 +45,21 @@ nonisolated enum LofiSynth {
         }
     }
 
+    /// The pad voice's tone when a program has no usable sample: the texture branch's partials (1, 2 and
+    /// 3 times the pitch) without its internal 0.4 percent detune, which beats, and without an envelope
+    /// (`LofiPadVoice` adds it and detunes left against right). `count` frames at `midi` times `detune`,
+    /// RMS near 0.1 like the grain streams.
+    static func padTone(midi: Int, count: Int, rate: Double, detune: Double) -> [Float] {
+        let frequency = 440 * pow(2, Double(midi - 69) / 12) * detune
+        let omega = 2 * Double.pi * frequency / rate
+        var out = [Float](repeating: 0, count: count)
+        out.withUnsafeMutableBufferPointer { out in
+            for i in 0..<count {
+                let t = Double(i) / rate
+                let p = Double(i) * omega + 0.22 * sin(t * 3.2)
+                out[i] = Float(sin(p) + 0.5 * sin(2 * p) + 0.25 * sin(3 * p + sin(t * 1.9))) * 0.123
+            }
+        }
+        return out
+    }
 }

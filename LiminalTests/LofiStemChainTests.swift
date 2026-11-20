@@ -163,6 +163,9 @@ struct LofiStemChainTests {
                 l = out.left
                 r = out.right
             }),
+            ("pad", LofiStemChains.Pad.standard.filters, [150, 220, 380, 1_000, 2_000, 2_800, 5_000], { l, r in
+                LofiStemChains.applyPad(left: &l, right: &r, sampleRate: Self.rate)
+            }),
             ("space", LofiStemChains.Space.standard.filters, [200, 350, 1_000, 2_500, 4_500, 8_000], { l, r in
                 LofiStemChains.applySpace(left: &l, right: &r, sampleRate: Self.rate)
             }),
@@ -184,6 +187,11 @@ struct LofiStemChainTests {
         #expect(abs(Self.analyticDB(lead.filters, 9_000) + 3) <= 0.5)
         #expect(abs(Self.analyticDB(LofiStemChains.Mids.standard.filters, 400) + 3) <= 0.5)
         #expect(abs(Self.analyticDB(LofiStemChains.Mids.standard.filters, 1_600) - 1.5) <= 0.5)
+        // The pad (D117): 220 Hz high-pass and 2.8 kHz low-pass at their corners, dips at 380 Hz and 2 kHz.
+        #expect(Self.analyticDB(LofiStemChains.Pad.standard.filters, 220) <= -3)
+        #expect(Self.analyticDB(LofiStemChains.Pad.standard.filters, 380) <= -3)
+        #expect(Self.analyticDB(LofiStemChains.Pad.standard.filters, 2_000) <= -2.5)
+        #expect(Self.analyticDB(LofiStemChains.Pad.standard.filters, 120) <= -10)
         #expect(abs(Self.analyticDB(LofiStemChains.Space.standard.filters, 350) + 3) <= 0.5)
         #expect(abs(Self.analyticDB(LofiStemChains.Space.standard.filters, 4_500) + 3.5) <= 0.5)
     }
@@ -446,6 +454,34 @@ struct LofiStemChainTests {
         let upper = LofiStemChains.applyMids(lower: (silent, silent), upper: (mixed, mixed), sampleRate: Self.rate)
         #expect(Self.bandDB(upper.right, upper.right, low: 600, high: nil)
                 - Self.bandDB(upper.left, upper.left, low: 600, high: nil) > 1)
+    }
+
+    /// The held pad (D117) is folded to mono below 300 Hz by its chain; above it the two grain streams differ.
+    @Test func padWidthStaysAboveThreeHundredHertz() throws {
+        let clock = LofiClock(tempo: 72, sampleRate: Self.rate)
+        let preset = LofiPreset.selection(seed: 32, phrase: 0)
+        let note = LofiScore.Note(part: .texture, midi: 53, beat: 0, length: 6, velocity: 0.52, articulation: .pad)
+        let sample = LofiRenderer.padSample(.bundled, preset: preset, midi: 53)
+        let voice = try #require(LofiPadVoice.render(note, sample: sample, preset: preset, clock: clock, attack: 0.3,
+                                                      voice: 0, seed: 3, limit: clock.frameCount))
+        var left = voice.left, right = voice.right
+        LofiStemChains.applyPad(left: &left, right: &right, sampleRate: Self.rate)
+        func correlation(low: Double?, high: Double?) -> Double {
+            var l = left, r = right
+            var kinds: [LofiBiquad.Kind] = []
+            let q = LofiStemChains.butterworthQ
+            if let low { kinds += [.highpass(hz: low, q: q), .highpass(hz: low, q: q)] }
+            if let high { kinds += [.lowpass(hz: high, q: q), .lowpass(hz: high, q: q)] }
+            var chain = LofiFilterChain(kinds, sampleRate: Self.rate)
+            chain.process(left: &l, right: &r)
+            let a = l.dropFirst(Int(Self.rate)), b = r.dropFirst(Int(Self.rate))
+            let lr = zip(a, b).reduce(0.0) { $0 + Double($1.0 * $1.1) }
+            let ll = a.reduce(0.0) { $0 + Double($1 * $1) }, rr = b.reduce(0.0) { $0 + Double($1 * $1) }
+            return lr / max(1e-20, (ll * rr).squareRoot())
+        }
+        let below = correlation(low: nil, high: 200), above = correlation(low: 800, high: nil)
+        #expect(below > 0.99, "below 200 Hz: \(below)")
+        #expect(above < below, "above 800 Hz: \(above)")
     }
 
     /// Two lead phrases with a rest: the duck reaches its depth on the onsets, eases to the sustain
