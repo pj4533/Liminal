@@ -8,7 +8,7 @@ import OSLog
 /// All stems start against one host time. The backing recording is queued once per 64 beats.
 @MainActor
 final class LofiPlayback {
-    private let bus: LofiBus
+    let bus: LofiBus
     var output: Fader { bus.output }
     /// The faders the archive voice ducks under featured chops; this transport never writes them.
     var duckTargets: (lead: Fader, mids: Fader, space: Fader) { bus.duckTargets }
@@ -82,6 +82,7 @@ final class LofiPlayback {
                 let first = Request(seed: seed, index: 0, options: options)
                 let next = try await bank.prepare(first, sampleRate: sampleRate)
                 guard !Task.isCancelled, epoch == token else { return }
+                bus.syncBeat(next.take.drums.clock.beatDuration)
                 enqueue(next.phrase, take: next.take, request: first)
                 // This getter synchronously queries the audio device. The graph is
                 // fixed for this transport and reacquires latency when the route restarts.
@@ -147,7 +148,7 @@ final class LofiPlayback {
     private func enqueue(_ phrase: LofiRenderer.Phrase, take: LofiPhraseBank.Take, request: Request,
                          repeated: Bool = false, wet: AVAudioPCMBuffer? = nil) {
         if request.drumPhraseIndex == 0 { bus.schedule(take.drums) }
-        bus.schedule(phrase, wet: wet)
+        bus.schedule(phrase, wet: wet, repeated: repeated, silence: take.rest)
         let current = rendered.first
         rendered.append(.init(request: request, breakAudio: take, music: phrase, repeated: repeated, start: queuedFrames))
         queuedFrames += AVAudioFramePosition(take.drums.clock.frameCount)
@@ -203,7 +204,8 @@ final class LofiPlayback {
                 }
                 #endif
                 let next = try await bank.prepare(target, sampleRate: sampleRate, previous: last.breakAudio,
-                                                  carry: last.repeated ? nil : last.music.tail)
+                                                  carry: last.repeated ? nil : last.music.tail,
+                                                  isolatedCarry: last.repeated ? [] : last.music.isolatedWet.map(\.tail))
                 guard !Task.isCancelled, epoch == token, preparationID == job else { return }
                 prepared = (target, next)
             } catch {
@@ -335,7 +337,8 @@ actor LofiPhraseBank {
     private lazy var assets = LofiDrumLibrary.assets()
 
     func prepare(_ request: LofiPlayback.Request, sampleRate: Double, previous: Take? = nil,
-                 carry: LofiRenderer.Tail? = nil, captureEffects: Bool = false) throws -> Prepared {
+                 carry: LofiRenderer.Tail? = nil, captureEffects: Bool = false,
+                 isolatedCarry: [LofiRenderer.Tail] = []) throws -> Prepared {
         try Task.checkCancellation()
         let started = ContinuousClock.now
         let take: Take
@@ -378,7 +381,8 @@ actor LofiPhraseBank {
                                              drift: LofiDrift(seed: request.seed),
                                              startBeat: Double(request.index) * LofiClock.beats,
                                              drums: take.drums, drumStartBeat: request.drumStartBeat, carry: carry,
-                                             captureEffects: captureEffects)
+                                             captureEffects: captureEffects,
+                                             prepareIsolatedWet: LofiBus.isolatedPreparationQualified, isolatedCarry: isolatedCarry)
         let elapsed = started.duration(to: .now).components
         let seconds = Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18
         if seconds > 1 {

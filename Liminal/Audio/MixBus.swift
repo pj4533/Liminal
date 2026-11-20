@@ -32,6 +32,7 @@ nonisolated final class MixBus {
     let reverb: ZitaReverb
     let reverbLP: LowPassButterworthFilter
     let reverbReturn: Fader
+    let performanceSpace: ControllerChannelStrip
     let master: Mixer
     let highpass: HighPassButterworthFilter
     let lowpass: LowPassButterworthFilter
@@ -103,7 +104,8 @@ nonisolated final class MixBus {
         shimmerLP = LowPassButterworthFilter(shimmerHP, cutoffFrequency: 1800)
         shimmerVerb = CostelloReverb(shimmerLP, balance: 1, feedback: 0.93, cutoffFrequency: 2500)
         shimmerReturn = Fader(shimmerVerb, gain: 0)
-        master = Mixer(dryBus, reverbReturn, delayReturn, shimmerReturn, spaceMovement)
+        performanceSpace = ControllerChannelStrip(Mixer(reverbReturn, delayReturn, shimmerReturn, spaceMovement))
+        master = Mixer(dryBus, performanceSpace.output)
         highpass = HighPassButterworthFilter(master, cutoffFrequency: 28)
         lowpass = LowPassButterworthFilter(highpass, cutoffFrequency: Self.ambientLowpassHz)
         masterTrim = Fader(lowpass, gain: 0)

@@ -33,7 +33,7 @@ final class GenerativeEngine: ObservableObject {
     #endif
     private var configurationObserver: AnyCancellable?
     private var recovery: Task<Void, Never>?
-    private let lofi: LofiPlayback
+    let lofi: LofiPlayback
     nonisolated private let lofiActive = Atomic<Bool>(false)
 
     // MARK: - Events
@@ -121,7 +121,8 @@ final class GenerativeEngine: ObservableObject {
         let duck = lofi.duckTargets
         archive.attachMusicDuck(lead: duck.lead, mids: duck.mids, space: duck.space)
         master = LofiMasterBus(archiveAndAmbient: mix.output, lofi: lofi.output)
-        lofi.onPhrase = { [weak conductor, weak master] duration, index, seed in
+        lofi.onPhrase = { [weak conductor, weak master, weak lofi] duration, index, seed in
+            lofi?.bus.syncBeat(duration)
             conductor?.updateArchiveTempo(beatDuration: duration, phrase: index, seed: seed)
             master?.setCalibrationBeatDuration(duration)
         }
@@ -141,6 +142,55 @@ final class GenerativeEngine: ObservableObject {
             guard layer == .drips else { return }
             DispatchQueue.main.async { subject.send(midi) }
         }
+    }
+
+    /// Controller-owned nodes only: the original conductor continues to own levels, pans and sends.
+    /// Future manual voices connect to `manualInput` on these strips, never stop an automatic layer.
+    func controllerStrips(_ channel: ControllerChannel) -> [ControllerChannelStrip] {
+        if channel == .ambientSpace { return [mix.performanceSpace] }
+        if let strip = lofi.bus.strips[channel] { return [strip] }
+        let layerID: LayerID?
+        switch channel {
+        case .drone: layerID = .drone
+        case .pad: layerID = .pad
+        case .ambientLead: layerID = .lead
+        case .keys: layerID = .keys
+        case .drips: layerID = .drips
+        case .air: layerID = .air
+        case .grains: layerID = .grains
+        case .pluck: layerID = .pluck
+        default: layerID = nil
+        }
+        return layers.first { $0.id == layerID }?.allStrips.map(\.performance) ?? []
+    }
+
+    func controllerMixReady(_ channel: ControllerChannel) -> Bool {
+        !controllerStrips(channel).isEmpty && lofi.bus.controlsReady(channel)
+    }
+
+    func controllerModeReady(_ channel: ControllerChannel) -> Bool {
+        // Chops need automatic duck suppression plus a separate manual source in the next stage.
+        ![ControllerChannel.chops, .lofiSpace, .ambientSpace, .film].contains(channel) && controllerMixReady(channel)
+    }
+
+    @discardableResult
+    func controllerSet(_ channel: ControllerChannel, parameter: ControllerParameter, value: Double) -> Bool {
+        guard value.isFinite, (0...1).contains(value), controllerMixReady(channel) else { return false }
+        if channel.rawValue.hasPrefix("lofi.") { return lofi.bus.set(channel, parameter: parameter, value: value) }
+        return controllerStrips(channel).allSatisfy { $0.set(parameter, value: value) }
+    }
+
+    @discardableResult
+    func controllerSetAutomatic(_ channel: ControllerChannel, enabled: Bool) -> Bool {
+        guard controllerModeReady(channel) else { return false }
+        if channel.rawValue.hasPrefix("lofi.") { return lofi.bus.setAutomatic(channel, enabled: enabled) }
+        for strip in controllerStrips(channel) { strip.setAutomatic(enabled) }
+        return true
+    }
+
+    func controllerReset(_ channel: ControllerChannel) {
+        if channel.rawValue.hasPrefix("lofi.") { lofi.bus.reset(channel) }
+        else { for strip in controllerStrips(channel) { strip.reset() } }
     }
 
     // MARK: - Audio Session (visionOS)

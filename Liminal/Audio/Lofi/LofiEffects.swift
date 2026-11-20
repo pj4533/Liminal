@@ -253,13 +253,14 @@ nonisolated struct LofiEffects {
     /// when its sample is present. A polyphonic fallback moves only by octaves.
     static func granulate(_ lead: (left: [Float], right: [Float]), score: LofiScore,
                           clock: LofiClock, frames: Int, seed: UInt64, gesture: Gesture,
-                          texture: (left: [Float], right: [Float]), samples: LofiSampleBank) -> (left: [Float], right: [Float]) {
+                          texture: (left: [Float], right: [Float]), samples: LofiSampleBank,
+                          includeLead: Bool = true, includeMids: Bool = true) -> (left: [Float], right: [Float]) {
         let silence = [Float](repeating: 0, count: frames)
         var result = (left: silence, right: silence)
         var rng = MusicRNG(seed: seed).fork(110)
-        let leadNotes = score.notes.filter { $0.part == .lead }
+        let leadNotes = score.notes.filter { includeLead && $0.part == .lead }
         // The texture anchor is the first answer shell, or none: the held pad is never granulated (D117).
-        let shells = score.notes.filter { $0.part == .texture && $0.articulation != .pad }
+        let shells = score.notes.filter { includeMids && $0.part == .texture && $0.articulation != .pad }
         let anchors = [leadNotes.first, leadNotes.last, shells.first].compactMap { $0 }
         for note in anchors {
             let sustained = note.part == .texture

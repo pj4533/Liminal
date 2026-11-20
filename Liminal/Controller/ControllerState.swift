@@ -55,6 +55,10 @@ nonisolated enum ControllerParameter: String, CaseIterable, Sendable {
         case .pan: return "Pan"
         }
     }
+    func display(_ value: Double) -> String {
+        if self == .gain { return value == 0 ? "Muted" : String(format: "%.1f dB", 20 * log10(Self.linearGain(value))) }
+        return "\(Int(min(1, max(0, value)) * 100))%"
+    }
     static func linearGain(_ value: Double) -> Double {
         guard value > 0 else { return 0 }
         return pow(10, (value <= 0.5 ? -60 + 120 * value : 12 * (value - 0.5)) / 20)

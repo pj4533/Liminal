@@ -68,6 +68,7 @@ nonisolated struct SoftEnv {
 nonisolated final class LayerStrip {
     let level: Fader
     let panner: Panner
+    let performance: ControllerChannelStrip
     let reverbSend: Fader
     let delaySend: Fader
     /// Optional dry fader (nil = the panner feeds the dry bus at unity).
@@ -87,7 +88,7 @@ nonisolated final class LayerStrip {
     private var lastWritten: Float = -1
     private(set) var pan: Float = 0
 
-    var outputs: (dry: Node, reverbSend: Node, delaySend: Node) { (dryGain ?? panner, reverbSend, delaySend) }
+    var outputs: (dry: Node, reverbSend: Node, delaySend: Node) { (dryGain ?? performance.output, reverbSend, delaySend) }
 
     /// Fade position 0...1 (the conductor's target level, published in `MusicState.layerLevels`).
     var targetLevel: Float { min(1, fade.value * swellEnv.value + boostEnv.value) }
@@ -101,9 +102,10 @@ nonisolated final class LayerStrip {
         let p = Panner(level, pan: pan)
         panner = p
         self.pan = pan
-        reverbSend = Fader(p, gain: reverb)
-        delaySend = Fader(p, gain: delay)
-        dryGain = dry.map { Fader(p, gain: $0) }
+        performance = ControllerChannelStrip(p)
+        reverbSend = Fader(performance.output, gain: reverb)
+        delaySend = Fader(performance.output, gain: delay)
+        dryGain = dry.map { Fader(performance.output, gain: $0) }
     }
 
     func fade(to v: Float, over: Double, now: Double) { fade.go(to: v, over: over, now: now) }

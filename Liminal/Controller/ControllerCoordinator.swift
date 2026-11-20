@@ -2,8 +2,8 @@
 import Foundation
 import Combine
 
-/// The initial native integration exposes transport and state only. Audio controls explicitly return
-/// unavailable until the independent audio strips, instrument caches and audible bank adapters land.
+/// Controls independently owned performance strips. Manual voice and qualified Lo-Fi isolation
+/// capabilities remain unavailable until their preparation adapters are installed and validated.
 /// No remote command may acknowledge a mode or mix change that did not reach the audio graph.
 @MainActor
 final class ControllerCoordinator: ObservableObject {
@@ -17,6 +17,8 @@ final class ControllerCoordinator: ObservableObject {
     private var revision: Int64 = 0
     private var timer: Task<Void, Never>?
     private var onsets = ControllerOnsets()
+    private var modeTransitions: [ControllerChannel: (previous: Bool, deadline: Double, request: String)] = [:]
+
 
     private lazy var server = ControllerServer(
         connect: { [weak self] session in self?.connect(session) ?? [:] },
@@ -64,7 +66,11 @@ final class ControllerCoordinator: ObservableObject {
         self.session = nil; connected = false
     }
     func panic() { _ = onsets.releaseAll() }
-    func reset() { panic() }
+    func reset() {
+        panic()
+        for channel in ControllerChannel.allCases { engine?.controllerReset(channel) }
+        modeTransitions.removeAll()
+    }
 
     /// App stop/recovery calls this too. This must grow with native manual audio ownership, not transport.
     func transportDidStop() { panic() }
@@ -92,9 +98,31 @@ final class ControllerCoordinator: ObservableObject {
             case .pressure:
                 // No held onset is a harmless success. No audio-onset adapter is advertised yet.
                 guard onsets.onset(session: command.session, noteID: try command.string("note_id")) == nil else { throw ControllerWire.Failure.unavailable }
-            case .reset: reset()
+            case .reset:
+                if command.fields["scope"]?.string == "channel", let raw = command.fields["channel"]?.string,
+                   let channel = ControllerChannel(rawValue: raw) {
+                    _ = onsets.releaseAll(channel: channel)
+                    engine.controllerReset(channel)
+                    modeTransitions.removeValue(forKey: channel)
+                } else { reset() }
+            case .parameter:
+                guard let channel = ControllerChannel(rawValue: try command.string("channel")) else { throw ControllerWire.Failure.invalid_channel }
+                guard let parameter = ControllerParameter(rawValue: try command.string("parameter")) else { throw ControllerWire.Failure.invalid_parameter }
+                guard let value = command.fields["value"]?.number,
+                      engine.controllerSet(channel, parameter: parameter, value: value) else { throw ControllerWire.Failure.unavailable }
+                reply["value"] = .number(value)
+            case .mode:
+                guard let channel = ControllerChannel(rawValue: try command.string("channel")) else { throw ControllerWire.Failure.invalid_channel }
+                let previous = effectiveAutomatic(channel)
+                guard engine.controllerSetAutomatic(channel, enabled: try command.string("mode") == "auto") else { throw ControllerWire.Failure.unavailable }
+                let request = UUID().uuidString
+                modeTransitions[channel] = (previous, ProcessInfo.processInfo.systemUptime + 0.03, request)
+                reply["status"] = .string("pending"); reply["request_id"] = .string(request)
+
             case .note_on, .pad_on:
                 guard engine.isRunning && engine.isPlaybackReady else { throw ControllerWire.Failure.not_playing }
+                if let raw = command.fields["channel"]?.string, let channel = ControllerChannel(rawValue: raw),
+                   effectiveAutomatic(channel) { throw ControllerWire.Failure.wrong_mode }
                 throw ControllerWire.Failure.not_ready
             default: throw ControllerWire.Failure.unavailable
             }
@@ -107,6 +135,18 @@ final class ControllerCoordinator: ObservableObject {
         reply["revision"] = .integer(revision)
         server.publish(snapshot())
         return reply
+    }
+
+    private func effectiveAutomatic(_ channel: ControllerChannel) -> Bool {
+        if let transition = modeTransitions[channel], ProcessInfo.processInfo.systemUptime < transition.deadline { return transition.previous }
+        return engine?.controllerStrips(channel).first?.automatic ?? true
+    }
+
+    private func modeTransition(_ channel: ControllerChannel) -> ControllerWire.Value {
+        guard let transition = modeTransitions[channel] else { return .null }
+        return .object(["request_id": .string(transition.request),
+                        "status": .string(ProcessInfo.processInfo.systemUptime < transition.deadline ? "applying" : "applied"),
+                        "mode": .string(engine?.controllerStrips(channel).first?.automatic == false ? "manual" : "auto")])
     }
 
     private func isActive(_ id: ControllerChannel) -> Bool {
@@ -122,18 +162,23 @@ final class ControllerCoordinator: ObservableObject {
         let scale = ScaleType.allCases.indices.contains(Int(music.modeIndex)) ? ScaleType.allCases[Int(music.modeIndex)] : .major
         let channels: [ControllerWire.Value] = ControllerChannel.allCases.map { id in
             let parameters: [ControllerWire.Value] = ControllerParameter.allCases.map { p in
-                .object(["id": .string(p.rawValue), "label": .string(p.label), "value": .number(p.defaultValue),
-                         "default": .number(p.defaultValue), "display": .string(p == .gain ? "0.0 dB" : "\(Int(p.defaultValue * 100))%"), "enabled": .bool(false)])
+                .object(["id": .string(p.rawValue), "label": .string(p.label), "value": .number(engine?.controllerStrips(id).first?.values[p] ?? p.defaultValue),
+                         "default": .number(p.defaultValue), "display": .string(p.display(engine?.controllerStrips(id).first?.values[p] ?? p.defaultValue)), "enabled": .bool(isActive(id) && engine?.controllerMixReady(id) == true)])
             }
             return .object(["id": .string(id.rawValue), "label": .string(id.label), "kind": .string(id.kind),
-                            "active": .bool(isActive(id)), "mode": .string("auto"), "ready": .bool(false),
-                            "status": .string("Native performance audio adapter not installed"),
+                            "active": .bool(isActive(id)), "mode": .string(effectiveAutomatic(id) ? "auto" : "manual"), "pending_mode": modeTransition(id), "ready": .bool(false),
+                            "mix_ready": .bool(engine?.controllerMixReady(id) == true),
+                            "mode_ready": .bool(engine?.controllerModeReady(id) == true),
+                            "status": .string("Manual voices unavailable; Lo-Fi source isolation awaits native qualification"),
                             "instrument": .string("Unavailable"), "instrument_revision": .integer(0), "base_midi": .integer(id == .bass ? 24 : 48),
                             "parameters": .array(parameters), "pad_bank": .null])
         }
         let playing = engine?.isRunning == true
         return ["type": .string("state"), "revision": .integer(revision),
-                "capabilities": .object(["transport": .bool(true), "snapshot": .bool(true), "performance_audio": .bool(false)]),
+                "capabilities": .object(["transport": .bool(true), "snapshot": .bool(true), "performance_audio": .bool(false),
+                                          "channel_mix": .bool(true), "channel_effects": .bool(true),
+                                          "automatic_gates": .bool(true), "manual_notes": .bool(false),
+                                          "isolated_lofi_wet": .bool(LofiBus.isolatedPreparationQualified)]),
                 "transport": .object(["state": .string(playing ? "playing" : "stopped"),
                                       "ready": .bool(engine?.isPlaybackReady == true),
                                       "music_mode": .string(engine?.musicMode == .lofi ? "lofi" : "ambient"),

@@ -60,12 +60,21 @@ nonisolated enum LofiRenderer {
         let leadSampleCount: Int
         let tail: Tail
         let effectReturns: [AVAudioPCMBuffer]
+        /// Lead, mids, bass: each nonlinear rack/replay and carry is source-isolated.
+        var isolatedWet: [IsolatedWet] = []
+    }
+
+    struct IsolatedWet: @unchecked Sendable {
+        let buffer: AVAudioPCMBuffer
+        let fallback: AVAudioPCMBuffer
+        let tail: Tail
     }
 
     static func render(seed: UInt64, section: LofiScore.Section, options: LofiOptions, sampleRate: Double,
                        drift: LofiDrift, startBeat: Double, drums: LofiDrumTake? = nil,
                        drumStartBeat: Int = 0, carry: Tail? = nil, samples: LofiSampleBank = .bundled,
-                       captureEffects: Bool = false) throws -> Phrase {
+                       captureEffects: Bool = false, prepareIsolatedWet: Bool = false,
+                       isolatedCarry: [Tail] = []) throws -> Phrase {
         let clock = drums?.clock ?? LofiClock(tempo: options.safeTempo, sampleRate: sampleRate)
         // A take with landmarks drives bass placement through its timing field; otherwise the old kicks.
         let timing = drums.flatMap { $0.landmarks.isEmpty ? nil : $0.timing }
@@ -144,38 +153,139 @@ nonisolated enum LofiRenderer {
         let textureSend = textureVoices.shellSend
         textureVoices.shellSend = ([], [])
         let padSend = mids.padSend.left.isEmpty ? (left: quiet, right: quiet) : mids.padSend
-        let gesture = LofiEffects.Gesture.selection(seed: drift.seed, phrase: phrase)
-        var effectRNG = MusicRNG(seed: drift.seed).fork(UInt64(phrase) + 450)
-        let effectSeed = effectRNG.next()
-        let filterPhase = effectRNG.rangeF(0...(2 * .pi))
-        let filterRate = effectRNG.pick([Float.pi / 4, Float.pi / 6, Float.pi / 8])
-        var grains = LofiEffects.granulate(leadSend, score: score, clock: clock, frames: frames, seed: effectSeed,
-                                           gesture: gesture, texture: textureSend, samples: samples)
-        let fill = LofiFill.ending(phrase: phrase)
-        if let fill, let landing = score.notes.last(where: { $0.part == .lead }) {
-            // Read the cadence backwards into the fill and forwards out of it. Stretch
-            // the build by layering two octave-related pickups on the full-take turn.
-            let body = clock.frame(at: landing.beat + 0.09)
-            let rise = clock.frame(at: fill.buildBeats)
-            let release = clock.frame(at: 0.75)
-            for frame in (n - rise)..<(n + release) {
-                let distance = abs(frame - n)
-                let offset = distance / 2
-                let strength = fill.accent(beatsFromBoundary: Double(frame - n) / clock.framesPerBeat)
-                let level = strength * (fill == .halfway ? 0.72 : 0.95)
-                grains.left[frame] += level * lead.left[body + offset]
-                grains.right[frame] += level * lead.right[body + offset]
-                if fill == .turnaround {
-                    grains.left[frame] += 0.38 * level * lead.right[body + distance]
-                    grains.right[frame] += 0.38 * level * lead.left[body + distance]
+        let automation = (0...Int(ceil(LofiClock.beats + tailBeats))).map { drift.at(startBeat + Double($0)) }
+        // Render only effects again, never the score, sample voices or instrument chains.
+        // Granulation, nonlinear feedback, wet tone and self-return replay each start from silence.
+        func rack(leadSend: (left: [Float], right: [Float]),
+                  textureSend: (left: [Float], right: [Float]),
+                  padSend: (left: [Float], right: [Float]), leadPickup: Bool,
+                  capture: Bool = false, includeLead: Bool = true, includeMids: Bool = true) throws -> (left: [Float], right: [Float]) {
+            let gesture = LofiEffects.Gesture.selection(seed: drift.seed, phrase: phrase)
+            var effectRNG = MusicRNG(seed: drift.seed).fork(UInt64(phrase) + 450)
+            let effectSeed = effectRNG.next()
+            let filterPhase = effectRNG.rangeF(0...(2 * .pi))
+            let filterRate = effectRNG.pick([Float.pi / 4, Float.pi / 6, Float.pi / 8])
+            var grains = LofiEffects.granulate(leadSend, score: score, clock: clock, frames: frames, seed: effectSeed,
+                                               gesture: gesture, texture: textureSend, samples: samples,
+                                               includeLead: includeLead, includeMids: includeMids)
+            let fill = LofiFill.ending(phrase: phrase)
+            if leadPickup, let fill, let landing = score.notes.last(where: { $0.part == .lead }) {
+                // Read the cadence backwards into the fill and forwards out of it. Stretch
+                // the build by layering two octave-related pickups on the full-take turn.
+                let body = clock.frame(at: landing.beat + 0.09)
+                let rise = clock.frame(at: fill.buildBeats)
+                let release = clock.frame(at: 0.75)
+                for frame in (n - rise)..<(n + release) {
+                    let distance = abs(frame - n)
+                    let offset = distance / 2
+                    let strength = fill.accent(beatsFromBoundary: Double(frame - n) / clock.framesPerBeat)
+                    let level = strength * (fill == .halfway ? 0.72 : 0.95)
+                    grains.left[frame] += level * lead.left[body + offset]
+                    grains.right[frame] += level * lead.right[body + offset]
+                    if fill == .turnaround {
+                        grains.left[frame] += 0.38 * level * lead.right[body + distance]
+                        grains.right[frame] += 0.38 * level * lead.left[body + distance]
+                    }
                 }
             }
+            var replay = score.notes.last(where: { $0.part == .lead }).map {
+                LofiEffects.ReturnReplay(lastBeat: $0.beat, clock: clock, gesture: gesture)
+            }
+            let captureWindow = replay?.window ?? 0..<0
+
+            var effects = LofiEffects(clock: clock, profile: score.preset.space, tonic: score.tonic,
+                                      seed: effectSeed, gesture: gesture, scale: score.scale)
+            var wetTone = LofiWetTone(sampleRate: sampleRate)
+            var spaceL = quiet, spaceR = quiet
+            // Per-frame automation, fill accent and filter sweep, computed ahead of the effect loop.
+            var spaceTrack = Self.automationTrack(automation.map(\.space), frames: frames, clock: clock)
+            var sweepTrack = [Float](repeating: 0, count: frames)
+            do {
+                // 0.5 + 0.5 sin(position * rate + phase), position in beats.
+                var start = filterPhase, step = Float(1 / clock.framesPerBeat) * filterRate, half: Float = 0.5
+                var length = Int32(frames)
+                vDSP_vramp(&start, &step, &sweepTrack, 1, vDSP_Length(frames))
+                vvsinf(&sweepTrack, sweepTrack, &length)
+                vDSP_vsmsa(sweepTrack, 1, &half, &half, &sweepTrack, 1, vDSP_Length(frames))
+            }
+            spaceTrack.withUnsafeMutableBufferPointer { space in
+                sweepTrack.withUnsafeMutableBufferPointer { sweep in
+                    if let fill {
+                        let start = max(0, n - clock.frame(at: fill.buildBeats)), end = min(frames, n + clock.frame(at: 0.75))
+                        for frame in start..<end {
+                            let accent = fill.accent(beatsFromBoundary: Double(frame) / clock.framesPerBeat - LofiClock.beats)
+                            space[frame] += 0.25 * accent
+                            sweep[frame] += accent * 0.35
+                        }
+                    }
+                    var one: Float = 1
+                    vDSP_vclip(sweep.baseAddress!, 1, [-1], &one, sweep.baseAddress!, 1, vDSP_Length(frames))
+                }
+            }
+            // Raw pointers keep the per-sample effect loop fast in unoptimized builds; the arrays are not
+            // resized while these are in use. The replay writes into `grains` once, between two runs.
+            let sendL = leadSend.left, sendR = leadSend.right, texSendL = textureSend.left, texSendR = textureSend.right
+            let padSendL = padSend.left, padSendR = padSend.right
+            func run(_ range: Range<Int>) throws {
+                guard !range.isEmpty else { return }
+                let grainL = grains.left, grainR = grains.right
+                try sendL.withUnsafeBufferPointer { sendL in
+                try sendR.withUnsafeBufferPointer { sendR in
+                try texSendL.withUnsafeBufferPointer { texSendL in
+                try texSendR.withUnsafeBufferPointer { texSendR in
+                try padSendL.withUnsafeBufferPointer { padSendL in
+                try padSendR.withUnsafeBufferPointer { padSendR in
+                try grainL.withUnsafeBufferPointer { grainL in
+                try grainR.withUnsafeBufferPointer { grainR in
+                try spaceTrack.withUnsafeBufferPointer { spaceTrack in
+                try sweepTrack.withUnsafeBufferPointer { sweepTrack in
+                try spaceL.withUnsafeMutableBufferPointer { outL in
+                try spaceR.withUnsafeMutableBufferPointer { outR in
+                    let captureStart = captureWindow.lowerBound, captureEnd = captureWindow.upperBound
+                    let wetGain = Self.wetGain, capturing = capture && !effectChannels.isEmpty
+                    // A `while` loop: `for in` over a range goes through the generic iterator in Debug builds.
+                    var frame = range.lowerBound
+                    while frame < range.upperBound {
+                        defer { frame += 1 }
+                        if frame & 8191 == 0 { try Task.checkCancellation() }
+                        let space = spaceTrack[frame]
+                        let returns = effects.processReturns(
+                            lead: (sendGain * sendL[frame], sendGain * sendR[frame]),
+                            texture: (texSendL[frame], texSendR[frame]),
+                            pad: (padSendL[frame], padSendR[frame]),
+                            grains: (sendGain * grainL[frame], sendGain * grainR[frame]),
+                            space: space)
+                        if capturing, frame < n {
+                            effectChannels[0][0][frame] = returns.echo.left
+                            effectChannels[0][1][frame] = returns.echo.right
+                            effectChannels[1][0][frame] = returns.room.left
+                            effectChannels[1][1][frame] = returns.room.right
+                            effectChannels[2][0][frame] = returns.color.left
+                            effectChannels[2][1][frame] = returns.color.right
+                        }
+                        let filtered = wetTone.process(returns.mix, sweep: sweepTrack[frame], space: space)
+                        if frame >= captureStart, frame < captureEnd {
+                            replay?.record(filtered, at: frame)
+                        }
+                        outL[frame] = wetGain * filtered.left
+                        outR[frame] = wetGain * filtered.right
+                    }
+                }}}}}}}}}}}}
+            }
+            let release = captureWindow.upperBound
+            if replay != nil, release > 0, release <= frames {
+                try run(0..<release)
+                replay?.release(into: &grains)
+                try run(release..<frames)
+            } else {
+                try run(0..<frames)
+            }
+            return (spaceL, spaceR)
         }
-        var replay = score.notes.last(where: { $0.part == .lead }).map {
-            LofiEffects.ReturnReplay(lastBeat: $0.beat, clock: clock, gesture: gesture)
-        }
-        let captureWindow = replay?.window ?? 0..<0
-        let automation = (0...Int(ceil(LofiClock.beats + tailBeats))).map { drift.at(startBeat + Double($0)) }
+        let edge = max(1, Int(sampleRate * 0.004))
+        let tailFade = Float(clock.frame(at: 1.25))
+        var tailL = [Float](repeating: 0, count: tailCount)
+        var tailR = tailL
         let drumChannels = drums?.buffer.floatChannelData
         let drumOffset = (drumStartBeat / Int(LofiClock.beats)) * n
         var kickDuck = LofiKickDuck(sampleRate: sampleRate)
@@ -185,96 +295,21 @@ nonisolated enum LofiRenderer {
             }
         }
 
-        var effects = LofiEffects(clock: clock, profile: score.preset.space, tonic: score.tonic,
-                                  seed: effectSeed, gesture: gesture, scale: score.scale)
-        var wetTone = LofiWetTone(sampleRate: sampleRate)
-        let edge = max(1, Int(sampleRate * 0.004))
-        let tailFade = Float(clock.frame(at: 1.25))
-        var tailL = [Float](repeating: 0, count: tailCount)
-        var tailR = tailL
-        var spaceL = quiet, spaceR = quiet
-        // Per-frame automation, fill accent and filter sweep, computed ahead of the effect loop.
-        var spaceTrack = Self.automationTrack(automation.map(\.space), frames: frames, clock: clock)
-        var sweepTrack = [Float](repeating: 0, count: frames)
-        do {
-            // 0.5 + 0.5 sin(position * rate + phase), position in beats.
-            var start = filterPhase, step = Float(1 / clock.framesPerBeat) * filterRate, half: Float = 0.5
-            var length = Int32(frames)
-            vDSP_vramp(&start, &step, &sweepTrack, 1, vDSP_Length(frames))
-            vvsinf(&sweepTrack, sweepTrack, &length)
-            vDSP_vsmsa(sweepTrack, 1, &half, &half, &sweepTrack, 1, vDSP_Length(frames))
-        }
-        spaceTrack.withUnsafeMutableBufferPointer { space in
-            sweepTrack.withUnsafeMutableBufferPointer { sweep in
-                if let fill {
-                    let start = max(0, n - clock.frame(at: fill.buildBeats)), end = min(frames, n + clock.frame(at: 0.75))
-                    for frame in start..<end {
-                        let accent = fill.accent(beatsFromBoundary: Double(frame) / clock.framesPerBeat - LofiClock.beats)
-                        space[frame] += 0.25 * accent
-                        sweep[frame] += accent * 0.35
-                    }
-                }
-                var one: Float = 1
-                vDSP_vclip(sweep.baseAddress!, 1, [-1], &one, sweep.baseAddress!, 1, vDSP_Length(frames))
-            }
-        }
-        // Raw pointers keep the per-sample effect loop fast in unoptimized builds; the arrays are not
-        // resized while these are in use. The replay writes into `grains` once, between two runs.
-        let sendL = leadSend.left, sendR = leadSend.right, texSendL = textureSend.left, texSendR = textureSend.right
-        let padSendL = padSend.left, padSendR = padSend.right
-        func run(_ range: Range<Int>) throws {
-            guard !range.isEmpty else { return }
-            let grainL = grains.left, grainR = grains.right
-            try sendL.withUnsafeBufferPointer { sendL in
-            try sendR.withUnsafeBufferPointer { sendR in
-            try texSendL.withUnsafeBufferPointer { texSendL in
-            try texSendR.withUnsafeBufferPointer { texSendR in
-            try padSendL.withUnsafeBufferPointer { padSendL in
-            try padSendR.withUnsafeBufferPointer { padSendR in
-            try grainL.withUnsafeBufferPointer { grainL in
-            try grainR.withUnsafeBufferPointer { grainR in
-            try spaceTrack.withUnsafeBufferPointer { spaceTrack in
-            try sweepTrack.withUnsafeBufferPointer { sweepTrack in
-            try spaceL.withUnsafeMutableBufferPointer { outL in
-            try spaceR.withUnsafeMutableBufferPointer { outR in
-                let captureStart = captureWindow.lowerBound, captureEnd = captureWindow.upperBound
-                let wetGain = Self.wetGain, capturing = !effectChannels.isEmpty
-                // A `while` loop: `for in` over a range goes through the generic iterator in Debug builds.
-                var frame = range.lowerBound
-                while frame < range.upperBound {
-                    defer { frame += 1 }
-                    if frame & 8191 == 0 { try Task.checkCancellation() }
-                    let space = spaceTrack[frame]
-                    let returns = effects.processReturns(
-                        lead: (sendGain * sendL[frame], sendGain * sendR[frame]),
-                        texture: (texSendL[frame], texSendR[frame]),
-                        pad: (padSendL[frame], padSendR[frame]),
-                        grains: (sendGain * grainL[frame], sendGain * grainR[frame]),
-                        space: space)
-                    if capturing, frame < n {
-                        effectChannels[0][0][frame] = returns.echo.left
-                        effectChannels[0][1][frame] = returns.echo.right
-                        effectChannels[1][0][frame] = returns.room.left
-                        effectChannels[1][1][frame] = returns.room.right
-                        effectChannels[2][0][frame] = returns.color.left
-                        effectChannels[2][1][frame] = returns.color.right
-                    }
-                    let filtered = wetTone.process(returns.mix, sweep: sweepTrack[frame], space: space)
-                    if frame >= captureStart, frame < captureEnd {
-                        replay?.record(filtered, at: frame)
-                    }
-                    outL[frame] = wetGain * filtered.left
-                    outR[frame] = wetGain * filtered.right
-                }
-            }}}}}}}}}}}}
-        }
-        let release = captureWindow.upperBound
-        if replay != nil, release > 0, release <= frames {
-            try run(0..<release)
-            replay?.release(into: &grains)
-            try run(release..<frames)
-        } else {
-            try run(0..<frames)
+        let space = try rack(leadSend: leadSend, textureSend: textureSend, padSend: padSend,
+                             leadPickup: true, capture: true)
+        var spaceL = space.left, spaceR = space.right
+        // Allocate isolated assets only when explicitly requested by a qualified preparation path.
+        // The ordinary default renderer keeps its original work and exact PCM.
+        var isolated: [(left: [Float], right: [Float])] = []
+        if prepareIsolatedWet {
+            isolated.append(try rack(leadSend: leadSend, textureSend: (quiet, quiet),
+                                     padSend: (quiet, quiet), leadPickup: true, includeMids: false))
+            isolated.append(try rack(leadSend: (quiet, quiet), textureSend: textureSend,
+                                     padSend: padSend, leadPickup: false, includeLead: false))
+            var bassSpace = (left: quiet, right: quiet)
+            addBassThrow(score: score, clock: clock, frames: frames,
+                         spaceLeft: &bassSpace.left, spaceRight: &bassSpace.right)
+            isolated.append(bassSpace)
         }
         // Space: filtered once over phrase plus tail, so the carried tail is never filtered again,
         // then ducked under the dry lead. The duck applies to this phrase's frames (own and carried).
@@ -405,9 +440,36 @@ nonisolated enum LofiRenderer {
                 channels[1][i] = wet.right
             }
         }
+        var independent: [IsolatedWet] = []
+        for (index, lane) in isolated.enumerated() {
+            try Task.checkCancellation()
+            var lane = lane
+            _ = LofiStemChains.applySpace(left: &lane.left, right: &lane.right, sampleRate: sampleRate)
+            let buffer = try stereoBuffer(clock: clock), fallback = try stereoBuffer(clock: clock)
+            guard let output = buffer.floatChannelData, let fallbackOut = fallback.floatChannelData else { throw RenderError.buffer }
+            var nextL = [Float](repeating: 0, count: tailCount), nextR = nextL
+            let previous = index < isolatedCarry.count ? isolatedCarry[index] : nil
+            for frame in 0..<n {
+                let old = previous?.sample(frame, at: clock) ?? (0, 0)
+                let revealed = reveal ? Self.returnCarryGain(beat: Double(frame) / clock.framesPerBeat, hold: hold) : 1
+                let sample = boundedWet((revealed * duck.gain[frame] * (lane.left[frame] * spaceTrim * trim + old.0),
+                                         revealed * duck.gain[frame] * (lane.right[frame] * spaceTrim * trim + old.1)))
+                output[0][frame] = sample.left; output[1][frame] = sample.right
+            }
+            for frame in 0..<tailCount {
+                nextL[frame] = lane.left[n + frame] * fade[frame] * spaceTrim * trim
+                nextR[frame] = lane.right[n + frame] * fade[frame] * spaceTrim * trim
+                if frame < n {
+                    let sample = boundedWet((nextL[frame], nextR[frame]))
+                    fallbackOut[0][frame] = sample.left; fallbackOut[1][frame] = sample.right
+                }
+            }
+            independent.append(.init(buffer: buffer, fallback: fallback,
+                                     tail: Tail(clock: clock, left: nextL, right: nextR)))
+        }
         return Phrase(bass: bass, dry: dry, texture: textureBuffer, wet: wetBuffer, fallbackWet: fallbackWet,
                       clock: clock, score: score, leadSampleCount: leadSampleCount,
-                      tail: Tail(clock: clock, left: tailL, right: tailR), effectReturns: effectReturns)
+                      tail: Tail(clock: clock, left: tailL, right: tailR), effectReturns: effectReturns, isolatedWet: independent)
     }
 
     /// A per-beat automation value interpolated linearly to every frame (the value at beat `b`
