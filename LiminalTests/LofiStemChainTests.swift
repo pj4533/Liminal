@@ -453,6 +453,43 @@ struct LofiStemChainTests {
         #expect(LofiKickDuck.landmarkGains([landmarks[4], landmarks[5]], start: 0, count: count, sampleRate: rate) == nil)
     }
 
+    /// A kick the score anchored a bass note to is not ducked, even on the phrase's first frame (an
+    /// audio-based check could not see silence before frame 0), and excluding it leaves the depth on the
+    /// other kicks unchanged because they keep the same median strength.
+    @Test func anchoredKicksAreNotDuckedAndKeepTheReference() throws {
+        let rate = Self.rate
+        func frame(_ seconds: Double) -> Int { Int(seconds * rate) }
+        func kick(_ at: Double, strength: Float) -> LofiDrumLandmark {
+            LofiDrumLandmark(kind: .kick, attackFrame: frame(at), peakFrame: frame(at + 0.02), strength: strength,
+                             confidence: 0.95, lowRiseFrame: frame(at + 0.010))
+        }
+        let start = frame(1.0), count = frame(2.5)
+        let landmarks = [kick(1.0, strength: 1.0), kick(1.8, strength: 0.5), kick(2.6, strength: 0.9)]
+        // The anchor's kick beat is rounded through beats, so it arrives a frame or two off the landmark.
+        let anchored = LofiKickDuck.anchoredKicks(landmarks, near: [frame(1.0) + 2], sampleRate: rate)
+        #expect(anchored == [frame(1.0)])
+        let all = try #require(LofiKickDuck.landmarkGains(landmarks, start: start, count: count, sampleRate: rate))
+        let some = try #require(LofiKickDuck.landmarkGains(landmarks, start: start, count: count, sampleRate: rate,
+                                                           excluding: anchored))
+        #expect(all[frame(0.03)] < 0.8)
+        #expect(some[0..<frame(0.2)].allSatisfy { $0 == 1 })
+        for at in [1.8, 2.6] {
+            let i = frame(at + 0.03) - start
+            #expect(abs(all[i] - some[i]) < 1e-6, "kick at \(at) s")
+        }
+    }
+
+    /// Phrases play back to back on the bass player, so the stem is exactly zero at both edges after the
+    /// split kick duck (its zero-phase low-pass would otherwise spread signal onto the edge frames).
+    @Test func bassStemIsZeroAtBothPhraseEdges() throws {
+        let drums = try Self.phraseDrums()
+        for index in 0..<4 {
+            let bass = Self.channels(try Self.phrase(index: index, drums: drums).bass)
+            #expect(bass.left.first == 0 && bass.left.last == 0, "phrase \(index)")
+            #expect(bass.right.first == 0 && bass.right.last == 0, "phrase \(index)")
+        }
+    }
+
     @Test func leadMidsAndSpaceLeaveTheLowEndToDrumsAndBass() throws {
         let drums = try Self.phraseDrums()
         let take = Self.channels(drums.buffer)

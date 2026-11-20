@@ -68,7 +68,11 @@ nonisolated struct LofiKickDuck {
     /// kick's duck (C-B2 read -0.48 dB). Here every confident kick ducks, scaled by the square root of its
     /// strength against the take's median kick, so ghost kicks barely move the bass. Nil when the take has no confident kick
     /// (the detector then runs as before). Offline, on the renderer's thread.
-    static func landmarkGains(_ landmarks: [LofiDrumLandmark], start: Int, count: Int, sampleRate: Double) -> [Float]? {
+    /// `excluding` lists kick attack frames (take timeline) that are not ducked: the kicks a bass note is
+    /// anchored to. They still count toward the median strength, so the depth on the other kicks does not
+    /// move from phrase to phrase with the anchors.
+    static func landmarkGains(_ landmarks: [LofiDrumLandmark], start: Int, count: Int, sampleRate: Double,
+                              excluding: Set<Int> = []) -> [Float]? {
         let kicks = landmarks.filter { $0.kind == .kick && $0.confidence >= landmarkConfidence }
         guard count > 0, !kicks.isEmpty else { return nil }
         let strengths = kicks.map(\.strength).sorted()
@@ -78,7 +82,7 @@ nonisolated struct LofiKickDuck {
         let total = preroll + count
         let hold = Int(landmarkHold * sampleRate)
         var target = [Float](repeating: 0, count: total)
-        for kick in kicks {
+        for kick in kicks where !excluding.contains(kick.attackFrame) {
             let from = max(0, kick.attackFrame - origin)
             let to = min(total, max(kick.attackFrame, kick.lowRiseFrame) + hold - origin)
             guard to > from else { continue }
@@ -102,16 +106,16 @@ nonisolated struct LofiKickDuck {
         return gains
     }
 
-    /// True when the raw bass is silent just before phrase frame `kick` (20 ms ending 2 ms before it) and
-    /// sounds in the 40 ms after it: a note anchored to that kick starts there.
-    static func noteStarts(on kick: Int, bass: UnsafePointer<Float>, count: Int, sampleRate: Double) -> Bool {
-        let before = kick - Int(0.022 * sampleRate), gap = kick - Int(0.002 * sampleRate)
-        let after = kick + Int(0.040 * sampleRate)
-        guard before >= 0, after <= count, kick >= 0 else { return false }
-        var quiet: Float = 0, loud: Float = 0
-        vDSP_maxmgv(bass + before, 1, &quiet, vDSP_Length(gap - before))
-        vDSP_maxmgv(bass + kick, 1, &loud, vDSP_Length(after - kick))
-        return loud > 1e-3 && quiet < 0.02 * loud
+    /// The confident kicks of `landmarks` whose attack lies within `tolerance` seconds of one of
+    /// `anchoredKicks` (take frames): the kicks the score anchored a bass note to.
+    static func anchoredKicks(_ landmarks: [LofiDrumLandmark], near anchoredKicks: [Int], sampleRate: Double,
+                              tolerance: Double = 0.003) -> Set<Int> {
+        let window = Int(tolerance * sampleRate)
+        var result = Set<Int>()
+        for kick in landmarks where kick.kind == .kick && kick.confidence >= landmarkConfidence {
+            if anchoredKicks.contains(where: { abs($0 - kick.attackFrame) <= window }) { result.insert(kick.attackFrame) }
+        }
+        return result
     }
 
     // MARK: Split duck

@@ -39,7 +39,7 @@ nonisolated extension LofiRenderer {
     /// copied to R. Returns the chain's stats with the deepest kick duck.
     static func finishBass(left: UnsafeMutableBufferPointer<Float>, right: UnsafeMutableBufferPointer<Float>,
                            frames n: Int, sampleRate: Double, envelope: [Float], drums: LofiDrumTake?,
-                           drumOffset: Int, kickDuck: inout LofiKickDuck) -> LofiStemChains.Stats {
+                           drumOffset: Int, anchoredKicks: [Int], kickDuck: inout LofiKickDuck) -> LofiStemChains.Stats {
         let drumChannels = drums?.buffer.floatChannelData
         guard let bassL = left.baseAddress, let bassR = right.baseAddress else { return LofiStemChains.Stats() }
         // Bass: mono chain on the rendered voice, before the edge envelope and the kick duck.
@@ -47,26 +47,21 @@ nonisolated extension LofiRenderer {
         var half: Float = 0.5
         vDSP_vsmul(bassL, 1, &half, bassL, 1, vDSP_Length(n))
         let beatSeconds = Double(n) / LofiClock.beats / sampleRate
-        // Kicks a bass note starts on (an anchored note rises out of its 30 ms clearance just after the
-        // attack) are not ducked: there the kick and the bass hit together and sum (C-B2), and a duck would
-        // put the note's onset 4 dB under its own body.
-        var struck = Set<Int>()
-        for kick in drums?.landmarks ?? [] where kick.kind == .kick && kick.confidence >= LofiKickDuck.landmarkConfidence {
-            if LofiKickDuck.noteStarts(on: kick.attackFrame - drumOffset, bass: bassL, count: n, sampleRate: sampleRate) {
-                struck.insert(kick.attackFrame)
-            }
-        }
+        // Kicks the score anchored a bass note to (`anchoredKicks`, take frames) are not ducked: there the
+        // kick and the bass hit together and sum (C-B2), and a duck would put the note's onset 4 dB under its
+        // own body. Taken from the score, not the audio, so a downbeat kick at frame 0 counts too.
+        let struck = drums.map { LofiKickDuck.anchoredKicks($0.landmarks, near: anchoredKicks, sampleRate: sampleRate) } ?? []
         var bassStats = LofiStemChains.applyBass(bassL, count: n, sampleRate: sampleRate, beatSeconds: beatSeconds)
 
-        // Headroom guard after the chain and the edge envelope, then the kick duck (mono), keyed by the
-        // take's kick landmarks when it has confident kicks, else by the level detector.
-        envelope.withUnsafeBufferPointer { e in
-            var frame = 0
-            while frame < n { bassL[frame] = headroom(bassL[frame]) * e[frame]; frame += 1 }
-        }
+        // Headroom guard after the chain, then the kick duck (mono), keyed by the take's kick landmarks when
+        // it has confident kicks, else by the level detector, then the edge envelope last: the split duck's
+        // zero-phase low-pass spreads signal toward the edges, so the envelope must follow it for the stem to
+        // be exactly zero at both phrase edges.
+        var frame = 0
+        while frame < n { bassL[frame] = headroom(bassL[frame]); frame += 1 }
         var gains: [Float]?
-        if let drums, let landmark = LofiKickDuck.landmarkGains(drums.landmarks.filter { !struck.contains($0.attackFrame) },
-                                                                start: drumOffset, count: n, sampleRate: sampleRate) {
+        if let drums, let landmark = LofiKickDuck.landmarkGains(drums.landmarks, start: drumOffset, count: n,
+                                                                sampleRate: sampleRate, excluding: struck) {
             gains = landmark
         } else if let drumChannels {
             let drumL = drumChannels[0] + drumOffset, drumR = drumChannels[1] + drumOffset
@@ -76,6 +71,7 @@ nonisolated extension LofiRenderer {
             bassStats.extra["kickDuckMaxDb"] = -20 * log10f(gains.min() ?? 1)
             LofiKickDuck.applySplit(gains, to: bassL, count: n, sampleRate: sampleRate)
         }
+        envelope.withUnsafeBufferPointer { e in vDSP_vmul(bassL, 1, e.baseAddress!, 1, bassL, 1, vDSP_Length(n)) }
         bassR.update(from: bassL, count: n)
         return bassStats
     }
