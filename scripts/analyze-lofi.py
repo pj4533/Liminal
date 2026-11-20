@@ -285,6 +285,7 @@ def analyze(run, true_peak_limit, report):
         failures.append("lofi: combined music bus is silent")
     if stats["master"].sample_peak <= SILENCE_FLOOR:
         failures.append("master: combined output is silent")
+    failures.extend(stale_motif_lines(manifest))
     if stats["master"].nonfinite:
         return
 
@@ -299,6 +300,25 @@ def analyze(run, true_peak_limit, report):
     if reference_peak is not None and meter["samplePeakDbfs"] is not None:
         if abs(reference_peak - meter["samplePeakDbfs"]) > 0.11:
             failures.append("master: FFmpeg sample peak disagrees with direct PCM peak")
+
+
+def stale_motif_lines(manifest):
+    """Fresh samples every loop (user direction, 19 November 2026): in motif mode each 16-bar loop
+    (four phrases) leads with its own line. Fails when a loop's main bank is the previous loop's."""
+    chops = [c for c in manifest.get("dialogueChops") or [] if c.get("cell") and isinstance(c.get("block"), int)]
+    loops = {}
+    for chop in chops:
+        loops.setdefault(chop["block"] // 4, []).append(chop["bankID"])
+    keys = sorted(loops)
+    failures = []
+    for a, b in zip(keys, keys[1:]):
+        if b != a + 1:
+            continue
+        main_a = max(set(loops[a]), key=loops[a].count)
+        main_b = max(set(loops[b]), key=loops[b].count)
+        if main_a == main_b:
+            failures.append(f"dialogue: loop {b} repeats loop {a}'s line (bank {main_b}); every loop needs a fresh line")
+    return failures
 
 
 def engine_ceiling(run):

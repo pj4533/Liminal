@@ -138,29 +138,34 @@ nonisolated final class ArchiveVoice {
 
     /// Dialogue chop returns (plan 8.5). Levels are relative to the 0.72 dry path.
     enum ChopBus {
-        static let dryGain: Float = 0.72
+        /// Tuck pass (19 November 2026): 8 dB under the calibrated 0.72, so the chops sit with the
+        /// melodic stems instead of 9 to 15 dB over them in 250 Hz-4 kHz.
+        static let dryGain: Float = 0.28
         static let echoBeats: Float = 0.75
-        /// Heavier chop effects (user direction of 19 November 2026): more echo with more repeats (0.25
-        /// feedback at -16 dB before), and a clearly audible room tail (0.9 s at 0.17 before).
-        static let echoFeedback: Float = 0.42
-        static let echoBand: (low: Float, high: Float) = (400, 3000)
-        static let echoUnderDryDB: Float = -11
-        static let roomBand: (low: Float, high: Float) = (300, 4000)
-        static let roomMidRelease: Float = 1.5
-        static let roomLowRelease: Float = 0.8
-        static let roomDamping: Float = 3000
+        /// Heavier chop effects (user direction of 19 November 2026, "heavier... echo more, more repeats,
+        /// more reverb"): feedback 0.55 with the return 5 dB under dry (0.42 at -11 dB after calibration,
+        /// 0.25 at -16 dB before), and a long, clearly wet room (2.4 s at 0.6; 1.5 s at 0.32 before).
+        static let echoFeedback: Float = 0.55
+        static let echoBand: (low: Float, high: Float) = (400, 2500)
+        static let echoUnderDryDB: Float = -5
+        static let roomBand: (low: Float, high: Float) = (300, 3000)
+        static let roomMidRelease: Float = 2.4
+        static let roomLowRelease: Float = 1.2
+        static let roomDamping: Float = 2200
         /// Return gain that puts the room's energy about 14 dB under the dry path for a 1 kHz line
         /// (0.2 measured 18.5 dB under with the 0.9 s room; 0.17 was the baseline).
-        static let roomReturnGain: Float = 0.32
+        static let roomReturnGain: Float = 0.38
     }
 
     /// Ducking of the Lo-Fi music buses under a featured chop (plan 8.5). Drums and bass are not ducked.
     enum MusicDuck {
-        /// One dB deeper than plan 8.5 (-2, -3, -4): the chops sit in the beat by a light duck of the
-        /// music rather than more chop level (user direction of 19 November 2026).
-        static let leadDB: Float = -3
-        static let midsDB: Float = -4
-        static let spaceDB: Float = -5
+        /// Barely there (-3, -4, -5 after calibration; -2, -3, -4 in plan 8.5). Ducking the music under a
+        /// vocal is how a mix puts the vocal on top; the user's direction after the calibrated clip
+        /// (19 November 2026: the chops "way too loud... need to fit into the mids and melody") is the
+        /// opposite, so the chops are tucked by level, EQ and shared space instead.
+        static let leadDB: Float = -1
+        static let midsDB: Float = -1
+        static let spaceDB: Float = -1.5
         static let attack = 0.03
         static let lead = 0.02
         static let release = 0.3

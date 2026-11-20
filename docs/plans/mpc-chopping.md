@@ -36,6 +36,14 @@ Status: plan. Numbers marked *start* are tuning hypotheses exposed as named cons
 >
 > This is implemented by wave 4 package `chop-motif`. Mix calibration runs after it in wave 5.
 
+> **User direction after the calibrated clips, 19 November 2026 (binding; supersedes "chops loud and forward" and C-B8's old bounds).**
+>
+> - **Fresh samples, always.** One line for 32 bars was a bug. Every 16-bar loop must lead with a fresh line. A film with no usable line must not make the loop repeat the previous one. Guard against it in tests and in the capture analyzer.
+> - **Chops tucked into the mix.** The chops were "way too loud... they need to fit into the mids and melody better. They just stick out frequency wise." Blend them with level, EQ, compression and light, dark reverb, not by ducking the music under them.
+> - **Heavy effects stay.** Echo with many repeats, reverse pickups and reverb, as approved before.
+>
+> See "Heavier chop effects and the line refresh" and "Tuck pass" in [the measurements](mpc-chopping-measurements.md).
+
 > **User direction on chop effects and blend, 19 November 2026 (binding, for wave 5 `mix-calibration` and later rounds).** The user approved the word-piece motif chopping ("way better… definitely go with that") and asked for two changes. `mix-calibration` may edit the effect constants in `DialogueMotif.swift` and the chop chain and returns in `ArchiveVoice.swift` and `DialogueChopRenderer.swift`.
 >
 > 1. **Much heavier effects on the chops.**
@@ -684,7 +692,7 @@ Buses
 | C-B5 | mids 3 to 8 dB under the lead when both play; mids at least 3 dB over the lead in lead rests where mids play; at least two mid articulations per 16 bars | fail |
 | C-B6 | return salience at least +6 dB and not below the theme phrase's; theme and return onset correlation at least 0.8; same program | fail |
 | C-B7 | space at least 3 dB under the lead in lead-active phrases | warn |
-| C-B8 | SII proxy mean at least 0.55 and p10 at least 0.40 over featured chops; 1 to 4 kHz SNR mean at least +3 dB (aim +6); per-chop loudness spread at most 2.5 LU | fail |
+| C-B8 | Chops tucked into the music (user direction, 19 November 2026): SII proxy mean at least 0.30 and p10 at least 0.18 over featured chops; 1 to 4 kHz SNR mean -3 to +2.5 dB; per-chop loudness spread at most 2.5 LU | fail |
 | C-B9 | bed direct to wet at least +3 dB; audibility index in gaps 0.20 to 0.55; bed at least 6 dB under dialogue in 1 to 4 kHz during chops; roll-off at least 3 kHz | fail |
 | C-B10 | routing identities hold | fail |
 

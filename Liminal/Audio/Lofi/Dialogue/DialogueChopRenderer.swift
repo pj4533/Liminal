@@ -322,11 +322,13 @@ nonisolated enum DialogueChopChain {
         static let all: Dynamics = [.deEsser, .compressor]
     }
 
-    static let highpassHz = 120.0
-    static let mudHz = 300.0, mudQ = 1.0, mudDB = -2.5
-    /// Mix calibration moved the presence bell up and raised it (3 kHz, +3 dB before) and eased the
-    /// de-esser (5.5 dB before): the 4 kHz octave carried the lowest SNR of the SII proxy (C-B8).
-    static let presenceHz = 3400.0, presenceQ = 0.8, presenceDB = 4.5
+    /// Tuck pass (19 November 2026): the chops give the low mids to the bass, keys and melody (120 Hz and
+    /// -2.5 dB at 300 Hz before).
+    static let highpassHz = 200.0
+    static let mudHz = 300.0, mudQ = 1.0, mudDB = -4.0
+    /// Tuck pass (19 November 2026): a 2.8 kHz cut instead of a presence boost (+4.5 dB at 3.4 kHz
+    /// after calibration, +3 dB at 3 kHz before). A boost there is what made the chops sit on top of the beat.
+    static let presenceHz = 2800.0, presenceQ = 0.7, presenceDB = -4.0
     static let deEssBand = 5_000.0...8_000.0
     static let deEssMaxDB: Float = 4.5
     /// Firmer than plan 8.5's 3:1 at 9 dB under the peak (user direction of 19 November 2026: the chops glued
@@ -334,9 +336,10 @@ nonisolated enum DialogueChopChain {
     /// the loudest syllables see about 9 dB, the body 2 to 5 dB, so short and long pieces level alike.
     static let ratio: Float = 4, kneeDB: Float = 6, attack = 0.003, release = 0.090
     static let thresholdBelowPeakDB: Float = 13
-    static let speechLowpassHz = 7_500.0, textureLowpassHz = 5_500.0
+    /// Lo-Fi top (7.5 kHz before): the chops roll off with the music's dusty top end.
+    static let speechLowpassHz = 4_200.0, textureLowpassHz = 3_400.0
     /// Low-frequency group delay of the chain in whole samples (mostly the low-pass), removed by the renderer.
-    static let delayFrames = 1
+    static let delayFrames = 2
 
     /// Levelling after the chain (the renderer's `clipGain` call). The K-weighted level of the loud
     /// syllables is the target; the legacy sampler's 0.132 with a hard 0.44 peak cap left featured lines

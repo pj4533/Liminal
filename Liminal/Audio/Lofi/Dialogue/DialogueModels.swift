@@ -589,6 +589,9 @@ nonisolated struct DialoguePerformanceMemory: Sendable {
     var motifLines: [DialogueMotifLineUse] = []
     /// Full-line statements the motif's loop has played so far.
     var motifLineStatements = 0
+    /// Recent films heard by the dialogue layer, newest last (bounded by `DialogueMotifTuning.crateSize`):
+    /// when a loop's own film has no usable line, the motif digs a fresh line from one of these.
+    var motifCrate: [DialogueMotifCrateEntry] = []
 
     init() {}
 

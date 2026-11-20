@@ -384,7 +384,8 @@ def ev_C_B8(m, b, c):
     c.test("siiMean", d.get("siiMean"), d["siiMean"] >= b["siiMeanMin"])
     c.test("siiP10", d.get("siiP10"), None if d.get("siiP10") is None else d["siiP10"] >= b["siiP10Min"],
            f"only {d.get('chops')} featured chops")
-    c.test("snr1to4kMeanDb", d.get("snr1to4kMeanDb"), d["snr1to4kMeanDb"] >= b["snr1to4kMeanDbMin"])
+    snr = d["snr1to4kMeanDb"]
+    c.test("snr1to4kMeanDb", d.get("snr1to4kMeanDb"), b["snr1to4kMeanDbMin"] <= snr <= b.get("snr1to4kMeanDbMax", float("inf")))
     s = d.get("loudnessSpreadLu")
     c.test("loudnessSpreadLu", s, None if s is None else s <= b["loudnessSpreadLuMax"], f"only {d.get('chops')} featured chops")
 

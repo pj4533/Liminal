@@ -274,6 +274,63 @@ struct DialogueMotifTests {
         }
     }
 
+    /// Fresh lines every loop (user direction, 19 November 2026: "I want there to always be fresh samples").
+    /// A loop that opens on a film with no usable line digs a new line from the crate of recent films
+    /// instead of repeating the last loop's line (a capture held one line for 32 bars).
+    @Test func aLoopWhoseFilmHasNoLineDigsAFreshLineFromTheCrate() throws {
+        let speech = MotifShape.film(MotifShape.other, id: "other-c", transcribed: false)
+        let sung = MotifShape.film(MotifShape.sung, id: "sung-c", transcribed: false)
+        let later = MotifShape.film(MotifShape.corpus, id: "corpus-c", transcribed: false)
+        let shapes = [
+            MotifShape(name: "speech-sung-speech-72", bpm: 72, films: [speech, speech, sung, later]),
+            // Only the first film ever speaks: every later loop still gets a line it has not just played.
+            MotifShape(name: "one-speaker-then-sung-72", bpm: 72, films: [speech, sung, sung, sung, sung, sung]),
+        ]
+        for shape in shapes {
+            for seed in Self.seeds {
+                let r = run(shape, seed: seed, takes: 3)
+                try #require(r.loops.count == 3)
+                let motifs = try r.loops.map { try #require($0.motif, "\(shape) seed \(seed)") }
+                for (a, b) in zip(motifs, motifs.dropFirst()) {
+                    #expect(!b.carried, "\(shape) seed \(seed): loop \(b.loop) carried the previous line")
+                    #expect(b.lineKey != a.lineKey, "\(shape) seed \(seed): loop \(b.loop) repeats the line of loop \(a.loop)")
+                }
+                for loop in r.loops {
+                    let covered = Set(bars(loop).keys)
+                    #expect(covered.isSuperset(of: Set(0..<16)), "\(shape) seed \(seed): bars \(covered.sorted())")
+                }
+            }
+        }
+    }
+
+    /// A loop that could only carry the previous line takes a fresh line from a later cue in the loop.
+    @Test func aCarriedLoopTakesAFreshLineFromTheNextSpokenCue() throws {
+        let sung = MotifShape.film(MotifShape.sung, id: "sung-d", transcribed: false)
+        let speech = MotifShape.film(MotifShape.other, id: "other-d", transcribed: false)
+        var memory = DialoguePerformanceMemory()
+        let beat = 60.0 / 72
+        // Loop 0: one spoken cue, so the crate has only that film; its lines are then all used up.
+        let snapshot0 = DialogueFixtures.snapshot(bpm: 72, origin: 0.5, phraseAtOrigin: 0, takeIndex: 0, seed: 3)
+        let w0 = snapshot0.time(beat: 0)..<snapshot0.time(beat: 64)
+        _ = try #require(DialogueMotif.plan(source: speech.source, analysis: speech.analysis, bank: speech.bank, transcript: nil,
+                                            snapshot: snapshot0, window: w0, earliestStart: w0.lowerBound, memory: &memory,
+                                            seed: 5, cueToken: 1, revision: 0))
+        memory.motifCrate.removeAll()
+        let snapshot1 = DialogueFixtures.snapshot(bpm: 72, origin: 0.5 + 64 * beat, phraseAtOrigin: 4, takeIndex: 1, seed: 3)
+        let first = snapshot1.time(beat: 0)..<snapshot1.time(beat: 32)
+        let carried = try #require(DialogueMotif.plan(source: sung.source, analysis: sung.analysis, bank: sung.bank, transcript: nil,
+                                                      snapshot: snapshot1, window: first, earliestStart: first.lowerBound,
+                                                      memory: &memory, seed: 6, cueToken: 2, revision: 0))
+        #expect(carried.motif.carried)
+        let second = snapshot1.time(beat: 32)..<snapshot1.time(beat: 64)
+        let later = MotifShape.film(MotifShape.corpus, id: "corpus-d", transcribed: false)
+        let fresh = try #require(DialogueMotif.plan(source: later.source, analysis: later.analysis, bank: later.bank, transcript: nil,
+                                                    snapshot: snapshot1, window: second, earliestStart: second.lowerBound,
+                                                    memory: &memory, seed: 7, cueToken: 3, revision: 0))
+        #expect(!fresh.motif.carried)
+        #expect(fresh.motif.lineKey != carried.motif.lineKey)
+    }
+
     @Test(arguments: MotifShape.all) fileprivate func latePlansKeepCoverageFromTheNextBar(_ shape: MotifShape) throws {
         for seed in Self.seeds.prefix(4) {
             // Each cue's plan is ready 1.3 bars after its window opens.
