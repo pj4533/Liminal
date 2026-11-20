@@ -50,7 +50,8 @@ struct LofiArrangementTests {
                 let bass = part(current, .bass)
                 for anchor in current.bassAnchors {
                     let note = try #require(bass.first { $0.beat == anchor.noteBeat })
-                    let lead = current.bassVoice.lowRiseLead(midi: note.midi, stroke: note.stroke) * clock.sampleRate
+                    let lead = current.bassVoice.lowRiseLead(midi: note.midi, stroke: note.stroke,
+                                                             struck: note.strike > 0) * clock.sampleRate
                     let kickFrame = anchor.kickLowRiseBeat * clock.framesPerBeat
                     // A note whose rise is longer than its kick's offset into the phrase starts on frame 0.
                     if lead > kickFrame {
@@ -67,7 +68,7 @@ struct LofiArrangementTests {
             }
         }
         BassReport.log("ARRANGEMENT anchored bass notes at \(tempo) BPM: \(anchored)")
-        #expect(voices == [.upright, .flatwound])
+        #expect(voices == [LofiBassTone.standard.voice])
     }
 
     /// Rewritten for the riddim line (plan 2.8): unconfident kicks never anchor, a note is never left
@@ -94,19 +95,14 @@ struct LofiArrangementTests {
         }
     }
 
-    /// Rewritten for the two kits (plan 2.8): one kit per sixteen-bar take for every section, both kits
-    /// in use, and the rendered bass stem equals `addBass` plus the chain sample for sample.
-    @Test func eachTakeHasOneBassKitAndTheStemIsTheVoiceThroughTheChain() throws {
-        var kits: [LofiBassVoice: Int] = [:]
+    /// Rewritten for the bass tones (plan bass-tone-redo 7): every phrase plays `LofiBassTone.standard`,
+    /// and the rendered bass stem equals `addBass` plus the chain sample for sample.
+    @Test func everyPhrasePlaysTheStandardToneAndTheStemIsTheVoiceThroughTheChain() throws {
         for seed in 0..<100 as Range<UInt64> {
-            for take in 0..<2 {
-                let voices = Set((0..<4).map { score(take * 4 + $0, seed: seed).bassVoice })
-                #expect(voices.count == 1)
-                kits[voices.first!, default: 0] += 1
+            for phrase in 0..<8 {
+                #expect(score(phrase, seed: seed).bassVoice == LofiBassTone.standard.voice)
             }
         }
-        let share = Double(kits[.upright, default: 0]) / 200
-        #expect((0.35...0.65).contains(share), "upright take share \(share)")
 
         let phrase = try LofiRenderer.render(seed: 5, section: .answer, options: .init(tempo: 70), sampleRate: 8_000,
                                              drift: .init(seed: 5), startBeat: 80)
@@ -120,8 +116,7 @@ struct LofiArrangementTests {
                 vDSP_vadd(l.baseAddress!, 1, r.baseAddress!, 1, l.baseAddress!, 1, vDSP_Length(n))
                 var half: Float = 0.5
                 vDSP_vsmul(l.baseAddress!, 1, &half, l.baseAddress!, 1, vDSP_Length(n))
-                _ = LofiStemChains.applyBass(l.baseAddress!, count: n, sampleRate: phrase.clock.sampleRate,
-                                             beatSeconds: phrase.clock.beatDuration)
+                _ = LofiStemChains.applyBass(l.baseAddress!, count: n, sampleRate: phrase.clock.sampleRate)
             }
         }
         let rendered = try #require(phrase.bass.floatChannelData)
@@ -377,6 +372,7 @@ struct LofiArrangementTests {
         }
         let perPhrase = best / 8 * 1000
         print("LOFI_RENDER_TIME_PER_PHRASE_MS \(perPhrase) reference \(Self.referenceRenderMilliseconds)")
+        BassReport.log(String(format: "LOFI_RENDER_TIME_PER_PHRASE_MS %.1f reference %.0f", perPhrase, Self.referenceRenderMilliseconds))
         #expect(perPhrase <= 1.3 * Self.referenceRenderMilliseconds)
     }
 }

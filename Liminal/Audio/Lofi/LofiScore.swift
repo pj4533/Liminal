@@ -146,6 +146,9 @@ nonisolated struct LofiScore: Sendable, Equatable {
         var stroke: BassStroke = .walk
         /// Semitones of glide into the note.
         var slide: Int = 0
+        /// How hard a bass note is struck on its kick, 0 to 1 (`LofiBassVoice`): the strike layer, the body's
+        /// filter opening and the level accent. 0 is a plain warm tone.
+        var strike: Float = 0
     }
 
     /// A structural bass accent whose audible attack was placed on a played kick (phrase-local beats).
@@ -181,6 +184,8 @@ nonisolated struct LofiScore: Sendable, Equatable {
     var bassAnchors: [BassAnchor] = []
     /// Optional low-pass sweep range for the phrase's bass chain; nil leaves the chain unchanged.
     var bassSweep: ClosedRange<Double>? = nil
+    /// The sample kit of the frozen D116 throw send (`LofiBassThrowSend.kit`).
+    var bassThrowKit: LofiBassSamples.Kit = .upright
 
     static let phrasesPerForm = 8
     /// The return's first two lead notes are revealed: +3 dB dry (+1.5 dB before mix calibration; a
@@ -265,7 +270,8 @@ nonisolated struct LofiScore: Sendable, Equatable {
                                                      protectedUntil: protected)
         return .init(section: section, tonic: tonic, chordRoot: (tonic + chordDegree) % 12, scale: scale, notes: notes,
                      preset: preset, endingRest: rest, virtualRecord: virtualRecord, bassVoice: voice,
-                     bassAnchors: bass.anchors, bassSweep: bass.sweep)
+                     bassAnchors: bass.anchors, bassSweep: bass.sweep,
+                     bassThrowKit: LofiBassThrowSend.kit(seed: seed, phrase: phrase))
     }
 
     /// The onset of the second melodic cell: the largest gap among the first notes ends the first cell.

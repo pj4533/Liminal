@@ -154,7 +154,8 @@ struct LofiCompositionTests {
         let locked = timed([(0.10, 0.9), (2.5, 0.9), (8.3, 0.4)])
         let bass = locked.notes.filter { $0.part == .bass }
         // A synthetic landmark's low-band rise is its attack; the voice's own low-band rise leads it.
-        let lead = locked.bassVoice.lowRiseLead(midi: bass[0].midi, stroke: bass[0].stroke) / clock.beatDuration
+        let lead = locked.bassVoice.lowRiseLead(midi: bass[0].midi, stroke: bass[0].stroke,
+                                                struck: bass[0].strike > 0) / clock.beatDuration
         #expect(abs(bass[0].beat - max(0, Double(clock.frame(at: 0.10)) / clock.framesPerBeat - lead)) < 1e-9)
         #expect(locked.bassAnchors.count >= 1 && locked.bassAnchors.first?.noteBeat == bass[0].beat)
         #expect(!locked.bassAnchors.contains { abs($0.kickBeat - 8.3) < 0.01 })

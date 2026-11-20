@@ -7,7 +7,8 @@ nonisolated extension LofiRenderer {
     static func addBass(_ note: LofiScore.Note, score: LofiScore, clock: LofiClock, samples: LofiSampleBank,
                         left: UnsafeMutableBufferPointer<Float>, right: UnsafeMutableBufferPointer<Float>) {
         LofiBassVoice.add(note, voice: score.bassVoice, clock: clock, left: left, right: right,
-                          samples: .bundled, sweep: score.bassSweep)
+                          samples: .bundled, sweep: score.bassSweep, beforeStrike: score.bassBeforeStrike(note),
+                          strikeShift: score.bassStrikeShift(note, clock: clock))
     }
 
     /// Dub throws (plan 2.4): the body of each thrown bass note through the echo and spring, added to the
@@ -18,7 +19,8 @@ nonisolated extension LofiRenderer {
                              spaceLeft: inout [Float], spaceRight: inout [Float]) {
         guard LofiBassThrow.isEnabled else { return }
         let thrown = score.notes.filter { $0.part == .bass && $0.send > 0 && $0.velocity > 0 }
-        guard !thrown.isEmpty, let kit = score.bassVoice.kit else { return }
+        guard !thrown.isEmpty, score.bassVoice != .classic else { return }
+        let kit = score.bassThrowKit
         // Only the frames the return can reach are rendered.
         let total = min(frames, spaceLeft.count, spaceRight.count)
         let origin = max(0, min(total, thrown.map { clock.frame(at: $0.beat) }.min() ?? total))
@@ -46,12 +48,11 @@ nonisolated extension LofiRenderer {
         vDSP_vadd(bassL, 1, bassR, 1, bassL, 1, vDSP_Length(n))
         var half: Float = 0.5
         vDSP_vsmul(bassL, 1, &half, bassL, 1, vDSP_Length(n))
-        let beatSeconds = Double(n) / LofiClock.beats / sampleRate
         // Kicks the score anchored a bass note to (`anchoredKicks`, take frames) are not ducked: there the
         // kick and the bass hit together and sum (C-B2), and a duck would put the note's onset 4 dB under its
         // own body. Taken from the score, not the audio, so a downbeat kick at frame 0 counts too.
         let struck = drums.map { LofiKickDuck.anchoredKicks($0.landmarks, near: anchoredKicks, sampleRate: sampleRate) } ?? []
-        var bassStats = LofiStemChains.applyBass(bassL, count: n, sampleRate: sampleRate, beatSeconds: beatSeconds)
+        var bassStats = LofiStemChains.applyBass(bassL, count: n, sampleRate: sampleRate)
 
         // Headroom guard after the chain, then the kick duck (mono), keyed by the take's kick landmarks when
         // it has confident kicks, else by the level detector, then the edge envelope last: the split duck's
@@ -92,6 +93,7 @@ nonisolated extension LofiRenderer {
             let kick = score.bassAnchors.first { $0.noteBeat == note.beat }
             var row: [String: Any] = ["frame": frame, "attackFrame": frame + lead, "midi": note.midi,
                                       "stroke": String(describing: note.stroke), "thrown": note.send > 0,
+                                      "strike": note.strike, "release": score.bassRelease(note),
                                       "alignedKickFrame": kick.map { origin + clock.frame(at: $0.kickBeat) as Any } ?? NSNull()]
             if let kick {
                 row["kickLowRiseFrame"] = origin + clock.frame(at: kick.kickLowRiseBeat)

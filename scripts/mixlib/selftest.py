@@ -446,11 +446,49 @@ def test_engine_paths_skip_cleanly():
            "C-D criteria evaluate without a plan log, and C-D8 skips without accents")
 
 
+def test_bass_tone():
+    """scripts/bass-tone.py on a synthetic capture: a 55 Hz tone with a decaying 600 Hz burst on each note
+    reads its strike contrast and timing, sounding ratio and dark sustain."""
+    import importlib.util
+    import json
+    spec = importlib.util.spec_from_file_location("bass_tone", Path(__file__).resolve().parent.parent / "bass-tone.py")
+    bt = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bt)
+    beat = int(RATE * 60 / 70)
+    frames = 16 * beat
+    x = np.zeros(frames)
+    notes, rows = [], []
+    for k in range(8):
+        on = k * 2 * beat
+        off = on + 2 * beat - int(0.08 * RATE)
+        t = np.arange(off + int(0.07 * RATE) - on) / RATE
+        env = np.minimum(1, t / 0.004) * np.where(t < (off - on) / RATE, 1.0, 0.0)
+        burst = 0.3 * np.exp(-t / 0.008) * np.sin(2 * np.pi * 600 * t)
+        x[on:on + len(t)] += 0.3 * np.sin(2 * np.pi * 55 * t) * env + burst
+        notes.append({"frame": on, "alignedKickFrame": on, "attackFrame": on, "stroke": "walk"})
+        rows.append({"role": "bass", "on": on, "off": off, "midi": 33, "strike": 1.0, "release": 0.07,
+                     "stroke": "walk", "velocity": 0.8, "send": 0, "color": 0.5})
+    with tempfile.TemporaryDirectory() as d:
+        write_wav(Path(d) / "bass.wav", x, RATE)
+        write_wav(Path(d) / "drums.wav", np.zeros(frames), RATE)
+        (Path(d) / "score.json").write_text(json.dumps([{"section": "theme", "range": [0, frames], "notes": rows}]))
+        (Path(d) / "manifest.json").write_text(json.dumps(manifest(frames, diagnostics={"bass": [
+            {"phrase": 0, "voice": "flatwound", "notes": notes}]})))
+        r = bt.analyze(d)
+    s = r["strike"]
+    expect(s["struckNotes"] == 8, f"bass-tone: 8 struck notes ({s['struckNotes']})")
+    expect(s["contrastMedian"] > 20, f"bass-tone: burst contrast {s['contrastMedian']:.1f} dB over 20")
+    expect(s["timingAbsMedian"] <= 6, f"bass-tone: burst peak {s['timingAbsMedian']:.1f} ms from the kick")
+    expect(s["brightestFirstShare"] == 1.0, "bass-tone: the first 15 ms is the brightest window")
+    expect(r["soundingMedian"] >= 0.95, f"bass-tone: sounding ratio {r['soundingMedian']:.2f}")
+    expect(r["thirds"][1000] < -40, f"bass-tone: little at 1 kHz ({r['thirds'][1000]:.1f} dB)")
+
+
 def run_self_test():
     tests = [test_loudness_and_peak, test_masking, test_cadence, test_kick_bass, test_lowband_mono, test_pumping,
              test_full_pipeline_v1, test_plan_fingerprints, test_gain_reduction_trace, test_bass_attack_lag,
              test_all_piece_sii, test_lead_salience, test_lead_time_simulation, test_kick_attack_not_measured,
-             test_nofilm_master_gating, test_engine_paths_skip_cleanly]
+             test_nofilm_master_gating, test_engine_paths_skip_cleanly, test_bass_tone]
     failures = 0
     for t in tests:
         print(t.__name__)

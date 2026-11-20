@@ -1,7 +1,8 @@
 import Accelerate
 import Foundation
 
-/// Dub throws on the bass (plan 2.4): the body layer alone of a thrown note (no sub), high-passed at
+/// Dub throws on the bass (plan 2.4): the body layer alone of a thrown note (no sub), rendered by the
+/// frozen D116 send (`LofiBassThrowSend`, plan bass-tone-redo 2.4), high-passed at
 /// 250 Hz, into a tape echo of three quarters of a beat with a dark saturating loop, and a short spring.
 /// The return goes into the phrase's space arrays, so it shares the wet stem, its ducks and its carried
 /// tail; the low end stays dry and mono in the bass stem. Offline, on the render worker.
@@ -39,8 +40,8 @@ nonisolated enum LofiBassThrow {
         for note in thrown {
             let start = clock.frame(at: note.beat) - origin
             guard start >= 0, start < frames else { continue }
-            let body = LofiBassVoice.render(note, kit: kit, clock: clock, limit: frames - start, samples: samples,
-                                            sweep: sweep, layers: .body)
+            let body = LofiBassThrowSend.render(note, kit: kit, clock: clock, limit: frames - start, samples: samples,
+                                                sweep: sweep, layers: .body)
             body.withUnsafeBufferPointer { b in
                 send.withUnsafeMutableBufferPointer { s in
                     vDSP_vadd(s.baseAddress! + start, 1, b.baseAddress!, 1, s.baseAddress! + start, 1, vDSP_Length(b.count))
@@ -69,7 +70,7 @@ nonisolated enum LofiBassThrow {
         for note in thrown {
             let start = clock.frame(at: note.beat) - origin
             guard start >= 0, start < frames else { continue }
-            let full = LofiBassVoice.render(note, kit: kit, clock: clock, limit: frames - start, samples: samples, sweep: sweep)
+            let full = LofiBassThrowSend.render(note, kit: kit, clock: clock, limit: frames - start, samples: samples, sweep: sweep)
             voice.withUnsafeMutableBufferPointer { v in
                 vDSP_vadd(v.baseAddress! + start, 1, full, 1, v.baseAddress! + start, 1, vDSP_Length(full.count))
             }

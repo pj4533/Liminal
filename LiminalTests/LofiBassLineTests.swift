@@ -46,7 +46,7 @@ struct LofiBassLineTests {
     }
 
     static func release(_ note: LofiScore.Note, _ score: LofiScore, clock: LofiClock = Self.clock) -> Double {
-        score.bassVoice.release(note.stroke) / clock.beatDuration
+        score.bassRelease(note) / clock.beatDuration
     }
 
     // MARK: Density, rests, stroke mix and pitch
@@ -56,6 +56,7 @@ struct LofiBassLineTests {
         var degrees: [String: Int] = [:]
         var total = 0
         var sounding: [Double] = []
+        var ratios: [Double] = []
         for seed in 0..<100 as Range<UInt64> {
             let timing = seed.isMultiple(of: 2) ? Self.take(seed: seed) : nil
             for phrase in 0..<8 {
@@ -74,11 +75,17 @@ struct LofiBassLineTests {
                     #expect(counts.prefix(3).allSatisfy { (1...2).contains($0) }, "\(label)")
                     #expect(counts[3] <= 2, "\(label)")
                 }
-                for bar in bars { #expect(bar.reduce(0) { $0 + $1.length } <= 2.6 + 1e-9, "\(label) bar sounding") }
+                for bar in bars {
+                    #expect(bar.reduce(0) { $0 + $1.length } <= LofiScore.bassBarSoundingLimit + 1e-9, "\(label) bar sounding")
+                }
                 let phraseSounding = notes.reduce(0) { $0 + $1.length }
                 if [.theme, .variation, .returnTheme].contains(current.section) {
                     sounding.append(phraseSounding)
-                    #expect((6.5 - 1e-9...9.5 + 1e-9).contains(phraseSounding), "\(label) sounding \(phraseSounding)")
+                    #expect((10.5 - 1e-9...14.5 + 1e-9).contains(phraseSounding), "\(label) sounding \(phraseSounding)")
+                }
+                // Sounding ratio: held part plus release over the gap to the next onset (phrase-final notes out).
+                for (note, next) in zip(notes, notes.dropFirst()) {
+                    ratios.append(min(1, (note.length + Self.release(note, current)) / (next.beat - note.beat)))
                 }
                 #expect(notes.filter { $0.stroke == .ghost }.count <= 2)
                 for note in notes { strokes[note.stroke, default: 0] += 1 }
@@ -96,10 +103,15 @@ struct LofiBassLineTests {
         let all = Double(strokes.values.reduce(0, +))
         func share(_ s: LofiScore.BassStroke) -> Double { Double(strokes[s, default: 0]) / all }
         func pitchShare(_ s: String) -> Double { Double(degrees[s, default: 0]) / Double(total) }
-        BassReport.log(String(format: "BASSLINE strokes thump %.2f walk %.2f hold %.2f ghost %.2f; root %.2f fifth %.2f octave %.2f other %.2f high %.2f; sounding mean %.2f min %.2f max %.2f",
+        let sortedRatios = ratios.sorted()
+        let medianRatio = sortedRatios[sortedRatios.count / 2]
+        let underHalf = Double(ratios.filter { $0 < 0.5 }.count) / Double(ratios.count)
+        BassReport.log(String(format: "BASSLINE strokes thump %.2f walk %.2f hold %.2f ghost %.2f; root %.2f fifth %.2f octave %.2f other %.2f high %.2f; sounding mean %.2f min %.2f max %.2f; ratio median %.2f under half %.2f",
                      share(.thump), share(.walk), share(.hold), share(.ghost), pitchShare("root"), pitchShare("fifth"),
                      pitchShare("octave"), pitchShare("other"), pitchShare("high"),
-                     sounding.reduce(0, +) / Double(sounding.count), sounding.min() ?? 0, sounding.max() ?? 0))
+                     sounding.reduce(0, +) / Double(sounding.count), sounding.min() ?? 0, sounding.max() ?? 0,
+                     medianRatio, underHalf))
+        #expect(medianRatio >= 0.85)
         #expect((0.35...0.65).contains(share(.thump)))
         #expect((0.15...0.45).contains(share(.walk)))
         #expect((0.08...0.30).contains(share(.hold)))
@@ -174,7 +186,8 @@ struct LofiBassLineTests {
     }
 
     /// Every note ends, release included, by beat 16 (by the drop-out in a breakdown) and starts at or
-    /// after 0; notes never overlap; an anchored note's predecessor is silent 30 ms before it.
+    /// after 0; a release overlaps the next note by at most 40 ms and only when that note is neither struck
+    /// nor anchored; a struck or anchored note's predecessor is silent 30 ms before it.
     @Test func notesAreMonoTightAndInsideThePhrase() {
         for seed in 0..<100 as Range<UInt64> {
             let timing = seed.isMultiple(of: 3) ? nil : Self.take(seed: seed)
@@ -187,9 +200,11 @@ struct LofiBassLineTests {
                     #expect(end <= LofiClock.beats + 1e-9, "seed \(seed) phrase \(phrase) note at \(note.beat) ends \(end)")
                     if i + 1 < notes.count {
                         let next = notes[i + 1]
-                        let anchored = current.bassAnchors.contains { $0.noteBeat == next.beat }
-                        let gap = anchored ? LofiScore.bassAccentClearance / Self.clock.beatDuration : 0
-                        #expect(end <= next.beat - gap + 1e-9, "seed \(seed) phrase \(phrase) overlap at \(note.beat)")
+                        let crisp = next.strike > 0 || current.bassAnchors.contains { $0.noteBeat == next.beat }
+                        let allowed = crisp ? -LofiScore.bassAccentClearance : LofiScore.bassLegatoOverlap
+                        #expect(end <= next.beat + allowed / Self.clock.beatDuration + 1e-9,
+                                "seed \(seed) phrase \(phrase) overlap at \(note.beat)")
+                        #expect(note.beat + note.length <= next.beat + 1e-9, "seed \(seed) phrase \(phrase) held into the next note")
                     }
                 }
                 #expect(notes.filter { $0.slide != 0 }.count <= 1)
@@ -202,6 +217,54 @@ struct LofiBassLineTests {
                 for high in notes where high.midi > 41 { #expect(!current.bassAnchors.contains { $0.noteBeat == high.beat }) }
             }
         }
+    }
+
+    /// Every anchored note but a ghost is struck (1 on a downbeat, kick or weight, 0.6 otherwise), ghosts
+    /// and unanchored notes never are (with a timing field; the return's slam is struck whatever lies under it).
+    @Test func everyAnchoredNoteIsStruckAndGhostsNeverAre() {
+        var struck = 0, all = 0
+        for seed in 0..<100 as Range<UInt64> {
+            let timing = Self.take(seed: seed)
+            for phrase in 0..<8 {
+                let current = Self.score(phrase, seed: seed, timing: timing)
+                for note in Self.bass(current) {
+                    all += 1
+                    let anchored = current.bassAnchors.contains { $0.noteBeat == note.beat }
+                    let slam = current.section == .returnTheme && note.beat == 0 && note.stroke == .hold
+                    if note.stroke == .ghost { #expect(note.strike == 0) }
+                    else if anchored || slam { #expect(note.strike == 1 || note.strike == 0.6, "seed \(seed) phrase \(phrase) \(note.beat)") }
+                    else { #expect(note.strike == 0, "seed \(seed) phrase \(phrase) unanchored \(note.beat) struck") }
+                    if note.strike > 0 { struck += 1 }
+                }
+            }
+        }
+        BassReport.log(String(format: "BASSLINE struck share %.2f", Double(struck) / Double(all)))
+    }
+
+    /// The breath (plan bass-tone-redo 4.2) in the full sections: the note before a pickup keeps its drawn
+    /// length when that leaves a rest of at least 0.35 beats, so at least 40 percent of two-bar cells have
+    /// one (measured 55 percent over seeds 0..<100), and no cell has more than three rests.
+    @Test func oneBreathPerCell() {
+        var counts: [Int: Int] = [:]
+        for seed in 0..<100 as Range<UInt64> {
+            let timing = seed.isMultiple(of: 2) ? Self.take(seed: seed) : nil
+            for phrase in [0, 1, 3, 4, 7] {
+                let current = Self.score(phrase, seed: seed, timing: timing)
+                let notes = Self.bass(current)
+                for cell in 0..<2 {
+                    let lo = Double(cell * 8) - LofiScore.bassBarLead, hi = lo + 8
+                    var rests = 0
+                    for (note, next) in zip(notes, notes.dropFirst()) where note.beat >= lo && note.beat < hi {
+                        if next.beat - (note.beat + note.length + Self.release(note, current)) >= LofiScore.bassBreathRest - 1e-9 { rests += 1 }
+                    }
+                    counts[rests, default: 0] += 1
+                }
+            }
+        }
+        BassReport.log("BASSLINE rests per cell \(counts.sorted { $0.key < $1.key })")
+        let cells = Double(counts.values.reduce(0, +))
+        #expect(Double(counts[0] ?? 0) <= 0.6 * cells, "at least 40 percent of cells breathe")
+        #expect(counts.keys.allSatisfy { $0 <= 3 })
     }
 
     // MARK: Sections, drop-outs and throws
@@ -245,6 +308,6 @@ struct LofiBassLineTests {
 enum BassReport {
     static func log(_ line: String) {
         print(line)
-        Attachment.record(line, named: "bass-report.txt")
+        Attachment.record(line + "\n", named: "bass-report.txt")
     }
 }

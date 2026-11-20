@@ -7,7 +7,8 @@ pre-master) prints the mean-square level in dB of 40-120 Hz, 120-300 Hz,
 whole file and over the stem's active windows only: 400 ms windows whose
 full-band level is within 30 dB of the stem's strongest window. With
 --baseline the same numbers for the baseline capture and the deltas are shown,
-and the band gates of docs/plans/bass-and-pads.md section 5.5 are evaluated.
+and the band gates of docs/plans/bass-tone-redo.md sections 6.1 and 6.5 are evaluated (they replace
+the bass-and-pads 5.5 gates, which encoded the brighter D116 bass).
 
 usage: scripts/stem-bands.py CAPTURE [--baseline CAPTURE] [--json OUT.json]
 Exit status 0 always; the gate lines say PASS or FAIL.
@@ -56,36 +57,37 @@ def stem_bands(capture, stem):
 
 
 def gates(cur, base):
+    """Band gates of docs/plans/bass-tone-redo.md 6.1 and 6.5 (the bass against the baseline capture,
+    everything else unchanged)."""
     g = []
 
     def add(label, value, ok, limit):
         g.append({"gate": label, "value": round(value, 2), "limit": limit, "pass": bool(ok)})
 
-    b, d, t, m, pm = cur["bass"], cur["drums"], cur["texture"], cur["dry"], cur["pre-master"]
-    bb, tb, pmb = base["bass"], base["texture"], base["pre-master"]
+    b, d, pm = cur["bass"], cur["drums"], cur["pre-master"]
+    bb, pmb = base["bass"], base["pre-master"]
     v = b["40-120"]["active"] - d["40-120"]["active"]
     add("bass 40-120 vs drums 40-120 (active)", v, abs(v) <= 1.5, "within 1.5 dB")
+    v = b["40-120"]["active"] - bb["40-120"]["active"]
+    add("bass 40-120 vs baseline bass (active)", v, abs(v) <= 1, "within 1 dB")
     v = b["120-300"]["active"] - bb["120-300"]["active"]
-    add("bass 120-300 vs baseline bass (active)", v, 5 <= v <= 9, "+5 to +9 dB")
+    add("bass 120-300 vs baseline bass (active)", v, -4 <= v <= 0, "0 to 4 dB lower")
     v = b["300-800"]["active"] - bb["300-800"]["active"]
-    add("bass 300-800 vs baseline bass (active)", v, 8 <= v <= 14, "+8 to +14 dB")
+    add("bass 300-800 vs baseline bass (active)", v, v <= -7, ">= 7 dB lower")
+    v = b["1-4k"]["active"] - bb["1-4k"]["active"]
+    add("bass 1-4k vs baseline bass (active)", v, v <= -10, ">= 10 dB lower")
     v = b["1-4k"]["active"]
-    add("bass 1-4k (active, absolute)", v, v <= -55, "<= -55 dB")
-    v = t["40-120"]["active"]
-    add("chords 40-120 (active, absolute)", v, v <= -60, "<= -60 dB")
-    v = t["120-300"]["active"] - tb["120-300"]["active"]
-    add("chords 120-300 vs baseline (active)", v, v <= -4, "<= -4 dB")
-    v = t["120-300"]["whole"] - tb["120-300"]["whole"]
-    add("chords 120-300 vs baseline (whole file)", v, v <= 0, "<= 0 dB")
-    v = t["300-800"]["whole"] - tb["300-800"]["whole"]
-    add("chords 300-800 vs baseline (whole file)", v, v <= 2, "<= +2 dB")
-    v = m["1-4k"]["active"] - t["1-4k"]["active"]
-    add("chords 1-4k under melody 1-4k (active)", v, v >= 8, ">= 8 dB under")
-    for name, limit in (("40-120", 1.5), ("120-300", 1.0), ("300-800", 1.0)):
+    add("bass 1-4k (active, absolute)", v, v <= -62, "<= -62 dB")
+    for stem in ("texture", "dry", "wet", "dialogue-chops", "footage"):
+        if cur.get(stem) and base.get(stem):
+            v = max(abs(cur[stem][n]["whole"] - base[stem][n]["whole"]) for n in NAMES)
+            add(f"{stem} unchanged (largest band change)", v, v <= 0.1, "within 0.1 dB")
+    for name in ("40-120", "120-300"):
         v = pm[name]["active"] - pmb[name]["active"]
-        add(f"pre-master {name} vs baseline", v, v <= limit, f"<= +{limit} dB")
-    v = pm["1-4k"]["active"] - pmb["1-4k"]["active"]
-    add("pre-master 1-4k vs baseline", v, abs(v) <= 0.5, "within 0.5 dB")
+        add(f"pre-master {name} vs baseline", v, abs(v) <= 1, "within 1 dB")
+    for name in ("300-800", "1-4k"):
+        v = pm[name]["active"] - pmb[name]["active"]
+        add(f"pre-master {name} vs baseline", v, -3 <= v <= 0, "0 to 3 dB lower")
     return g
 
 
@@ -110,7 +112,7 @@ def main():
                          f"{c['whole'] - o['whole']:+6.2f} {c['active'] - o['active']:+6.2f}")
             print(line)
     result = {"capture": a.capture, "baseline": a.baseline, "stems": cur, "baselineStems": base}
-    if base and all(cur.get(k) and base.get(k) for k in ("bass", "drums", "texture", "dry", "pre-master")):
+    if base and all(cur.get(k) and base.get(k) for k in ("bass", "drums", "pre-master")):
         result["gates"] = gates(cur, base)
         print()
         for g in result["gates"]:

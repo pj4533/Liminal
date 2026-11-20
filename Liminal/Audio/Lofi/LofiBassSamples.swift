@@ -15,6 +15,9 @@ nonisolated struct LofiBassSamples: Sendable {
         let roundRobin: Int
         let rate: Double
         let pcm: [Float]
+        /// First frame within 40 dB of the file's peak, less 1 ms: playback starts here, so round robins
+        /// with different lead silence (0 to 31 ms on the upright) all speak on the note's first frame.
+        var onset: Int = 0
     }
 
     static let bundled = Self(urls: Bundle.main.urls(forResourcesWithExtension: "wav", subdirectory: nil) ?? [])
@@ -62,8 +65,18 @@ nonisolated struct LofiBassSamples: Sendable {
         else { throw SampleError.format }
         try file.read(into: buffer)
         guard let pcm = buffer.floatChannelData?[0], buffer.frameLength > 1 else { throw SampleError.format }
-        return Sample(root: root, roundRobin: roundRobin, rate: format.sampleRate,
-                      pcm: Array(UnsafeBufferPointer(start: pcm, count: Int(buffer.frameLength))))
+        let samples = Array(UnsafeBufferPointer(start: pcm, count: Int(buffer.frameLength)))
+        return Sample(root: root, roundRobin: roundRobin, rate: format.sampleRate, pcm: samples,
+                      onset: onset(samples, rate: format.sampleRate))
+    }
+
+    /// First frame within 40 dB of the peak, less 1 ms (at least 0).
+    static func onset(_ pcm: [Float], rate: Double) -> Int {
+        let peak = pcm.reduce(Float(0)) { max($0, abs($1)) }
+        guard peak > 0 else { return 0 }
+        let threshold = peak * 0.01
+        let first = pcm.firstIndex { abs($0) >= threshold } ?? 0
+        return max(0, first - Int(0.001 * rate))
     }
 
     private enum SampleError: Error { case format }

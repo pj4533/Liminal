@@ -14,13 +14,24 @@ nonisolated extension LofiScore {
     static let bassKickSafety = 0.20
     /// Gap answers keep this far (beats) from any confident kick or snare.
     static let bassGapClearance = 0.25
-    /// An anchored note's predecessor is silent this long (seconds) before it starts.
+    /// An anchored or struck note's predecessor is silent this long (seconds) before it starts.
     static let bassAccentClearance = 0.030
+    /// Into a note that is neither, the predecessor's release may overlap it by this much (seconds): a
+    /// cross-fade with no gap (plan bass-tone-redo 4.3).
+    static let bassLegatoOverlap = 0.040
+    /// Anchored notes sustain to the next onset, at most this many beats (`hold` `bassHoldCap`).
+    static let bassSustainCap = 2.5
+    static let bassHoldCap = 3.0
+    /// One breath per two-bar cell: the note before a pickup keeps its drawn length when that leaves at
+    /// least this many beats of rest.
+    static let bassBreathRest = 0.35
+    /// The strike layer moves at most this far (seconds) from its note's start onto the kick's attack.
+    static let bassStrikeAdvance = 0.025
     /// A shortened bass note keeps at least this many beats of sustain.
     static let bassShortestLength = 0.12
-    /// Sounding beats per bar at most, and per phrase for the full sections (gates of plan 2.5.7).
-    static let bassBarSoundingLimit = 2.6
-    static let bassPhraseSounding = 6.5...9.5
+    /// Sounding beats per bar at most, and per phrase for the full sections (plan bass-tone-redo 4.2).
+    static let bassBarSoundingLimit = 3.8
+    static let bassPhraseSounding = 10.5...14.5
     /// A note anchored early to a kick on the bar line belongs to the new bar: bars are counted from this
     /// many beats before each bar line, and a note behind the beat never crosses it.
     static let bassBarLead = 0.12
@@ -35,10 +46,19 @@ nonisolated extension LofiScore {
         var sweep: ClosedRange<Double>?
     }
 
-    /// One kit per sixteen-bar take, seeded: a take is consistent and takes differ.
+    /// Every phrase plays one tone (`LofiBassTone.current`: `standard` in the app, plan bass-tone-redo 2).
     static func bassVoice(seed: UInt64, section: Section, phrase: Int) -> LofiBassVoice {
-        var take = MusicRNG(seed: seed).fork(UInt64(max(0, phrase) / LofiDrumTake.phraseCount) + 733)
-        return take.chance(0.5) ? .upright : .flatwound
+        LofiBassTone.current.voice
+    }
+
+    /// The strike of a note anchored to a kick: full on the downbeat, kick and weight notes, lighter on an
+    /// ornament or pickup that landed on a kick; never on a ghost.
+    static func bassStrike(role: BassRole) -> Float {
+        switch role {
+        case .downbeat, .kick, .weight: 1.0
+        case .answer, .pickup: 0.6
+        case .ghost: 0
+        }
     }
 
     // MARK: Cell
@@ -171,7 +191,7 @@ nonisolated extension LofiScore {
 
         // Pitch and performance. Notes on the kick grid claim their kicks first; the others then sit behind
         // the beat but clear of every confident kick, moving onto a free one if they would crowd it.
-        var notes: [Note] = []
+        var placed: [(note: Note, role: BassRole)] = []
         var anchors: [BassAnchor] = []
         var claimed = Set<Int>()
         func isStructural(_ n: CellNote) -> Bool { n.role == .downbeat || n.role == .kick || slots.contains(n.grid) }
@@ -182,6 +202,7 @@ nonisolated extension LofiScore {
             let structural = isStructural(cellNote)
             var beat: Double
             var anchor: BassAnchor?
+            var strike: Float = 0
             if let timing {
                 var target = cellNote.grid
                 if !structural {
@@ -202,7 +223,8 @@ nonisolated extension LofiScore {
                     claimed.insert(kick.offset)
                     // An ornament moved onto a kick drops into the structural register, under the kick.
                     if midi > 41 { midi -= 12 }
-                    let lead = voice.lowRiseLead(midi: midi, stroke: cellNote.stroke) / beatSeconds
+                    strike = cellNote.stroke == .ghost ? 0 : bassStrike(role: cellNote.role)
+                    let lead = voice.lowRiseLead(midi: midi, stroke: cellNote.stroke, struck: strike > 0) / beatSeconds
                     beat = max(0, kick.element.lowRise - lead)
                     anchor = BassAnchor(noteBeat: beat, kickBeat: kick.element.attack,
                                         kickLowRiseBeat: kick.element.lowRise, bassLowRiseBeats: lead)
@@ -213,26 +235,36 @@ nonisolated extension LofiScore {
                 // Legacy: kick notes snap to a played kick within 0.075 beats; the rest keep the pocket.
                 let nearest = kickBeats.min { abs($0 - cellNote.grid) < abs($1 - cellNote.grid) }
                 if structural {
-                    beat = nearest.flatMap { abs($0 - cellNote.grid) <= 0.075 ? $0 : nil } ?? cellNote.grid
+                    let snapped = nearest.flatMap { abs($0 - cellNote.grid) <= 0.075 ? $0 : nil }
+                    beat = snapped ?? cellNote.grid
+                    // Without a timing field a structural note is struck when it sits on a kick (or on the
+                    // template's kick figure when there are no drums at all).
+                    if snapped != nil || kickBeats.isEmpty, cellNote.stroke != .ghost { strike = bassStrike(role: cellNote.role) }
                 } else {
                     beat = cellNote.grid + draws.pocket
                 }
             }
-            var note = Note(part: .bass, midi: midi, beat: max(0, beat), length: cellNote.length,
+            // Drawn length: the cell's own (its holds keep the figure's room), moved into the longer ranges.
+            let drawn = cellNote.stroke == .hold ? cellNote.length + 0.5 : cellNote.length
+            var note = Note(part: .bass, midi: midi, beat: max(0, beat), length: drawn,
                             velocity: cellNote.velocity, send: 0)
             note.stroke = cellNote.stroke
-            notes.append(note)
+            note.strike = strike
+            // The return's slam is struck whatever the take plays under it.
+            if section == .returnTheme, cellNote.grid == 0, cellNote.stroke == .hold { note.strike = 1 }
+            placed.append((note, cellNote.role))
             if let anchor { anchors.append(anchor) }
         }
-        notes.sort { $0.beat < $1.beat }
-        notes = fit(notes, anchors: anchors, voice: voice, beatSeconds: beatSeconds, end: end,
-                    full: section != .breakdown && section != .answer)
+        placed.sort { $0.note.beat < $1.note.beat }
+        var notes = fit(placed.map(\.note), roles: placed.map(\.role), anchors: anchors, voice: voice,
+                        beatSeconds: beatSeconds, end: end, full: section != .breakdown && section != .answer)
         anchors = anchors.filter { a in notes.contains { $0.beat == a.noteBeat } }
 
         // One slide per phrase at most, into a non-anchored walk or hold.
         if draws.slide > 0, section == .theme || section == .variation,
            let i = notes.indices.first(where: { i in
-               (notes[i].stroke == .walk || notes[i].stroke == .hold) && !anchors.contains { $0.noteBeat == notes[i].beat }
+               (notes[i].stroke == .walk || notes[i].stroke == .hold) && notes[i].strike == 0
+                   && !anchors.contains { $0.noteBeat == notes[i].beat }
            }) {
             notes[i].slide = draws.slide
         }
@@ -252,12 +284,13 @@ nonisolated extension LofiScore {
         return range.lowerBound + (range.upperBound - range.lowerBound) * u
     }
 
-    /// Held length in beats per stroke (plan 2.2).
+    /// Drawn held length in beats per stroke (plan bass-tone-redo 4.2). A `hold` takes the cell's weight
+    /// length (1 to 2 beats, kept so the figure is unchanged) plus half a beat.
     static func strokeLengths(_ stroke: BassStroke) -> ClosedRange<Double> {
         switch stroke {
-        case .thump: 0.15...0.30
-        case .walk: 0.5...0.75
-        case .hold: 1.0...2.0
+        case .thump: 0.5...0.75
+        case .walk: 0.75...1.0
+        case .hold: 1.5...2.5
         case .ghost: 0.12...0.20
         }
     }
@@ -456,26 +489,53 @@ nonisolated extension LofiScore {
         }
     }
 
-    /// Mono and tight: every note's release ends before the next note starts (30 ms before an anchored
-    /// one), everything ends by `end`, and the sounding length per bar and per phrase keeps to the gates.
-    static func fit(_ input: [Note], anchors: [BassAnchor], voice: LofiBassVoice, beatSeconds: Double,
-                    end: Double, full: Bool) -> [Note] {
+    /// Joins and lengths (plan bass-tone-redo 4.2, 4.3). Into a struck or anchored note the predecessor
+    /// takes the short release and is silent `bassAccentClearance` before it (a clean re-pluck the C-B2
+    /// measure can time); into any other note its release cross-fades over up to `bassLegatoOverlap`.
+    /// Struck and anchored notes and holds then sustain to the next onset (capped), unanchored answers,
+    /// pickups and kick notes keep their drawn length, ghosts stay short, and the note before a pickup keeps
+    /// one breath per cell. Everything ends by `end`; the sounding length per bar and per phrase keeps to
+    /// the limits.
+    static func fit(_ input: [Note], roles inputRoles: [BassRole], anchors: [BassAnchor], voice: LofiBassVoice,
+                    beatSeconds: Double, end: Double, full: Bool) -> [Note] {
         var notes = input
-        func release(_ n: Note) -> Double { voice.release(n.stroke) / beatSeconds }
+        var roles = inputRoles
+        func crisp(_ i: Int) -> Bool {
+            i < notes.count && (notes[i].strike > 0 || anchors.contains { $0.noteBeat == notes[i].beat })
+        }
+        func release(_ i: Int) -> Double { voice.release(notes[i].stroke, beforeStrike: crisp(i + 1)) / beatSeconds }
         func room(_ i: Int) -> Double {
-            let next = i + 1 < notes.count ? notes[i + 1].beat : end
-            let anchored = i + 1 < notes.count && anchors.contains { $0.noteBeat == notes[i + 1].beat }
-            return next - notes[i].beat - release(notes[i]) - (anchored ? bassAccentClearance / beatSeconds : 0)
+            guard i + 1 < notes.count else { return end - notes[i].beat - release(i) }
+            let gap = notes[i + 1].beat - notes[i].beat
+            if crisp(i + 1) { return gap - release(i) - bassAccentClearance / beatSeconds }
+            return gap - max(0, release(i) - bassLegatoOverlap / beatSeconds)
         }
         var i = 0
         while i < notes.count {
             let r = room(i)
             if r < 0.06 {
                 notes.remove(at: i)
+                roles.remove(at: i)
                 if i > 0 { i -= 1 }
                 continue
             }
             if notes[i].length > r { notes[i] = notes[i].with(length: r) }
+            i += 1
+        }
+        // Sustain: struck and anchored notes and holds ring to the next onset; one breath per cell.
+        var breathing = Set<Int>()
+        i = 0
+        while i < notes.count {
+            let isHold = notes[i].stroke == .hold
+            if notes[i].stroke != .ghost, isHold || crisp(i) {
+                let rest = i + 1 < notes.count ? notes[i + 1].beat - notes[i].beat - notes[i].length - release(i) : 0
+                if i + 1 < notes.count, roles[i + 1] == .pickup, rest >= bassBreathRest {
+                    breathing.insert(i)
+                } else {
+                    let cap = isHold ? bassHoldCap : bassSustainCap
+                    notes[i] = notes[i].with(length: max(notes[i].length, min(room(i), cap)))
+                }
+            }
             i += 1
         }
         // Sounding length per bar.
@@ -490,17 +550,24 @@ nonisolated extension LofiScore {
                 total -= cut
             }
         }
-        // Sounding length per phrase, for the full sections: walks and holds stretch into their room.
+        // Sounding length per phrase, for the full sections.
         if full {
             var total = notes.reduce(0) { $0 + $1.length }
             for m in notes.indices.sorted(by: { notes[$0].length > notes[$1].length }) where total < bassPhraseSounding.lowerBound {
+                guard notes[m].stroke != .ghost, !breathing.contains(m) else { continue }
                 let bar = bassBar(notes[m].beat)
                 let barTotal = notes.filter { bassBar($0.beat) == bar }.reduce(0) { $0 + $1.length }
-                let limit = min(strokeLengths(notes[m].stroke).upperBound, room(m))
-                let add = min(bassPhraseSounding.lowerBound - total, max(0, limit - notes[m].length),
+                let cap = notes[m].stroke == .hold ? bassHoldCap : bassSustainCap
+                let add = min(bassPhraseSounding.lowerBound - total, max(0, min(cap, room(m)) - notes[m].length),
                               max(0, bassBarSoundingLimit - barTotal))
                 notes[m] = notes[m].with(length: notes[m].length + add)
                 total += add
+            }
+            for m in notes.indices.sorted(by: { notes[$0].length > notes[$1].length }) where total > bassPhraseSounding.upperBound {
+                let floor = strokeLengths(notes[m].stroke).lowerBound
+                let cut = min(total - bassPhraseSounding.upperBound, max(0, notes[m].length - floor))
+                notes[m] = notes[m].with(length: notes[m].length - cut)
+                total -= cut
             }
         }
         return notes
@@ -537,7 +604,32 @@ nonisolated extension LofiScore.Note {
     func with(length: Double) -> Self {
         var copy = self
         copy = Self(part: part, midi: midi, beat: beat, length: length, velocity: velocity, color: color, send: send,
-                    gain: gain, articulation: articulation, stroke: stroke, slide: slide)
+                    gain: gain, articulation: articulation, stroke: stroke, slide: slide, strike: strike)
         return copy
+    }
+}
+
+nonisolated extension LofiScore {
+    /// Whether the bass note after `note` is struck or anchored: `note` then takes the short release.
+    func bassBeforeStrike(_ note: Note) -> Bool {
+        let bass = notes.filter { $0.part == .bass }
+        guard let i = bass.firstIndex(of: note), i + 1 < bass.count else { return false }
+        let next = bass[i + 1]
+        return next.strike > 0 || bassAnchors.contains { $0.noteBeat == next.beat }
+    }
+
+    /// Frames from an anchored note's start to its strike: the strike layer peaks about 1 ms after it
+    /// starts, so it starts that much before the kick's broadband attack (the sub's rise sits on the kick's
+    /// later low rise). At most `bassStrikeAdvance` either way; 0 for a note without an anchor.
+    func bassStrikeShift(_ note: Note, clock: LofiClock) -> Int {
+        guard note.strike > 0, let anchor = bassAnchors.first(where: { $0.noteBeat == note.beat }) else { return 0 }
+        let seconds = (anchor.kickBeat - note.beat) * clock.beatDuration - LofiBassVoice.strikePeakTime
+        let limit = LofiScore.bassStrikeAdvance
+        return Int((min(limit, max(-limit, seconds)) * clock.sampleRate).rounded())
+    }
+
+    /// Seconds of release the phrase's voice gives `note`.
+    func bassRelease(_ note: Note) -> Double {
+        bassVoice.release(note.stroke, beforeStrike: bassBeforeStrike(note))
     }
 }

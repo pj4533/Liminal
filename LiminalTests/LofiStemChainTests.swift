@@ -148,7 +148,7 @@ struct LofiStemChainTests {
                     _ = LofiStemChains.applyDrums(left: lp.baseAddress!, right: rp.baseAddress!, count: lp.count,
                                                   sampleRate: Self.rate, settings: drums) } }
             }),
-            ("bass", bass.highpass + bass.filters, [30, 55, 110, 280, 1_000, 4_500], { l, r in
+            ("bass", bass.highpass + bass.filters, [30, 55, 110, 300, 700, 1_400, 2_800], { l, r in
                 l.withUnsafeMutableBufferPointer { _ = LofiStemChains.applyBass($0.baseAddress!, count: $0.count,
                                                                                  sampleRate: Self.rate, settings: bass) }
                 r = l   // the bass chain is mono
@@ -180,12 +180,14 @@ struct LofiStemChainTests {
         // The named settings themselves, where no neighbouring stage contributes more than 0.3 dB.
         #expect(abs(Self.analyticDB(drums.filters + drums.air, 320) + 2.5) <= 0.5)
         #expect(abs(Self.analyticDB(drums.filters + drums.air, 32) + 3) <= 0.5)
-        // Bass EQ of plan 2.3 (the neighbouring bells overlap, so the corners read within 1 dB).
+        // Bass EQ of plan bass-tone-redo 3 (the neighbouring stages overlap, so the corners read within
+        // 1 dB): no 700 Hz bell any more, and a 24 dB per octave low-pass at 1.4 kHz.
         #expect(abs(Self.analyticDB(bass.highpass + bass.filters, 30) + 3) <= 1)
         #expect(abs(Self.analyticDB(bass.highpass + bass.filters, 80) - 0.5) <= 1)
-        #expect(abs(Self.analyticDB(bass.highpass + bass.filters, 280) + 2) <= 1)
-        #expect(abs(Self.analyticDB(bass.highpass + bass.filters, 700) - 2) <= 1)
-        #expect(abs(Self.analyticDB(bass.highpass + bass.filters, 2_400) + 3) <= 1)
+        #expect(abs(Self.analyticDB(bass.highpass + bass.filters, 300) + 1) <= 1)
+        #expect(abs(Self.analyticDB(bass.highpass + bass.filters, 700)) <= 1)
+        #expect(abs(Self.analyticDB(bass.highpass + bass.filters, 1_400) + 3) <= 1)
+        #expect(Self.analyticDB(bass.highpass + bass.filters, 2_800) <= -22)
         #expect(abs(Self.analyticDB(lead.filters, 2_800) - 1.5) <= 0.5)
         #expect(abs(Self.analyticDB(lead.filters, 9_000) + 3) <= 0.5)
         #expect(abs(Self.analyticDB(LofiStemChains.Mids.standard.filters, 400) + 3) <= 0.5)
@@ -353,26 +355,30 @@ struct LofiStemChainTests {
         #expect(bass.left == bass.right)
         #expect(bass.left.contains { abs($0) > 0.02 })
 
-        // Rewritten for the two-layer voice (plan 2.8): a held sub at MIDI 33 (the layer the chain's
-        // parallel harmonics work on): 150 to 800 Hz rises against 40 to 150 Hz, and the compressor's
-        // deepest reduction is 2.5 to 6.5 dB. The plan asked a 6 dB rise; the harmonics band had to move to
-        // 200-900 Hz (zero phase) for C-B2 and the 1-4 kHz band, which gives +2.2 dB here (+5.4 dB at twice
-        // the mix put the bass 1.5 LU over the drums and its 1-4 kHz over -55 dB, capture of 20 November
-        // 2026). The finished stem's harmonics read -7.9 dB against the fundamental (C-B3 asks -12.5).
+        // Rewritten for the bass tone redo (plan bass-tone-redo 7): on a held round (flatwound) MIDI 33 the gentle
+        // parallel harmonics add 0.5 to 3 dB in 200-500 Hz and under 0.5 dB above 800 Hz (D116's added
+        // 3 to 6 dB from 150 Hz to 1.2 kHz), and the compressor's deepest reduction is 2.5 to 6.5 dB.
         let clock = LofiClock(tempo: 70, sampleRate: Self.rate)
         let note = LofiScore.Note(part: .bass, midi: 33, beat: 0, length: 6, velocity: 0.8)
-        var left = LofiBassVoice.render(note, kit: .upright, clock: clock, limit: clock.frameCount, layers: .sub)
+        var left = LofiBassVoice.render(note, voice: .flatwound, clock: clock, limit: clock.frameCount)
         left += [Float](repeating: 0, count: clock.frameCount - left.count)
-        let raw = left
+        var dry = left
         let stats = left.withUnsafeMutableBufferPointer {
-            LofiStemChains.applyBass($0.baseAddress!, count: $0.count, sampleRate: Self.rate, beatSeconds: clock.beatDuration)
+            LofiStemChains.applyBass($0.baseAddress!, count: $0.count, sampleRate: Self.rate)
         }
-        func harmonics(_ x: [Float]) -> Double {
-            Self.bandDB(x, x, low: 150, high: 800) - Self.bandDB(x, x, low: 40, high: 150)
+        var plain = LofiStemChains.Bass.standard
+        plain.saturationMix = 0
+        dry.withUnsafeMutableBufferPointer {
+            _ = LofiStemChains.applyBass($0.baseAddress!, count: $0.count, sampleRate: Self.rate, settings: plain)
         }
-        BassReport.log(String(format: "CHAIN bass harmonics %.2f -> %.2f dB, GR mean %.2f max %.2f",
-                     harmonics(raw), harmonics(left), stats.grMeanDb, stats.grMaxDb))
-        #expect(harmonics(left) >= harmonics(raw) + 2)
+        let added = Self.bandDB(left, left, low: 200, high: 500) - Self.bandDB(dry, dry, low: 200, high: 500)
+        let above = Self.bandDB(left, left, low: 800, high: nil) - Self.bandDB(dry, dry, low: 800, high: nil)
+        BassReport.log(String(format: "CHAIN bass parallel harmonics +%.2f dB in 200-500 Hz, %+.2f dB above 800 Hz, GR mean %.2f max %.2f",
+                     added, above, stats.grMeanDb, stats.grMaxDb))
+        #expect((0.5...3).contains(added), "200-500 Hz \(added) dB")
+        // Plan: under 0.5 dB. The round voice has almost nothing above 800 Hz, so the stage's own
+        // products read +0.62 dB there; the capture's 1-4 kHz is 12.4 dB under cap-fix-1.
+        #expect(abs(above) < 1, "above 800 Hz \(above) dB")
         #expect((2.5...6.5).contains(stats.grMaxDb), "bass reduction \(stats.grMaxDb) dB")
         let finite = left.allSatisfy { $0.isFinite }
         #expect(finite)

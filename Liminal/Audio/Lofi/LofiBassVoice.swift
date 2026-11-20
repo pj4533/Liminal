@@ -2,22 +2,53 @@ import Accelerate
 import Foundation
 import Synchronization
 
-/// The bass voice of a phrase (plan 2.2). `classic` is the original sine, kept bit for bit. The two kits
-/// are a two-layer voice: a synthesized, phase-exact sub that owns everything below 150 Hz, and a sampled
-/// body (CC0 upright or flatwound electric, `LofiBassSamples`) high-passed at 150 Hz that carries the note
-/// from 150 Hz to about 2.5 kHz. Each note is struck with one of four strokes (`LofiScore.BassStroke`).
+/// The bass tone every phrase plays (plan bass-tone-redo 2): one tone for every take, chosen by this
+/// constant. Captures may pick another with the `bassTone` hook; the hooks are inert in the app, so the
+/// app always plays `standard`.
+nonisolated enum LofiBassTone: String, CaseIterable, Sendable {
+    /// Flatwound electric with the tone rolled off; a real string pluck as the strike.
+    case round
+    /// Onset-trimmed upright, darker, with a soft synthesized thump.
+    case upright
+    /// No samples: the sub's harmonic series continued, with a synthesized strike.
+    case synth
+
+    static let standard: LofiBassTone = .round
+
+    static var current: LofiBassTone {
+        LofiCaptureHooks.option("bassTone").flatMap(LofiBassTone.init(rawValue:)) ?? standard
+    }
+
+    var voice: LofiBassVoice {
+        switch self {
+        case .round: .flatwound
+        case .upright: .upright
+        case .synth: .synth
+        }
+    }
+}
+
+/// The bass voice of a phrase. `classic` is the original sine, kept bit for bit. The other three are one
+/// design (plan bass-tone-redo 2): everything below 160 Hz is an additive, phase-exact sub (fundamental
+/// and real 2nd to 4th harmonics, weighted by a zero-phase 160 Hz crossover), and everything above comes
+/// from one dark layer: a sample high-passed at the same 160 Hz with the complementary zero-phase slope and
+/// low-passed at a few hundred hertz, or (`synth`) the sub's series continued. A note with `strike` gets a
+/// short bright strike layer (gone by 80 to 100 ms), a brief opening of the body's low-pass and a level
+/// accent; a note without one is a plain warm tone. No drive, no click, no pitch drop.
 /// Mono, all envelope corners raised cosines, exactly zero after the release.
 nonisolated enum LofiBassVoice: Int, CaseIterable, Sendable {
     /// The original sine with decaying second harmonic and tanh shaping, kept bit for bit.
     case classic
-    /// Synth sub under Karoryfer Sneakybass finger notes: boom-bap upright thump.
+    /// Sub under onset-trimmed Karoryfer Sneakybass finger notes, low-passed at 350 Hz.
     case upright
-    /// Synth sub under Karoryfer Swagbass flatwound notes: dub roundness.
+    /// Sub under Karoryfer Swagbass flatwound notes, low-passed at 420 Hz; flatwound pluck as the strike.
     case flatwound
+    /// Sub and its harmonic series continued to the 12th partial; no samples.
+    case synth
 
     var kit: LofiBassSamples.Kit? {
         switch self {
-        case .classic: nil
+        case .classic, .synth: nil
         case .upright: .upright
         case .flatwound: .flatwound
         }
@@ -29,7 +60,7 @@ nonisolated enum LofiBassVoice: Int, CaseIterable, Sendable {
     var attackLead: Double {
         switch self {
         case .classic: 0.0085
-        case .upright, .flatwound: 0.0010
+        case .upright, .flatwound, .synth: 0.0012
         }
     }
 
@@ -38,80 +69,114 @@ nonisolated enum LofiBassVoice: Int, CaseIterable, Sendable {
     struct Shape: Sendable {
         /// Raised-cosine rise and release of the voice, seconds.
         let rise: Double, release: Double
-        /// Level change across the held part: dB over the whole note (`thump`) plus dB per second (`hold`).
-        let decayDBAcrossNote: Double, decayDBPerSecond: Double
-        /// The sub starts this many semitones above the note and falls onto it over `dropTime`.
-        let dropSemitones: Double, dropTime: Double
+        /// Level change across the held part, dB per second.
+        let decayDBPerSecond: Double
         /// Prepared sample articulation of the body.
         let body: LofiBassSamples.Stroke
-        /// Hann click at 1 kHz, linear level against the body.
-        let click: Double
-        /// Attack accent: the level starts `accent` above the sustain and settles with a 40 ms time
-        /// constant. It makes the note's strike its loudest moment, so the C-B2 rise is read on the strike
-        /// rather than on a later ripple of the low band (a steady note's envelope beats with its harmonics).
-        var accent: Double = 0
     }
 
     static func shape(_ stroke: LofiScore.BassStroke) -> Shape {
         switch stroke {
-        case .thump:
-            Shape(rise: 0.0015, release: 0.060, decayDBAcrossNote: 10, decayDBPerSecond: 0, dropSemitones: 12,
-                  dropTime: 0.008, body: .short, click: 0.1)
-        case .walk:
-            Shape(rise: 0.003, release: 0.090, decayDBAcrossNote: 0, decayDBPerSecond: 0, dropSemitones: 0,
-                  dropTime: 0, body: .long, click: 0, accent: 0.4)
-        case .hold:
-            Shape(rise: 0.004, release: 0.160, decayDBAcrossNote: 0, decayDBPerSecond: 3, dropSemitones: 0,
-                  dropTime: 0, body: .long, click: 0, accent: 0.4)
-        case .ghost:
-            Shape(rise: 0.003, release: 0.050, decayDBAcrossNote: 0, decayDBPerSecond: 0, dropSemitones: 0,
-                  dropTime: 0, body: .ghost, click: 0)
+        case .thump, .walk: Shape(rise: 0.004, release: 0.070, decayDBPerSecond: 3, body: .long)
+        case .hold: Shape(rise: 0.005, release: 0.140, decayDBPerSecond: 2, body: .long)
+        case .ghost: Shape(rise: 0.004, release: 0.050, decayDBPerSecond: 0, body: .ghost)
         }
     }
 
+    /// The release of a note whose successor is struck or anchored: short, so the strike is a re-pluck
+    /// and the low band dips the 6 dB that C-B2 times (with `LofiScore.bassAccentClearance`).
+    static let strikeRelease = 0.045
+
     /// Seconds of release after the held part of a note of this voice and stroke.
-    func release(_ stroke: LofiScore.BassStroke) -> Double {
-        self == .classic ? 0.31 : Self.shape(stroke).release
+    func release(_ stroke: LofiScore.BassStroke, beforeStrike: Bool = false) -> Double {
+        guard self != .classic else { return 0.31 }
+        let normal = Self.shape(stroke).release
+        return beforeStrike ? min(normal, Self.strikeRelease) : normal
     }
 
-    // MARK: Levels (start values, plan 2.2)
+    // MARK: Levels (plan bass-tone-redo 2, start values)
 
-    /// Sub peak level at velocity 1 before the chain.
+    /// Fundamental amplitude of the sub at velocity 1, before the chain.
     static let subGain: Float = 0.30
-    static let subDrive = 1.2
-    static let subHarmonics = (second: 0.20, third: 0.10)
-    /// The body sits this far under the sub's RMS over the sounding note, before its velocity filter.
-    static let bodyUnderSubDB: Float = 11
-    /// Body crossover: 24 dB per octave high-pass.
-    static let bodyHighpass = 180.0
-    /// Pre-crossover drive per kit: the upright finger notes are almost pure fundamental, so the drive
-    /// makes the 3rd and 5th harmonics that carry them above 150 Hz.
-    static func bodyDrive(_ kit: LofiBassSamples.Kit) -> Float { kit == .upright ? 4 : 2 }
-    /// The body's normalization never raises it more than this (a nearly empty band stays quiet).
-    static let bodyMaxBoostDB: Float = 30
+    /// Sub partials 1 to 4, dB re the fundamental, before the crossover weight.
+    static let subPartialsDB: [Double] = [0, -14, -17, -21]
+    /// The crossover between the sub and the upper layer.
+    static let crossover = 160.0
+    /// Magnitude of a 2-pole Butterworth low-pass at `crossover` run forward and backward; the upper layer
+    /// gets 1 minus this, so the two sum flat.
+    static func subWeight(_ f: Double) -> Double { 1 / (1 + pow(f / crossover, 4)) }
     static let slideTime = 0.045
+
+    /// The sampled body is held this far under the steady sub's RMS (`steadySubRMS`) through the note.
+    static func bodyUnderSubDB(_ voice: LofiBassVoice) -> Float { voice == .upright ? 12.5 : 13 }
+    /// The body's levelling never raises a quiet stretch more than this over its loudest point.
+    static let bodyMaxBoostDB: Float = 24
+    /// The body rises over this long (raised cosine): an unstruck note has no pluck, and on a struck one the
+    /// strike layer, not the sample's own second-period pluck, is the brightest moment.
+    static let plainBodyRise = 0.030
+    static let struckBodyRise = 0.040
+    /// A second zero-phase high-pass on the body (4-pole, forward and backward), under the crossover,
+    /// keeps the sample's fundamental out of the sub's band (-0.2 dB at 160 Hz, -9 dB at 87 Hz).
+    static let bodyLeakHighpass = 110.0
+    /// Fixed 24 dB per octave low-pass of the sampled body (two sections: at 12 dB per octave the flatwound's
+    /// own pluck brightness, as strong at 300-1500 Hz as its fundamental, stayed in the sustain and masked
+    /// the strike).
+    static func bodyLowpass(_ voice: LofiBassVoice) -> Double { voice == .upright ? 360 : 400 }
+    /// On a struck note the body's low-pass opens by `strike` times this and closes with `strikeOpenTime`.
+    static let strikeOpening = 300.0
+    static let strikeOpenTime = 0.008
+    /// The breakdown sweep moves the body's low-pass across this range.
+    static let sweepRange = 150.0...450.0
+    /// The synth body's level against the series it continues, dB.
+    static let synthBodyGainDB: Float = 0
+
+    /// Strike layer per voice: peak level re the sub's peak (dB, times `strike`), decay time constant and
+    /// the time it reaches exactly zero.
+    static func strikeLevelDB(_ voice: LofiBassVoice) -> Float {
+        switch voice {
+        case .upright: -5
+        case .synth: -3
+        default: -2
+        }
+    }
+    static func strikeDecay(_ voice: LofiBassVoice) -> Double { 0.010 }
+    static func strikeEnd(_ voice: LofiBassVoice) -> Double { voice == .upright ? 0.100 : 0.080 }
+    static let strikeLowpass = 650.0
+    /// The strike layer's peak sits about this long after its start (its 1 ms rise).
+    static let strikePeakTime = 0.001
+    /// The strike's energy sits above this (zero-phase 2-pole high-pass, or the same weight on synthesized
+    /// partials), so it reads as a bright slap rather than more low end.
+    static let strikeHighpass = 300.0
+    static func strikeWeight(_ f: Double) -> Double {
+        let r = pow(f / strikeHighpass, 4)
+        return r / (1 + r) / sqrt(1 + pow(f / strikeLowpass, 8))
+    }
+    /// Level accent of a struck note: `1 + accent strike e^(-t / accentTime)`.
+    static let accent = 0.4
+    static let accentTime = 0.040
 
     // MARK: Low-band rise
 
-    private struct LeadKey: Hashable { let voice: Int, stroke: Int, midi: Int, rate: Double }
+    private struct LeadKey: Hashable { let voice: Int, stroke: Int, midi: Int, rate: Double, struck: Bool }
     private static let leadCache = Mutex<[LeadKey: Double]>([:])
 
     /// Seconds from note start until the voice's C-B2 rise (`smoothLowRise`: the -6 dB point of the
-    /// 40-160 Hz Hilbert envelope, the measure of scripts/mixlib/lowend.py), on the complete voice (both
-    /// layers) at `midi`. An anchored note starts this far before its kick's rise, so the two bodies rise
-    /// together. (The 2 ms power of `LofiDrumLandmarks.lowBandRise` ripples with a low note's waveform: on
-    /// the two-layer voice it read 1 to 79 ms depending on pitch and body, 20 November 2026.) Cached per
-    /// (voice, stroke, midi, sample rate); called off the audio thread only (the lock is taken on the
-    /// render worker).
-    func lowRiseLead(midi: Int, stroke: LofiScore.BassStroke = .walk, sampleRate: Double = 48_000) -> Double {
-        let key = LeadKey(voice: rawValue, stroke: stroke.rawValue, midi: midi, rate: sampleRate)
+    /// 40-160 Hz Hilbert envelope, the measure of scripts/mixlib/lowend.py), on the complete voice at
+    /// `midi`. An anchored note starts this far before its kick's rise, so the two bodies rise together.
+    /// Everything below 160 Hz is the synthesized sub, so the lead depends on stroke, pitch and strike
+    /// only. Cached per (voice, stroke, midi, sample rate, struck); called off the audio thread only (the
+    /// lock is taken on the render worker).
+    func lowRiseLead(midi: Int, stroke: LofiScore.BassStroke = .walk, struck: Bool = false,
+                     sampleRate: Double = 48_000) -> Double {
+        let key = LeadKey(voice: rawValue, stroke: stroke.rawValue, midi: midi, rate: sampleRate, struck: struck)
         if let cached = Self.leadCache.withLock({ $0[key] }) { return cached }
-        let value = uncachedLowRiseLead(midi: midi, stroke: stroke, sampleRate: sampleRate)
+        let value = uncachedLowRiseLead(midi: midi, stroke: stroke, struck: struck, sampleRate: sampleRate)
         Self.leadCache.withLock { $0[key] = value }
         return value
     }
 
-    func uncachedLowRiseLead(midi: Int, stroke: LofiScore.BassStroke = .walk, sampleRate: Double = 48_000) -> Double {
+    func uncachedLowRiseLead(midi: Int, stroke: LofiScore.BassStroke = .walk, struck: Bool = false,
+                             sampleRate: Double = 48_000) -> Double {
         // A tenth of a second of silence first, as for a note inside a phrase after its clearance.
         let clock = LofiClock(tempo: 60, sampleRate: sampleRate)
         let preroll = clock.frame(at: 0.1)
@@ -119,6 +184,7 @@ nonisolated enum LofiBassVoice: Int, CaseIterable, Sendable {
         var left = [Float](repeating: 0, count: frames), right = left
         var note = LofiScore.Note(part: .bass, midi: midi, beat: 0.1, length: 0.3, velocity: 0.8, send: 0)
         note.stroke = stroke
+        note.strike = struck ? 1 : 0
         left.withUnsafeMutableBufferPointer { l in
             right.withUnsafeMutableBufferPointer { r in Self.add(note, voice: self, clock: clock, left: l, right: r) }
         }
@@ -128,8 +194,8 @@ nonisolated enum LofiBassVoice: Int, CaseIterable, Sendable {
             Self.smoothLowRise(x, from: preroll, sampleRate: sampleRate).map { Double($0 - preroll) / sampleRate }
         }
         if let full = lead(left), full <= Self.maximumLead { return full }
-        if let kit {
-            var sub = Self.render(note, kit: kit, clock: clock, limit: frames - preroll, layers: .sub)
+        if self != .classic {
+            var sub = Self.render(note, voice: self, clock: clock, limit: frames - preroll, layers: .sub)
             sub = [Float](repeating: 0, count: preroll) + sub + [Float](repeating: 0, count: max(0, frames - preroll - sub.count))
             if let alone = lead(sub), alone <= Self.maximumLead { return alone }
         }
@@ -198,93 +264,109 @@ nonisolated enum LofiBassVoice: Int, CaseIterable, Sendable {
 
     // MARK: Rendering
 
-    /// Adds one note to both channels. `sweep`, when present, moves the body low-pass base from 250 to
-    /// 900 Hz across those phrase beats (dub filter movement in a breakdown).
+    /// Adds one note to both channels. `sweep`, when present, moves the body low-pass across
+    /// `sweepRange` over those phrase beats (dub filter movement in a breakdown). `beforeStrike` gives the
+    /// note the short release it needs before a struck or anchored successor. `strikeShift` places the
+    /// strike layer that many frames from the note start (negative: earlier), so on an anchored note the
+    /// slap lands on the kick's broadband attack while the sub's rise stays on the kick's low rise.
     static func add(_ note: LofiScore.Note, voice: LofiBassVoice, clock: LofiClock,
                     left: UnsafeMutableBufferPointer<Float>, right: UnsafeMutableBufferPointer<Float>,
-                    samples: LofiBassSamples = .bundled, sweep: ClosedRange<Double>? = nil) {
-        guard let kit = voice.kit else {
+                    samples: LofiBassSamples = .bundled, sweep: ClosedRange<Double>? = nil, beforeStrike: Bool = false,
+                    strikeShift: Int = 0) {
+        guard voice != .classic else {
             addClassic(note, clock: clock, left: left, right: right)
             return
         }
         let start = clock.frame(at: note.beat)
         guard start >= 0, start < left.count else { return }
-        let mono = render(note, kit: kit, clock: clock, limit: left.count - start, samples: samples, sweep: sweep)
-        guard !mono.isEmpty else { return }
-        mono.withUnsafeBufferPointer { m in
-            vDSP_vadd(left.baseAddress! + start, 1, m.baseAddress!, 1, left.baseAddress! + start, 1, vDSP_Length(m.count))
-            vDSP_vadd(right.baseAddress! + start, 1, m.baseAddress!, 1, right.baseAddress! + start, 1, vDSP_Length(m.count))
-        }
-    }
-
-    enum Layers: Sendable { case both, sub, body }
-
-    /// One note as a mono buffer that starts on the note's first frame, at most `limit` frames long.
-    static func render(_ note: LofiScore.Note, kit: LofiBassSamples.Kit, clock: LofiClock, limit: Int,
-                       samples: LofiBassSamples = .bundled, sweep: ClosedRange<Double>? = nil,
-                       layers: Layers = .both) -> [Float] {
-        let shape = shape(note.stroke)
-        let rate = clock.sampleRate
-        let span = max(1, clock.frame(at: note.length))
-        let tail = max(1, Int(rate * shape.release))
-        let count = min(limit, span + tail)
-        guard count > 0 else { return [] }
-        let envelope = envelope(shape: shape, span: span, tail: tail, count: count, rate: rate)
-        let sub = renderSub(note, shape: shape, envelope: envelope, rate: rate)
-        if layers == .sub { return sub }
-        var body = renderBody(note, kit: kit, shape: shape, count: count, rate: rate, samples: samples)
-        // Body level: `bodyUnderSubDB` under the sub's RMS over the sounding note, measured before the
-        // velocity low-pass, so a soft note is darker as well as quieter.
-        var shaped = [Float](repeating: 0, count: count)
-        vDSP_vmul(body, 1, envelope, 1, &shaped, 1, vDSP_Length(count))
-        var subRMS: Float = 0, bodyRMS: Float = 0
-        vDSP_rmsqv(sub, 1, &subRMS, vDSP_Length(count))
-        vDSP_rmsqv(shaped, 1, &bodyRMS, vDSP_Length(count))
-        let target = subRMS * powf(10, -bodyUnderSubDB / 20)
-        var gain = bodyRMS > 1e-9 ? min(powf(10, bodyMaxBoostDB / 20), target / bodyRMS) : 0
-        velocityLowpass(&body, velocity: Double(note.velocity), startBeat: note.beat, clock: clock, sweep: sweep)
-        // The envelope goes on last, so the body is exactly zero after the release.
-        vDSP_vmul(body, 1, envelope, 1, &body, 1, vDSP_Length(count))
-        vDSP_vsmul(body, 1, &gain, &body, 1, vDSP_Length(count))
-        if shape.click > 0 {
-            // 3 ms Hann click at 1 kHz, 20 dB under the body.
-            let clickFrames = min(count, Int(0.003 * rate))
-            let amplitude = Float(shape.click) * target * sqrtf(2)
-            let omega = 2 * Double.pi * 1_000 / rate
-            for i in 0..<clickFrames {
-                let window = 0.5 - 0.5 * cos(2 * Double.pi * Double(i) / Double(clickFrames))
-                body[i] += amplitude * Float(window * sin(omega * Double(i)))
+        let parts = renderParts(note, voice: voice, clock: clock, limit: left.count - start, samples: samples,
+                                sweep: sweep, layers: .all, beforeStrike: beforeStrike)
+        func mix(_ x: [Float], at position: Int) {
+            let skip = max(0, -position), at = max(0, position)
+            let n = min(x.count - skip, left.count - at)
+            guard n > 0 else { return }
+            x.withUnsafeBufferPointer { m in
+                vDSP_vadd(left.baseAddress! + at, 1, m.baseAddress! + skip, 1, left.baseAddress! + at, 1, vDSP_Length(n))
+                vDSP_vadd(right.baseAddress! + at, 1, m.baseAddress! + skip, 1, right.baseAddress! + at, 1, vDSP_Length(n))
             }
         }
-        if layers == .body { return body }
-        var mono = sub
-        vDSP_vadd(mono, 1, body, 1, &mono, 1, vDSP_Length(count))
+        mix(parts.tone, at: start)
+        mix(parts.strike, at: start + strikeShift)
+    }
+
+    enum Layers: Sendable { case all, sub, body, strike }
+
+    /// One note as a mono buffer that starts on the note's first frame, at most `limit` frames long (the
+    /// strike layer unshifted).
+    static func render(_ note: LofiScore.Note, voice: LofiBassVoice, clock: LofiClock, limit: Int,
+                       samples: LofiBassSamples = .bundled, sweep: ClosedRange<Double>? = nil,
+                       layers: Layers = .all, beforeStrike: Bool = false) -> [Float] {
+        let parts = renderParts(note, voice: voice, clock: clock, limit: limit, samples: samples, sweep: sweep,
+                                layers: layers, beforeStrike: beforeStrike)
+        guard layers == .all, !parts.strike.isEmpty else { return layers == .strike ? parts.strike : parts.tone }
+        var mono = parts.tone
+        parts.strike.withUnsafeBufferPointer { s in
+            vDSP_vadd(mono, 1, s.baseAddress!, 1, &mono, 1, vDSP_Length(min(s.count, mono.count)))
+        }
         return mono
     }
 
-    /// Raised-cosine rise, the stroke's sustain shape, raised-cosine release to exactly zero (vectorized).
-    private static func envelope(shape: Shape, span: Int, tail: Int, count: Int, rate: Double) -> [Float] {
+    /// The note's tone (the layers asked for among sub and body) and its strike layer (empty when unstruck
+    /// or not asked for), both starting on the note's first frame.
+    private static func renderParts(_ note: LofiScore.Note, voice: LofiBassVoice, clock: LofiClock, limit: Int,
+                                    samples: LofiBassSamples, sweep: ClosedRange<Double>?, layers: Layers,
+                                    beforeStrike: Bool) -> (tone: [Float], strike: [Float]) {
+        guard voice != .classic else { return ([], []) }
+        let shape = shape(note.stroke)
+        let rate = clock.sampleRate
+        let span = max(1, clock.frame(at: note.length))
+        let tail = max(1, Int(rate * voice.release(note.stroke, beforeStrike: beforeStrike)))
+        let count = min(limit, span + tail)
+        guard count > 0 else { return ([], []) }
+        let strike = Double(max(0, min(1, note.strike)))
+        let envelope = envelope(shape: shape, span: span, tail: tail, count: count, rate: rate, accent: accent * strike)
+        let sub = renderSub(note, envelope: envelope, rate: rate)
+        if layers == .sub { return (sub, []) }
+        var subPeak: Float = 0
+        vDSP_maxmgv(sub, 1, &subPeak, vDSP_Length(count))
+        var tone = layers == .all ? sub : [Float](repeating: 0, count: count)
+        if layers == .all || layers == .body {
+            let body = voice == .synth
+                ? synthBody(note, envelope: envelope, rate: rate)
+                : sampledBody(note, voice: voice, sub: sub, envelope: envelope, clock: clock, samples: samples,
+                              sweep: sweep, strike: strike)
+            vDSP_vadd(tone, 1, body, 1, &tone, 1, vDSP_Length(count))
+        }
+        var layer: [Float] = []
+        if layers == .all || layers == .strike, strike > 0 {
+            layer = strikeLayer(note, voice: voice, count: count, rate: rate, samples: samples,
+                                peak: Float(strike) * subPeak * powf(10, strikeLevelDB(voice) / 20))
+        }
+        return (tone, layer)
+    }
+
+    /// Raised-cosine rise, the stroke's per-second decay times the strike accent, raised-cosine release
+    /// to exactly zero (vectorized).
+    private static func envelope(shape: Shape, span: Int, tail: Int, count: Int, rate: Double, accent: Double) -> [Float] {
         var e = [Float](repeating: 0, count: count)
-        let spanSeconds = Double(span) / rate
         let hold = min(span, count)
         // Held part: 10^(-dB(t) / 20) = exp(-ln(10) / 20 * rate_dB * t), one vector exp.
-        let dbPerFrame = (shape.decayDBAcrossNote / spanSeconds + shape.decayDBPerSecond) / rate
-        var start: Float = 0, step = Float(-log(10.0) / 20 * dbPerFrame)
+        var start: Float = 0, step = Float(-log(10.0) / 20 * shape.decayDBPerSecond / rate)
         var n = Int32(hold)
         if hold > 0 {
             vDSP_vramp(&start, &step, &e, 1, vDSP_Length(hold))
             vvexpf(&e, e, &n)
         }
-        if shape.accent > 0, hold > 0 {
-            // 1 + accent e^(-t / 40 ms), normalized so the sustain keeps its level.
-            var a0: Float = 0, da = Float(-1 / (0.040 * rate))
-            var accent = [Float](repeating: 0, count: hold)
-            vDSP_vramp(&a0, &da, &accent, 1, vDSP_Length(hold))
+        if accent > 0, hold > 0 {
+            // 1 + accent e^(-t / 40 ms): the strike is the note's loudest moment.
+            var a0: Float = 0, da = Float(-1 / (accentTime * rate))
+            var bump = [Float](repeating: 0, count: hold)
+            vDSP_vramp(&a0, &da, &bump, 1, vDSP_Length(hold))
             var hn = Int32(hold)
-            vvexpf(&accent, accent, &hn)
-            var scale = Float(shape.accent), one: Float = 1
-            vDSP_vsmsa(accent, 1, &scale, &one, &accent, 1, vDSP_Length(hold))
-            vDSP_vmul(e, 1, accent, 1, &e, 1, vDSP_Length(hold))
+            vvexpf(&bump, bump, &hn)
+            var scale = Float(accent), one: Float = 1
+            vDSP_vsmsa(bump, 1, &scale, &one, &bump, 1, vDSP_Length(hold))
+            vDSP_vmul(e, 1, bump, 1, &e, 1, vDSP_Length(hold))
         }
         let last = hold > 0 ? e[hold - 1] : 1
         if span < count {
@@ -303,136 +385,234 @@ nonisolated enum LofiBassVoice: Int, CaseIterable, Sendable {
                 }
             }
         }
-        let riseFrames = min(count, max(1, Int(shape.rise * rate)))
-        var r0: Float = 0, dr = Float(Double.pi / Double(max(1, Int(shape.rise * rate))))
+        applyRise(&e, frames: max(1, Int(shape.rise * rate)))
+        return e
+    }
+
+    /// Multiplies the first `frames` of `x` by a raised-cosine rise from zero.
+    private static func applyRise(_ x: inout [Float], frames: Int) {
+        let riseFrames = min(x.count, frames)
+        guard riseFrames > 0 else { return }
+        var r0: Float = 0, dr = Float(Double.pi / Double(frames))
         var rise = [Float](repeating: 0, count: riseFrames)
         vDSP_vramp(&r0, &dr, &rise, 1, vDSP_Length(riseFrames))
         var rn = Int32(riseFrames)
         vvcosf(&rise, rise, &rn)
         var a: Float = -0.5, b: Float = 0.5
         vDSP_vsmsa(rise, 1, &a, &b, &rise, 1, vDSP_Length(riseFrames))
-        vDSP_vmul(e, 1, rise, 1, &e, 1, vDSP_Length(riseFrames))
-        return e
+        vDSP_vmul(x, 1, rise, 1, &x, 1, vDSP_Length(riseFrames))
     }
 
-    /// Phase-accumulating sine with 2nd and 3rd harmonics through a tanh, zero start phase. The `thump`
-    /// drop and the `slide` glide are raised-cosine pitch curves that end exactly on the note. The 3rd
-    /// harmonic is in the phase a tanh makes, so the chain's parallel harmonics add to it.
-    private static func renderSub(_ note: LofiScore.Note, shape: Shape, envelope: [Float], rate: Double) -> [Float] {
-        let count = envelope.count
-        let omega = 2 * Double.pi * 440 * pow(2, Double(note.midi - 69) / 12) / rate
+    /// The note's phase in [0, 2 pi), zero at the first frame: the `slide` glide is a raised-cosine pitch
+    /// curve that ends exactly on the note, then an exact ramp.
+    private static func phase(_ note: LofiScore.Note, count: Int, rate: Double) -> [Float] {
+        let omega = 2 * Double.pi * frequency(note.midi) / rate
         let slide = Double(max(0, note.slide))
-        // Phase: the pitch curves accumulated over their first frames, then an exact ramp.
-        let bend = min(count, max(shape.dropTime > 0 ? Int(shape.dropTime * rate) + 1 : 0,
-                                  slide > 0 ? Int(slideTime * rate) + 1 : 0))
+        let bend = min(count, slide > 0 ? Int(slideTime * rate) + 1 : 0)
         var phase = [Double](repeating: 0, count: count)
         var acc = 0.0
-        for i in 0..<bend {
+        var i = 0
+        while i < bend {
             phase[i] = acc
             let t = Double(i) / rate
-            var semitones = 0.0
-            if shape.dropTime > 0, t < shape.dropTime {
-                semitones += shape.dropSemitones * (0.5 + 0.5 * cos(Double.pi * t / shape.dropTime))
-            }
-            if slide > 0, t < slideTime { semitones -= slide * (0.5 + 0.5 * cos(Double.pi * t / slideTime)) }
+            let semitones = t < slideTime ? -slide * (0.5 + 0.5 * cos(Double.pi * t / slideTime)) : 0
             acc += semitones == 0 ? omega : omega * pow(2, semitones / 12)
+            i += 1
         }
         if bend < count {
             var base = acc, step = omega
             phase.withUnsafeMutableBufferPointer { vDSP_vrampD(&base, &step, $0.baseAddress! + bend, 1, vDSP_Length(count - bend)) }
         }
-        // Reduce to [0, 2 pi) in double precision, then to float.
         var tau = [Double](repeating: 2 * Double.pi, count: count)
         var n = Int32(count)
         vvremainder(&tau, phase, tau, &n)
-        var p1 = [Float](repeating: 0, count: count)
-        vDSP_vdpsp(tau, 1, &p1, 1, vDSP_Length(count))
-        var p2 = p1, p3 = p1
-        var two: Float = 2, three: Float = 3
-        vDSP_vsmul(p1, 1, &two, &p2, 1, vDSP_Length(count))
-        vDSP_vsmul(p1, 1, &three, &p3, 1, vDSP_Length(count))
-        vvsinf(&p1, p1, &n)
-        vvsinf(&p2, p2, &n)
-        vvsinf(&p3, p3, &n)
-        var second = Float(subHarmonics.second), third = Float(-subHarmonics.third)
-        vDSP_vsma(p2, 1, &second, p1, 1, &p1, 1, vDSP_Length(count))
-        vDSP_vsma(p3, 1, &third, p1, 1, &p1, 1, vDSP_Length(count))
-        var drive = Float(subDrive)
-        vDSP_vsmul(p1, 1, &drive, &p1, 1, vDSP_Length(count))
-        vvtanhf(&p1, p1, &n)
-        var level = Float(1 / tanh(subDrive)) * subGain * note.velocity
-        vDSP_vsmul(p1, 1, &level, &p1, 1, vDSP_Length(count))
-        vDSP_vmul(p1, 1, envelope, 1, &p1, 1, vDSP_Length(count))
-        return p1
+        var p = [Float](repeating: 0, count: count)
+        vDSP_vdpsp(tau, 1, &p, 1, vDSP_Length(count))
+        return p
     }
 
-    /// The sampled body at the note's pitch, driven, then high-passed at 150 Hz (24 dB per octave).
-    /// Without a sample: the bright 2nd to 4th harmonic burst of the former `pluck`, fading over 90 ms.
-    private static func renderBody(_ note: LofiScore.Note, kit: LofiBassSamples.Kit, shape: Shape, count: Int,
-                                   rate: Double, samples: LofiBassSamples) -> [Float] {
+    static func frequency(_ midi: Int) -> Double { 440 * pow(2, Double(midi - 69) / 12) }
+
+    /// Sum of `amplitudes[k]` sin((k + first) phase) over the partials, zero above 0.45 of the rate.
+    private static func partials(_ p: [Float], first: Int, amplitudes: [Double], f0: Double, rate: Double) -> [Float] {
+        let count = p.count
         var out = [Float](repeating: 0, count: count)
-        let hash = UInt64(truncatingIfNeeded: note.midi &* 7_919 &+ Int((note.beat * 64).rounded()) &* 104_729)
-        // Upright has no ghost recordings (they are unpitched): its ghost uses the short finger note.
-        let stroke: LofiBassSamples.Stroke = samples.has(kit: kit, stroke: shape.body) ? shape.body : .short
-        if let sample = samples.sample(kit: kit, stroke: stroke, midi: note.midi, hash: hash) {
-            let speed = sample.rate / rate * pow(2, Double(note.midi - sample.root) / 12)
-            let drive = bodyDrive(kit)
-            var peak: Float = 0
-            vDSP_maxmgv(sample.pcm, 1, &peak, vDSP_Length(sample.pcm.count))
-            let bias: Float = 0.05
-            var used = 0
-            sample.pcm.withUnsafeBufferPointer { pcm in
-                out.withUnsafeMutableBufferPointer { o in
-                    var position = 0.0
-                    let last = pcm.count - 1
-                    var i = 0
-                    while i < count {
-                        let j = Int(position)
-                        guard j < last else { break }
-                        let f = Float(position - Double(j))
-                        o[i] = pcm[j] + f * (pcm[j + 1] - pcm[j])
-                        position += speed
-                        used = i + 1
-                        i += 1
-                    }
-                }
+        var work = [Float](repeating: 0, count: count)
+        var n = Int32(count)
+        var k = 0
+        while k < amplitudes.count {
+            let harmonic = k + first
+            if amplitudes[k] != 0, f0 * Double(harmonic) < 0.45 * rate {
+                var h = Float(harmonic)
+                vDSP_vsmul(p, 1, &h, &work, 1, vDSP_Length(count))
+                vvsinf(&work, work, &n)
+                var a = Float(amplitudes[k])
+                vDSP_vsma(work, 1, &a, out, 1, &out, 1, vDSP_Length(count))
             }
-            if used > 0 {
-                // y = (tanh(drive (x / peak + bias)) - tanh(drive bias)) / tanh(drive). A little bias adds
-                // even harmonics to the odd ones of the tanh.
-                var a = drive / max(1e-6, peak), b = drive * bias, n = Int32(used)
-                vDSP_vsmsa(out, 1, &a, &b, &out, 1, vDSP_Length(used))
-                vvtanhf(&out, out, &n)
-                var c = -tanhf(drive * bias), scale = 1 / tanhf(drive)
-                vDSP_vsadd(out, 1, &c, &out, 1, vDSP_Length(used))
-                vDSP_vsmul(out, 1, &scale, &out, 1, vDSP_Length(used))
-            }
-        } else {
-            let omega = 2 * Double.pi * 440 * pow(2, Double(note.midi - 69) / 12) / rate
-            let tau = 0.09 / log(100.0)
-            for i in 0..<count {
-                let t = Double(i) / rate
-                guard t < 0.135 else { break }
-                let p = omega * Double(i)
-                out[i] = Float(exp(-t / tau) * (0.5 * sin(2 * p) + 0.35 * sin(3 * p) + 0.25 * sin(4 * p)))
-            }
+            k += 1
         }
-        let q = (0.541_196_100_146_197, 1.306_562_964_876_377)
-        var highpass = LofiFilterChain([.highpass(hz: bodyHighpass, q: q.0), .highpass(hz: bodyHighpass, q: q.1)],
-                                       sampleRate: rate)
-        out.withUnsafeMutableBufferPointer { highpass.process($0.baseAddress!, count: count) }
         return out
     }
 
-    /// 12 dB per octave low-pass without resonance (state-variable, Q 0.707) whose cutoff is
-    /// `base + 1100 v e^(-t / 0.04)` Hz, base `650 + 300 v` or the breakdown sweep. The coefficients
-    /// follow the cutoff every 16 frames.
-    private static func velocityLowpass(_ x: inout [Float], velocity v: Double, startBeat: Double, clock: LofiClock,
-                                        sweep: ClosedRange<Double>?) {
+    /// RMS of the steady sub at `midi` per unit of `subGain` times velocity (before the envelope): the
+    /// reference the body is levelled against, the same for every note length.
+    static func steadySubRMS(_ midi: Int) -> Double {
+        let f0 = frequency(midi)
+        let power = subPartialsDB.indices.reduce(0.0) { sum, k in
+            let a = pow(10, subPartialsDB[k] / 20) * subWeight(f0 * Double(k + 1))
+            return sum + a * a / 2
+        }
+        return power.squareRoot()
+    }
+
+    /// Additive sub: partials 1 to 4 in sine phase, zero start phase, each weighted by the crossover.
+    private static func renderSub(_ note: LofiScore.Note, envelope: [Float], rate: Double) -> [Float] {
+        let f0 = frequency(note.midi)
+        let amplitudes = subPartialsDB.indices.map { k in pow(10, subPartialsDB[k] / 20) * subWeight(f0 * Double(k + 1)) }
+        var out = partials(phase(note, count: envelope.count, rate: rate), first: 1, amplitudes: amplitudes, f0: f0, rate: rate)
+        var level = subGain * note.velocity
+        vDSP_vsmul(out, 1, &level, &out, 1, vDSP_Length(out.count))
+        vDSP_vmul(out, 1, envelope, 1, &out, 1, vDSP_Length(out.count))
+        return out
+    }
+
+    /// The `synth` upper layer: partials 2 to 12 continue the sub's series (`-13 - 4 (k - 2)` dB re the
+    /// fundamental), rolled off at 500 Hz and weighted by the complementary crossover, so sub plus body is
+    /// one flat series through 160 Hz.
+    private static func synthBody(_ note: LofiScore.Note, envelope: [Float], rate: Double) -> [Float] {
+        let f0 = frequency(note.midi)
+        let amplitudes = (2...12).map { k -> Double in
+            let f = f0 * Double(k)
+            return pow(10, (-13 - 4 * Double(k - 2)) / 20) / sqrt(1 + pow(f / 500, 4)) * (1 - subWeight(f))
+        }
+        var out = partials(phase(note, count: envelope.count, rate: rate), first: 2, amplitudes: amplitudes, f0: f0, rate: rate)
+        var level = subGain * note.velocity * powf(10, synthBodyGainDB / 20)
+        vDSP_vsmul(out, 1, &level, &out, 1, vDSP_Length(out.count))
+        vDSP_vmul(out, 1, envelope, 1, &out, 1, vDSP_Length(out.count))
+        return out
+    }
+
+    /// A sample at the note's pitch from its onset, linear interpolation, at most `count` frames.
+    private static func read(_ sample: LofiBassSamples.Sample, midi: Int, count: Int, rate: Double) -> [Float] {
+        var out = [Float](repeating: 0, count: count)
+        let speed = sample.rate / rate * pow(2, Double(midi - sample.root) / 12)
+        sample.pcm.withUnsafeBufferPointer { pcm in
+            out.withUnsafeMutableBufferPointer { o in
+                var position = Double(sample.onset)
+                let last = pcm.count - 1
+                var i = 0
+                while i < count {
+                    let j = Int(position)
+                    guard j < last else { break }
+                    let f = Float(position - Double(j))
+                    o[i] = pcm[j] + f * (pcm[j + 1] - pcm[j])
+                    position += speed
+                    i += 1
+                }
+            }
+        }
+        return out
+    }
+
+    /// 2-pole Butterworth run forward then backward: the zero-phase slope matched to the sub's weight.
+    private static func zeroPhase(_ x: inout [Float], _ kind: LofiBiquad.Kind, rate: Double) {
+        let count = x.count
+        guard count > 0 else { return }
+        x.withUnsafeMutableBufferPointer { b in
+            var forward = LofiFilterChain([kind], sampleRate: rate)
+            forward.process(b.baseAddress!, count: count)
+            vDSP_vrvrs(b.baseAddress!, 1, vDSP_Length(count))
+            var backward = LofiFilterChain([kind], sampleRate: rate)
+            backward.process(b.baseAddress!, count: count)
+            vDSP_vrvrs(b.baseAddress!, 1, vDSP_Length(count))
+        }
+    }
+
+    private static let butterworthQ = 0.707_106_781_186_547_5
+
+    /// The sampled body: the long (or ghost) note at pitch from its onset, no drive, high-passed at the
+    /// crossover (zero phase), then the 12 dB per octave low-pass that opens on a strike. Level: its RMS over
+    /// the first 250 ms (at the fixed cutoff, after the envelope) sits `bodyUnderSubDB` under the sub's.
+    private static func sampledBody(_ note: LofiScore.Note, voice: LofiBassVoice, sub: [Float], envelope: [Float],
+                                    clock: LofiClock, samples: LofiBassSamples, sweep: ClosedRange<Double>?,
+                                    strike: Double) -> [Float] {
+        let count = envelope.count
+        let rate = clock.sampleRate
+        guard let kit = voice.kit else { return [Float](repeating: 0, count: count) }
+        let hash = UInt64(truncatingIfNeeded: note.midi &* 7_919 &+ Int((note.beat * 64).rounded()) &* 104_729)
+        let wanted = shape(note.stroke).body
+        // The upright has no pitched ghost recordings: its ghost is the long note at ghost velocity.
+        let stroke: LofiBassSamples.Stroke = samples.has(kit: kit, stroke: wanted) ? wanted : .long
+        guard let sample = samples.sample(kit: kit, stroke: stroke, midi: note.midi, hash: hash) else {
+            return [Float](repeating: 0, count: count)
+        }
+        var body = read(sample, midi: note.midi, count: count, rate: rate)
+        zeroPhase(&body, .highpass(hz: crossover, q: butterworthQ), rate: rate)
+        zeroPhase(&body, .highpass(hz: bodyLeakHighpass, q: 0.541_196_100_146_197), rate: rate)
+        zeroPhase(&body, .highpass(hz: bodyLeakHighpass, q: 1.306_562_964_876_377), rate: rate)
+        let cutoff = bodyLowpass(voice)
+        // Level: a plucked sample decays (the flatwound long note falls 15 dB in its first half second), so
+        // the body is levelled to a steady `bodyUnderSubDB` under the steady sub's RMS: its
+        // 50 ms RMS envelope, measured at the fixed cutoff so a strike or a sweep never changes it, is
+        // divided out (at most `bodyMaxBoostDB`). The timbre stays the sample's; the strike layer, not the
+        // sample's own pluck, makes the attack.
+        var probe = body
+        probe.withUnsafeMutableBufferPointer { p in
+            var lowpass = LofiFilterChain([.lowpass(hz: cutoff, q: butterworthQ), .lowpass(hz: cutoff, q: butterworthQ)],
+                                          sampleRate: rate)
+            lowpass.process(p.baseAddress!, count: count)
+        }
+        let target = Float(steadySubRMS(note.midi)) * powf(10, -bodyUnderSubDB(voice) / 20)
+        let level = steadyGain(probe, target: target, rate: rate)
+        vDSP_vmul(body, 1, level, 1, &body, 1, vDSP_Length(count))
+        var velocity = subGain * note.velocity
+        vDSP_vsmul(body, 1, &velocity, &body, 1, vDSP_Length(count))
+        movingLowpass(&body, base: cutoff, strike: strike, startBeat: note.beat, clock: clock, sweep: sweep)
+        // The envelope goes on last, so the body is exactly zero after the release.
+        vDSP_vmul(body, 1, envelope, 1, &body, 1, vDSP_Length(count))
+        applyRise(&body, frames: max(1, Int((strike == 0 ? plainBodyRise : struckBodyRise) * rate)))
+        return body
+    }
+
+    /// Per-frame gain that brings `x`'s centred 50 ms RMS to `target`, never above `bodyMaxBoostDB` over
+    /// the gain at the loudest point and never boosting what lies 40 dB under that point.
+    private static func steadyGain(_ x: [Float], target: Float, rate: Double) -> [Float] {
+        let count = x.count
+        guard count > 0 else { return [] }
+        var square = [Float](repeating: 0, count: count)
+        vDSP_vsq(x, 1, &square, 1, vDSP_Length(count))
+        var sums = [Double](repeating: 0, count: count + 1)
+        var i = 0
+        var acc = 0.0
+        while i < count { acc += Double(square[i]); i += 1; sums[i] = acc }
+        let half = max(1, Int(0.025 * rate))
+        var envelope = [Float](repeating: 0, count: count)
+        i = 0
+        while i < count {
+            let lo = max(0, i - half), hi = min(count, i + half)
+            envelope[i] = Float(((sums[hi] - sums[lo]) / Double(hi - lo)).squareRoot())
+            i += 1
+        }
+        var loudest: Float = 0
+        vDSP_maxv(envelope, 1, &loudest, vDSP_Length(count))
+        guard loudest > 1e-9 else { return [Float](repeating: 0, count: count) }
+        // Floor: the envelope never reads under its maximum less the boost cap, so nothing is raised more.
+        var floor = loudest * powf(10, -bodyMaxBoostDB / 20)
+        vDSP_vthr(envelope, 1, &floor, &envelope, 1, vDSP_Length(count))
+        var gain = [Float](repeating: 0, count: count)
+        var t = target
+        vDSP_svdiv(&t, envelope, 1, &gain, 1, vDSP_Length(count))
+        return gain
+    }
+
+    /// 24 dB per octave low-pass without resonance (two state-variable sections, Q 0.707) whose cutoff is
+    /// `base + strikeOpening strike e^(-t / strikeOpenTime)` Hz, the base following the breakdown sweep
+    /// across `sweepRange` when there is one. The coefficients follow the cutoff every 16 frames.
+    private static func movingLowpass(_ x: inout [Float], base fixed: Double, strike: Double, startBeat: Double,
+                                      clock: LofiClock, sweep: ClosedRange<Double>?) {
         let rate = clock.sampleRate
         let k: Float = 2 * 0.707_106_781_186_547_5 // 1 / Q
-        var ic1: Float = 0, ic2: Float = 0
-        let normal = 650 + 300 * v
+        var ic1: Float = 0, ic2: Float = 0, jc1: Float = 0, jc2: Float = 0
         let beatFrames = clock.framesPerBeat
         var a1: Float = 0, a2: Float = 0, a3: Float = 0
         x.withUnsafeMutableBufferPointer { b in
@@ -441,14 +621,15 @@ nonisolated enum LofiBassVoice: Int, CaseIterable, Sendable {
             let count = b.count
             while i < count {
                 let t = Double(i) / rate
-                var base = normal
+                var base = fixed
                 if let sweep, sweep.upperBound > sweep.lowerBound {
                     let beat = startBeat + Double(i) / beatFrames
                     if sweep.contains(beat) {
-                        base = 250 + 650 * (beat - sweep.lowerBound) / (sweep.upperBound - sweep.lowerBound)
+                        let u = (beat - sweep.lowerBound) / (sweep.upperBound - sweep.lowerBound)
+                        base = sweepRange.lowerBound + (sweepRange.upperBound - sweepRange.lowerBound) * u
                     }
                 }
-                let cutoff = min(0.45 * rate, base + 1_100 * v * exp(-t / 0.04))
+                let cutoff = min(0.45 * rate, base + strikeOpening * strike * exp(-t / strikeOpenTime))
                 let g = Float(tan(Double.pi * cutoff / rate))
                 a1 = 1 / (1 + g * (g + k)); a2 = g * a1; a3 = g * a2
                 let end = min(count, i + 16)
@@ -458,11 +639,75 @@ nonisolated enum LofiBassVoice: Int, CaseIterable, Sendable {
                     let v2 = ic2 + a2 * ic1 + a3 * v3
                     ic1 = 2 * v1 - ic1
                     ic2 = 2 * v2 - ic2
-                    p[i] = v2
+                    let w3 = v2 - jc2
+                    let w1 = a1 * jc1 + a2 * w3
+                    let w2 = jc2 + a2 * jc1 + a3 * w3
+                    jc1 = 2 * w1 - jc1
+                    jc2 = 2 * w2 - jc2
+                    p[i] = w2
                     i += 1
                 }
             }
         }
+    }
+
+    /// The strike: brightest in its first milliseconds, between the crossover and about 1.2 kHz, exactly
+    /// zero from `strikeEnd` on, its peak at `peak`. `flatwound` plucks the flatwound `short` note at pitch;
+    /// `upright` is a soft synthesized burst of partials 3 to 6; `synth` partials 2 to 8.
+    private static func strikeLayer(_ note: LofiScore.Note, voice: LofiBassVoice, count: Int, rate: Double,
+                                    samples: LofiBassSamples, peak: Float) -> [Float] {
+        let frames = min(count, Int(strikeEnd(voice) * rate))
+        guard frames > 1, peak > 0 else { return [] }
+        let f0 = frequency(note.midi)
+        var layer: [Float]
+        switch voice {
+        case .flatwound:
+            let hash = UInt64(truncatingIfNeeded: note.midi &* 7_919 &+ Int((note.beat * 64).rounded()) &* 104_729)
+            guard let sample = samples.sample(kit: .flatwound, stroke: .short, midi: note.midi, hash: hash) else { return [] }
+            layer = read(sample, midi: note.midi, count: frames, rate: rate)
+            zeroPhase(&layer, .highpass(hz: strikeHighpass, q: butterworthQ), rate: rate)
+            layer.withUnsafeMutableBufferPointer { l in
+                var lowpass = LofiFilterChain([.lowpass(hz: strikeLowpass, q: 0.541_196_100_146_197),
+                                               .lowpass(hz: strikeLowpass, q: 1.306_562_964_876_377)], sampleRate: rate)
+                lowpass.process(l.baseAddress!, count: frames)
+            }
+        case .upright:
+            let amplitudes = (3...6).map { k in strikeWeight(f0 * Double(k)) / Double(k) }
+            layer = partials(phase(note, count: frames, rate: rate), first: 3, amplitudes: amplitudes, f0: f0, rate: rate)
+        case .synth:
+            let amplitudes = (2...8).map { k -> Double in
+                let f = f0 * Double(k)
+                return (1 - subWeight(f)) * strikeWeight(f)
+            }
+            layer = partials(phase(note, count: frames, rate: rate), first: 2, amplitudes: amplitudes, f0: f0, rate: rate)
+        case .classic:
+            return []
+        }
+        // 1 ms raised-cosine rise, e^(-t / decay), and a raised-cosine fade over the last quarter to zero.
+        var decay = [Float](repeating: 0, count: frames)
+        var d0: Float = 0, dd = Float(-1 / (strikeDecay(voice) * rate))
+        vDSP_vramp(&d0, &dd, &decay, 1, vDSP_Length(frames))
+        var n = Int32(frames)
+        vvexpf(&decay, decay, &n)
+        vDSP_vmul(layer, 1, decay, 1, &layer, 1, vDSP_Length(frames))
+        applyRise(&layer, frames: max(1, Int(0.001 * rate)))
+        let fade = max(2, frames / 4)
+        var u0: Float = 0, du = Float(Double.pi / Double(fade))
+        var r = [Float](repeating: 0, count: fade)
+        vDSP_vramp(&u0, &du, &r, 1, vDSP_Length(fade))
+        var fn = Int32(fade)
+        vvcosf(&r, r, &fn)
+        var a: Float = 0.5, b: Float = 0.5
+        vDSP_vsmsa(r, 1, &a, &b, &r, 1, vDSP_Length(fade))
+        layer.withUnsafeMutableBufferPointer { l in
+            vDSP_vmul(l.baseAddress! + frames - fade, 1, r, 1, l.baseAddress! + frames - fade, 1, vDSP_Length(fade))
+        }
+        layer[frames - 1] = 0
+        var top: Float = 0
+        vDSP_maxmgv(layer, 1, &top, vDSP_Length(frames))
+        var gain = top > 1e-9 ? peak / top : 0
+        vDSP_vsmul(layer, 1, &gain, &layer, 1, vDSP_Length(frames))
+        return layer
     }
 
     /// The bass branch of the original `LofiSynth.add`, unchanged in types and operation order.

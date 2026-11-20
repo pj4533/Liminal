@@ -228,11 +228,22 @@ struct LofiMixRenderTests {
                 "range": [i * clock.frameCount, (i + 1) * clock.frameCount],
                 "endingRest": [clock.frame(at: phrase.score.endingRest.lowerBound) + i * clock.frameCount,
                                    clock.frame(at: phrase.score.endingRest.upperBound) + i * clock.frameCount],
-                "notes": phrase.score.notes.map {
-                    ["role": String(describing: $0.part), "midi": $0.midi, "velocity": $0.velocity,
-                     "on": clock.frame(at: $0.beat) + i * clock.frameCount,
-                     "off": clock.frame(at: $0.beat + $0.length) + i * clock.frameCount,
-                     "send": $0.send, "color": $0.color]
+                "notes": phrase.score.notes.map { note -> [String: Any] in
+                    var row: [String: Any] = ["role": String(describing: note.part), "midi": note.midi,
+                                              "velocity": note.velocity,
+                                              "on": clock.frame(at: note.beat) + i * clock.frameCount,
+                                              "off": clock.frame(at: note.beat + note.length) + i * clock.frameCount,
+                                              "send": note.send, "color": note.color]
+                    if note.part == .bass {
+                        row["stroke"] = String(describing: note.stroke)
+                        row["strike"] = note.strike
+                        row["release"] = phrase.score.bassRelease(note)
+                        if note.strike > 0 {
+                            row["strikeOn"] = clock.frame(at: note.beat) + phrase.score.bassStrikeShift(note, clock: clock)
+                                + i * clock.frameCount
+                        }
+                    }
+                    return row
                 },
             ]
             if let edit = phrase.score.virtualRecord {
