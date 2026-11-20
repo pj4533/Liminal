@@ -17,6 +17,18 @@ xcodebuild test -scheme Liminal -destination 'platform=macOS' \
   -only-testing:LiminalTests/ArchiveCachePolicyTests
 ```
 
+For bass, chords or mix work add the suites that pin the bass line and voice, the pad, the stem chains and the render (`docs/plans/bass-and-pads.md` 5.1):
+
+```sh
+  -only-testing:LiminalTests/LofiRhythmTests -only-testing:LiminalTests/LofiArrangementTests \
+  -only-testing:LiminalTests/LofiStemChainTests -only-testing:LiminalTests/LofiBassLineTests \
+  -only-testing:LiminalTests/LofiBassVoiceTests -only-testing:LiminalTests/LofiPadTests \
+  -only-testing:LiminalTests/LofiMixRenderTests -only-testing:LiminalTests/LofiLiveBusTests \
+  -only-testing:LiminalTests/LofiCaptureHooksTests
+```
+
+`LofiStemChainTests.preparationStaysInsideItsBudget` holds a Debug phrase render under 1.5 s. Per-sample loops on the render path are `while` loops: in a Debug build a `for` loop over a range goes through the generic iterator and Swift's runtime metadata on every step, which cost the merged bass and pad render about a quarter of its time (D118).
+
 Tests that assert on elapsed wall-clock time (deadlines, render budgets) carry the `.responsivePool` trait from `LiminalTests/ResponsivePoolTrait.swift`. Swift Testing starts every test at once, and the synchronous render tests can occupy every thread of the concurrency pool for seconds, which makes a `Task.sleep` or deadline wakeup in another test return late. The trait runs timed tests one at a time and starts each only after short sleeps return on time again. Add it to any new test that measures time, rather than widening its limit or turning parallel testing off.
 
 Tests that hold synchronous code to a time budget (the dialogue stages, phrase and take preparation, the master kernel) measure it with `ForegroundTiming.measure` from `LiminalTests/ForegroundTiming.swift` and assert on `Cost.seconds`. A wall clock on a pool thread measures the machine in the parallel suite: on 19 November 2026 the dialogue stages read 212 ms alone and 570-680 ms beside the render suites, and CPU time alone still read 381-476 ms because the code also runs about 2.5 times slower there (efficiency cores, shared caches). The helper runs the work on its own user-interactive thread, reads that thread's CPU time, and divides it by how much slower than its idle reference (158 ms in a Debug build on this machine) a fixed calibration workload ran straight before and after. In the full suite the same stages then read 152-191 ms. The correction leans generous under load by up to about 30 %, so check a budget's real margin in an isolated run. Every measurement is written to the unified log: `log show --last 30m --predicate 'subsystem == "com.saygoodnight.Liminal.tests"'`.
@@ -116,6 +128,8 @@ Pass as launch arguments, for example `-LiminalAutoPlay YES`. Defined in `Limina
 | `archive-curate.py`, `archive-fetch-fixture.sh` | Build the bundled Prelinger seed list / download one fixture clip to a scratch folder |
 | `mix-report.sh`, `mix-matrix.sh` | Capture Lo-Fi audio offline and measure the mix against `mix-criteria.json` (one capture or the five-case matrix); `mixlib/` holds the analysis modules. See Mix verification above |
 | `solo-stems.py` | Turn a capture into a full-mix file plus one file per channel (drums, bass, chords, melody, reverb-echo, chops, film footage) at its level in the final mix, through the same master gain trace, so the stems sum to `master.wav`. `scripts/solo-stems.py CAPTURE OUT [--wav]` |
+| `stem-bands.py` | Per-stem band levels of a capture (40-120 Hz, 120-300 Hz, 300-800 Hz, 1-4 kHz), whole-file and over the stem's active 400 ms windows (within 30 dB of its loudest), with deltas to a baseline and the band gates of `docs/plans/bass-and-pads.md` 5.5. `scripts/stem-bands.py CAPTURE [--baseline CAPTURE] [--json OUT]` |
+| `prepare-lofi-samples.py`, `lofi-sample-recipes.sh` | Prepare and measure the bundled instrument samples. `--prefix LofiBass` writes bass body files (`LofiBass-<kit>-<stroke>-<midi>[-<rr>].wav`, pitch search from 30 Hz) and `--retune` resamples each file by its measured pitch error until it is within 3 cents; the lead (`LofiLead`) behaviour is the default. Recipes `bass-upright` and `bass-flatwound` rebuild the bass kits ([credits](lofi-samples.md)) |
 | `av-coupling-check.sh` | Offline check of the audio-visual coupling |
 
 Simulator automation notes: `research/visionos-sim-automation/README.md`.
