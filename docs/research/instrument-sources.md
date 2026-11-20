@@ -1,5 +1,7 @@
 # Liminal instrument sources: ranked shortlist (deduplicated, usable=true only)
 
+Bass sources (upright, flatwound electric, FM and sub) are surveyed separately in [bass-and-pads/bass-sources.md](bass-and-pads/bass-sources.md).
+
 Survey of 2026-11-19 for D114. **Integrated in D114:** Osiris Piano (UC, vl1), Upright Piano KW (soft layer), VCSL Kawai grand and Folk Harp, Shinyguitar (acoustic and electric), Emilyguitar and the Martin HD28, alongside the FreePats Spanish classical guitar. See [Lo-Fi instrument recordings](../lofi-samples.md) for exactly what is bundled. **Not yet integrated:** the chord-strum sets (Robohymn, Carbonthief), which would need a chord-sample playback path of their own rather than the single-note sampler (the guitar programs strum by stacking single notes instead), and everything else below. Fuchs & Möhr, KeyPleezer (CC BY-SA, which conflicts with the repository's licence), Freesound packs (login required) and Iowa MIS (anechoic, needs slicing) remain candidates only.
 
 **Deduplication:** I merged the duplicate entries for Osiris, Shinyguitar, Emilyguitar, Black & Green, TEDAgame, Salamander, and the three University of Iowa MIS entries (piano, guitar, general).
