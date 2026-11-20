@@ -10,6 +10,11 @@ pressing solo on a mixer channel.
 usage: scripts/solo-stems.py CAPTURE_DIR OUT_DIR [--wav]
 Writes numbered .m4a files (AAC 256k; --wav keeps float WAVs) and prints each
 stem's level and the sum-of-stems residual against master.wav.
+
+Encode headroom: every file is lowered by ENCODE_TRIM_DB (one common gain, so the
+stems keep their relative levels and still sum to the mix) before the AAC encode,
+because a lossy encode raises true peak (+0.23 dB for the master at 256k, +1.5 dB
+at 160k on the 20 November 2026 capture; D121). The --wav files are not trimmed.
 """
 import json, os, subprocess, sys
 import numpy as np, soundfile as sf
@@ -17,6 +22,7 @@ from scipy.signal import butter, sosfilt
 
 STEMS = [('drums', 'drums'), ('bass', 'bass'), ('chords', 'texture'), ('melody', 'dry'),
          ('reverb-echo', 'wet'), ('chops', 'dialogue-chops'), ('film-footage', 'footage')]
+ENCODE_TRIM_DB = -1.0
 
 def main():
     cap, out = sys.argv[1], sys.argv[2]
@@ -57,9 +63,12 @@ def main():
         act = np.mean(np.abs(y).max(axis=1) > 10 ** (-60 / 20))
         print(f'{name:13s} rms {db(rms(y)):6.1f} dBFS  peak {db(np.abs(y).max()):6.1f} dBFS  {L}  active {act:4.0%}')
     print(f'sum of stems vs master: {db(rms(master - total) / rms(master)):.1f} dB')
+    trim = 1.0 if keep_wav else 10 ** (ENCODE_TRIM_DB / 20)
+    if not keep_wav:
+        print(f'encode trim {ENCODE_TRIM_DB:+.1f} dB on every file before AAC 256k')
     for base, y in files:
         wav = os.path.join(out, base + '.wav')
-        sf.write(wav, y.astype(np.float32), sr, subtype='FLOAT')
+        sf.write(wav, (y * trim).astype(np.float32), sr, subtype='FLOAT')
         if not keep_wav:
             subprocess.run(['ffmpeg', '-loglevel', 'error', '-y', '-i', wav, '-c:a', 'aac', '-b:a', '256k',
                             os.path.join(out, base + '.m4a')], check=True)

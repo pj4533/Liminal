@@ -426,11 +426,13 @@ def test_nofilm_master_gating():
     """The master criteria evaluate on nofilm with its own loudness window; film-only criteria stay skipped."""
     criteria = load_criteria(CRITERIA)
     cap = Capture(manifest={**manifest(RATE), "hasFootage": False}, arrays={}, case="nofilm")
-    metrics = {"loudness": {"integratedLufs": -13.3, "lraLu": 2.4}, "crest": {"plrDb": 12.1, "master": {"crestDb": 14.0}},
+    metrics = {"loudness": {"integratedLufs": -14.8, "lraLu": 2.4}, "crest": {"plrDb": 13.6, "master": {"crestDb": 15.5}},
                "truePeak": {"ffmpegDbtp": -0.5, "reconstructionDbtp": -0.6}}
     res = {r["id"]: r for r in evaluate(metrics, cap, criteria)}
     expect(res["C-M1"]["status"] == "pass" and res["C-M3"]["status"] == "pass" and res["C-M5"]["status"] == "pass",
-           "nofilm reads C-M1, C-M3 and C-M5 against its music-only window (-13.3 LUFS, PLR 12.1, crest 14.0 pass)")
+           "nofilm reads C-M1, C-M3 and C-M5 against its music-only window (-14.8 LUFS, PLR 13.6, crest 15.5 pass)")
+    on_ref = {r["id"]: r for r in evaluate(metrics, Capture(manifest=manifest(RATE), arrays={}, case="ref"), criteria)}
+    expect(on_ref["C-M1"]["status"] == "fail", "the same -14.8 LUFS fails C-M1 on ref (-14.5 to -12.5 LUFS)")
     expect(res["C-M2"]["status"] == "fail", "nofilm keeps the true-peak bound (-0.5 dBTP fails C-M2)")
     expect(res["C-B8"]["status"] == "skipped" and res["C-D1"]["status"] == "skipped", "dialogue and bed criteria stay skipped on nofilm")
 

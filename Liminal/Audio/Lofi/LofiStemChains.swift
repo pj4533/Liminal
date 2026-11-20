@@ -182,12 +182,21 @@ nonisolated enum LofiStemChains {
             let rounding = crestRounding(left, right, count, hits: hits, targetCrestDB: settings.targetCrestDB,
                                          range: settings.saturationPeakRoundingDB...max(settings.saturationPeakRoundingDB,
                                                                                          settings.saturationMaxRoundingDB))
+            // Capture only: keep the tape stage's input for its null test (D121); the audio is unchanged.
+            let tapeInput = LofiCaptureHooks.isEnabled
+                ? (left: Array(UnsafeBufferPointer(start: left, count: count)),
+                   right: Array(UnsafeBufferPointer(start: right, count: count))) : nil
             saturate(left, right, count, peakRoundingDB: rounding, at: hits, oversampling: settings.oversampling)
+            if let tapeInput,
+               let null = tapeNull(input: tapeInput, output: left, right, count: count, sampleRate: sampleRate) {
+                stats.extra["tapeResidualDb"] = null.residualDB
+                stats.extra["tapeResidual1to4kDb"] = null.band1to4kDB
+            }
             stats.grMeanDb = bus.meanDB
             stats.grMaxDb = bus.maxDB
-            stats.extra = ["thresholdDb": reference - settings.bus.thresholdBelowReferenceDB,
-                           "parallelGrMeanDb": parallel.meanDB, "parallelGrMaxDb": parallel.maxDB,
-                           "saturationRoundingDb": rounding, "crestDb": crestDB(left, right, count)]
+            stats.extra.merge(["thresholdDb": reference - settings.bus.thresholdBelowReferenceDB,
+                               "parallelGrMeanDb": parallel.meanDB, "parallelGrMaxDb": parallel.maxDB,
+                               "saturationRoundingDb": rounding, "crestDb": crestDB(left, right, count)]) { $1 }
         }
         var air = LofiFilterChain(settings.air, sampleRate: sampleRate)
         air.process(left: left, right: right, count: count)

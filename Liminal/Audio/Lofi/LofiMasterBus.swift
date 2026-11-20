@@ -21,22 +21,30 @@ final class LofiMasterBus {
     nonisolated static let safetyTrimDB: Float = -4.8
     private static let nominalInputTrimDB: Float = 3.3
     nonisolated static let ambientTargetLUFS: Float = -18
-    nonisolated static let lofiTargetLUFS: Float = -12
+    /// Where live calibration steers the Lo-Fi master: the `ref` capture's reading at `lofiSettings`
+    /// (-13.9 LUFS, 20 November 2026, D121), so calibration is at rest on the reference programme.
+    nonisolated static let lofiTargetLUFS: Float = -14
     /// Default length of each half of a profile change (fade down, swap, fade up).
     nonisolated static let switchRamp: Double = 0.04
-    /// Lo-Fi finisher drive, chosen on the 32-bar `ref` capture (plan 8.7, wave 2) with the stems as they were
-    /// before the per-bus chains: +4 dB into a -12 dB glue threshold is the loudest setting found that keeps
-    /// soft-clip use (C-M9), kick-synchronous dips (C-M8) and limiter reduction (C-M6) inside their bounds
-    /// with some margin (-12.5 LUFS). The section 8.7 start (+6 dB, -14 dB) reached -11.7 LUFS but failed
-    /// C-M8 and C-M9 on the raw drum peaks. Revisit once the drum bus chain controls those peaks.
+    /// Lo-Fi finisher drive and soft-clip threshold (D121, 20 November 2026). The net drive is +2 dB over
+    /// the pre-master sum (written as `2 - lofiStagingDB`: the finisher makes the -2 dB staging up first),
+    /// into a -12 dB glue threshold and a soft clip that starts at -2 dBFS.
+    ///
+    /// History: +4 dB net (plan 8.7, wave 2) was the loudest setting that kept C-M6, C-M8 and C-M9 in bounds
+    /// on the stems as they were before the per-bus chains. With the bus chains and the D119 strike layer the
+    /// kick and bass peaks landed 5.8 dB over the clip threshold: on the 32-bar `ref` capture the clip fired in
+    /// 185 bursts, reached its 2 dB cap, and left a -18.9 dB residual in 1-4 kHz while engaged
+    /// (`scripts/distortion-report.py`). A hook sweep (+3.5 to +2 dB net, clip at -3 and -2 dBFS) found only
+    /// this row passing the distortion gates G1 to G3 (clip at most 0.29 dB, residual while reducing
+    /// -51.5 dB): -13.9 LUFS, PLR 12.7 dB, limiter at most 1.13 dB.
     ///
     /// Gain staging (19 November 2026): in the Lo-Fi profile both branches enter `input` at `lofiStagingDB`,
-    /// so the pre-master sum peaks 2 dB lower (+0.9 dBFS before), and the finisher input rises by those 2 dB
-    /// (+4 dB before): its glue, clip and limiter see the same signal and the master is unchanged.
+    /// so the pre-master sum keeps 2 dB of headroom, and the finisher input makes those 2 dB up.
     nonisolated static let lofiSettings: LofiMasterSettings = {
         var settings = LofiMasterSettings.lofi
-        settings.inputGainDB = 4 - lofiStagingDB
+        settings.inputGainDB = 2 - lofiStagingDB
         settings.glue?.thresholdDB = -12
+        settings.clipThresholdDB = -2
         return settings
     }()
 
@@ -336,7 +344,7 @@ final class LofiMasterBus {
         if activeChain == .lofi {
             let meters = finisher.meters
             finisher.resetMeters()
-            load = .init(meanDB: meters.limiterDB.mean, p95DB: meters.limiterDB.p95)
+            load = .init(meanDB: meters.limiterDB.mean, p95DB: meters.limiterDB.p95, clipMaxDB: meters.clipDB.max)
         }
         let target = activeChain == .lofi ? Self.lofiTargetLUFS : Self.ambientTargetLUFS
         let next = LofiMasterMeter.calibratedTrim(current: calibrationDb, observation: result, target: target,
@@ -456,12 +464,15 @@ nonisolated struct LofiMasterMeter {
         let samplePeak: Float
     }
 
-    /// Finisher limiter reduction over one epoch (positive dB).
+    /// Finisher limiter reduction and the soft clip's deepest reduction over one epoch (positive dB).
     struct LimiterLoad: Sendable, Equatable {
         let meanDB: Float
         let p95DB: Float
-        /// Upward steps are held while the limiter already works this hard.
-        var blocksUpward: Bool { meanDB > 2.5 || p95DB > 4.5 }
+        var clipMaxDB: Float = 0
+        /// Upward steps are held while the limiter already works this hard, or while the soft clip went past
+        /// 1 dB in the epoch (D121: a quieter programme must not be driven back into the clip).
+        var blocksUpward: Bool { meanDB > 2.5 || p95DB > 4.5 || clipMaxDB > Self.clipHoldDB }
+        static let clipHoldDB: Float = 1
     }
 
     private static let maximumHops = 1_200
@@ -540,7 +551,7 @@ nonisolated struct LofiMasterMeter {
 
     /// One epoch's trim step toward `target`: at most 1 dB per epoch, inside -3 to +2 dB. Without a limiter
     /// load (Ambient chain), peaks within 0.5 dB of the sample ceiling block upward steps; with one (Lo-Fi
-    /// finisher), heavy limiter reduction over the epoch blocks them instead.
+    /// finisher), heavy limiter reduction or soft-clip reduction over 1 dB in the epoch blocks them instead.
     static func calibratedTrim(current: Float, observation: Observation,
                                target: Float = LofiMasterBus.ambientTargetLUFS,
                                limiter: LimiterLoad? = nil) -> Float {

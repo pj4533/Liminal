@@ -221,9 +221,11 @@ struct LofiMasterBusTests {
             #expect(sample <= ceiling)
         }
         // Both branches enter at the staging gain and the finisher input makes it up: the net drive is the
-        // +4 dB chosen before the gain staging change of 19 November 2026.
+        // +2 dB and the soft clip starts at -2 dBFS, chosen by the distortion sweep of 20 November 2026 (D121).
         let drive = master.lofiFinisherSettings.inputGainDB + LofiMasterBus.lofiStagingDB
-        #expect(abs(drive - 4) < 1e-4)
+        #expect(abs(drive - 2) < 1e-4)
+        #expect(master.lofiFinisherSettings.clipThresholdDB == -2)
+        #expect(LofiMasterBus.lofiTargetLUFS == -14)
         #expect(abs(master.archiveTrim.gain - dbToGain(LofiMasterBus.lofiStagingDB)) < 1e-6)
         #expect(abs(master.lofiTrim.gain - dbToGain(LofiMasterBus.lofiStagingDB)) < 1e-6)
         #expect(quiet > drive - 1 && quiet < drive + 0.5)
@@ -342,7 +344,7 @@ struct LofiMasterBusTests {
     @Test func calibrationAimsAtTheProfileTargetAndHoldsUnderLimiterLoad() {
         typealias Meter = LofiMasterMeter
         let light = Meter.LimiterLoad(meanDB: 0.8, p95DB: 2.0)
-        // Lo-Fi aims at -12 LUFS; the sample peak no longer gates upward steps.
+        // Lo-Fi (target passed explicitly here): the sample peak no longer gates upward steps.
         #expect(Meter.calibratedTrim(current: 0, observation: .init(lufs: -16, samplePeak: 0.89), target: -12, limiter: light) == 1)
         #expect(Meter.calibratedTrim(current: 0, observation: .init(lufs: -12.5, samplePeak: 0.5), target: -12, limiter: light) == 0)
         #expect(Meter.calibratedTrim(current: 0, observation: .init(lufs: -9, samplePeak: 0.5), target: -12, limiter: light) == -1)
@@ -354,6 +356,13 @@ struct LofiMasterBusTests {
             #expect(Meter.calibratedTrim(current: 0, observation: .init(lufs: -16, samplePeak: 0.5), target: -12, limiter: load) == 0)
             #expect(Meter.calibratedTrim(current: 0, observation: .init(lufs: -9, samplePeak: 0.5), target: -12, limiter: load) == -1)
         }
+        // Soft-clip reduction over 1 dB in the epoch also holds upward steps (D121), so a quiet programme is
+        // not driven back into the clip; downward steps still pass. At 1 dB or less it does not hold.
+        let clipped = Meter.LimiterLoad(meanDB: 0.1, p95DB: 0.5, clipMaxDB: 1.2)
+        #expect(clipped.blocksUpward)
+        #expect(!Meter.LimiterLoad(meanDB: 0.1, p95DB: 0.5, clipMaxDB: 1.0).blocksUpward)
+        #expect(Meter.calibratedTrim(current: 0, observation: .init(lufs: -17, samplePeak: 0.5), target: -14, limiter: clipped) == 0)
+        #expect(Meter.calibratedTrim(current: 0, observation: .init(lufs: -11, samplePeak: 0.5), target: -14, limiter: clipped) == -1)
         // Ambient keeps -18 LUFS and the sample-peak test.
         #expect(Meter.calibratedTrim(current: 0, observation: .init(lufs: -23, samplePeak: 0.3)) == 1)
         #expect(Meter.calibratedTrim(current: 0, observation: .init(lufs: -16, samplePeak: 0.3)) == -0.8)
@@ -367,7 +376,7 @@ struct LofiMasterBusTests {
         ambient.applyObservation(.init(lufs: -15, samplePeak: 0.2))
         #expect(abs(ambient.calibrationOffsetDB - 0) < 1e-6)
 
-        // Light program: the finisher barely limits, so Lo-Fi steps toward -12 LUFS.
+        // Light program: the finisher barely limits, so Lo-Fi steps toward `lofiTargetLUFS` (-14).
         let rig = Rig()
         let lofi = LofiMasterBus(archiveAndAmbient: rig.archive, lofi: rig.lofi)
         lofi.setProfile(.lofi, ramp: 0)

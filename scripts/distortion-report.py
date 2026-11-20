@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Distortion and headroom report for one check-lofi.sh capture (measured, not by ear).
 
-  python3 scripts/distortion-report.py CAPTURE [--out DIR] [--aac FILE ...] [--encode-test] [--json OUT.json]
+  python3 scripts/distortion-report.py CAPTURE [--out DIR] [--aac FILE ...] [--encode-test [--encode-trim DB]]
+                                       [--against CAPTURE [--moved STEM,...]] [--json OUT.json] [--strict]
+  python3 scripts/distortion-report.py --bass-samples
 
 Applies the usual engineering checks to every stem WAV and bus tap of a capture and prints one table per
 section (also written as JSON to OUT_DIR/distortion-report.json):
@@ -37,6 +39,24 @@ section (also written as JSON to OUT_DIR/distortion-report.json):
    stems at final-mix level are encoded to AAC at 256k and 160k with ffmpeg's aac encoder (the settings
    scripts/solo-stems.py and the README preview use) and measured against their sources.
 
+6. Gates (--strict): the `distortion` block of scripts/mix-criteria.json (G1 to G7 of
+   docs/plans/mix-distortion.md section 4.1). Each gate names a path into this report's JSON and a bound;
+   a gate whose metric is absent (a voice not in the capture, a stage engaged under 10 ms) is skipped.
+   Exit status 1 when any gate fails.
+7. --against CAPTURE: sample-exact null of each stem and the lofi tap against another capture of the same
+   seed (G7). The five rendered music stems are bit-identical run to run; the film soundtrack decode is
+   not (about -135 dB re itself between two runs of one build, 20 November 2026), which reaches the
+   footage tap at about -92 dB and, through the chops' film source, dialogue-chops and lofi at about
+   -105 and -115 dB. So the music stems and the film-derived taps are gated separately.
+   --moved names stems allowed to differ (their rows are reported, not gated).
+8. Drum tape stage: the null test across the drum bus tape saturation that LofiStemChains runs on each
+   take in a capture (manifest diagnostics.stemChains, tapeResidualDb and tapeResidual1to4kDb; same block
+   gain model as section 2), overall and in 1 to 4 kHz. Intended colour: a follow-up only above -30 dB.
+9. --bass-samples (no capture): per bundled LofiBass-*-long-* sample, the body band (zero-phase
+   high-pass 160 Hz 2-pole and 110 Hz 4-pole, low-pass 360 Hz upright / 400 Hz flatwound, 4-pole, as
+   LofiBassVoice), the energy in 120 to 450 Hz off exact multiples of the measured fundamental and off
+   the tracked (stretched) partials, and the partial offsets in cents.
+
 Also: the wet stem's share of samples in boundedWet's shoulder (above 0.25 linked peak; the tap follows
 the duck fader, so a lower bound) with the implied reduction, and bass.wav samples above the headroom
 guard's 0.74 knee.
@@ -46,6 +66,7 @@ AES TD1008 for lossy-codec input), -18 dBFS RMS nominal per track (common gain-s
 Sound On Sound), end-of-chain limiting of about 2 dB typical (iZotope), zero clip runs.
 """
 import argparse
+import glob
 import json
 import os
 import subprocess
@@ -54,16 +75,22 @@ import tempfile
 
 import numpy as np
 import soundfile as sf
-from scipy.signal import butter, resample_poly, sosfilt, welch
+from scipy.signal import butter, resample_poly, sosfilt, sosfiltfilt, welch
 from scipy.stats import kurtosis
 
 STEMS = ["drums", "bass", "dry", "texture", "wet", "dialogue-chops", "footage"]
 MUSIC = ["drums", "bass", "dry", "texture", "wet", "dialogue-chops"]
 TAPS = ["lofi", "pre-master", "glue", "master-in", "master"]
+# Taps with no film-derived content: bit-identical between captures of one seed and build.
+FILM_FREE = ["drums", "bass", "dry", "texture", "wet"]
 NOMINAL_RMS = -18.0
 CEILING_DBTP = -1.0
 SHARE_CEILING_DBTP = -1.5
 OCTAVES = [31.5, 63, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
+HERE = os.path.dirname(os.path.abspath(__file__))
+SAMPLES = os.path.join(HERE, "..", "Liminal", "Audio", "Lofi", "InstrumentSamples")
+# Share clips are lowered by this before the lossy encode (scripts/solo-stems.py ENCODE_TRIM_DB, D121).
+ENCODE_TRIM_DB = -1.0
 
 
 def db(x, floor=1e-12):
@@ -255,6 +282,7 @@ def gr_stats(gr, hop_frames, sr, latency, stems, master_in, bass_on, kicks):
                      "engaged": float(np.mean(v > 0.01))}
     # Events: contiguous hops where clip + limiter > 0.1 dB.
     hard = gr[:, 2] + gr[:, 3]
+    out["clipPlusLimiter"] = {"maxDb": float(hard.max()), "engaged": float(np.mean(hard > 0.1))}
     mask = hard > 0.1
     d = np.diff(np.concatenate(([0], mask.astype(np.int8), [0])))
     starts, ends = np.flatnonzero(d == 1), np.flatnonzero(d == -1)
@@ -419,6 +447,104 @@ def final_mix_stems(cap, sr, master, pre, man):
     return chain, g, stage, env
 
 
+def bass_sample_audit():
+    """Body-band content of every bundled long bass sample (section 9 of the docstring)."""
+    rows = []
+    for kit, lp in (("upright", 360.0), ("flatwound", 400.0)):
+        for p in sorted(glob.glob(os.path.join(SAMPLES, f"LofiBass-{kit}-long-*.wav"))):
+            x, sr = sf.read(p, dtype="float64")
+            if x.ndim > 1:
+                x = x.mean(axis=1)
+            fields = os.path.basename(p)[:-4].split("-")
+            midi = int(fields[3])
+            on = int(np.argmax(np.abs(x) >= np.abs(x).max() * 0.01))
+            y = sosfiltfilt(butter(2, 160, "highpass", fs=sr, output="sos"), x)
+            y = sosfiltfilt(butter(4, 110, "highpass", fs=sr, output="sos"), y)
+            y = sosfiltfilt(butter(4, lp, "lowpass", fs=sr, output="sos"), y)
+            a, b = on + int(0.1 * sr), min(len(x), on + int(1.1 * sr))
+            L = b - a
+            size = 1 << int(np.ceil(np.log2(L * 8)))
+            win = np.hanning(L)
+            sp = np.abs(np.fft.rfft(y[a:b] * win, size)) ** 2
+            raw = np.abs(np.fft.rfft(x[a:b] * win, size)) ** 2
+            fr = np.fft.rfftfreq(size, 1 / sr)
+            f_nom = 440 * 2 ** ((midi - 69) / 12)
+            sel = (fr > f_nom * 0.96) & (fr < f_nom * 1.04)
+            f0 = float(fr[sel][np.argmax(raw[sel])])
+            half = max(2.5 * sr / L, 2.0)
+            exact = np.zeros_like(fr, dtype=bool)
+            tracked = np.zeros_like(fr, dtype=bool)
+            cents = {}
+            for k in range(1, 25):
+                exact |= (fr >= k * f0 - half) & (fr <= k * f0 + half)
+                near = (fr > k * f0 * 0.94) & (fr < k * f0 * 1.06)
+                fk = float(fr[near][np.argmax((sp if k * f0 > 150 else raw)[near])])
+                tracked |= (fr >= fk - half) & (fr <= fk + half)
+                if 2 <= k <= 4 or 160 < k * f0 < lp:
+                    cents[k] = float(1200 * np.log2(fk / (k * f0)))
+            rng = (fr >= 120) & (fr <= 450)
+            tot = sp[rng].sum()
+            rows.append({"file": os.path.basename(p), "kit": kit, "midi": midi,
+                         "roundRobin": int(fields[4]) if len(fields) > 4 else 1, "f0": f0,
+                         "offExactDb": pdb(sp[rng & ~exact].sum() / tot),
+                         "offTrackedDb": pdb(sp[rng & ~tracked].sum() / tot), "partialCents": cents})
+    return rows
+
+
+def null_against(cap, other, names, moved):
+    """Sample-exact residual of each tap against the same tap of another capture, dB re that tap."""
+    rows = {}
+    for name in names:
+        x, _ = read(cap, name)
+        y, _ = read(other, name)
+        if x is None or y is None:
+            continue
+        n = min(len(x), len(y))
+        r = x[:n] - y[:n]
+        rows[name] = {"residualDb": pdb(np.sum(r ** 2) / max(np.sum(y[:n] ** 2), 1e-30)),
+                      "lengthDiffFrames": int(len(x) - len(y)), "moved": name in moved}
+    music = [v["residualDb"] for k, v in rows.items() if not v["moved"] and k in FILM_FREE]
+    film = [v["residualDb"] for k, v in rows.items() if not v["moved"] and k not in FILM_FREE]
+    return {"against": os.path.abspath(other), "taps": rows,
+            "maxMusicResidualDb": max(music) if music else None, "maxFilmDerivedResidualDb": max(film) if film else None}
+
+
+def lookup(report, path):
+    v = report
+    for key in path:
+        if isinstance(v, dict) and key in v:
+            v = v[key]
+        elif isinstance(v, list) and isinstance(key, int) and -len(v) <= key < len(v):
+            v = v[key]
+        else:
+            return None
+    return v
+
+
+def evaluate_gates(report, criteria_path):
+    block = json.load(open(criteria_path)).get("distortion", {})
+    rows = []
+    for g in block.get("gates", []):
+        if g.get("requires") and lookup(report, g["requires"]) is None:
+            rows.append({**g, "value": None, "status": "skipped"})
+            continue
+        if g.get("each"):
+            items = lookup(report, g["each"]) or []
+            values = [lookup(it, g["path"]) for it in items]
+            values = [v for v in values if v is not None]
+            value = (max(values) if "max" in g else min(values)) if values else None
+        else:
+            value = lookup(report, g["path"])
+        if value is None:
+            value = g.get("absentValue")
+        if value is None:
+            rows.append({**g, "value": None, "status": "skipped"})
+            continue
+        ok = ("max" not in g or value <= g["max"]) and ("min" not in g or value >= g["min"])
+        rows.append({**g, "value": float(value), "status": "pass" if ok else "fail"})
+    return rows
+
+
 def fmt(v, nd=1):
     if v is None:
         return "-"
@@ -430,12 +556,32 @@ def fmt(v, nd=1):
 def main():
     np.seterr(all="ignore")  # Accelerate-backed matmul raises spurious FP warnings on macOS
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("capture")
+    ap.add_argument("capture", nargs="?")
     ap.add_argument("--out", help="output directory (default CAPTURE/report)")
     ap.add_argument("--aac", nargs="*", default=[], help="delivered m4a/mp4 files to decode and measure")
     ap.add_argument("--encode-test", action="store_true", help="encode master and solo stems to AAC 256k/160k and measure")
+    ap.add_argument("--encode-trim", type=float, default=ENCODE_TRIM_DB,
+                    help=f"gain applied before the --encode-test encodes, as the share-clip encode (default {ENCODE_TRIM_DB} dB)")
+    ap.add_argument("--against", help="another capture of the same seed: sample-exact stem nulls (G7)")
+    ap.add_argument("--moved", default="", help="comma-separated stems allowed to differ from --against")
+    ap.add_argument("--bass-samples", action="store_true", help="audit the bundled long bass samples (no capture)")
+    ap.add_argument("--strict", action="store_true", help="evaluate the distortion gates; exit 1 on a failure")
+    ap.add_argument("--criteria", default=os.path.join(HERE, "mix-criteria.json"))
     ap.add_argument("--json", help="also write the JSON here")
     args = ap.parse_args()
+    if args.bass_samples:
+        rows = bass_sample_audit()
+        print("Bass body samples (120-450 Hz after the body band; dB re the band)")
+        print(f"{'file':34s}{'f0':>7s}{'offExact':>10s}{'offTracked':>12s}  partial offsets (cents, k=2,3,4 and body band)")
+        for r in rows:
+            print(f"{r['file']:34s}{r['f0']:7.1f}{r['offExactDb']:10.1f}{r['offTrackedDb']:12.1f}  "
+                  + " ".join(f"{k}:{c:+.0f}" for k, c in r["partialCents"].items()))
+        if args.json:
+            with open(args.json, "w") as f:
+                json.dump(rows, f, indent=1)
+        return 0
+    if not args.capture:
+        ap.error("CAPTURE is required unless --bass-samples")
     cap = os.path.abspath(args.capture)
     out_dir = args.out or os.path.join(cap, "report")
     os.makedirs(out_dir, exist_ok=True)
@@ -648,8 +794,10 @@ def main():
     if args.encode_test and "master" in audio and gr is not None:
         print("\n5b. Encode test: capture master and solo stems at final-mix level -> AAC (ffmpeg aac)", flush=True)
         chain, gfin, stage, env = final_mix_stems(cap, sr, audio["master"], audio["pre-master"], man)
+        trim = 10 ** (args.encode_trim / 20)
+        print(f"   encode trim {args.encode_trim:+.1f} dB on every source (the share-clip encode)")
         with tempfile.TemporaryDirectory() as tmp:
-            srcs = [("master", audio["master"])] + [(k, chain(audio[k] * stage, gfin)) for k in STEMS if k in audio]
+            srcs = [("master", audio["master"] * trim)] + [(k, chain(audio[k] * stage, gfin) * trim) for k in STEMS if k in audio]
             for name, y in srcs:
                 wav = os.path.join(tmp, f"{name}.wav")
                 sf.write(wav, y.astype(np.float32), sr, subtype="FLOAT")
@@ -661,6 +809,59 @@ def main():
                           f"(rise {row['truePeakRiseDb']:+.2f}), >FS {row['samplesOverFS']}, clipped16 {row['clipped16bit']}", flush=True)
                 os.remove(wav)
     report["aac"] = aac
+    report["encodeTrimDb"] = args.encode_trim
+    worst = {}
+    for kind in ("delivered", "encodeTest"):
+        rows = aac[kind] if kind == "delivered" else [r for r in aac[kind] if r["bitrate"] == "256k"]
+        if rows:
+            worst[kind] = {"maxTruePeakDbtp": max(r["truePeakDbtp"] for r in rows),
+                           "samplesOverFS": sum(r["samplesOverFS"] for r in rows),
+                           "clipped16bit": sum(r["clipped16bit"] for r in rows)}
+    m256 = [r for r in aac["encodeTest"] if r["file"] == "master" and r["bitrate"] == "256k"]
+    if m256:
+        worst["master256k"] = m256[0]
+    report["aacSummary"] = worst
+
+    # Clip detection over every tap (G4).
+    rows = [v for v in levels.values() if not v.get("silent")]
+    report["summary"] = {"flatRunsAtPeakAllTaps": sum(v["flatRunsAtPeak"] for v in rows),
+                         "runsAtFullScaleAllTaps": sum(v["runsAtFullScale"] for v in rows),
+                         "samplesOverFSAllTaps": sum(v["samplesOverFS"] for v in rows)}
+
+    # Drum tape stage (measured in the capture by LofiStemChains.tapeNull).
+    takes = [r for r in man.get("diagnostics", {}).get("stemChains", [])
+             if r.get("bus") == "drums" and "tapeResidualDb" in r]
+    if takes:
+        report["drumTape"] = {"takes": [{"take": r.get("take"), "residualReOutputDb": r["tapeResidualDb"],
+                                         "band1to4kReOutputBandDb": r["tapeResidual1to4kDb"],
+                                         "roundingDb": r.get("saturationRoundingDb")} for r in takes],
+                              "maxResidualReOutputDb": max(r["tapeResidualDb"] for r in takes),
+                              "maxBand1to4kReOutputBandDb": max(r["tapeResidual1to4kDb"] for r in takes)}
+        print("\n8. Drum tape stage (null across the tanh stage, per take; follow-up only above -30 dB in 1-4 kHz)")
+        for t in report["drumTape"]["takes"]:
+            print(f"   take {t['take']}: rounding {fmt(t['roundingDb'], 2)} dB, residual {fmt(t['residualReOutputDb'])} dB re output, "
+                  f"1-4 kHz {fmt(t['band1to4kReOutputBandDb'])} dB re the band")
+
+    if args.against:
+        names = STEMS + ["lofi"]
+        moved = {m for m in args.moved.split(",") if m}
+        report["against"] = null_against(cap, args.against, names, moved)
+        print(f"\n7. Sample-exact nulls against {args.against} (dB re that tap; moved: {sorted(moved) or 'none'})")
+        for k, v in report["against"]["taps"].items():
+            print(f"   {k:15s} {v['residualDb']:8.1f} dB  length diff {v['lengthDiffFrames']}{'  (moved)' if v['moved'] else ''}")
+
+    status = 0
+    if args.strict:
+        gates = evaluate_gates(report, args.criteria)
+        report["gates"] = gates
+        print("\n6. Distortion gates (scripts/mix-criteria.json, distortion block)")
+        for g in gates:
+            bound = " ".join(x for x in (f"<= {g['max']}" if "max" in g else "", f">= {g['min']}" if "min" in g else "") if x)
+            val = "-" if g["value"] is None else f"{g['value']:.2f}"
+            print(f"   {g['status']:7s} {g['id']:4s} {g['name']:52s} {val:>9s}  {bound}")
+        failed = [g for g in gates if g["status"] == "fail"]
+        print(f"   {len(gates) - len(failed)} of {len(gates)} pass or skipped; failures: {', '.join(g['id'] + ' ' + g['name'] for g in failed) or 'none'}")
+        status = 1 if failed else 0
 
     path = os.path.join(out_dir, "distortion-report.json")
     with open(path, "w") as f:
@@ -669,7 +870,7 @@ def main():
         with open(args.json, "w") as f:
             json.dump(report, f, indent=1, default=float)
     print(f"\nReport: {path}")
-    return 0
+    return status
 
 
 if __name__ == "__main__":

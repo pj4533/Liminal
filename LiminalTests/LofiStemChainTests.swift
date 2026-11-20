@@ -408,6 +408,24 @@ struct LofiStemChainTests {
     }
 
     /// At most `LofiKickDuck.depth` (4 dB since mix calibration; 3 dB before), 1.5 to 4.5 dB after each kick.
+    /// The capture-only tape null (D121): a slow gain change leaves almost no residual, a tanh stage
+    /// driven into its shoulder leaves its harmonics, and the 1-4 kHz band sees a 300 Hz tone's 3rd to 13th.
+    @Test func tapeNullSeparatesGainFromShapeChange() throws {
+        let x = Self.sine(300, seconds: 1, amplitude: 0.5)
+        let count = x.count
+        var ramp = x
+        for i in 0..<count { ramp[i] *= 1 - 0.3 * Float(i) / Float(count) }
+        let linear = try #require(LofiStemChains.tapeNull(input: (x, x), output: ramp, ramp, count: count, sampleRate: Self.rate))
+        #expect(linear.residualDB < -60)
+        var shaped = x
+        let drive = LofiStemChains.driveFor(rounding: 3, at: 0.5)
+        for i in 0..<count { shaped[i] = LofiSaturation.tape(x[i], drive: drive) }
+        let tape = try #require(LofiStemChains.tapeNull(input: (x, x), output: shaped, shaped, count: count, sampleRate: Self.rate))
+        print("tape null, 3 dB rounding of a 300 Hz tone: \(tape.residualDB) dB, 1-4 kHz \(tape.band1to4kDB) dB")
+        #expect(tape.residualDB > -40 && tape.residualDB < -10)
+        #expect(tape.band1to4kDB > -3)
+    }
+
     @Test func kickDuckIsBounded() {
         let fixture = Self.drumFixture(seconds: 4)
         var duck = LofiKickDuck(sampleRate: Self.rate)
