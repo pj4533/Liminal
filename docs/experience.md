@@ -52,6 +52,10 @@ Ambient and the footage soundtrack share slowly changing phasing and a second ec
 
 With **Footage audio** up, Lo-Fi listens for the rise and fall of syllables in the incoming shot. A few words can become a hook that lands two or three times over two bars. The original soundtrack drifts in and out through phaser, echo and reverb. The sampler favors spoken lines, softens each cut to suit the mix, and lets a dark, beat-timed echo and room trail the words. Occasionally a short pickup plays backwards. Sometimes a pickup quotes one syllable, or a repeated line pauses and finishes on an offbeat. When the speaker carries on for a few words, you can hear two pieces in succession and then the whole line together on the downbeat of bar two or four. The sampler leaves space for the drummer’s eight-bar fill. It works from the current film locally, including when playback uses the cache offline.
 
+Dialogue chops play in every bar, cut from a small stable bank of related pieces (eight to twelve) taken from the current film: whole phrases, word groups and single stabs, with the occasional texture. Most hits are pieces of one line rather than the whole line, which plays at most twice per 16 bars. The performance changes at least every 16 bars (a new arrangement of the same bank, or a new bank when the film changes), with a rest in some bars, so a pattern that works returns with one thing changed rather than looping. Chops sit inside the drummer's feel and land on the downbeats, with short echo throws on some phrase endings.
+
+The **Dialogue understanding** setting in the Archive Footage card controls whether Liminal may read the words. Off uses acoustic analysis only. Installed only (the default) uses Apple's on-device speech model when the system already has it. Allow download lets Liminal fetch the model once. The transcript only improves where cuts fall and lets a clause repeat or reorder when that is safe; the acoustic path is always built first and is what plays when the model is off, missing or late. Nothing is sent off the device.
+
 An excerpt whose audio falls below the silence threshold can play with visuals alone. The music continues while Liminal waits for the next footage cue.
 
 ## Controls
@@ -74,6 +78,8 @@ An excerpt whose audio falls below the silence threshold can play with visuals a
 | **Footage audio** | Mutes both the film and its sampled drops at 0%. The mix is tuned at 50%. Turning it up gives the film up to 6 dB more level, while the musical drops gain at most 1.2 dB. |
 | **Clear Footage** | Deletes the cached films (keeps the ones on screen) |
 | **Reset All Settings** | Restores defaults |
+
+In Lo-Fi the bass has three bounded voices besides the classic one: a round sub, a plucked voice and a long answer. They change from phrase to phrase, the bass is sat tightly against the kick (a short duck on each kick) and carries enough upper harmonics to be heard on small speakers. The mids (the sampled shells and textures) are louder and more varied than before and answer the melody in its rests rather than competing with it. When a phrase's opening hook returns later in a take, the return is brought forward: the mids and effect returns stay under it, the first two notes get a small accent, and the film bed steps down for a bar so the theme is recognized. The film bed itself stays dark, effected and well under the music, audible in the gaps between chops.
 
 Liminal varies note density, reverb, and echo slowly and independently. The mix stays sparse while the balance between the bass, musical textures, and their tails evolves.
 

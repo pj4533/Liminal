@@ -770,3 +770,11 @@ Every package builds for macOS and the visionOS simulator with an explicit desti
 | Hand-labelled drum attacks | an agent cannot produce hand labels; an independent reference detector and plotted spot checks stand in; hand labels remain a human follow-up |
 | Physical Vision Pro timing, memory and thermal runs | needs hardware; the simulator build and the Mac measurements are done here |
 | Listening acceptance | human step: compare the baseline and candidate `master.wav` at matched loudness and judge recognition, intelligibility and the theme return |
+
+### Remaining human steps
+
+- [ ] Listening acceptance at matched loudness (`baseline-master.wav` against `master.wav`), including bass density and the two-line rotation on a repeated film. The five checks are in [Listening checks for a person](mpc-chopping-measurements.md#listening-checks-for-a-person).
+- [ ] Hand-labelled drum attacks to replace `scripts/drum-landmark-reference.py` (see [D110](../decisions/music.md)).
+- [ ] The physical Vision Pro timing, memory and thermal run (D110).
+- [ ] Optional brighter-bed A/B audition, off by default ([D107](../decisions/music.md)).
+- [ ] Decide whether to schedule reversed pickups every two to four bars ([D109](../decisions/music.md)).

@@ -630,3 +630,25 @@ Made while building PASS 1 (conductor, harmony, scenes, mix bus, drone/pad/lead/
 - Deep: register bias -4 -> -2 and brightness bias -0.3 -> -0.15, and the power-centroid floor in `music-criteria.json` 220 -> 200 Hz. Seed 9191's Deep render has a 150 s stillness at intensity 0.18, where the pad thins to two voices and the drone dominates: 205 Hz, then 208, then 214 Hz after two bias steps. Deep is meant to be the dark style and the user likes the bass; the floor guards against mud, and 200 Hz still sits far above the drone alone (84-94 Hz). This is a gate change made to pass a measured render, recorded as such.
 - `tick_max` read 2.0-5.9 ms in batches where four renders and six analyses shared the CPU, and 0.16-0.45 ms when two renders ran alone (final renders: 0.23 / 0.16 ms). It is wall-clock time; the gate is unchanged and the final numbers come from uncontended runs.
 - Iterations (all 10 minutes, seeds 4242 and 9191): i1 (first full implementation; failing: body attacks, loudest 3 s) -> i2 lead -3 dB -> i3 pad back on the old brightness curve -> i4 analyzer window (D104) and the fading-layer budget: 0 failures on Drift -> i5-i7 Glass and Garden (pad in every scene) -> i8-i9 all four styles, lead -2 dB, borrow cap -> i10 Deep. Spectrograms of i2, i4 and the final pair were viewed (`music-calm/spec-i2.png`, `spec-i4.png`, `calm-vs-old-spectrograms.png`).
+
+## D107. Film bed: keep the baseline effected chain and change only levels (2026-11-19)
+- What: by the user's direction (commits ee8edb8 and f1a22d4) the Lo-Fi film bed keeps its baseline effected chain (sends, phaser, high-pass, two low-pass stages, tempo-linked delay). Only levels changed: the Lo-Fi context gain and the under-chop gain rose 2.5 dB each, and the bed steps down 18 dB under each theme return's opening bar. This deviates from the handoff's "lift direct presence and bandwidth" for the bed.
+- Why: the user wants the chops forward and the film as an effected background, never a ducking key. A brighter or more direct bed competes with the chops in 1 to 4 kHz.
+- Measured (final matrix, `docs/plans/mpc-chopping-measurements.md`): direct minus wet -9.9 to -10.6 dB; audibility index in gaps 0.13 to 0.21 against a C-B9 floor lowered from 0.20 to 0.10; bed 10.8 to 11.6 dB under the mix in gaps; low-pass roll-off 733 to 1008 Hz (reported, no longer gated). `same` has 0.03 of margin on the audibility floor.
+- Alternatives: raise the direct send and open the low-pass (clearer bed, rejected by the direction). A brighter-bed A/B audition remains a possible follow-up and would be off by default.
+
+## D108. Dialogue performance: motif mode by default, grammar as fallback (2026-11-19)
+- What: `DialogueMotif.plan` is the default performance. The five grammar families (anchor, echo, callResponse, sparseReorder, textureFill) in `DialoguePerformer` run only when it returns nil (`DialogueEngine.prepare`, `DialogueEngine.swift:86`).
+- Why: the user asked for a chop in every bar. The motif places a piece in every bar of each 16-bar loop and limits the full line to twice per loop. The grammar keeps its rests and rules for cues that cannot form a motif.
+- Evidence: the 16-bar change (C-D1) measures 0.91 to 1.00 across ref, long, fast and same (bound 0.25). C-D4 (rests) is not applicable in motif mode and C-D9 checks the loop shape instead. C-D8 (accents 50 ms from a kick) is warn-level at 0.56 to 0.70, because motif pieces land on downbeats by design.
+- Alternatives: grammar only (leaves empty bars); motif only (no fallback when speech is too thin).
+
+## D109. Reversed pickups every 2 to 4 bars are declined for now (2026-11-19)
+- What: the user's direction asked for reversed pickups every two to four bars. The renderer supports a `reversed` effect and one motif cell variant uses it, but `DialogueMotif.reversedChance` is declared and not read, so no scheduled cadence exists. Echo throws are implemented in the motif cells.
+- Why: the other direction items (a piece in every bar, glued and effected chops, intelligibility) were met first, and a reversed pickup's effect on word recognition is a listening judgment. The effect ends 30 ms before its slot (`reversedLeadSeconds`).
+- Revisit: wire `reversedChance` into the cell choice and add a cadence check beside C-D9.
+
+## D110. Deferred human and hardware steps, and phase 4 items (2026-11-19)
+- Not done here: hand-labelled drum attacks (`scripts/drum-landmark-reference.py` stands in, with plotted spot checks); the physical Vision Pro timing, memory and thermal run; listening acceptance at matched loudness, including bass density and the two-line rotation on a repeated film.
+- Phase 4 and not started: pitch-preserving time stretch, stem or speech separation, Whisper and legacy Speech backends, a sampled bass library, whole-utterance fitting, and locales other than English.
+- The checklist is in the plan's section 13 and the listening checks are in the measurements document.
