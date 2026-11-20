@@ -34,6 +34,54 @@ The archive store protects ten curated titles and reserves two slots for discove
 
 An incoming footage cue can decode while the current cue plays. Late PCM starts at the matching position in the active excerpt with a short fade. The Lo-Fi archive rack picks a three-tap echo pattern every four audible bars. Each pattern uses beat subdivisions for its main echo, darker stereo answer, and room reflection. The tap levels swell independently. Two delay banks let earlier echoes decay at their original timing across changes. Footage and music are summed independently before the final bus. The combined final path uses light compression, slowly adjusts gain within bounded limits, and protects sample peaks with a conservative output trim. [Research and verification](research/lofi-studio.md) · [Headless capture](development.md#lo-fi-checks)
 
+### Dialogue chopping pipeline
+
+Lo-Fi turns the film's speech into a small bank of related cuts and plays it against the drum take. The code is in `Liminal/Audio/Lofi/Dialogue/`; every stage is a pure function on preparation threads, and nothing here runs on the render thread.
+
+1. **Source.** `DialogueSource` holds the immutable native-rate PCM of the incoming cue, its film start time and rate, and the cue token. `DialogueCueCoordinator` and `DialogueDirector` decode and run the stages below for each cue while the current cue plays. Analysis covers up to 32 seconds (`DialogueTuning.analysisSeconds`).
+2. **Analysis.** `DialogueAnalyzer` combines the SoundAnalysis speech windows with envelopes in three bands, nuclei, voicing, pauses and clipping. A cue led by music or singing gives no bank.
+3. **Hierarchy.** `DialogueHierarchy` builds `SpeechUnit`s from utterance to phrase, word group, stab and texture. Units keep their parent and source neighbours, stress anchors, protected spans and tails.
+4. **Pad bank.** `DialogueBankBuilder` ranks units by sound before rhythm and keeps 8 to 12 pads (`DialoguePadBank`) with roles anchor, head, answer, stab, sibling and texture. With a transcript, `DialogueReorderGuard` may arrange a bank in a safe template (repeat a clause, omit a parenthetical, move an adverbial, exchange clauses); without one the source order stands.
+5. **Motif and performer.** `DialogueMotif` is the default. One line per 16-bar loop is cut into word and syllable pieces and placed so every bar has an onset, following the drummer's timing field. When `DialogueMotif.plan` returns nil, `DialoguePerformer` runs the bounded grammar families (anchor, echo, call-response, sparse-reorder, texture-fill). Both produce a `DialoguePerformancePlan` of blocks and `DialogueEvent`s. The plan changes at least every 16 bars.
+6. **Chop render.** `DialogueChopRenderer` renders each event once: linked-rate resample, noise weighting, the chop chain and light per-piece effects (echo throws in motif cells), then caches the buffer.
+7. **Scheduling.** `ArchiveVoice.perform` stores a `ChopPlan` and schedules its chops sample-accurately on the transport clock. The film bed keeps playing from its own path and is never held back by analysis. Chops are placed only at or after the commit margin and a gesture the build overran is dropped whole, so a late plan never forces an immediate entrance.
+8. **Token and revision rules.** A plan carries `cueToken` and `revision` (and the transport revision it was built against). `ArchiveVoice` keeps the highest revision per token and ignores a stale token or a revision no higher than the stored one. Revision 0 is the acoustic plan. A higher revision (the transcript-refined plan) replaces stored chops from `replaceFrom` on. A route or latency change is handled through the transport revision: `LofiPlayback` bumps `transportRevision`, the director sees the new snapshot revision, keeps the analysis and bank, and replans from the commit margin on, replacing chops that are not yet queued. Queued audio is never moved.
+9. **Cache.** `DialogueDirector` keeps 12 analyses keyed by content id, start (to 10 ms), frame count and analysis version. The four newest keep their PCM. Transcript-refined banks are cached per `locale|modelVersion`. Analysis is cached independently of the plan, so a tempo change remaps the plan without redoing analysis.
+
+Transcription is optional (`DialogueTranscriptionMode`: off, installed only by default, or allow one model download). `AppleSpeechTranscriptProvider` uses Apple SpeechAnalyzer and SpeechTranscriber off the scheduling path. The acoustic bank is built first and used whenever transcription is off, unavailable or late.
+
+Handoff record names and their code types, from [the research handoff](research/mpc-chopping-handoff.md):
+
+| Handoff record | Code type | Notes |
+| --- | --- | --- |
+| `SourceAudio` | `DialogueSource` | `contentID`, `cueToken`, immutable PCM, film start and rate; the frame/second conversion lives here |
+| `SpeechUnit` | `SpeechUnit` (levels in `SpeechUnit.Level`) | frames, parent and neighbour ids, text and token range, confidences, stress anchors, protected spans, tail |
+| `PadBank` | `DialoguePadBank` of `DialoguePad` | ordered pads, anchor pad, sibling groups, rejections, reorder arrangement |
+| `TransportSnapshot` | `DialogueTransportSnapshot` | revision, take index, origin, beat durations (current and next), phrase at origin, kick and snare landmarks, lead notes, groove offsets |
+| `PerformanceEvent` | `DialogueEvent` | pad, slot, accent and start time, gain, `chokeAt`, transform, cell and effect |
+| (performance plan) | `DialoguePerformancePlan`, `DialogueBlock` | cue token, bank id, transport revision, plan revision |
+
+Handoff fields with no direct counterpart:
+
+- `speakerIDIfReliable` is omitted on purpose. Speaker identity was not reliable enough on this material to rank or group by.
+- `expiryPolicy` has no field. A plan expires through the cue token (a departed clip is discarded) and the revision rules above.
+- `dryChokeGroup` is not a named group. The one-voice rule is enforced per event through `chokeAt`: a later event's start shortens the earlier one, which ends 2 ms before it.
+- `committedNextTempo` is carried as `nextBeatDuration` only; the committed-next key has no field.
+- `latestCommitFrame` and `futureBoundaryFrames` are not stored. The planner derives the boundaries from `origin`, `beatDuration` and the phrase index, and the earliest start is a call argument.
+
+### Per-bus chains and the master finisher
+
+Each section has its own chain, built offline on preparation threads by `LofiStemChains` (zero latency: minimum-phase biquads and feed-forward dynamics, so landmarks found on unprocessed audio still point at the same frame) and the chop chain in `DialogueChopRenderer`.
+
+- **Drums**: mono below 100 Hz, high-pass 32 Hz, a 320 Hz cut, a 3:1 bus compressor, 25 percent parallel 8:1 compression, tape-style saturation that rounds peaks until the take's crest reaches the target, a gentle air shelf, and a -4 dB peak ceiling. Kick attacks stay on their original frames.
+- **Bass**: high-pass 30 Hz, parallel harmonics (an asymmetric tanh above 120 Hz) so the bass reads on small speakers, a 280 Hz cut, a 4.5 kHz low-pass and a 3.5:1 compressor, then the kick duck. `LofiBassVoice` supplies three bounded voices (`roundSub`, `pluck`, `longAnswer`) next to the classic one.
+- **Lead and mids**: each is high-passed and shaped around the other's range (the lead gets 2.8 kHz presence, the mids a 400 Hz cut and 1.6 kHz bump), so the mids can answer the melody without masking it. The mids shell is mono below 300 Hz.
+- **Space** (reverb and delay returns): high-pass 350 Hz, low-pass 4.5 kHz, ducked by the dry lead so notes are heard dry first.
+- **Dialogue chops**: the chop chain keeps speech intelligible (1 to 4 kHz forward) and glues each cut to a consistent level. The film bed sits under the chops and the music (see decisions D107).
+- **Film bed**: the effected soundtrack path in `ArchiveVoice` and the footage mix bus, kept dark, with a one-bar dip under each theme return.
+
+`LofiMasterBus` hosts `LofiMasterKernel`, an audio unit whose render path allocates nothing: input trim, 25 Hz high-pass, a 1.7:1 glue compressor with a 100 Hz sidechain high-pass, a 4x oversampled soft clip, and a 3 ms look-ahead true-peak limiter at -1 dBTP. The kernel exposes meters and a gain-reduction trace for the capture harness (`LofiCaptureHooks`). Targets and measured results are in [mix verification](mix-verification.md) and [the measurements](plans/mpc-chopping-measurements.md).
+
 ## Dependencies
 
 - [AudioKit](https://github.com/AudioKit/AudioKit), AudioKitEX and SoundpipeAudioKit: audio synthesis and effects

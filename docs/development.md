@@ -32,6 +32,31 @@ Use `python3 scripts/plot-lofi.py /path/to/capture --auditions` with NumPy, SciP
 
 Start with `-audio.musicMode lofi -LiminalAutoPlay YES -LiminalVideoOffline YES` for a cached-footage smoke test. The audio log reports instrument choices, 16-bar take starts, and any preparation misses. `-LiminalTraceLofi YES` also prints exact take sample ranges for a Debug launch. Add `-LiminalProbeLofiProviders YES` to a native Debug launch to log whether the host can discover Pro-C 2, Pro-L 2, and Animoog Z metadata. The probe does not instantiate or route audio to an extension. Physical headset listening and sustained profiling have their own acceptance checks in the [research notes](research/lofi-studio.md).
 
+### Mix verification
+
+Two commands capture Lo-Fi audio offline and measure it. Both need FFmpeg, Python 3 with NumPy, SciPy and Matplotlib, and the private drums for `--private-drums`. Set `DD` to a derived data path of your own, and write captures outside the repository.
+
+```sh
+# One capture, then the full report (JSON, Markdown, PNGs, audition files)
+DD=$S/dd-name scripts/mix-report.sh --out DIR [--baseline DIR] [--strict] [--no-plots] [--case NAME] \
+    [check-lofi.sh options: --private-drums --film-reel --bars 32 --seed 1042 --bpm 70 --hook k=v ...]
+
+# The five-case matrix (ref, long, fast, same, nofilm), run one after another
+DD=$S/dd-name scripts/mix-matrix.sh --out DIR [--baseline DIR] [--cases ref,long,fast,same,nofilm] [--strict] [--prune-wavs]
+```
+
+`python3 scripts/mix-report.py CAPTURE_DIR` re-measures an existing capture without capturing again.
+
+A report holds per-bus stems (drums, bass, lead, mids, space, dialogue chops, film bed, the Lo-Fi bus, pre-master and master), spectrograms at three resolutions, a band-energy and masking matrix between buses, low-band mono correlation, kick and bass window analysis, crest and PLR, integrated and short-term LUFS, true peak (FFmpeg and a 16x reconstruction), limiter and glue gain reduction from the master kernel's trace, dialogue intelligibility proxies, and the chop-change cadence from the plan log. The matrix adds `matrix-summary.md` and `matrix-summary.json`.
+
+`scripts/mix-criteria.json` is the source of truth for the thresholds, in three families: C-M (master: loudness, true peak, PLR, crest, limiter, pumping, soft clip, mono, spectrum, LRA), C-B (buses: low-end clearance, kick and bass, drum crest, mids and lead, theme return, space, intelligibility, film bed, routing) and C-D (dialogue: 16-bar and 8-bar change, repeats, rests, overlaps, stage timing and lead, accents, motif loop shape). Each criterion has a `fail` or `warn` level. The result is pass, warn (a warn-level miss), fail, or skipped with a reason. A threshold change needs a written reason in `docs/plans/mpc-chopping-measurements.md`.
+
+`--strict` makes the exit status nonzero when a fail-level criterion fails, or when a fail-level criterion is skipped for a reason other than no footage, no dialogue or not applicable to the case. `mix-report.sh` also exits nonzero when the capture's own routing or peak check fails. `mix-matrix.sh` exits nonzero when a case produced no capture, and under `--strict` when any case has a strict failure.
+
+Only one capture runs at a time per machine. `check-lofi.sh` takes an exclusive lock on `/private/tmp/liminal-lofi-audio-config-<uid>.json` and a second capture waits for it (`--wait-lock SECONDS`, default 1200). This is the same one-instance rule as for app launches: serialize captures and test runs. Analysis needs no lock. A 32-bar capture is about 0.9 GB. Captures, WAVs, audition files and `report/` output stay out of git, and the harness refuses an output directory inside the checkout.
+
+[Mix verification](mix-verification.md) explains each measurement, how to read the figures and how to compare against a baseline.
+
 ## README preview
 
 The linked poster and MP4 live in `docs/media/`. The current clip is a live macOS recording of *Thinking Machines* over the Lo-Fi mix. To refresh it, use ScreenCaptureKit to capture only the Liminal app and its stereo output with the microphone disabled. A Debug launch with `-LiminalVideoFile` pointed at a credited film and `-LiminalAllowGeneration NO` makes the source identifiable and reuses cached imagery. Record across a drum fill, crop to the artwork, and export a short H.264 MP4 with AAC stereo and the MP4 index at the front for streaming.
@@ -88,6 +113,7 @@ Pass as launch arguments, for example `-LiminalAutoPlay YES`. Defined in `Limina
 | `render-music.sh`, `check-music.py` | Offline render and analysis of the music engine; `ARCHIVE=<mp4>` mixes one footage piece's sound in |
 | `analyze-archive-audio.py` | Level, spectrum, fades and limiter check of the archive sound in a render |
 | `archive-curate.py`, `archive-fetch-fixture.sh` | Build the bundled Prelinger seed list / download one fixture clip to a scratch folder |
+| `mix-report.sh`, `mix-matrix.sh` | Capture Lo-Fi audio offline and measure the mix against `mix-criteria.json` (one capture or the five-case matrix); `mixlib/` holds the analysis modules. See Mix verification above |
 | `av-coupling-check.sh` | Offline check of the audio-visual coupling |
 
 Simulator automation notes: `research/visionos-sim-automation/README.md`.
