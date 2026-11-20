@@ -153,4 +153,65 @@ struct ControllerInstrumentTests {
         #expect(strip.automatic == false)
         #expect(strip.values[.gain] == 0.5)
     }
+    @MainActor @Test func coordinatorReleasesObsoleteBanksBeforeThirdProductionWindowAndRetriesPressure() async throws {
+        for rate in [44_100.0, 48_000.0, 96_000.0] {
+            let pool = ControllerVoiceBank(inputs: [:], timbres: ControllerAmbientTimbres())
+            var score = LofiScore.make(seed: 37, section: .theme, drift: .init(seed: 37), startBeat: 0)
+            score.bassVoice = .synth
+            let instrument = ControllerLofiInstrument(score: score, clock: .init(tempo: 72, sampleRate: rate))
+            var nextScore = score
+            nextScore.bassVoice = .classic
+            let next = ControllerLofiInstrument(score: nextScore, clock: instrument.clock)
+            func ready(base: Int) async throws {
+                let deadline = ContinuousClock.now.advanced(by: .seconds(45))
+                repeat {
+                    pool.refresh([instrument, next])
+                    let expected = rate == 96_000 ? 1 : 2
+                    if pool.instrument(.lead).ready && pool.instrument(.lead).base == base && pool.preparedKeys.count == expected { return }
+                    try await Task.sleep(for: .milliseconds(20))
+                } while ContinuousClock.now < deadline
+                Issue.record("production bank did not become ready at \(rate) Hz, base \(base)")
+            }
+            let root = 36 + score.tonic
+            try await ready(base: root)
+            for octave in 1...2 {
+                try pool.setWindow(.lead, base: root + 12 * octave, tonic: score.tonic, intervals: score.scale.intervals)
+                try await ready(base: root + 12 * octave)
+                #expect(ControllerPCMReservation.liveBytes <= ControllerPCMReservation.limit)
+            }
+            // Pin a real old note independently, then release all complete generations.
+            // Reservations owned by held notes must remain live across worker eviction.
+            let worker = ControllerLofiCache()
+            var held: ControllerNotePCM? = try ControllerLofiCache.render(.bass, midi: root, instrument: instrument)
+            let heldBytes = Int(held!.attack.frameLength + (held!.sustain?.frameLength ?? 0)) * 8
+            pool.invalidate()
+            pool.resetWindows()
+            try await Task.sleep(for: .milliseconds(50))
+            let before = ControllerPCMReservation.liveBytes
+            #expect(before >= heldBytes)
+            var pressure: ControllerPCMReservation? = try .init(count: ControllerPCMReservation.limit - before - 1024)
+            do {
+                _ = try await worker.prepare(instrument, bases: [.bass: 24 + score.tonic, .lead: root, .mids: root])
+                Issue.record("bank unexpectedly fit under pinned memory pressure")
+            } catch { #expect(error as? ControllerWire.Failure == .overloaded) }
+            withExtendedLifetime(pressure) {}
+            pressure = nil
+            // Exercise the coordinator's retry too; transient pressure cannot latch failedKey.
+            pressure = try .init(count: ControllerPCMReservation.limit - ControllerPCMReservation.liveBytes - 1024)
+            pool.refresh([instrument])
+            let failedDeadline = ContinuousClock.now.advanced(by: .seconds(5))
+            while pool.preparationError == nil, ContinuousClock.now < failedDeadline {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            #expect(pool.preparationError != nil)
+            withExtendedLifetime(pressure) {}
+            pressure = nil
+            try await ready(base: root)
+            #expect(held?.attack.frameLength ?? 0 > 0)
+            held = nil
+            pool.invalidate()
+            try await Task.sleep(for: .milliseconds(50))
+        }
+    }
+
 }

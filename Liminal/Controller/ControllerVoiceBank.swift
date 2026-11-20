@@ -81,6 +81,7 @@ final class ControllerVoiceBank {
     private var preparation: Task<Void, Never>?
     private var preparingKey: String?
     private var prepared: [ControllerLofiCache.Bank] = []
+    var preparedKeys: Set<String> { Set(prepared.map(\.key)) }
     private var requestedBases: [ControllerChannel: Int] = [.bass: 24, .lead: 36, .mids: 36]
     private var bases: [ControllerChannel: Int] = [:]
     private var tonic = 0
@@ -88,7 +89,7 @@ final class ControllerVoiceBank {
     private var lofiTonic = 0
     private var revisions: [ControllerChannel: Int64] = [:]
     private var ambientPrograms: [ControllerChannel: String] = [:]
-    private var failedKey: String?
+    private var retryAfter = 0.0
     private var maintenance: Task<Void, Never>?
     private var activeKey: String?
     private var activeBank: ControllerLofiCache.Bank?
@@ -174,22 +175,39 @@ final class ControllerVoiceBank {
             }
             return (instrument, instrument.key + ControllerLofiCache.windowKey(bases), bases)
         }
-        guard preparation == nil, let target = targets.first(where: { item in
-            item.1 != failedKey && !prepared.contains { $0.key == item.1 }
-        }) else { return }
+        guard preparation == nil, ProcessInfo.processInfo.systemUptime >= retryAfter else { return }
+        // Only actual current/next targets may own complete generations. Held/retiring slots
+        // independently pin individual notes and are never cleared to make room.
+        let targetKeys = Set(targets.map { $0.1 })
+        prepared.removeAll { !targetKeys.contains($0.key) }
+        guard let target = targets.first(where: { item in !prepared.contains { $0.key == item.1 } }) else {
+            Task { await cache.retain(keys: targetKeys) }
+            return
+        }
+        let bytes = (try? ControllerLofiCache.bytes(target.0, bases: target.2)) ?? ControllerPCMReservation.limit
+        let currentBytes = activeBank.flatMap { try? ControllerLofiCache.bytes($0.instrument, bases: $0.bases) } ?? 0
+        // At high route rates two full banks may not fit. Keep current playable and defer
+        // speculative next preparation; on an actual current change retire the old bank first.
+        if target.1 != key, bytes + currentBytes > ControllerPCMReservation.limit { return }
+        var keep = Set([target.1])
+        if let activeBank, bytes + currentBytes <= ControllerPCMReservation.limit { keep.insert(activeBank.key) }
+        else if target.1 == key { activeBank = nil }
+        prepared.removeAll { !keep.contains($0.key) }
         let token = epoch, bases = target.2
         preparingKey = target.1
         preparation = Task(priority: .utility) { [weak self, cache] in
             do {
-                let bank = try await cache.prepare(target.0, bases: bases)
+                let bank = try await cache.prepare(target.0, bases: bases, retaining: keep)
                 guard let self, !Task.isCancelled, epoch == token else { return }
                 prepared.removeAll { $0.key == bank.key }
                 prepared.append(bank)
                 if prepared.count > 2 { prepared.removeFirst() }
-                preparationError = nil; failedKey = nil
+                preparationError = nil; retryAfter = 0
             } catch {
                 guard let self, !Task.isCancelled, epoch == token else { return }
-                preparationError = "Manual instrument preparation failed"; failedKey = target.1
+                preparationError = "Manual instrument preparation failed"
+                // Memory pressure from held notes is temporary; retry once references retire.
+                retryAfter = ProcessInfo.processInfo.systemUptime + 1
             }
             guard let self, epoch == token else { return }
             preparation = nil; preparingKey = nil
@@ -319,7 +337,8 @@ final class ControllerVoiceBank {
     }
     func invalidate() {
         epoch += 1; preparation?.cancel(); preparation = nil; preparingKey = nil
-        prepared.removeAll(); activeBank = nil; activeKey = nil; failedKey = nil; preparationError = nil
+        prepared.removeAll(); activeBank = nil; activeKey = nil; retryAfter = 0; preparationError = nil
+        Task { await cache.retain(keys: []) }
         for token in Array(owned.keys) { release(token, over: 0.03, now: ProcessInfo.processInfo.systemUptime) }
     }
 }

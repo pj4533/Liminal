@@ -83,7 +83,7 @@ struct ControllerDialogueTests {
         try rig.schedule(voice.chops, LofiMasterBusTests.tone(n * 4, amplitude: 0.1))
         _ = try await rig.render(n)
         let before = try #require(voice.chops.player.lastRenderTime.flatMap { voice.chops.player.playerTime(forNodeTime: $0) }).sampleTime
-        voice.controllerSetAutomatic(false)
+        voice.controllerSetAutomatic(false, now: 0)
         let quiet = try await rig.render(n)
         #expect(quiet[0].suffix(n / 2).allSatisfy { abs($0) < 0.000001 })
         let after = try #require(voice.chops.player.lastRenderTime.flatMap { voice.chops.player.playerTime(forNodeTime: $0) }).sampleTime
@@ -113,7 +113,7 @@ struct ControllerDialogueTests {
         #expect(voice.chopCounts.queued == 1)
         voice.updateDucks(at: 0.4)
         #expect(voice.isMusicDucked)
-        voice.controllerSetAutomatic(false)
+        voice.controllerSetAutomatic(false, now: 0)
         voice.updateDucks(at: 0.42)
         #expect(!voice.isMusicDucked)
         #expect(voice.chopCounts.queued == 1, "manual mode must not flush/re-origin the automatic timeline")
@@ -139,10 +139,18 @@ struct ControllerDialogueTests {
         voice.controllerPrepareBank(bank)
         voice.updateDucks(at: 0.5)
         #expect(voice.controllerDialogue.read().bank == nil)
-        voice.controllerSetAutomatic(false)
+        voice.controllerSetAutomatic(false, now: 0)
         voice.updateDucks(at: 1.01)
         #expect(voice.controllerDialogue.read().bank?.bankID == 9)
         let oldRevision = voice.controllerDialogue.read().revision
+        try rig.schedule(voice.manualChops, LofiMasterBusTests.tone(48_000, amplitude: 0.1))
+        ParamRamp.setGain(voice.manualChopGain, 1, over: 0)
+        voice.controllerTrigger(bank: oldRevision, pad: 63, velocity: 1, start: 1.5, token: UUID(), now: 1.08)
+        voice.updateDucks(at: 1.08)
+        #expect(voice.manualChops.player.isPlaying, "a press between modulation ticks must preserve the old player during choke")
+        voice.updateDucks(at: 1.099)
+        #expect(voice.manualChops.player.isPlaying)
+        voice.updateDucks(at: 1.101)
         var refined = ArchiveVoice.ChopPlan(token: 1, revision: 1, replaceFrom: 2, chops: [])
         refined.bankEpoch = .init(cueToken: "1", bankID: "10", planRevision: 1, transportRevision: 3)
         refined.bankActivation = 2; refined.bankEnd = 5
@@ -180,4 +188,23 @@ struct ControllerDialogueTests {
         gate.invalidateTransport()
         #expect(!gate.accepts(revision: gate.revision - 1))
     }
+    @MainActor @Test func betweenModulationTicksStopPreservesEntireChokeFade() async throws {
+        let voice = ArchiveVoice()
+        let rig = LofiMasterBusTests.Rig()
+        try rig.start(voice.chopOutput)
+        defer { rig.stop() }
+        voice.setBeatLocked(true)
+        voice.modulate(t: 0) // the old 10 Hz clock is stale when the command arrives
+        try rig.schedule(voice.manualChops, LofiMasterBusTests.tone(48_000, amplitude: 0.1))
+        ParamRamp.setGain(voice.manualChopGain, 1, over: 0)
+        _ = try await rig.render(1024)
+        voice.controllerStopManual(now: 0.08)
+        voice.updateDucks(at: 0.08)
+        #expect(voice.manualChops.player.isPlaying)
+        voice.updateDucks(at: 0.099)
+        #expect(voice.manualChops.player.isPlaying)
+        voice.updateDucks(at: 0.101)
+        #expect(!voice.manualChops.player.isPlaying)
+    }
+
 }

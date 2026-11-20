@@ -231,7 +231,7 @@ nonisolated final class MusicConductor: @unchecked Sendable {
         scheduler.reset(to: t)
         if !preservingArchive { archive?.reset(now: t) }
         began = true
-        drainInbox()
+        drainInbox(now: t)
         scenes.removeAll()
         hysteresis.removeAll()
         for l in layers {
@@ -259,7 +259,7 @@ nonisolated final class MusicConductor: @unchecked Sendable {
         if realtime { dispatchPrecondition(condition: .notOnQueue(.main)) }
         #endif
         let t0 = DispatchTime.now().uptimeNanoseconds
-        drainInbox()
+        drainInbox(now: time)
         guard began else { return }
         scheduler.advance(to: time)
         if archiveOnly {
@@ -286,16 +286,16 @@ nonisolated final class MusicConductor: @unchecked Sendable {
          tickMaxAt, slowTicks)
     }
 
-    private func drainInbox() {
+    private func drainInbox(now: Double) {
         inboxLock.lock()
         guard !inbox.isEmpty else { inboxLock.unlock(); return }
         let items = inbox
         inbox.removeAll(keepingCapacity: true)
         inboxLock.unlock()
-        for c in items { apply(c) }
+        for c in items { apply(c, now: now) }
     }
 
-    private func apply(_ c: MusicControl) {
+    private func apply(_ c: MusicControl, now: Double) {
         switch c {
         case .style(let id):
             guard id != styleID else { break }
@@ -316,16 +316,16 @@ nonisolated final class MusicConductor: @unchecked Sendable {
         case .visualActivity(let a): activityTarget = min(max(a, 0), 1)
         case .limiterBypass(let b): mix.limiterBypassed = b
         case .forceLayers(let ids): forced = ids
-        case .archiveBegin(let cue): if began && !stopping { archive?.begin(cue, now: scheduler.now) }
-        case .archiveEnd(let fade): archive?.end(fade: fade, now: scheduler.now)
+        case .archiveBegin(let cue): if began && !stopping { archive?.begin(cue, now: now) }
+        case .archiveEnd(let fade): archive?.end(fade: fade, now: now)
         case .archiveGain(let g): archive?.setGain(g)
-        case .archiveChops(let plan): if began && !stopping { archive?.perform(plan, now: scheduler.now) }
+        case .archiveChops(let plan): if began && !stopping { archive?.perform(plan, now: now) }
         case .archiveChopsCancel(let token): archive?.cancelChops(token: token)
         case .archiveControllerBank(let bank): if began && !stopping { archive?.controllerPrepareBank(bank) }
-        case .controllerChopsAutomatic(let automatic): archive?.controllerSetAutomatic(automatic)
-        case .controllerChopsStop: archive?.controllerStopManual()
+        case .controllerChopsAutomatic(let automatic): archive?.controllerSetAutomatic(automatic, now: now)
+        case .controllerChopsStop: archive?.controllerStopManual(now: now)
         case .controllerChop(let bank, let pad, let velocity, let start, let token):
-            if began && !stopping { archive?.controllerTrigger(bank: bank, pad: pad, velocity: velocity, start: start, token: token) }
+            if began && !stopping { archive?.controllerTrigger(bank: bank, pad: pad, velocity: velocity, start: start, token: token, now: now) }
         }
     }
 

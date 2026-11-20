@@ -64,11 +64,39 @@ actor ControllerLofiCache {
     }
     private var cached: [Bank] = []
 
-    func prepare(_ instrument: ControllerLofiInstrument, bases: [ControllerChannel: Int]) throws -> Bank {
+    func retain(keys: Set<String>) { cached.removeAll { !keys.contains($0.key) } }
+
+    /// Exact reservation sizes, including the pitch-dependent sustain overlap.
+    nonisolated static func bytes(_ instrument: ControllerLofiInstrument, bases: [ControllerChannel: Int]) throws -> Int {
+        var frames = 0
+        let rate = instrument.clock.sampleRate
+        for channel in [ControllerChannel.bass, .lead, .mids] {
+            guard let base = bases[channel], let pitches = ControllerPadWindow.pitches(
+                base: base, tonic: instrument.score.tonic, intervals: instrument.score.scale.intervals) else {
+                throw ControllerWire.Failure.out_of_range
+            }
+            for midi in Set(pitches) {
+                if channel == .lead { frames += Int(2.8 * rate) }
+                else {
+                    let period = rate / Double(Scale.midiToFrequency(midi))
+                    let loop = Int((0.55 * rate / period).rounded() * period)
+                    let fade = channel == .mids ? Int(0.2 * rate) : max(8, Int(period * 2))
+                    frames += Int(0.7 * rate) + max(0, loop - fade)
+                }
+            }
+        }
+        return frames * 2 * MemoryLayout<Float>.stride
+    }
+
+    func prepare(_ instrument: ControllerLofiInstrument, bases: [ControllerChannel: Int],
+                 retaining keys: Set<String> = []) throws -> Bank {
         let key = instrument.key + Self.windowKey(bases)
+        // Coordinator and worker must drop the same obsolete generations BEFORE allocation.
+        retain(keys: keys.union([key]))
         if let bank = cached.first(where: { $0.key == key }) { return bank }
-        // Leave room for one new generation; notes still held retain their independent reservations.
-        if cached.count >= 2 { cached.removeFirst() }
+        guard try Self.bytes(instrument, bases: bases) <= ControllerPCMReservation.limit - ControllerPCMReservation.liveBytes else {
+            throw ControllerWire.Failure.overloaded
+        }
         var notes: [ControllerChannel: [Int: ControllerNotePCM]] = [:]
         for channel in [ControllerChannel.bass, .lead, .mids] {
             guard let base = bases[channel], let pitches = ControllerPadWindow.pitches(

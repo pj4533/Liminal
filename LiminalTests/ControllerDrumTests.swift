@@ -86,4 +86,48 @@ struct ControllerDrumTests {
         #expect(bus.drums.player.isPlaying)
         #expect(performance.pending == nil)
     }
+    @Test func supersedingQueuedSwapOnlyReusesInactivePlayer() async throws {
+        let bus = LofiBus(gain: 1, dialogue: Fader(Mixer()))
+        let rig = LofiMasterBusTests.Rig()
+        try rig.start(bus.output)
+        defer { rig.stop() }
+        let performance = ControllerDrumPerformance(bus: bus)
+        defer { performance.stop() }
+        performance.discover()
+        let discoveryDeadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while performance.choices.isEmpty, ContinuousClock.now < discoveryDeadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        performance.setAutomatic(false)
+        let info = DialogueRuntimeTests.info(origin: ProcessInfo.processInfo.systemUptime)
+        performance.tick(info: info, name: nil)
+        // Repeated ready selection exercises A -> B -> A without private drum assets.
+        _ = try performance.select("generated", info: info, launch: true)
+        let deadline = ContinuousClock.now.advanced(by: .seconds(12))
+        while performance.current == nil, ContinuousClock.now < deadline {
+            performance.tick(info: info, name: nil)
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try #require(performance.current == "generated")
+        let audible = performance.audibleLane
+        _ = try await rig.render(4096)
+        let player = bus.performanceDrums[audible].player
+        let before = try #require(player.lastRenderTime.flatMap { player.playerTime(forNodeTime: $0) }).sampleTime
+        for _ in 0..<2 {
+            _ = try performance.select("generated", info: info, launch: true)
+            let queuedDeadline = ContinuousClock.now.advanced(by: .seconds(1))
+            while performance.scheduledLane == nil, ContinuousClock.now < queuedDeadline {
+                performance.tick(info: info, name: nil)
+                try await Task.sleep(for: .milliseconds(5))
+            }
+            #expect(performance.scheduledLane == 1 - audible)
+            #expect(performance.audibleLane == audible)
+            #expect(performance.current == "generated")
+        }
+        _ = try await rig.render(4096)
+        let after = try #require(player.lastRenderTime.flatMap { player.playerTime(forNodeTime: $0) }).sampleTime
+        #expect(player.isPlaying)
+        #expect(after > before, "superseding queued PCM must not stop/reset the audible player")
+    }
+
 }

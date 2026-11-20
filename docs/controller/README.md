@@ -102,3 +102,34 @@ Automatic and manual chop sources meet before the existing dark chop echo/room, 
 Film availability comes from the actual archive cue. Its mixer and additive effects use the existing archive strip's independent performance controls after the original bed automation and before its dry/send fan-out. They do not write the Footage audio setting, bed contour or automatic duck faders. Film and Space Manual modes remain unavailable; no return/film pad behavior is advertised.
 
 These are implemented code paths, not native acceptance evidence. Linux source checks and normalized parsing cannot type-check AVFoundation/AudioKit. Added native `ControllerDialogueTests` and `ControllerDrumTests` require the Mac commands above. Acceptance still needs exact untouched Auto capture comparison, CPU/cache profiling during generation, pitch/onset measurements, quantized chop and drum-boundary capture under load, tempo/route changes and release/disconnect stress, both platform builds and actual Push verification. MainActor boundary fader ramps must be measured against the hardware clock; no measured latency or gap-free claim is made. `isolatedPreparationQualified` remains false.
+
+
+## Integration correctness repairs (2026-11-20)
+
+Superseding queued drum work always schedules on the lane opposite the last
+**applied** audible lane. Only a boundary commit changes that lane; preparing or
+cancelling a swap cannot stop the current loop.
+
+Manual PCM generations now have coordinated ownership: the MainActor coordinator
+and utility cache release obsolete complete banks before reserving replacement
+PCM. Held/retiring/pending notes retain their independent immutable PCM references
+and reservations until normal release. Admission estimates exact attack/loop
+reservation sizes; transient pressure retries after one second instead of latching
+a failed key forever. At 44.1/48 kHz current/next banks may coexist when they fit;
+at 96 kHz speculative next-bank preparation is deferred if both cannot fit under
+128 MiB. An actual program/window transition can temporarily report not-ready
+while its replacement prepares; no bank representation, rate or timbre is silently
+changed to fit. Held-note pressure may delay readiness until those notes release.
+This is a bounded fail-visible policy, not a gap-free preparation claim.
+
+Manual chop trigger, mode and stop commands use the current conductor step time
+passed before inbox drain; fade completion no longer uses the stale modulation
+clock. Cue begin/end/plan commands drained in that same step also use its time.
+
+Added native regressions cover the real captured Python parameter frames, an
+applied drum loop followed by two superseding queued selections on actual players,
+three complete windows with current/next ownership at 44.1/48 kHz and high-rate
+admission at 96 kHz, retry after pinned memory pressure, and chop trigger/stop
+between modulation ticks. They have not been compiled or executed here. Linux
+source/parser checks are not native acceptance; `isolatedPreparationQualified`
+remains false. Follow the paired controller repository's `docs/MAC_NATIVE_HANDOFF.md`.

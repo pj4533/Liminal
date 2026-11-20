@@ -104,10 +104,10 @@ nonisolated final class ArchiveVoice {
     private var manualDuckWindows: [Range<Double>] = []
 
     /// Conductor-queue only; the automatic player and planning continue behind this gate.
-    func controllerSetAutomatic(_ automatic: Bool) {
+    func controllerSetAutomatic(_ automatic: Bool, now: Double) {
         controllerAutomatic = automatic
         ParamRamp.setGain(automaticChopGate, automatic ? 1 : 0, over: 0.03)
-        controllerStopManual()
+        controllerStopManual(now: now)
         if !automatic { releaseMusicDuck() }
     }
 
@@ -126,19 +126,19 @@ nonisolated final class ArchiveVoice {
         manualBanks = [preserved, next].compactMap { $0 }
     }
 
-    func controllerStopManual() {
+    func controllerStopManual(now: Double) {
         manualLaunch = nil
         manualDuckWindows.removeAll()
         ParamRamp.setGain(manualChopGain, 0, over: 0.02)
-        manualStopAt = lastTime + 0.02
+        manualStopAt = now + 0.02
     }
 
-    func controllerTrigger(bank: Int64, pad: Int, velocity: Float, start: Double, token: UUID) {
+    func controllerTrigger(bank: Int64, pad: Int, velocity: Float, start: Double, token: UUID, now: Double) {
         guard !controllerAutomatic, controllerDialogue.read().revision == bank,
               controllerDialogue.read().bank?.pads.contains(where: { $0.index == pad }) == true else { return }
         // Mono choke group. DSP/buffers were prepared on the utility worker.
         ParamRamp.setGain(manualChopGain, 0, over: 0.02)
-        manualStopAt = lastTime + 0.02
+        manualStopAt = now + 0.02
         manualLaunch = (bank, pad, velocity, start, token)
     }
 
@@ -758,7 +758,7 @@ nonisolated final class ArchiveVoice {
 
     /// Fade out over `fade` seconds; the player stops once the fade is complete.
     func end(fade: Double, now: Double) {
-        controllerStopManual()
+        controllerStopManual(now: now)
         pending = nil
         guard playing else { return }
         strip.fade(to: 0, over: fade, now: now)
@@ -792,7 +792,7 @@ nonisolated final class ArchiveVoice {
 
     /// Engine stop and reset: the bed and the chop timeline stop.
     func powerDown() {
-        controllerStopManual(); manualChops.player.stop()
+        controllerStopManual(now: lastTime); manualChops.player.stop()
         manualBanks.removeAll(); bankAnnouncements.removeAll(); activeManualKey = nil; controllerDialogue.publish(nil); controllerDialogue.film(false)
 
         stopChopTimeline()

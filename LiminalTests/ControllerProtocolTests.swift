@@ -67,6 +67,20 @@ struct ControllerProtocolTests {
         #expect(frames.count == 12)
         for frame in frames where frame.type == "command" { try ControllerWire.Command(frame).validate() }
     }
+    @Test func actualPythonControllerParameterFramesValidateNativeSchema() throws {
+        // Captured from Controller.event -> Client.tick -> real TCP, verified byte-for-byte
+        // by liminal-controller's physical parameter regression, not hand-built commands.
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let fixture = root.appendingPathComponent("docs/controller/fixtures/controller-parameters.ndjson")
+        var parser = ControllerWire.Framer()
+        let frames = try parser.append(Data(contentsOf: fixture))
+        #expect(frames.count == 4)
+        for frame in frames { try ControllerWire.Command(frame).validate() }
+        #expect(try frames.map { try ControllerWire.Command($0).string("parameter") } == ["low_cut", "gain", "gain", "gain"])
+        #expect(throws: ControllerWire.Failure.bad_message) {
+            try command("\"action\":\"parameter\",\"channel\":\"ambient.drone\",\"parameter\":[\"ambient.drone\",\"gain\"],\"value\":0.505").validate()
+        }
+    }
     @Test func sequenceReplayAndEviction() throws {
         var lease = ControllerLease(session: "s")
         if case .reject(.stale_seq) = lease.accept(session: "s", seq: 2) {} else { Issue.record("First sequence must be 1") }

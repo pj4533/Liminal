@@ -38,7 +38,8 @@ final class ControllerDrumPerformance {
     private var generation = 0
     private var prepared: (id: String, buffer: AVAudioPCMBuffer, revision: UInt32, start: Double, beat: Double)?
     private var queued: (id: String, start: Double, beat: Double, lane: Int)?
-    private var lane = 0
+    private(set) var audibleLane = 0
+    var scheduledLane: Int? { queued?.lane }
     private var lastTake: Int?
     private var manual = false
     private var latched = false
@@ -162,7 +163,7 @@ final class ControllerDrumPerformance {
                 self.prepared = nil
                 _ = try? select(prepared.id, info: info, launch: manual)
             } else {
-                lane = 1 - lane
+                let lane = 1 - audibleLane
                 let player = bus.performanceDrums[lane].player
                 player.stop(); player.scheduleBuffer(prepared.buffer, at: nil, options: .loops)
                 player.play(at: AVAudioTime(hostTime: mach_absolute_time() + AVAudioTime.hostTime(forSeconds: prepared.start - now - player.outputPresentationLatency)))
@@ -185,6 +186,7 @@ final class ControllerDrumPerformance {
         guard let queued else { return }
         ParamRamp.setGain(bus.automaticDrumGain, 0, over: 0.025)
         for i in bus.performanceDrumGains.indices { ParamRamp.setGain(bus.performanceDrumGains[i], i == queued.lane ? 1 : 0, over: 0.025) }
+        audibleLane = queued.lane
         current = queued.id; latched = manual
         pending?.status = "applied"; pending?.beat = queued.beat
         self.queued = nil

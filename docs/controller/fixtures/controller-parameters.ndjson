@@ -1,0 +1,4 @@
+{"v":1,"type":"command","session":"test-session-1","seq":1,"action":"parameter","channel":"ambient.drone","parameter":"low_cut","value":0.005}
+{"v":1,"type":"command","session":"test-session-1","seq":2,"action":"parameter","channel":"ambient.drone","parameter":"gain","value":0.505}
+{"v":1,"type":"command","session":"test-session-1","seq":3,"action":"parameter","channel":"ambient.drone","parameter":"gain","value":0}
+{"v":1,"type":"command","session":"test-session-1","seq":4,"action":"parameter","channel":"ambient.pad","parameter":"gain","value":0.505}
