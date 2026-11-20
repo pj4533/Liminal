@@ -53,9 +53,15 @@ struct LofiArrangementTests {
                     // rise is its attack frame).
                     let lead = current.bassVoice.lowRiseLead(midi: note.midi) * clock.sampleRate
                     let kickFrame = Double(clock.frame(at: kickBeat))
+                    // A slow voice whose rise is longer than the kick's offset into the phrase starts on the
+                    // phrase's first frame instead (the round sub needs about 70 ms; the kick is 68 ms in at 62 BPM).
+                    if lead > kickFrame {
+                        #expect(note.beat == 0)
+                        continue
+                    }
                     let attack = Double(clock.frame(at: note.beat)) + lead
                     #expect(abs(attack - kickFrame) / clock.sampleRate < 0.002,
-                            "seed \(seed) phrase \(phrase) accent \(accent): \(attack - kickFrame) frames")
+                            "seed \(seed) phrase \(phrase) accent \(accent): \(attack - kickFrame) frames, \(current.bassVoice)")
                 }
                 #expect(current.notes.filter { $0.part != .bass } == plain.notes.filter { $0.part != .bass })
                 #expect(bass.allSatisfy { $0.beat >= 0 && $0.beat + $0.length <= LofiClock.beats })
