@@ -17,6 +17,12 @@
 #   archtop   sfzinstruments/karoryfer.shinyguitar 57243cca                   Samples/acoustic
 #   jazzbox   sfzinstruments/karoryfer.shinyguitar 57243cca                   Samples/electric
 #   flatwound sfzinstruments/karoryfer.emilyguitar b4920dc6                   notes
+#   bass-upright    sfzinstruments/karoryfer.sneakybass cc1a67e5 (CC0)       Samples/finger (all files in one folder)
+#   bass-flatwound  sfzinstruments/karoryfer.swagbass 9d10fcae (CC0)         notes
+#
+# The two bass cases write LofiBass-<kit>-<stroke>-<midi>[-<rr>].wav for the sampled bass body
+# (see docs/plans/bass-and-pads.md 2.1). Their files sound an octave below the library labels, so
+# Sneakybass e2 is MIDI 28 and Swagbass a1 is MIDI 21. `prepare` runs with --retune.
 #
 # Every pair is SOURCE-NAME=MIDI with MIDI the measured concert pitch (prepare refuses a file
 # more than 50 cents away). VCSL Kawai, VCSL Folk Harp and Osiris files sound an octave above
@@ -37,7 +43,38 @@ add() {
     args+=(--source "$src/${pattern//\{\}/$name}=$root")
   done
 }
+bass() {  # bass KIT STROKE DURATION FADE SOURCE...
+  local kit="$1" stroke="$2" duration="$3" fade="$4"; shift 4
+  python3 -I "$prep" prepare --prefix LofiBass --group "$kit-$stroke" --retune --highpass 25 --lowpass 5000 \
+    --body-db -10 --duration "$duration" --fade "$fade" --out "$out" "$@"
+}
 case "$group" in
+  bass-upright)
+    # The ghost and mute articulations are unpitched thumps (peaks at 62-65, 88 and 106 Hz whatever the key), so
+    # they cannot be retuned or labelled: only the pitched `finger` notes are used. The short stroke is the same
+    # take trimmed to 1.4 s. Round robins 1 and 2 become the -1 and -2 suffixes.
+    for stroke in short:1.4:0.25 long:2.2:0.5; do
+      IFS=: read -r name duration fade <<<"$stroke"
+      sources=()
+      for pair in e2=28 g2=31 a2=33 c3=36 eb3=39; do
+        for rr in 1 2; do
+          sources+=(--source "$src/sneakybass_${pair%%=*}_finger_rr$rr.wav=${pair#*=}:$rr")
+        done
+      done
+      bass upright "$name" "$duration" "$fade" "${sources[@]}"
+    done
+    exit 0 ;;
+  bass-flatwound)
+    # Swagbass: fff for short notes, f for medium and long, p for ghosts; round robin 1 only.
+    for stroke in short:fff:1.4:0.25 long:f:2.2:0.5 ghost:p:1.4:0.25; do
+      IFS=: read -r name vel duration fade <<<"$stroke"
+      sources=()
+      for pair in a1=21 c2=24 eb2=27 gb2=30 a2=33; do
+        sources+=(--source "$src/${pair%%=*}_${vel}_rr1.wav=${pair#*=}")
+      done
+      bass flatwound "$name" "$duration" "$fade" "${sources[@]}"
+    done
+    exit 0 ;;
   kawai)
     # Softest layer (v1) is the default layer 2; v2 is the accent layer 3.
     add 'GPiano_sus_{}_v1_rr1_Player.wav' C2=48 E2=52 G#2=56 C3=60 E3=64 G#3=68 C4=72
