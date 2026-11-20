@@ -249,8 +249,10 @@ nonisolated struct LofiScore: Sendable, Equatable {
             : []
         let quiet = section == .returnTheme ? max(2, protected, lead.count > 1 ? lead[1].beat + 1.5 : 0) : 0
         let texture = mids(lead: lead, harmony: harmony, section: section, chordDegree: chordDegree,
-                           quietUntil: quiet, extraOnsets: ornaments.map(\.beat), random: phraseRandom)
-        let ending = (lead + ornaments + texture).map { $0.beat + $0.length }.max() ?? 0
+                           quietUntil: quiet, extraOnsets: ornaments.map(\.beat), phrase: position,
+                           beatSeconds: max(0.001, beatSeconds), random: phraseRandom)
+        // The held pad sounds under the ending rest; the rest is the melody's and the shells'.
+        let ending = (lead + ornaments + texture.filter { $0.articulation != .pad }).map { $0.beat + $0.length }.max() ?? 0
         let rest = ending...LofiClock.beats
         let notes = (bass.notes + texture + lead + ornaments).sorted { lhs, rhs in
             if lhs.beat != rhs.beat { return lhs.beat < rhs.beat }
