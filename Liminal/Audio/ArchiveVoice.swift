@@ -688,8 +688,20 @@ nonisolated final class ArchiveVoice {
     /// Engine stop and reset: the bed and the chop timeline stop.
     func powerDown() {
         stopChopTimeline()
+        retireCurrentCue()
         chopsUntil = -.infinity
         releaseBed()
+    }
+
+    /// After a stop or reset (a route recovery re-arms the transport through one) the current cue's bed
+    /// is gone and its chop fader stays closed, so none of its chops can sound. Its token is retired
+    /// like a cancelled cue: a plan for it that arrives later (one built on the old transport revision
+    /// that was still in flight, or the rebuild on the new grid) is ignored instead of queueing inaudible
+    /// chops that would still duck the music and the bed. The footage service's next cue has a new token.
+    private func retireCurrentCue() {
+        guard let token = currentCueToken else { return }
+        cancelledTokens.insert(token)
+        planRevisions[token] = nil
     }
 
     /// The bed finished (or was replaced): the persistent chop timeline keeps running.
