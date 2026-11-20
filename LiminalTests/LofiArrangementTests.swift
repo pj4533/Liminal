@@ -173,7 +173,7 @@ struct LofiArrangementTests {
                         #expect(abs(note.beat - note.beat.rounded()) > 1e-9, "stab on a downbeat")
                     case .answer: #expect(note.length == 1.6)
                     case .rolled: #expect(note.length == 1.30)
-                    case .normal: break
+                    case .normal, .pad: break
                     }
                 }
                 // Each event is a close two-voice shell; rolled shells stagger by 0.17 beats.

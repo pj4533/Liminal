@@ -16,7 +16,7 @@ import Foundation
 /// budget even in an unoptimized Debug build.
 nonisolated enum LofiStemChains {
     static let blockFrames = 32
-    private static let butterworthQ = 0.7071067811865476
+    static let butterworthQ = 0.7071067811865476
 
     // MARK: Settings
 
@@ -60,25 +60,6 @@ nonisolated enum LofiStemChains {
         static let standard = Drums()
     }
 
-    /// Bass, per phrase, mono (plan 8.3). The kick duck and the `headroom` guard follow in the renderer.
-    struct Bass: Sendable, Equatable {
-        var highpass: [LofiBiquad.Kind] = [.highpass(hz: 30, q: butterworthQ)]
-        /// Parallel harmonics: an asymmetric tanh normalized to the phrase peak, high-passed so only
-        /// the generated 2nd and higher harmonics are added.
-        var saturationDrive: Float = 4.0
-        var saturationBias: Float = 0.2
-        var saturationHighpass: [LofiBiquad.Kind] = [.highpass(hz: 120, q: butterworthQ)]
-        var saturationMix: Float = 0.20
-        var compressor = Dynamics(ratio: 3.5, kneeDB: 6, attack: 0.020, release: 0.150, thresholdBelowReferenceDB: 6)
-        var maxMakeupDB: Float = 4
-        /// Output level after the EQ: +1 dB puts the bass 60 to 250 Hz near -5 dB of the processed
-        /// drum bus (C-B3 asks -6 to +3), measured on the reference capture.
-        var outputTrimDB: Float = 1
-        var filters: [LofiBiquad.Kind] = [.peak(hz: 280, q: 1.0, gainDB: -2), .lowpass(hz: 4_500, q: butterworthQ)]
-        var dynamicsEnabled = true
-        static let standard = Bass()
-    }
-
     /// Dry lead, per phrase (plan 8.4). Complements the renderer's one gain per phrase.
     struct Lead: Sendable, Equatable {
         /// The 2.8 kHz presence bell (+1.5 dB) sits in the tucked chops' -4 dB cut at 2.8 kHz
@@ -94,19 +75,6 @@ nonisolated enum LofiStemChains {
         var compressor = Dynamics(ratio: 2.5, kneeDB: 4, attack: 0.015, release: 0.150, thresholdBelowReferenceDB: 4)
         var dynamicsEnabled = true
         static let standard = Lead()
-    }
-
-    /// Sampled mid shells, per phrase (plan 8.4). The hiss is added after this chain.
-    struct Mids: Sendable, Equatable {
-        var filters: [LofiBiquad.Kind] = [
-            .highpass(hz: 160, q: butterworthQ), .peak(hz: 400, q: 1.0, gainDB: -3),
-            .peak(hz: 1_600, q: 1.0, gainDB: 1.5), .lowpass(hz: 7_000, q: butterworthQ),
-        ]
-        /// The lower shell voice sits left of centre and the upper right: 0.3 apart in total.
-        var voicePan: Float = 0.15
-        /// Below this the shell is folded back to the centre.
-        var monoBelowHz = 300.0
-        static let standard = Mids()
     }
 
     /// Effect returns (`wet`), per phrase plus its tail (plan 8.4).
@@ -233,59 +201,6 @@ nonisolated enum LofiStemChains {
         return stats
     }
 
-    /// Bass of one phrase, mono in place (the caller copies it to both channels).
-    @discardableResult
-    static func applyBass(_ mono: UnsafeMutablePointer<Float>, count: Int, sampleRate: Double,
-                          settings: Bass = .standard) -> Stats {
-        var stats = Stats()
-        guard count > 0 else { return stats }
-        (stats.inPeakDb, stats.inRmsDb) = level(mono, mono, count)
-        var highpass = LofiFilterChain(settings.highpass, sampleRate: sampleRate)
-        highpass.process(mono, count: count)
-        if settings.dynamicsEnabled {
-            let peak = peakLinear(mono, count)
-            if peak > 1e-6 {
-                let harmonics = UnsafeMutablePointer<Float>.allocate(capacity: count)
-                defer { harmonics.deallocate() }
-                harmonics.update(from: mono, count: count)
-                let drive = settings.saturationDrive, bias = settings.saturationBias
-                let offset = tanhf(drive * bias)
-                let scale = peak / max(1e-6, tanhf(drive * (1 + bias)) - offset)
-                LofiSaturation.oversampled(harmonics, count: count, factor: 2) { buffer, n in
-                    // y = peak * (tanh(drive (x / peak + bias)) - tanh(drive bias)) / norm
-                    var a = drive / peak, b = drive * bias, c = -offset, s = scale, length = Int32(n)
-                    vDSP_vsmsa(buffer, 1, &a, &b, buffer, 1, vDSP_Length(n))
-                    vvtanhf(buffer, buffer, &length)
-                    vDSP_vsadd(buffer, 1, &c, buffer, 1, vDSP_Length(n))
-                    vDSP_vsmul(buffer, 1, &s, buffer, 1, vDSP_Length(n))
-                }
-                var band = LofiFilterChain(settings.saturationHighpass, sampleRate: sampleRate)
-                band.process(harmonics, count: count)
-                var mix = settings.saturationMix
-                vDSP_vsma(harmonics, 1, &mix, mono, 1, mono, 1, vDSP_Length(count))
-            }
-            let reference = referenceDB(mono, mono, count, sampleRate: sampleRate)
-            let before = level(mono, mono, count).rms
-            let reduction = compress(mono, nil, count, settings: settings.compressor.settings(
-                thresholdDB: reference - settings.compressor.thresholdBelowReferenceDB), sampleRate: sampleRate)
-            // Makeup restores the pre-compression level (bounded), so evening the sustain never
-            // turns the bass down against the kick.
-            var makeup = dbToGain(min(settings.maxMakeupDB, max(0, before - level(mono, mono, count).rms)))
-            vDSP_vsmul(mono, 1, &makeup, mono, 1, vDSP_Length(count))
-            stats.grMeanDb = reduction.meanDB
-            stats.grMaxDb = reduction.maxDB
-            stats.extra["makeupDb"] = gainToDB(makeup)
-        }
-        var eq = LofiFilterChain(settings.filters, sampleRate: sampleRate)
-        eq.process(mono, count: count)
-        if settings.dynamicsEnabled, settings.outputTrimDB != 0 {
-            var trim = dbToGain(settings.outputTrimDB)
-            vDSP_vsmul(mono, 1, &trim, mono, 1, vDSP_Length(count))
-        }
-        (stats.outPeakDb, stats.outRmsDb) = level(mono, mono, count)
-        return stats
-    }
-
     /// Dry lead of one phrase plus its tail, in place. `accent` (the revealed notes' extra level,
     /// kept apart until the phrase gain is measured) gets the same filters and the same gain
     /// trajectory, so compression never flattens a deliberate accent.
@@ -326,32 +241,6 @@ nonisolated enum LofiStemChains {
         }
         (stats.outPeakDb, stats.outRmsDb) = level(left, right)
         return stats
-    }
-
-    /// Mid shells of one phrase plus its tail: pans the lower and upper voice apart, folds the band
-    /// below `monoBelowHz` back to the centre and applies the EQ. Returns the processed stereo sum.
-    static func applyMids(lower: (left: [Float], right: [Float]), upper: (left: [Float], right: [Float]),
-                          sampleRate: Double, settings: Mids = .standard) -> (left: [Float], right: [Float], stats: Stats) {
-        let count = min(lower.left.count, upper.left.count)
-        var left = [Float](repeating: 0, count: count), right = left
-        var stats = Stats()
-        guard count > 0 else { return (left, right, stats) }
-        func gains(_ pan: Float) -> (Float, Float) { ((1 - pan).squareRoot(), (1 + pan).squareRoot()) }
-        let (lowerL, lowerR) = gains(-settings.voicePan), (upperL, upperR) = gains(settings.voicePan)
-        var inLeft = left, inRight = right
-        let n = vDSP_Length(count)
-        vDSP_vadd(lower.left, 1, upper.left, 1, &inLeft, 1, n)
-        vDSP_vadd(lower.right, 1, upper.right, 1, &inRight, 1, n)
-        var gains = (lowerL, upperL, lowerR, upperR)
-        vDSP_vsmsma(lower.left, 1, &gains.0, upper.left, 1, &gains.1, &left, 1, n)
-        vDSP_vsmsma(lower.right, 1, &gains.2, upper.right, 1, &gains.3, &right, 1, n)
-        (stats.inPeakDb, stats.inRmsDb) = level(inLeft, inRight)
-        // Linkwitz-Riley fold: the pan survives above the crossover at full level difference.
-        LofiStereo.monoBelow(settings.monoBelowHz, left: &left, right: &right, sampleRate: sampleRate)
-        var eq = LofiFilterChain(settings.filters, sampleRate: sampleRate)
-        eq.process(left: &left, right: &right)
-        (stats.outPeakDb, stats.outRmsDb) = level(left, right)
-        return (left, right, stats)
     }
 
     /// Effect returns of one phrase plus its tail, in place: filters only. The tail carried into
@@ -650,5 +539,5 @@ nonisolated enum LofiStemChains {
         vDSP_vmul(x, 1, gain, 1, &x, 1, vDSP_Length(n))
     }
 
-    private static func gainToDB(_ gain: Float) -> Float { 20 * log10f(max(gain, 1e-6)) }
+    static func gainToDB(_ gain: Float) -> Float { 20 * log10f(max(gain, 1e-6)) }
 }

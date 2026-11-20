@@ -8,29 +8,6 @@ nonisolated enum LofiRenderer {
     /// 4.5 kHz low-pass took about 3 dB off the wash (2.25 before); this restores half of it, so
     /// the space stays at least 3 dB under the lead (C-B7) and the wash stays present.
     static let wetGain: Float = 2.7
-    /// Nominal dry level of the sampled mid shells on the texture stem (the fixed trim was 0.31).
-    /// Used when a phrase has too little lead and mid overlap to measure (`midsLevel`).
-    /// Raised from 2.2 with the mids chain (plan 8.4), which takes about 2.7 dB off the shells
-    /// (high-pass 160 Hz, -3 dB at 400 Hz): the nominal level is the same as before the chain.
-    /// Mix calibration raised it from 3.0 (+1.6 dB): a breakdown's soft answer, the one phrase that keeps
-    /// it, read 9 dB under the lead in the reference capture.
-    static let midsTrim: Float = 3.6
-    /// Where lead and mids sound together, the mids sit this far under the lead in 400 Hz to 3 kHz
-    /// (M13 asks for 3 to 8 dB). Chosen by measurement on the reference captures.
-    /// 5.5 read 6.1 to 8.2 dB on the matrix (long above 8; the bus ducks under featured chops take the
-    /// mids 1 dB further down than the lead, and loud lead notes over decaying shells dominate the measure), so mix calibration set 3.5.
-    static let midsUnderLeadDB: Float = 3.5
-    /// Shortest lead and mid overlap in a phrase that sets the matched level. 0.25 s left every phrase of
-    /// the short-overlap first take at `midsTrim`, about 1 dB under the lead (mix calibration).
-    static let midsMatchSeconds = 0.1
-    /// The per-phrase mids gain stays within this factor of `midsTrim` either way.
-    static let midsGainRange: Float = 2.5
-    /// Plucked attacks never push the dry mids above -4.4 dBFS before the instrument balance. Mix
-    /// calibration tried 1.0: C-B5 held, but plucked shells then peaked at 0 dBFS on the texture stem and
-    /// the pre-master peak rose 2 dB, so the ceiling stayed.
-    static let midsPeakCeiling: Float = 0.6
-    /// The mids' contribution to `InstrumentBalance`, at the former 0.31 trim.
-    static let midsMeterTrim: Float = 0.31
     /// The wet stem under a return's opening notes, -9 dB (-6 dB before mix calibration): the carried tail
     /// and the phrase's own returns dip together, so the room of the first notes blooms after them instead
     /// of over them. The deeper dip keeps a low-register hook salient (C-B6, case `long`).
@@ -126,7 +103,7 @@ nonisolated enum LofiRenderer {
         for (index, note) in score.notes.enumerated() where note.velocity > 0 {
             try Task.checkCancellation()
             switch note.part {
-            case .bass: LofiBassVoice.add(note, voice: score.bassVoice, clock: clock, left: left, right: right)
+            case .bass: addBass(note, score: score, clock: clock, samples: samples, left: left, right: right)
             case .lead, .texture, .ornament:
                 let sample = samples.sample(for: score.preset, midi: note.midi, velocity: note.velocity)
                 // A revealed return note scales its whole send, the fixed part included, so the
@@ -146,14 +123,9 @@ nonisolated enum LofiRenderer {
                         leadAccent = accent
                     }
                 } else {
-                    let dryNote = LofiScore.Note(part: .texture, midi: note.midi, beat: note.beat, length: note.length,
-                                                 velocity: note.velocity * note.gain, color: note.color)
-                    if upperVoices.contains(index) {
-                        addInstrument(dryNote, sample: sample, score: score, clock: clock, into: &textureUpper)
-                    } else {
-                        addInstrument(dryNote, sample: sample, score: score, clock: clock, into: &textureLower)
-                    }
-                    addInstrument(send, sample: sample, score: score, clock: clock, into: &textureSend)
+                    addTexture(note, send: send, sample: sample, score: score, clock: clock,
+                               isUpper: upperVoices.contains(index), lower: &textureLower,
+                               upper: &textureUpper, sendStem: &textureSend)
                 }
             }
         }
@@ -302,15 +274,11 @@ nonisolated enum LofiRenderer {
         }
         // Space: filtered once over phrase plus tail, so the carried tail is never filtered again,
         // then ducked under the dry lead. The duck applies to this phrase's frames (own and carried).
+        addBassThrow(score: score, clock: clock, frames: n, into: (left, right))
         let spaceStats = LofiStemChains.applySpace(left: &spaceL, right: &spaceR, sampleRate: sampleRate)
         let duck = Self.spaceDuck(lead: lead, gain: dryLeadGain, frames: n, sampleRate: sampleRate,
                                   onsets: Self.leadOnsets(score, clock: clock))
-        // Bass: mono chain on the rendered voice, before the edge envelope and the kick duck.
         guard let bassL = left.baseAddress, let bassR = right.baseAddress else { throw RenderError.buffer }
-        vDSP_vadd(bassL, 1, bassR, 1, bassL, 1, vDSP_Length(n))
-        var half: Float = 0.5
-        vDSP_vsmul(bassL, 1, &half, bassL, 1, vDSP_Length(n))
-        var bassStats = LofiStemChains.applyBass(bassL, count: n, sampleRate: sampleRate)
 
         // Stems of the phrase: edge envelope, hiss after the mids chain, duck on the space.
         var envelope = [Float](repeating: 1, count: n)
@@ -337,8 +305,7 @@ nonisolated enum LofiRenderer {
             let space = channel == 0 ? spaceL : spaceR
             vDSP_vsmul(source, 1, &leadLevel, dryChannels[channel], 1, count)
             vDSP_vmul(dryChannels[channel], 1, envelope, 1, dryChannels[channel], 1, count)
-            vDSP_vsma(mids, 1, &mixLevel, hissTrack, 1, textureChannels[channel], 1, count)
-            vDSP_vmul(textureChannels[channel], 1, envelope, 1, textureChannels[channel], 1, count)
+            mixTexture(mids, level: &mixLevel, hiss: hissTrack, envelope: envelope, into: textureChannels[channel], count: count)
             vDSP_vmul(space, 1, duck.gain, 1, wetChannels[channel], 1, count)
             vDSP_vsmul(wetChannels[channel], 1, &spaceTrim, wetChannels[channel], 1, count)
         }
@@ -363,39 +330,14 @@ nonisolated enum LofiRenderer {
         vDSP_vsmul(tailL, 1, &spaceTrim, &tailL, 1, vDSP_Length(tailCount))
         vDSP_vsmul(tailR, 1, &spaceTrim, &tailR, 1, vDSP_Length(tailCount))
         balance.observe(tailL, tailR)
-        // Bass: headroom guard after the chain, edge envelope, then the kick duck (mono), keyed by the
-        // take's kick landmarks when it has confident kicks, else by the level detector.
-        let landmarkDuck = drums.flatMap {
-            LofiKickDuck.landmarkGains($0.landmarks, start: drumOffset, count: n, sampleRate: sampleRate)
-        }
-        envelope.withUnsafeBufferPointer { envelope in
-            if let landmarkDuck {
-                var deepest: Float = 1
-                for frame in 0..<n {
-                    let kickGain = landmarkDuck[frame]
-                    deepest = kickGain < deepest ? kickGain : deepest
-                    bassL[frame] = headroom(bassL[frame]) * envelope[frame] * kickGain
-                }
-                bassStats.extra["kickDuckMaxDb"] = -20 * log10f(deepest)
-            } else if let drumChannels {
-                let drumL = drumChannels[0] + drumOffset, drumR = drumChannels[1] + drumOffset
-                var deepest: Float = 1
-                for frame in 0..<n {
-                    let kickGain = kickDuck.gain(drumLeft: drumL[frame], drumRight: drumR[frame])
-                    deepest = kickGain < deepest ? kickGain : deepest
-                    bassL[frame] = headroom(bassL[frame]) * envelope[frame] * kickGain
-                }
-                bassStats.extra["kickDuckMaxDb"] = -20 * log10f(deepest)
-            } else {
-                for frame in 0..<n { bassL[frame] = headroom(bassL[frame]) * envelope[frame] }
-            }
-        }
-        bassR.update(from: bassL, count: n)
+        var bassStats = finishBass(left: left, right: right, frames: n, sampleRate: sampleRate, envelope: envelope,
+                                   drums: drums, drumOffset: drumOffset, kickDuck: &kickDuck)
         // The program's loudness-match trim (D114) follows the balance, which only turns phrases down:
         // a plucked program held under the 400 ms and peak ceilings can still come up to the grand.
         let programTrim = powf(10, score.preset.levelDB / 20)
         let trim = balance.gain * programTrim
-        report(score, clock: clock, phrase: phrase, bass: UnsafePointer(bassL),
+        reportBass(score, clock: clock, phrase: phrase, bass: UnsafePointer(bassL))
+        reportMusicLevels(score, phrase: phrase,
                levels: ["leadGain": dryLeadGain, "sendGain": sendGain, "midsGain": midsGain, "balanceTrim": balance.gain,
                         "programTrim": programTrim])
         if LofiCaptureHooks.isEnabled {
@@ -501,20 +443,6 @@ nonisolated enum LofiRenderer {
         }
     }
 
-    /// Indices of the upper note of each two-note mid shell: a texture note whose partner (same
-    /// articulation, lower pitch) starts at the same beat or up to the roll's stagger before it.
-    static func upperShellVoices(_ score: LofiScore) -> Set<Int> {
-        let mids = score.notes.indices.filter { score.notes[$0].part == .texture }
-        return Set(mids.filter { i in
-            let note = score.notes[i]
-            return mids.contains { j in
-                let other = score.notes[j]
-                return j != i && other.articulation == note.articulation && other.midi < note.midi
-                    && other.beat <= note.beat + 1e-9 && other.beat >= note.beat - 0.18
-            }
-        })
-    }
-
     static func stereoBuffer(clock: LofiClock, frames: Int? = nil) throws -> AVAudioPCMBuffer {
         let count = frames ?? clock.frameCount
         guard let format = AVAudioFormat(standardFormatWithSampleRate: clock.sampleRate, channels: 2),
@@ -548,7 +476,7 @@ nonisolated enum LofiRenderer {
         return min(4.4, 0.43 / peak, bodyGain)
     }
 
-    private static func addInstrument(_ note: LofiScore.Note, sample: LofiSampleBank.Sample?, score: LofiScore,
+    static func addInstrument(_ note: LofiScore.Note, sample: LofiSampleBank.Sample?, score: LofiScore,
                                 clock: LofiClock, into stereo: inout (left: [Float], right: [Float])) {
         stereo.left.withUnsafeMutableBufferPointer { left in
             stereo.right.withUnsafeMutableBufferPointer { right in
@@ -559,110 +487,6 @@ nonisolated enum LofiRenderer {
                 }
             }
         }
-    }
-
-    /// One mids gain per phrase: meter the dry lead (after its gain) and the dry mids in 400 Hz to
-    /// 3 kHz where the score has both sounding, and set the mids `midsUnderLeadDB` under the lead.
-    /// Every program and arrangement then keeps the same relation; the mids never ride per note.
-    private static func midsLevel(lead: (left: [Float], right: [Float]), leadGain: Float,
-                                  texture: (left: [Float], right: [Float]), score: LofiScore,
-                                  clock: LofiClock) -> Float {
-        // Breakdowns are matched too (19 November 2026): with the darker acoustic and guitar programs a
-        // breakdown's shells at the nominal level sat over the lead (C-B5 lead minus mids read -1.6 dB).
-        let n = clock.frameCount
-        var leadOn = [Bool](repeating: false, count: n), midOn = leadOn
-        for note in score.notes where note.part != .bass {
-            let range = max(0, clock.frame(at: note.beat))..<min(n, clock.frame(at: note.beat + note.length))
-            guard !range.isEmpty else { continue }
-            if note.part.playsLead {
-                leadOn.withUnsafeMutableBufferPointer { $0[range].update(repeating: true) }
-            } else {
-                midOn.withUnsafeMutableBufferPointer { $0[range].update(repeating: true) }
-            }
-        }
-        let rate = Float(clock.sampleRate)
-        let high = expf(-2 * .pi * 400 / rate), low = 1 - expf(-2 * .pi * 3_000 / rate)
-        struct Meter {
-            var x: Float = 0, hp: Float = 0, lp: Float = 0
-            mutating func band(_ input: Float, high: Float, low: Float) -> Float {
-                hp = high * (hp + input - x)
-                x = input
-                lp += (hp - lp) * low
-                return lp
-            }
-        }
-        var leadMeter = Meter(), midMeter = Meter()
-        var leadPower: Double = 0, midPower: Double = 0
-        var count = 0
-        var peakL: Float = 0, peakR: Float = 0
-        vDSP_maxmgv(texture.left, 1, &peakL, vDSP_Length(n))
-        vDSP_maxmgv(texture.right, 1, &peakR, vDSP_Length(n))
-        let peak = max(peakL, peakR)
-        var leadMono = [Float](repeating: 0, count: n), midMono = leadMono
-        var half: Float = 0.5
-        vDSP_vasm(lead.left, 1, lead.right, 1, &half, &leadMono, 1, vDSP_Length(n))
-        vDSP_vasm(texture.left, 1, texture.right, 1, &half, &midMono, 1, vDSP_Length(n))
-        leadMono.withUnsafeBufferPointer { leadMono in
-            midMono.withUnsafeBufferPointer { midMono in
-            leadOn.withUnsafeBufferPointer { leadOn in
-            midOn.withUnsafeBufferPointer { midOn in
-                for frame in 0..<n {
-                    let l = leadMeter.band(leadMono[frame], high: high, low: low) * leadGain
-                    let m = midMeter.band(midMono[frame], high: high, low: low)
-                    guard leadOn[frame], midOn[frame] else { continue }
-                    leadPower += Double(l * l)
-                    midPower += Double(m * m)
-                    count += 1
-                }
-            }}
-            }
-        }
-        var gain = midsTrim
-        if count >= Int(midsMatchSeconds * clock.sampleRate), midPower > 1e-14, leadPower > 1e-14 {
-            let matched = Float(sqrt(leadPower / midPower)) * powf(10, -midsUnderLeadDB / 20)
-            gain = min(midsTrim * midsGainRange, max(midsTrim / midsGainRange, matched))
-        }
-        // Plucked programs meter quietly over a held shell; never let their attacks overshoot.
-        return peak > 0 ? min(gain, midsPeakCeiling / peak) : gain
-    }
-
-    /// Capture-only: one `diagnostics.bass` element per phrase, frames on the capture timeline
-    /// (phrase index times phrase frames). `attackFrame` is the note start plus the voice's attack lead
-    /// (its 20 percent point). For an accent aligned to a kick, `alignedKickFrame` is the kick's broadband
-    /// attack, `kickLowRiseFrame` the kick's 40-160 Hz half-amplitude rise measured on the take, and
-    /// `bassLowRiseFrame` the same measure on this phrase's finished bass stem (after the chain, the
-    /// headroom guard and the kick duck); `bassLowRiseFrame - kickLowRiseFrame` is the real alignment error.
-    private static func report(_ score: LofiScore, clock: LofiClock, phrase: Int, bass: UnsafePointer<Float>,
-                               levels: [String: Float]) {
-        guard LofiCaptureHooks.isEnabled else { return }
-        let origin = phrase * clock.frameCount
-        let lead = Int((score.bassVoice.attackLead * clock.sampleRate).rounded())
-        let notes: [[String: Any]] = score.notes.filter { $0.part == .bass }.map { note in
-            let local = clock.frame(at: note.beat)
-            let frame = origin + local
-            let kick = score.bassAnchors.first { $0.noteBeat == note.beat }
-            var row: [String: Any] = ["frame": frame, "attackFrame": frame + lead, "midi": note.midi,
-                                      "alignedKickFrame": kick.map { origin + clock.frame(at: $0.kickBeat) as Any } ?? NSNull()]
-            if let kick {
-                row["kickLowRiseFrame"] = origin + clock.frame(at: kick.kickLowRiseBeat)
-                let rise = LofiDrumLandmarks.lowBandRise(bass, count: clock.frameCount, around: local + lead,
-                                                         sampleRate: clock.sampleRate)
-                row["bassLowRiseFrame"] = rise.map { origin + $0 as Any } ?? NSNull()
-                row["plannedBassLowRiseFrame"] = frame + clock.frame(at: kick.bassLowRiseBeats)
-            }
-            return row
-        }
-        LofiCaptureHooks.appendReport("bass", ["phrase": phrase, "voice": String(describing: score.bassVoice),
-                                               "notes": notes] as [String: Any])
-        // Per-phrase gains of the instrument stems, for the stem-chain and balance work.
-        let mids = score.notes.filter { $0.part == .texture }
-        var entry: [String: Any] = levels.mapValues { Double($0) }
-        entry["phrase"] = phrase
-        entry["section"] = String(describing: score.section)
-        entry["program"] = score.preset.name
-        entry["midEvents"] = mids.count / 2
-        entry["midArticulations"] = mids.map { String(describing: $0.articulation) }
-        LofiCaptureHooks.appendReport("musicLevels", entry)
     }
 
     enum RenderError: Error { case buffer }
