@@ -2,11 +2,13 @@
 
 import numpy as np
 
-from .audio import OCTAVE_CENTERS, SII_WEIGHTS, SECTION_ORDER, db10
+from .audio import OCTAVE_CENTERS, SII_WEIGHTS, SECTION_ORDER, chop_duration_frames, db10
 from .loudness import k_weighted
 from .spectral import spectral_rolloff
 
 MIN_CHOP_SECONDS = 0.5
+# Every dry piece at least this long is scored too (stabs and stutters, not only featured lines).
+MIN_PIECE_SECONDS = 0.12
 
 
 def band_mean(grid, g, mask, lo, hi):
@@ -44,23 +46,62 @@ def segment_lufs(sig, rate, a, b):
     return float(-0.691 + db10(np.sum(np.mean(k ** 2, axis=0)))) if len(k) else None
 
 
+def dry_pieces(cap, min_seconds=MIN_PIECE_SECONDS):
+    """(start, end) of every scheduled dry piece at least `min_seconds` long, one per chop (not merged).
+    The dry length excludes a motif echo throw's rendered tail."""
+    out = []
+    for c in cap.chops():
+        f, d = c.get("frame"), chop_duration_frames(c)
+        if c.get("dryFrames"):
+            d = min(d, int(c["dryFrames"]))
+        if f is not None and d >= min_seconds * cap.rate:
+            out.append((int(f), int(f) + int(d)))
+    return sorted(out)
+
+
+def _score(grid, d, others, intervals, nfr):
+    per = []
+    for a, b in intervals:
+        mask = grid.frames_mask([(a, b)], nfr)
+        snr = octave_snr(grid, d, others, mask)
+        per.append({"startFrame": int(a), "endFrame": int(b), "snrOctaveDb": snr, "sii": sii_proxy(snr),
+                    "snr1to4kDb": snr_1_to_4k(grid, d, others, mask)})
+    return per
+
+
 def measure_dialogue(cap, grid, grids):
+    """Featured chops (merged dry intervals of at least 0.5 s) and, separately, every dry piece of at least
+    0.12 s. Both use the octave-band SII proxy of the dialogue against the power sum of every other section."""
     if not cap.has_section("dialogue"):
         return {"skipped": "no dialogue"}
     d = grids.get("dialogue")
     others = [g for s, g in grids.items() if s != "dialogue" and g is not None]
-    chops = [(a, b) for a, b in cap.chop_intervals(dry=True) if b - a >= MIN_CHOP_SECONDS * cap.rate]
-    if not chops:
-        return {"skipped": "no dialogue chops of at least 0.5 s"}
     nfr = len(d["PL"])
+    chops = [(a, b) for a, b in cap.chop_intervals(dry=True) if b - a >= MIN_CHOP_SECONDS * cap.rate]
+    pieces = dry_pieces(cap)
+    if not pieces and not cap.chops():
+        # No manifest events (a v1 capture): the activity intervals of the dialogue stem stand in.
+        pieces = [(a, b) for a, b in cap.chop_intervals(dry=True) if b - a >= MIN_PIECE_SECONDS * cap.rate]
+    out = {"octaveCenters": OCTAVE_CENTERS}
+    if pieces:
+        pp = _score(grid, d, others, pieces, nfr)
+        sii = np.array([p["sii"] for p in pp])
+        few = len(pp) < 3
+        out["allPieces"] = {"count": len(pp), "minSeconds": MIN_PIECE_SECONDS, "siiMean": float(sii.mean()),
+                            "siiP10": None if few else float(np.percentile(sii, 10)), "fewPieces": few,
+                            "snr1to4kMeanDb": float(np.mean([p["snr1to4kDb"] for p in pp])),
+                            "events": len(cap.chops()), "perPiece": pp}
+    else:
+        out["allPiecesSkipped"] = f"no dry piece of at least {MIN_PIECE_SECONDS} s"
+    if not chops:
+        out["featuredSkipped"] = "no dialogue chops of at least 0.5 s"
+        if not pieces:
+            return {"skipped": "no dialogue chops of at least 0.5 s or pieces of at least 0.12 s"}
+        return out
     dsig = cap.section_signal("dialogue")
-    per = []
-    for a, b in chops:
-        mask = grid.frames_mask([(a, b)], nfr)
-        snr = octave_snr(grid, d, others, mask)
-        per.append({"startFrame": int(a), "endFrame": int(b), "snrOctaveDb": snr, "sii": sii_proxy(snr),
-                    "snr1to4kDb": snr_1_to_4k(grid, d, others, mask),
-                    "lufs": segment_lufs(dsig, cap.rate, a, min(b, len(dsig)))})
+    per = _score(grid, d, others, chops, nfr)
+    for p in per:
+        p["lufs"] = segment_lufs(dsig, cap.rate, p["startFrame"], min(p["endFrame"], len(dsig)))
     if cap.has("dialogue-dry"):
         dry = cap.signal(["dialogue-dry"])
         gains = []
@@ -77,11 +118,12 @@ def measure_dialogue(cap, grid, grids):
     snr14 = np.array([p["snr1to4kDb"] for p in per])
     lufs = np.array([p["lufs"] for p in per if p["lufs"] is not None])
     few = len(per) < 3  # a 10th percentile and a spread over one or two chops say nothing
-    return {"chops": len(per), "siiMean": float(sii.mean()), "siiP10": None if few else float(np.percentile(sii, 10)),
-            "fewChops": few,
-            "snr1to4kMeanDb": float(snr14.mean()), "loudnessSpreadLu": float(lufs.max() - lufs.min()) if len(lufs) and not few else None,
-            "perChop": per, "octaveCenters": OCTAVE_CENTERS,
-            "dialogueDryTap": None if dry_info is None else {"processedMinusDryLuMedian": dry_info["chains"]}}
+    out.update({"chops": len(per), "siiMean": float(sii.mean()), "siiP10": None if few else float(np.percentile(sii, 10)),
+                "fewChops": few,
+                "snr1to4kMeanDb": float(snr14.mean()), "loudnessSpreadLu": float(lufs.max() - lufs.min()) if len(lufs) and not few else None,
+                "perChop": per,
+                "dialogueDryTap": None if dry_info is None else {"processedMinusDryLuMedian": dry_info["chains"]}})
+    return out
 
 
 def measure_bed(cap, grid, grids):

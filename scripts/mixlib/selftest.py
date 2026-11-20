@@ -1,11 +1,19 @@
 """Synthetic fixtures with known answers for the measurement library."""
 
+import sys
 import tempfile
 from pathlib import Path
 
+if __name__ == "__main__" and not __package__:
+    # `python3 scripts/mixlib/selftest.py` runs the same tests as `python3 scripts/mix-report.py --self-test`.
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from mixlib.selftest import run_self_test as _run
+
+    sys.exit(_run())
+
 import numpy as np
 
-from . import cadence, dynamics, lowend, masking
+from . import cadence, dialogue, dynamics, lowend, masking, music
 from .audio import BandGrid, Capture, write_wav
 from .loudness import measure_loudness, true_peak_db
 from .report import evaluate, load_criteria, run_analysis, write_report
@@ -275,25 +283,155 @@ def test_gain_reduction_trace():
                f"{label}: C-M6 uses the engine trace and {'notes' if want_warn else 'does not note'} the disagreement")
 
 
+def kick_burst_track(frames, kicks, shift_frames=0, amp=0.5):
+    out = np.zeros(frames)
+    burst = np.exp(-np.arange(int(0.3 * RATE)) / (0.08 * RATE)) * tone(60, 0.3, amp)
+    for k in kicks:
+        k = k + shift_frames
+        out[k:k + len(burst)] += burst[: max(0, min(len(burst), frames - k))]
+    return out
+
+
 def test_bass_attack_lag():
+    """C-B2 lag comes from the audio: the bass stem is the kick burst shifted by a known amount, while the
+    engine's self-report claims zero lag in every case."""
     criteria = [c for c in load_criteria(CRITERIA) if c["id"] == "C-B2"]
     frames = RATE * 8
     kicks = [int(RATE * (0.5 + 0.857 * i)) for i in range(8)]
-    drums = np.zeros(frames)
-    burst = np.exp(-np.arange(int(0.3 * RATE)) / (0.08 * RATE)) * tone(60, 0.3, 0.5)
-    for k in kicks:
-        drums[k:k + len(burst)] += burst
-    for label, late_ms, want in (("on the kick", 0.0, "pass"), ("20 ms late", 20.0, "fail")):
-        late = int(RATE * late_ms / 1000)
-        notes = [{"frame": k - 100, "attackFrame": k + late, "alignedKickFrame": k, "midi": 36} for k in kicks]
+    drums = kick_burst_track(frames, kicks)
+    for label, late_ms, want in (("on the kick", 0.0, "pass"), ("8 ms late", 8.0, "fail"), ("8 ms early", -8.0, "fail"),
+                                 ("3 ms late", 3.0, "pass")):
+        late = int(round(RATE * late_ms / 1000))
+        bass = kick_burst_track(frames, kicks, late, amp=0.4)
+        notes = [{"frame": k - 100, "attackFrame": k, "alignedKickFrame": k, "midi": 36} for k in kicks]
         diag = {"bass": [{"phrase": 0, "voice": "roundSub", "notes": notes}],
                 "landmarks": [{"take": 0, "name": "t", "kicks": [{"frame": k, "peakFrame": k + 500, "strength": 1, "confidence": 1}
                                                                 for k in kicks]}]}
-        cap = Capture(manifest=manifest(frames, diagnostics=diag), arrays={"drums": stereo(drums), "bass": stereo(drums)})
-        r = result(evaluate({"kickBass": lowend.measure_kick_bass(cap)}, cap, criteria), "C-B2")
+        cap = Capture(manifest=manifest(frames, diagnostics=diag), arrays={"drums": stereo(drums), "bass": stereo(bass)})
+        kb = lowend.measure_kick_bass(cap)
+        r = result(evaluate({"kickBass": kb}, cap, criteria), "C-B2")
         failed = "lagMsMedian" in (r.get("failedChecks") or [])
-        expect(failed == (want == "fail") and abs(r["values"]["lagMsMedian"] - late_ms) < 0.1,
-               f"bass attack {label}: lag {r['values']['lagMsMedian']:.1f} ms gives lagMsMedian {'fail' if failed else 'pass'}")
+        expect(failed == (want == "fail") and abs(kb["lagMsSignedMedian"] - late_ms) < 0.3
+               and kb["lagSource"].startswith("audio") and kb["engineLag"]["medianMs"] == 0.0,
+               f"bass {label}: audio lag {kb['lagMsSignedMedian']:+.2f} ms (engine self-report {kb['engineLag']['medianMs']:.1f} ms) "
+               f"gives lagMsMedian {'fail' if failed else 'pass'}")
+        expect(abs(kb["peakLagMsSignedMedian"] - late_ms) < 0.3, f"bass {label}: envelope-peak lag {kb['peakLagMsSignedMedian']:+.2f} ms")
+
+
+def noise(seconds, amp, seed):
+    return np.random.default_rng(seed).normal(0, amp, int(seconds * RATE))
+
+
+def test_all_piece_sii():
+    """C-B8 all-piece SII: short dry pieces (0.3 s, never merged into a featured chop) of white noise over a
+    white-noise bed at a known SNR. The proxy is 0.5 at 0 dB and rises 1/30 per dB."""
+    criteria = [c for c in load_criteria(CRITERIA) if c["id"] == "C-B8"]
+    seconds = 12
+    frames = RATE * seconds
+    starts = [int(RATE * (0.5 + 0.8 * i)) for i in range(12)]
+    piece = int(0.3 * RATE)
+    for label, snr_db, want in (("0 dB", 0.0, "fail"), ("+9 dB", 9.0, "pass")):
+        rival = noise(seconds, 0.02, 3)
+        speech = np.zeros(frames)
+        src = noise(seconds, 0.02 * 10 ** (snr_db / 20), 4)
+        for f in starts:
+            speech[f:f + piece] = src[f:f + piece]
+        m = manifest(frames, dialogueChops=[{"frame": f, "durationFrames": piece, "dryFrames": piece, "cue": 0,
+                                             "sourceStart": 0, "sourceEnd": piece, "speed": 1.0} for f in starts])
+        cap = Capture(manifest=m, arrays={"dialogue-chops": stereo(speech), "texture": stereo(rival)})
+        grid = BandGrid(RATE)
+        grids = {sec: grid.for_section(cap, sec) for sec in ("dialogue", "mids") if cap.has_section(sec)}
+        d = dialogue.measure_dialogue(cap, grid, grids)
+        ap = d["allPieces"]
+        r = result(evaluate({"dialogue": d}, cap, criteria), "C-B8")
+        status = "fail" if "allPiecesSiiMean" in (r.get("failedChecks") or []) else "pass"
+        theory = 0.5 + snr_db / 30
+        expect(ap["count"] == 12 and "featuredSkipped" in d and abs(ap["siiMean"] - theory) < 0.06 and status == want,
+               f"{label} pieces: {ap['count']} scored, all-piece SII {ap['siiMean']:.3f} (theory {theory:.2f}), "
+               f"featured skipped, allPiecesSiiMean {status}")
+
+
+def test_lead_salience():
+    """C-B11: a 1 kHz lead over a 2 kHz dialogue at a known level difference in every lead note."""
+    criteria = [c for c in load_criteria(CRITERIA) if c["id"] == "C-B11"]
+    seconds = 10
+    frames = RATE * seconds
+    ons = [int(RATE * (0.5 + 0.9 * i)) for i in range(10)]
+    score = [{"section": "theme", "range": [0, frames],
+              "notes": [{"role": "lead", "on": on, "off": on + int(0.6 * RATE)} for on in ons]}]
+    for label, diff_db, want in (("lead 6 dB over the dialogue", 6.0, "pass"), ("lead 6 dB under", -6.0, "warn")):
+        lead = np.zeros(frames)
+        carrier = tone(1000, seconds, 0.1)
+        for on in ons:
+            lead[on:on + int(0.6 * RATE)] = carrier[on:on + int(0.6 * RATE)]
+        talk = tone(2000, seconds, 0.1 * 10 ** (-diff_db / 20))
+        cap = Capture(manifest=manifest(frames), arrays={"dry": stereo(lead), "dialogue-chops": stereo(talk)}, score=score)
+        ls = music.measure_lead_salience(cap)
+        r = result(evaluate({"leadSalience": ls}, cap, criteria), "C-B11")
+        expect(ls["notes"] == 10 and abs(ls["medianLeadMinusDialogueDb"] - diff_db) < 0.3
+               and abs(ls["medianLeadMinusOthersDb"] - diff_db) < 0.3 and r["status"] == want,
+               f"{label}: lead minus dialogue {ls['medianLeadMinusDialogueDb']:+.2f} dB, under the dialogue in "
+               f"{ls['underDialogueFraction']:.0%} of notes, C-B11 {r['status']}")
+
+
+def test_lead_time_simulation():
+    """C-D6 reads the live-order fields: p50, p95 and max of the stage totals, the per-cue lead, and the
+    optional thermal and memory fields; an event committed under 0.30 s ahead fails."""
+    criteria = [c for c in load_criteria(CRITERIA) if c["id"] == "C-D6"]
+    for label, lead_s, want in (("1.2 s lead", 1.2, "pass"), ("0.2 s lead", 0.2, "fail")):
+        m = manifest(RATE * 20)
+        timings, chops = [], []
+        for cue, total in enumerate((400.0, 600.0, 800.0)):
+            start = RATE * (2 + 5 * cue)
+            committed = start - int(lead_s * RATE)
+            timings.append({"cue": cue, "classifyMs": total / 2, "analyzeMs": total / 4, "bankMs": 10, "planMs": 5,
+                            "renderMs": total / 4 - 15, "totalMs": total, "wallMs": total + 20,
+                            "analysisStartFrame": committed - int((total + 20) / 1000 * RATE), "committedFrame": committed,
+                            "leadSeconds": lead_s, "thermalState": "nominal", "residentMB": 300 + cue})
+            chops.append({"frame": start, "durationFrames": RATE // 4, "committedFrame": committed, "cue": cue,
+                          "sourceStart": 0, "sourceEnd": 10, "speed": 1.0})
+        m["dialogueTimings"], m["dialogueChops"] = timings, chops
+        cap = Capture(manifest=m, arrays={})
+        cad = cadence.measure_cadence(cap)
+        r = result(evaluate({"cadence": cad}, cap, criteria), "C-D6")
+        st = cad["stageTiming"]
+        expect(st["totalMsP50"] == 600.0 and abs(st["totalMsP95"] - 780.0) < 1e-6 and st["totalMsMax"] == 800.0
+               and st["residentMB"]["max"] == 302 and st["thermalState"]["last"] == "nominal"
+               and cad["leadModel"].startswith("live-order") and r["status"] == want,
+               f"{label}: stage totals p50 {st['totalMsP50']:.0f} / p95 {st['totalMsP95']:.0f} / max {st['totalMsMax']:.0f} ms, "
+               f"lead min {cad['leadSecondsMin']:.2f} s, C-D6 {r['status']}")
+    m = manifest(RATE * 4)
+    m["dialogueTimings"] = [{"cue": 0, "totalMs": 100.0}]
+    st = cadence.measure_cadence(Capture(manifest={**m, "dialogueChops": [{"frame": RATE, "durationFrames": 100, "cue": 0}]},
+                                         arrays={}))["stageTiming"]
+    expect("thermalState" not in st and st["count"] == 1, "missing optional timing fields are tolerated")
+
+
+def test_kick_attack_not_measured():
+    """C-B4 without a stemChains attack ratio says 'not measured' instead of passing it silently."""
+    criteria = [c for c in load_criteria(CRITERIA) if c["id"] == "C-B4"]
+    m = {"crest": {"buses": {"drums": {"crestDb": 12.0, "samplePeakDbfs": -6.0}}}, "stemChains": [{"bus": "drums", "outPeakDb": -6.0}]}
+    cap = Capture(manifest=manifest(RATE), arrays={})
+    r = result(evaluate(m, cap, criteria), "C-B4")
+    expect(r["values"].get("kickAttackRatio") == "not measured" and any("not measured" in x for x in r.get("skippedChecks", []))
+           and any("NOT MEASURED" in n for n in r.get("notes", [])),
+           "C-B4 marks the kick attack ratio 'not measured' when stemChains has none")
+    m["stemChains"][0]["kickAttackRatio"] = 1.5
+    r = result(evaluate(m, cap, criteria), "C-B4")
+    expect(r["status"] == "warn" and "kickAttackRatioMax" in r.get("failedChecks", []), "a stemChains attack ratio of 1.5 warns C-B4")
+
+
+def test_nofilm_master_gating():
+    """The master criteria evaluate on nofilm with its own loudness window; film-only criteria stay skipped."""
+    criteria = load_criteria(CRITERIA)
+    cap = Capture(manifest={**manifest(RATE), "hasFootage": False}, arrays={}, case="nofilm")
+    metrics = {"loudness": {"integratedLufs": -13.3, "lraLu": 2.4}, "crest": {"plrDb": 12.1, "master": {"crestDb": 14.0}},
+               "truePeak": {"ffmpegDbtp": -0.5, "reconstructionDbtp": -0.6}}
+    res = {r["id"]: r for r in evaluate(metrics, cap, criteria)}
+    expect(res["C-M1"]["status"] == "pass" and res["C-M3"]["status"] == "pass" and res["C-M5"]["status"] == "pass",
+           "nofilm reads C-M1, C-M3 and C-M5 against its music-only window (-13.3 LUFS, PLR 12.1, crest 14.0 pass)")
+    expect(res["C-M2"]["status"] == "fail", "nofilm keeps the true-peak bound (-0.5 dBTP fails C-M2)")
+    expect(res["C-B8"]["status"] == "skipped" and res["C-D1"]["status"] == "skipped", "dialogue and bed criteria stay skipped on nofilm")
 
 
 def test_engine_paths_skip_cleanly():
@@ -310,7 +448,8 @@ def test_engine_paths_skip_cleanly():
 def run_self_test():
     tests = [test_loudness_and_peak, test_masking, test_cadence, test_kick_bass, test_lowband_mono, test_pumping,
              test_full_pipeline_v1, test_plan_fingerprints, test_gain_reduction_trace, test_bass_attack_lag,
-             test_engine_paths_skip_cleanly]
+             test_all_piece_sii, test_lead_salience, test_lead_time_simulation, test_kick_attack_not_measured,
+             test_nofilm_master_gating, test_engine_paths_skip_cleanly]
     failures = 0
     for t in tests:
         print(t.__name__)
@@ -321,3 +460,4 @@ def run_self_test():
             print(f"  FAIL {type(exc).__name__}: {exc}")
     print("self-test " + ("FAILED" if failures else "passed"))
     return 1 if failures else 0
+

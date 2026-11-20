@@ -1,6 +1,7 @@
 """M9 low-band mono and M10 kick and bass."""
 
 import numpy as np
+from scipy import fft as sfft
 from scipy import signal as sps
 
 from .audio import BAND_NAMES, BANDS, db10
@@ -108,23 +109,100 @@ def measure_kick_bass(cap):
         out["duckSource"] = "sustained bass notes from score.json" if notes else "all kicks (no score.json)"
     else:
         out["duckSkipped"] = "no kick falls inside a sustaining bass note"
-    attacks = [n for entry in (cap.diagnostics.get("bass") or []) for n in entry.get("notes", [])
-               if n.get("attackFrame") is not None]
-    aligned = [n for n in attacks if n.get("alignedKickFrame") is not None]
-    if aligned:
-        signed = np.array([n["attackFrame"] - n["alignedKickFrame"] for n in aligned], dtype=float) / rate * 1000
-        lag = np.abs(signed)
-        out["alignedAccents"] = int(len(lag))
-        out["bassNotes"] = int(len(attacks))
-        out["lagMsSignedMedian"] = float(np.median(signed))
-        out["lagMsMedian"] = float(np.median(lag))
-        out["lagMsP90"] = float(np.percentile(lag, 90))
-        out["lagMsMax"] = float(lag.max())
-        out["lagSource"] = "diagnostics.bass attackFrame against alignedKickFrame"
-    elif attacks:
-        out["lagSkipped"] = "diagnostics.bass has no note aligned to a kick"
-    else:
+    out["_kickFrames"], out["_kicksWithBassMask"] = ks, both
+    out.update(measure_attack_lag(cap, drums, bass))
+    return out
+
+
+LAG_BAND = (40, 160)
+LAG_WINDOW = (-0.030, 0.080)  # seconds around the aligned kick
+LAG_SMOOTH = 0.002
+
+
+def lag_envelope(sig, rate, band=LAG_BAND, smooth=LAG_SMOOTH):
+    """Amplitude envelope of the 40 to 160 Hz band: zero-phase band-pass, Hilbert magnitude, then a
+    centred 2 ms moving average. Zero-phase filtering and centring keep the envelope's timing."""
+    x = band_signal(sig, rate, *band)
+    n = sfft.next_fast_len(len(x))
+    env = np.abs(sps.hilbert(x, N=n)[: len(x)])
+    w = max(1, int(round(smooth * rate)))
+    c = np.concatenate(([0.0], np.cumsum(env)))
+    half = w // 2
+    lo = np.clip(np.arange(len(env)) - half, 0, len(env))
+    hi = np.clip(np.arange(len(env)) - half + w, 0, len(env))
+    return (c[hi] - c[lo]) / np.maximum(hi - lo, 1)
+
+
+def rise_point(env, a, b, drop_db=6.0):
+    """(-6 dB rise frame, peak frame) of the envelope in [a, b): the peak, then the last sample before it
+    that sits more than `drop_db` under the peak, plus one. None when the window is silent or the level
+    never falls 6 dB under the peak before it (a sustained earlier note: no attack to time)."""
+    a, b = max(0, a), min(len(env), b)
+    if b - a < 4:
+        return None
+    seg = env[a:b]
+    peak = int(np.argmax(seg))
+    top = float(seg[peak])
+    if top <= 1e-6:  # about -120 dBFS: nothing sounds
+        return None
+    below = np.nonzero(seg[: peak + 1] < top * 10 ** (-drop_db / 20))[0]
+    if not len(below):
+        return None
+    return a + int(below[-1]) + 1, a + peak
+
+
+def _lag_stats(signed):
+    signed = np.asarray(signed, dtype=float)
+    lag = np.abs(signed)
+    return {"signedMedian": float(np.median(signed)), "median": float(np.median(lag)),
+            "p90": float(np.percentile(lag, 90)), "max": float(lag.max())}
+
+
+def measure_attack_lag(cap, drums, bass):
+    """C-B2 lag from the audio. For each bass note the engine aligned to a kick (diagnostics.bass
+    alignedKickFrame), the -6 dB rise of the bass stem's 40 to 160 Hz envelope against the drum stem's,
+    both in the window 30 ms before to 80 ms after the kick. Positive: the bass arrives late. The engine's
+    own attackFrame minus alignedKickFrame is reported beside it as `engineLag` (information only: the two
+    frames are equal by construction)."""
+    rate = cap.rate
+    notes = [n for entry in (cap.diagnostics.get("bass") or []) for n in entry.get("notes", [])]
+    aligned = [n for n in notes if n.get("alignedKickFrame") is not None]
+    out = {}
+    if not notes:
         out["lagSkipped"] = "no diagnostics.bass notes"
+        return out
+    if not aligned:
+        out["lagSkipped"] = "diagnostics.bass has no note aligned to a kick"
+        out["bassNotes"] = len(notes)
+        return out
+    out["bassNotes"] = len(notes)
+    out["alignedAccents"] = len(aligned)
+    if all(n.get("attackFrame") is not None for n in aligned):
+        eng = _lag_stats([(n["attackFrame"] - n["alignedKickFrame"]) / rate * 1000 for n in aligned])
+        out["engineLag"] = {**{k + "Ms": v for k, v in eng.items()},
+                            "source": "diagnostics.bass attackFrame against alignedKickFrame (equal by construction; information only)"}
+    d_env, b_env = lag_envelope(drums, rate), lag_envelope(bass, rate)
+    w0, w1 = int(LAG_WINDOW[0] * rate), int(LAG_WINDOW[1] * rate)
+    rise, peak, per = [], [], []
+    for n in aligned:
+        k = int(n["alignedKickFrame"])
+        d, b = rise_point(d_env, k + w0, k + w1), rise_point(b_env, k + w0, k + w1)
+        if d is None or b is None:
+            continue
+        rise.append((b[0] - d[0]) / rate * 1000)
+        peak.append((b[1] - d[1]) / rate * 1000)
+        per.append({"kickFrame": k, "riseLagMs": round(rise[-1], 3), "peakLagMs": round(peak[-1], 3)})
+    out["lagSource"] = ("audio: -6 dB rise of the 40-160 Hz envelope (Hilbert, 2 ms), bass stem minus drum stem, "
+                        "30 ms before to 80 ms after each aligned kick")
+    out["lagMeasured"] = len(rise)
+    if not rise:
+        out["lagSkipped"] = f"none of {len(aligned)} aligned notes has a timeable attack in both stems"
+        return out
+    st = _lag_stats(rise)
+    out["lagMsSignedMedian"], out["lagMsMedian"], out["lagMsP90"], out["lagMsMax"] = st["signedMedian"], st["median"], st["p90"], st["max"]
+    pk = _lag_stats(peak)
+    out["peakLagMsSignedMedian"], out["peakLagMsMedian"], out["peakLagMsP90"] = pk["signedMedian"], pk["median"], pk["p90"]
+    out["perNote"] = per
     return out
 
 

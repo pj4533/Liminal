@@ -175,3 +175,77 @@ def measure_space_vs_lead(cap, grid, grids):
         l, w = band_mean(grid, lead, m, 20, 16000), band_mean(grid, wet, m, 20, 16000)
         margins.append(float(db10(max(l, 1e-18)) - db10(max(w, 1e-18))))
     return {"leadMinusSpaceDb": margins, "median": float(np.median(margins)) if margins else None}
+
+
+SALIENCE_BAND = (500, 4000)
+SALIENCE_WINDOW = 0.4  # seconds from each lead note's onset
+
+
+def measure_lead_salience(cap):
+    """C-B11: over the first 400 ms of every scored lead note in every phrase, in 500 Hz to 4 kHz, the lead
+    against the dialogue and against the power sum of every other section. Zero-phase band-pass per stem,
+    mean square over the window. Notes where the lead itself is silent (under -100 dBFS) are not scored."""
+    from .lowend import band_signal
+
+    if not cap.score or not cap.has_section("lead"):
+        return {"skipped": "score.json or lead stem missing"}
+    notes = [(int(n["on"]), int(n["off"]), ph.get("section")) for ph in cap.score for n in _notes(ph, "lead")]
+    if not notes:
+        return {"skipped": "no lead notes in score.json"}
+    rate = cap.rate
+    sections = [s for s in ("lead", "mids", "space", "dialogue", "bed", "drums", "bass") if cap.has_section(s)]
+    band = {s: band_signal(cap.section_signal(s), rate, *SALIENCE_BAND) for s in sections}
+    # A stem that never sounds in the band (the dialogue and bed of a no-footage capture) is no rival.
+    sections = [s for s in sections if s == "lead" or float(np.mean(band[s] ** 2)) > 1e-10]
+    win = int(SALIENCE_WINDOW * rate)
+
+    def level(x, a, b):
+        seg = x[a:b]
+        return float(db10(np.mean(seg * seg) + 1e-20)) if len(seg) else -200.0
+
+    per, silent = [], 0
+    for on, off, sec in sorted(notes):
+        a, b = max(0, on), min(cap.frames, on + win, max(off, on + 1))
+        if b - a < int(0.02 * rate):
+            continue
+        lead = level(band["lead"], a, b)
+        if lead < -100:
+            silent += 1
+            continue
+        others = {s: level(band[s], a, b) for s in sections if s != "lead"}
+        total = float(db10(sum(10 ** (v / 10) for v in others.values()) + 1e-20)) if others else -200.0
+        row = {"onFrame": on, "section": sec, "leadDb": round(lead, 2), "leadMinusOthersDb": round(lead - total, 2)}
+        if "dialogue" in others:
+            row["leadMinusDialogueDb"] = round(lead - others["dialogue"], 2)
+        row["loudestRival"] = max(others, key=others.get) if others else None
+        per.append(row)
+    if not per:
+        return {"skipped": f"the lead is silent in all {silent} notes"}
+    lmo = np.array([r["leadMinusOthersDb"] for r in per])
+    out = {"notes": len(per), "silentNotes": silent, "band": list(SALIENCE_BAND), "windowSeconds": SALIENCE_WINDOW,
+           "rivals": [s for s in sections if s != "lead"],
+           "medianLeadMinusOthersDb": float(np.median(lmo)), "aboveAllOthersFraction": float(np.mean(lmo >= 0)),
+           "perNote": per}
+    dia = [r["leadMinusDialogueDb"] for r in per if "leadMinusDialogueDb" in r]
+    if dia:
+        dia = np.array(dia)
+        out["underDialogueFraction"] = float(np.mean(dia < 0))
+        out["medianLeadMinusDialogueDb"] = float(np.median(dia))
+    else:
+        out["underDialogueSkipped"] = "no dialogue section"
+    by = {}
+    for r in per:
+        by.setdefault(r["section"], []).append(r)
+    out["bySection"] = {}
+    for sec, rows in by.items():
+        e = {"notes": len(rows), "medianLeadMinusOthersDb": float(np.median([r["leadMinusOthersDb"] for r in rows]))}
+        d = [r["leadMinusDialogueDb"] for r in rows if "leadMinusDialogueDb" in r]
+        if d:
+            e["underDialogueFraction"] = float(np.mean(np.array(d) < 0))
+            e["medianLeadMinusDialogueDb"] = float(np.median(d))
+        out["bySection"][str(sec)] = e
+    rivals = {}
+    for r in per:
+        rivals[r["loudestRival"]] = rivals.get(r["loudestRival"], 0) + 1
+    out["loudestRivalCounts"] = rivals
+    return out

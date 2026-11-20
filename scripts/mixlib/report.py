@@ -130,6 +130,8 @@ def run_analysis(cap, want_plots=True, log=print):
     safe(metrics, "midsLead", music.measure_mids_lead, cap, grid, present)
     safe(metrics, "themeReturn", music.measure_theme_return, cap, grid, present)
     safe(metrics, "spaceVsLead", music.measure_space_vs_lead, cap, grid, present)
+    stage("lead salience")
+    safe(metrics, "leadSalience", music.measure_lead_salience, cap)
     stage("cadence")
     safe(metrics, "cadence", cadence.measure_cadence, cap)
     metrics["stemChains"] = cap.stem_chains()
@@ -297,9 +299,19 @@ def ev_C_B2(m, b, c):
     if kb.get("skipped"):
         c.test("kickBass", None, None, kb["skipped"])
         return
+    # The lag is measured from the audio (lowend.measure_attack_lag); the engine's self-report is
+    # information only, since its attackFrame and alignedKickFrame are equal by construction.
     for key, bound in (("lagMsMedian", "lagMsMedianMax"), ("lagMsP90", "lagMsP90Max")):
         v = kb.get(key)
         c.test(key, v, None if v is None else v <= b[bound], kb.get("lagSkipped", "no diagnostics.bass"))
+    if kb.get("lagSource"):
+        c.values["lagSource"] = kb["lagSource"]
+    for k in ("lagMsSignedMedian", "peakLagMsSignedMedian", "peakLagMsMedian", "lagMeasured"):
+        if kb.get(k) is not None:
+            c.values[k] = kb[k]
+    eng = kb.get("engineLag")
+    if eng:
+        c.values["engineLagMsMedian"] = eng.get("medianMs")
     v = kb.get("sumVsLouderDbMedian")
     c.test("sumVsLouderDbMedian", v, None if v is None else v >= b["sumMedianDbMin"], kb.get("sumSkipped"))
     v = kb.get("sumVsLouderDbWorst")
@@ -328,8 +340,15 @@ def ev_C_B4(m, b, c):
     peaks = [float(e["outPeakDb"]) for e in chains if e.get("outPeakDb") is not None]
     if peaks:
         c.test("drumBusOutPeakDb", max(peaks), max(peaks) <= b["peakDbfsMax"])
-    c.test("kickAttackRatioMax", max(ratios) if ratios else None, None if not ratios else max(ratios) <= b["kickAttackRatioMax"],
-           "no diagnostics.stemChains attack-time ratio")
+    if ratios:
+        c.test("kickAttackRatioMax", max(ratios), max(ratios) <= b["kickAttackRatioMax"])
+        c.values["kickAttackRatioSource"] = "diagnostics.stemChains (drums)"
+    else:
+        # Not a silent pass: the value is reported as not measured and the criterion says so.
+        c.values["kickAttackRatio"] = "not measured"
+        c.skipped.append("kickAttackRatioMax: not measured (no attack-time ratio in diagnostics.stemChains for the drum bus)")
+        c.note("kick attack time against the unprocessed take is NOT MEASURED: the drum bus stemChains entry has no "
+               "kickAttackRatio, attackTimeRatio or attackRatio, so this result covers crest and peak only")
 
 
 def ev_C_B5(m, b, c):
@@ -381,12 +400,27 @@ def ev_C_B8(m, b, c):
     if d.get("skipped"):
         c.test("dialogue", None, None, d["skipped"])
         return
-    c.test("siiMean", d.get("siiMean"), d["siiMean"] >= b["siiMeanMin"])
-    c.test("siiP10", d.get("siiP10"), None if d.get("siiP10") is None else d["siiP10"] >= b["siiP10Min"],
-           f"only {d.get('chops')} featured chops")
-    c.test("snr1to4kMeanDb", d.get("snr1to4kMeanDb"), d["snr1to4kMeanDb"] >= b["snr1to4kMeanDbMin"])
-    s = d.get("loudnessSpreadLu")
-    c.test("loudnessSpreadLu", s, None if s is None else s <= b["loudnessSpreadLuMax"], f"only {d.get('chops')} featured chops")
+    if d.get("siiMean") is not None:
+        c.test("siiMean", d.get("siiMean"), d["siiMean"] >= b["siiMeanMin"])
+        c.test("siiP10", d.get("siiP10"), None if d.get("siiP10") is None else d["siiP10"] >= b["siiP10Min"],
+               f"only {d.get('chops')} featured chops")
+        c.test("snr1to4kMeanDb", d.get("snr1to4kMeanDb"), d["snr1to4kMeanDb"] >= b["snr1to4kMeanDbMin"])
+        s = d.get("loudnessSpreadLu")
+        c.test("loudnessSpreadLu", s, None if s is None else s <= b["loudnessSpreadLuMax"], f"only {d.get('chops')} featured chops")
+        c.values["featuredChops"] = d.get("chops")
+    else:
+        c.test("featured", None, None, d.get("featuredSkipped", "no featured chops"))
+    ap = d.get("allPieces")
+    if "allPiecesSiiMeanMin" in b:
+        if ap:
+            # Every dry piece of at least 0.12 s, not only the merged featured lines (fail-level sub-check).
+            c.test("allPiecesSiiMean", ap["siiMean"], ap["siiMean"] >= b["allPiecesSiiMeanMin"])
+            c.test("allPiecesSiiP10", ap.get("siiP10"),
+                   None if ap.get("siiP10") is None else ap["siiP10"] >= b["allPiecesSiiP10Min"], f"only {ap['count']} pieces")
+            c.values["allPieces"] = ap["count"]
+            c.values["allPiecesSnr1to4kMeanDb"] = ap.get("snr1to4kMeanDb")
+        else:
+            c.test("allPiecesSiiMean", None, None, d.get("allPiecesSkipped", "no pieces"))
 
 
 def ev_C_B9(m, b, c):
@@ -505,15 +539,32 @@ def ev_C_D5(m, b, c):
 
 
 def ev_C_D6(m, b, c):
-    st = _cad(m).get("stageTiming")
+    cad = _cad(m)
+    st = cad.get("stageTiming")
     if not st:
         c.test("stageTiming", None, None, "no dialogueTimings")
     else:
         c.test("totalMsP95", st["totalMsP95"], st["totalMsP95"] <= b["totalMsP95Max"])
         c.test("totalMsMax", st["totalMsMax"], st["totalMsMax"] <= b["totalMsMax"])
+        c.values["totalMsP50"] = st.get("totalMsP50")
         c.values["cues"] = st["count"]
-    lead = _cad(m).get("leadSecondsMin")
+        for k in ("wallMsP50", "wallMsP95", "wallMsMax", "cueLeadSecondsMin", "transcribeMsMax"):
+            if st.get(k) is not None:
+                c.values[k] = st[k]
+        for k in ("thermalState", "residentMB", "cacheEntries", "cacheBytes"):
+            if st.get(k) is not None:
+                v = st[k]
+                c.values[k] = v.get("max") if "max" in v else v.get("last")
+    lead = cad.get("leadSecondsMin")
     c.test("leadSecondsMin", lead, None if lead is None else lead >= b["leadSecondsMin"], "no committedFrame in chops")
+    if cad.get("eventsUnderCommitMargin") is not None:
+        c.values["eventsUnderCommitMargin"] = cad["eventsUnderCommitMargin"]
+    model = cad.get("leadModel")
+    if model:
+        c.values["leadModel"] = model
+        if model.startswith("synchronous"):
+            c.note("this capture predates the live-order simulation: the lead floor holds by construction; capture again to measure it")
+    c.note("C-D6 simulates the live lead offline (harness wall times on this machine); scripts/perf-run.sh --lofi is the live gate")
 
 
 def ev_C_D7(m, b, c):
@@ -531,10 +582,18 @@ def ev_C_D8(m, b, c):
     cad = _cad(m)
     v = cad.get("accentsAtLeast50msFraction")
     few = cad.get("accents") is not None and cad["accents"] < 5
-    c.test("accentsAtLeast50msFraction", v, None if (v is None or few) else v >= b["fractionMin"],
+    bound = b["fractionMin"]
+    if cad.get("motif") and b.get("motifFractionMin") is not None:
+        # Motif mode places statements on downbeats by design (plan 5.3), where a kick sits.
+        bound = b["motifFractionMin"]
+        c.values["mode"] = "motif"
+        c.values["boundUsed"] = bound
+    c.test("accentsAtLeast50msFraction", v, None if (v is None or few) else v >= bound,
            f"only {cad.get('accents')} stressed accents" if few else "no stressed accentFrame in chops, or no kick landmarks")
     if cad.get("accents") is not None:
         c.values["accents"] = cad["accents"]
+    if cad.get("eighthGridAtLeast50msFraction") is not None:
+        c.values["eighthGridChanceFraction"] = cad["eighthGridAtLeast50msFraction"]
 
 
 def ev_C_D9(m, b, c):
@@ -558,6 +617,29 @@ def ev_C_D9(m, b, c):
     for x in loops:
         c.note(f"loop {x['loop'] + 1}: onsets per bar {x['onsetsPerBar']}, full line {x['fullLine']}, "
                f"sub-line {fmt(x['subLineShare'])}, occupancy {fmt(x['occupancy'])}, cells {', '.join(x['cells'])}")
+
+
+def ev_C_B11(m, b, c):
+    ls = m.get("leadSalience") or {}
+    if ls.get("skipped"):
+        c.test("leadSalience", None, None, ls["skipped"])
+        return
+    v = ls.get("underDialogueFraction")
+    c.test("underDialogueFraction", v, None if v is None else v <= b["underDialogueFractionMax"],
+           ls.get("underDialogueSkipped", "no dialogue"))
+    v = ls.get("medianLeadMinusOthersDb")
+    c.test("medianLeadMinusOthersDb", v, None if v is None else v >= b["medianLeadMinusOthersDbMin"])
+    c.values["notes"] = ls.get("notes")
+    if ls.get("medianLeadMinusDialogueDb") is not None:
+        c.values["medianLeadMinusDialogueDb"] = ls["medianLeadMinusDialogueDb"]
+    c.values["aboveAllOthersFraction"] = ls.get("aboveAllOthersFraction")
+    worst = sorted((ls.get("bySection") or {}).items(), key=lambda kv: kv[1]["medianLeadMinusOthersDb"])[:2]
+    for sec, e in worst:
+        c.note(f"{sec}: {e['notes']} notes, lead minus others {e['medianLeadMinusOthersDb']:.1f} dB"
+               + (f", under the dialogue in {e['underDialogueFraction']:.0%}" if e.get("underDialogueFraction") is not None else ""))
+    rivals = ls.get("loudestRivalCounts") or {}
+    if rivals:
+        c.note("loudest rival per note: " + ", ".join(f"{k} {v}" for k, v in sorted(rivals.items(), key=lambda kv: -kv[1])))
 
 
 EVALUATORS = {k[3:].replace("_", "-"): v for k, v in globals().items() if k.startswith("ev_C_")}
@@ -678,21 +760,22 @@ MEASUREMENT = {
     "C-M11": "master energy below 25 Hz against the total (Welch estimate) and the 250 Hz to 8 kHz spectral tilt (M7)",
     "C-M12": "loudness range of the master (M1)",
     "C-B1": "per-section energy in 20 to 120 Hz against the louder of drums and bass (M8)",
-    "C-B2": "bass attack against the aligned kick attack (diagnostics.bass), the 40 to 120 Hz kick plus bass sum, and the bass duck depth under kicks (M10)",
+    "C-B2": "audio lag: -6 dB rise of the bass stem's 40 to 160 Hz envelope against the drum stem's around each aligned kick; the 40 to 120 Hz kick plus bass sum; and the bass duck depth under kicks (M10)",
     "C-B3": "bass against drums in 60 to 250 Hz, and bass harmonics against its fundamental (M8)",
     "C-B4": "drum bus crest and peak, and kick attack time against the unprocessed take (M3, stemChains)",
     "C-B5": "mids against lead in 400 Hz to 3 kHz when both play and in lead rests, and mid articulation count (M13)",
     "C-B6": "lead salience over the first two return notes, theme to return onset correlation, and the program of each (M14)",
     "C-B7": "lead minus space level in lead-active phrases (M13)",
-    "C-B8": "octave-band SNR of the dialogue against every other section during chops, as the SII proxy and 1 to 4 kHz SNR (M11)",
+    "C-B8": "octave-band SNR of the dialogue against every other section during featured chops (merged, 0.5 s or more) and during every dry piece of 0.12 s or more, as the SII proxy and 1 to 4 kHz SNR (M11)",
     "C-B9": "bed direct to wet ratio, bed audibility in the gaps between chops, bed against dialogue in 1 to 4 kHz, and bed 85 percent roll-off (M12)",
     "C-B10": "stem sums against the Lo-Fi bus and the pre-master (M16)",
+    "C-B11": "lead against the dialogue and against the power sum of all other sections in 500 Hz to 4 kHz over the first 400 ms of every lead note (M17)",
     "C-D1": "difference between consecutive 16-bar windows of position-tagged (padKey, slot) elements, recomputed from the scheduled events (M15)",
     "C-D2": "longest run of bars with the same family and bank in the plan log (M15)",
     "C-D3": "consecutive identical blocks, and agreement of logged and recomputed fingerprints (M15)",
     "C-D4": "empty bars per 8, dry audio in the last two beats before an 8-bar boundary, and occupancy (M15)",
     "C-D5": "overlap between scheduled dry events (M15)",
-    "C-D6": "per-cue stage timings and the lead of each event ahead of its commit (M15)",
+    "C-D6": "per-cue stage timings (p50, p95, max) and the lead of each event ahead of its commit, with the commit placed by the harness's live-order simulation (analysis starts the live scheduling lead before the bed, plus measured wall time) (M15)",
     "C-D7": "pad and transform of the two statements of each echo hook (M15)",
     "C-D8": "distance of stressed accents from confident kick landmarks (M15)",
     "C-D9": "motif mode: piece onsets in every bar of each 16-bar loop, full-line statements, sub-line share, cells and occupancy (M15)",
@@ -701,10 +784,10 @@ MEASUREMENT = {
 # Sections whose energy decides a criterion, and the bands to rank them in (indices into BAND_NAMES).
 DRIVER_BANDS = {
     "C-B1": (0, 2, ("mids", "lead", "space", "dialogue", "bed")), "C-B8": (5, 6, ("dialogue",)),
-    "C-B9": (5, 6, ("bed",)), "C-B5": (4, 6, ("mids", "lead")), "C-B6": (4, 6, ("lead",)), "C-B7": (4, 6, ("lead", "space")),
+    "C-B9": (5, 6, ("bed",)), "C-B5": (4, 6, ("mids", "lead")), "C-B6": (4, 6, ("lead",)), "C-B11": (4, 6, ("lead",)), "C-B7": (4, 6, ("lead", "space")),
     "C-B3": (1, 2, ("bass", "drums")), "C-B2": (1, 1, ("bass", "drums")), "C-B4": (0, 8, ("drums",)),
 }
-RIVAL_STYLE = ("C-B8", "C-B9", "C-B6", "C-B7", "C-B5")
+RIVAL_STYLE = ("C-B8", "C-B9", "C-B6", "C-B7", "C-B5", "C-B11")
 MASTER_DRIVERS = ("C-M1", "C-M2", "C-M3", "C-M4", "C-M5", "C-M6", "C-M7", "C-M8", "C-M9", "C-M11", "C-M12")
 
 
