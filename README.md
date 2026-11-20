@@ -18,11 +18,11 @@ Liminal pairs evolving ambient music with surreal AI imagery, flowing visual eff
 
 ## See it in motion
 
-[![Play the 10-second Lo-Fi preview with stereo sound](docs/media/lofi-preview.jpg)](https://cdn.jsdelivr.net/gh/pj4533/Liminal@c52ee4df212da9e543f308776e1291421f77c50e/docs/media/lofi-preview.mp4)
+[![Play the 10-second Lo-Fi preview with stereo sound](docs/media/lofi-preview.jpg)](https://cdn.jsdelivr.net/gh/pj4533/Liminal@59f953ea86e1e0654e08ce011f668ebadd877f8f/docs/media/lofi-preview.mp4)
 
-**[Play with sound · 10 seconds · 1.4 MB](https://cdn.jsdelivr.net/gh/pj4533/Liminal@c52ee4df212da9e543f308776e1291421f77c50e/docs/media/lofi-preview.mp4)** · [MP4 in the repository](docs/media/lofi-preview.mp4)
+**[Play with sound · 10 seconds · 1.4 MB](https://cdn.jsdelivr.net/gh/pj4533/Liminal@59f953ea86e1e0654e08ce011f668ebadd877f8f/docs/media/lofi-preview.mp4)** · [MP4 in the repository](docs/media/lofi-preview.mp4)
 
-Lo-Fi at 72 BPM with AJ Hall’s drums. The audio is the app’s own offline render, and the picture is a cached image and the film passed through the app’s shader. A line from *UFO Interview* (National Archives, 1966) is cut into word pieces. The pieces stutter, pause and reorder on the beat, with echo throws and a dark room, and sit inside the music. The film’s own soundtrack plays far behind as an effected bed. [Original film](https://archive.org/details/342-usaf-42990)
+Lo-Fi at 72 BPM with AJ Hall’s drums, the warm sub bass slapping on the kicks under a held pad. The audio is the app’s own offline render, and the picture is a cached image and the film passed through the app’s shader. A line from *UFO Interview* (National Archives, 1966) is cut into word pieces. The pieces stutter, pause and reorder on the beat, with echo throws and a dark room, and sit inside the music. The film’s own soundtrack plays far behind as an effected bed. [Original film](https://archive.org/details/342-usaf-42990)
 
 ## An atmosphere that keeps changing
 
