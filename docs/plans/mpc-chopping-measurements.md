@@ -364,6 +364,10 @@ A possible shape:
 4. Theme return: in `return-theme-take0.wav` and `-take1.wav`, is the return of the hook recognised? Is the +3 dB accent on its first two notes natural?
 5. Bass and kick: on a phone speaker and on headphones, does the bass hit with the kick? Is the deeper 4 dB duck heard as punch rather than as the bass dropping out?
 
+## Master loudness windows after the distortion fix (2026-11-20)
+
+C-M1 every bound 1.5 LU lower, C-M3 and C-M5 upper bounds 1.5 dB higher. Reason: the finisher drive fell 2 dB so the soft clip no longer works on the kick and bass peaks (D121, `docs/plans/mix-distortion.md`); `ref` measured -13.91 LUFS against -12.29 at the same ceiling, so PLR and crest rise by the same amount. The change is the measured 1.62 LU rounded to 0.5.
+
 ## Remaining risks
 
 - Resolved 2026-11-20 (D115): the pre-master sum peaked at +0.9 dBFS on `ref`. The master bus now stages both branches 2 dB lower in the Lo-Fi profile and the finisher input makes it up; the pre-master peaks at -2.9 to -4.4 dBFS.

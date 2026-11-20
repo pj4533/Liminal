@@ -1,6 +1,6 @@
 # Mix distortion: what was measured, what to fix, and the gates
 
-Date: 2026-11-20. Base: `main` at b11ac9e. Status: plan, nothing built.
+Date: 2026-11-20. Base: `main` at b11ac9e. Status: implemented 2026-11-20 except 2.2 (see [D121](../decisions/music.md)). Outcome: section 2.1 landed as the S6 row (net drive +2 dB, clip from -2 dBFS; no -3 dBFS row passed G2), -13.9 LUFS, target -14; 2.2 stopped at its rule 4 (upright -20.8 dB with the cleaner round robins, -23.4 dB with the largest body cut, against -28), nothing shipped; 2.3 landed; 2.4 drum tape null added (1-4 kHz -20.8 dB, above the -30 dB follow-up line), chop null not done (optional). G7 was split: the film decode varies run to run, so film-derived taps are gated at -90 dB.
 
 Inputs: the listening note ("verging on some distortion in the mix ... maybe the bass was distorting a little bit just on its own"), two research notes on how engineers detect distortion and stage gain (sources listed in section 7), a code map of every gain and nonlinear stage in the Lo-Fi path, and the measurements from `scripts/distortion-report.py` on two deterministic captures of HEAD (seed 2077, 72 BPM, 32 bars, private drums, film reel): `cap-readme` (synth then upright bass) and `cap-round` (`--hook bassTone=round`).
 
