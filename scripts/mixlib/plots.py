@@ -16,7 +16,7 @@ from .spectral import spectrogram  # noqa: E402
 DPI = 110
 FIGURES = ["spectrogram-4096", "spectrogram-1024", "spectrogram-256", "ltas", "band-energy", "masking-matrix",
            "masking-during-chops", "lowband-mono", "kick-bass", "loudness", "gain-reduction", "intelligibility",
-           "bed", "mids-lead", "theme-return", "cadence"]
+           "bed", "mids-lead", "theme-return", "lead-salience", "cadence"]
 COLORS = {"drums": "#444444", "bass": "#1f77b4", "mids": "#2ca02c", "lead": "#d62728", "space": "#9467bd",
           "dialogue": "#ff7f0e", "bed": "#8c564b", "master": "#000000"}
 
@@ -137,33 +137,68 @@ def plot_lowband(m, outdir):
 
 
 def plot_kick_bass(cap, m, outdir):
+    """Median 40-120 Hz envelopes around the kicks C-B2 measures. Drums over every kick; bass and the sum
+    only over the kicks where the bass sounds (kicksWithBass): the bass is silent under most kicks, and a
+    median over all of them sits at the floor. The right panel is the audio lag per aligned bass note."""
     kb = m.get("kickBass")
     if not kb or kb.get("skipped"):
         return empty(outdir, "kick-bass", (kb or {}).get("skipped", "no data"))
     rate = cap.rate
-    kicks = [k for k in cap.kicks() if 0 <= k < cap.frames][:400]
+    kicks = kb.get("_kickFrames")
+    with_bass = kb.get("_kicksWithBassMask")
+    if kicks is None:
+        kicks = np.array([k for k in cap.kicks() if 0 <= k < cap.frames])
+        with_bass = np.ones(len(kicks), dtype=bool)
+    kicks, with_bass = np.asarray(kicks)[:600], np.asarray(with_bass)[:600]
     d = lowend.band_signal(cap.signal(["drums"]), rate, 40, 120)
     b = lowend.band_signal(cap.signal(["bass"]), rate, 40, 120)
     pre, post, step = int(0.05 * rate), int(0.25 * rate), int(0.005 * rate)
     t = np.arange(-pre, post, step) / rate * 1000
-    curves = {"drums": [], "bass": [], "sum": []}
-    for k in kicks:
+    curves = {"drums (all kicks)": [], "bass (kicks with bass)": [], "sum (kicks with bass)": []}
+    for k, wb in zip(kicks, with_bass):
         if k - pre < 0 or k + post > len(d):
             continue
-        for name, x in (("drums", d), ("bass", b), ("sum", d + b)):
+        rows = [("drums (all kicks)", d)] + ([("bass (kicks with bass)", b), ("sum (kicks with bass)", d + b)] if wb else [])
+        for name, x in rows:
             seg = x[k - pre: k + post]
             curves[name].append(np.sqrt((seg[: (len(seg) // step) * step].reshape(-1, step) ** 2).mean(axis=1)))
-    fig, ax = plt.subplots(figsize=(9, 4.5))
+    fig, axes = plt.subplots(1, 2, figsize=(13, 4.5), gridspec_kw={"width_ratios": [3, 2]})
+    ax = axes[0]
+    colors = {"drums (all kicks)": COLORS["drums"], "bass (kicks with bass)": COLORS["bass"], "sum (kicks with bass)": "#e377c2"}
     for name, rows in curves.items():
         if rows:
-            ax.plot(t[: len(rows[0])], 20 * np.log10(np.maximum(np.median(rows, axis=0), 1e-6)), label=name)
+            ax.plot(t[: len(rows[0])], 20 * np.log10(np.maximum(np.median(rows, axis=0), 1e-6)),
+                    label=f"{name}, n={len(rows)}", color=colors[name])
     ax.axvline(0, color="k", lw=0.6)
-    ax.set_xlabel("ms from kick")
-    ax.set_ylabel("40-120 Hz RMS (dBFS, median over kicks)")
-    ax.legend()
+    ax.set_xlabel("ms from kick attack")
+    ax.set_ylabel("40-120 Hz RMS (dBFS, median)")
+    ax.legend(fontsize=8)
     ax.grid(alpha=0.3)
-    ax.set_title(f"Kick and bass: sum vs louder median {kb.get('sumVsLouderDbMedian')}, duck {kb.get('duckDepthDbMedian')} dB, lag {kb.get('lagMsMedian', 'n/a')} ms")
+    ax.set_title(f"Kick and bass: sum vs louder {fmt_num(kb.get('sumVsLouderDbMedian'))} dB, duck {fmt_num(kb.get('duckDepthDbMedian'))} dB")
+    per = kb.get("perNote") or []
+    ax = axes[1]
+    if per:
+        lags = [p["riseLagMs"] for p in per]
+        peaks = [p["peakLagMs"] for p in per]
+        x = np.arange(len(per))
+        ax.bar(x - 0.2, lags, 0.4, label="-6 dB rise lag", color=COLORS["bass"])
+        ax.bar(x + 0.2, peaks, 0.4, label="envelope peak lag", color="#aec7e8")
+        for y in (-5, 5):
+            ax.axhline(y, color="r", ls="--", lw=0.8)
+        ax.axhline(0, color="k", lw=0.6)
+        ax.set_xlabel("aligned bass note")
+        ax.set_ylabel("bass minus kick (ms; + = bass late)")
+        ax.legend(fontsize=8)
+        ax.set_title(f"Audio lag: signed median {fmt_num(kb.get('lagMsSignedMedian'))} ms, p90 |lag| {fmt_num(kb.get('lagMsP90'))} ms")
+    else:
+        ax.axis("off")
+        ax.text(0.5, 0.5, kb.get("lagSkipped", "no aligned bass notes"), ha="center", va="center", wrap=True)
+    ax.grid(alpha=0.3)
     save(fig, outdir, "kick-bass")
+
+
+def fmt_num(v):
+    return "n/a" if v is None else f"{v:.1f}"
 
 
 def plot_loudness(m, outdir):
@@ -205,22 +240,41 @@ def plot_gain_reduction(aux, m, outdir):
 
 
 def plot_intelligibility(m, outdir):
+    """SII proxy per featured chop and per dry piece (0.12 s or more), octave SNR by featured chop, and
+    per-chop loudness."""
     d = m.get("dialogue")
     if not d or d.get("skipped"):
         return empty(outdir, "intelligibility", (d or {}).get("skipped", "no data"))
-    per = d["perChop"]
-    fig, axes = plt.subplots(1, 3, figsize=(13, 4))
-    axes[0].bar(range(len(per)), [p["sii"] for p in per], color="#ff7f0e")
+    per = d.get("perChop") or []
+    pieces = (d.get("allPieces") or {}).get("perPiece") or []
+    fig, axes = plt.subplots(1, 4, figsize=(17, 4))
+    if per:
+        axes[0].bar(range(len(per)), [p["sii"] for p in per], color="#ff7f0e")
+        axes[0].set_title(f"Featured chops: SII mean {d['siiMean']:.2f}, p10 {fmt_num2(d.get('siiP10'))}")
     axes[0].axhline(0.55, color="r", ls="--", lw=0.8)
-    axes[0].set_title(f"SII proxy per chop (mean {d['siiMean']:.2f}, p10 {d['siiP10']:.2f})")
-    snr = np.array([p["snrOctaveDb"] for p in per])
-    im = axes[1].imshow(snr.T, aspect="auto", cmap="RdBu", vmin=-20, vmax=20)
-    axes[1].set_yticks(range(len(d["octaveCenters"])), d["octaveCenters"])
-    axes[1].set_title("octave SNR (dB) by chop")
-    fig.colorbar(im, ax=axes[1])
-    axes[2].bar(range(len(per)), [p["lufs"] if p["lufs"] is not None else np.nan for p in per], color="#8c564b")
-    axes[2].set_title(f"per-chop LUFS (spread {d.get('loudnessSpreadLu')})")
+    axes[0].axhline(0.40, color="r", ls=":", lw=0.8)
+    if pieces:
+        ap = d["allPieces"]
+        axes[1].bar(range(len(pieces)), [p["sii"] for p in pieces], color="#ffbb78")
+        axes[1].set_title(f"All {ap['count']} pieces >= 0.12 s: mean {ap['siiMean']:.2f}, p10 {fmt_num2(ap.get('siiP10'))}")
+    axes[1].axhline(0.55, color="r", ls="--", lw=0.8)
+    axes[1].axhline(0.40, color="r", ls=":", lw=0.8)
+    for ax in axes[:2]:
+        ax.set_ylim(0, 1)
+        ax.set_xlabel("chop" if ax is axes[0] else "piece")
+    if per:
+        snr = np.array([p["snrOctaveDb"] for p in per])
+        im = axes[2].imshow(snr.T, aspect="auto", cmap="RdBu", vmin=-20, vmax=20)
+        axes[2].set_yticks(range(len(d["octaveCenters"])), d["octaveCenters"])
+        axes[2].set_title("octave SNR (dB) by featured chop")
+        fig.colorbar(im, ax=axes[2])
+        axes[3].bar(range(len(per)), [p["lufs"] if p.get("lufs") is not None else np.nan for p in per], color="#8c564b")
+        axes[3].set_title(f"per-chop LUFS (spread {d.get('loudnessSpreadLu')})")
     save(fig, outdir, "intelligibility")
+
+
+def fmt_num2(v):
+    return "n/a" if v is None else f"{v:.2f}"
 
 
 def plot_bed(m, outdir):
@@ -259,10 +313,13 @@ def plot_mids_lead(m, outdir):
     axes[0].set_xticks(x, labels)
     axes[0].set_ylabel("400 Hz to 3 kHz level (dB)")
     axes[0].legend()
-    arts = ml.get("articulationsPer16Bars") or {}
+    # The count C-B5 gates: the engine's (musicLevels midArticulations) when present, else the score heuristic.
+    engine = ml.get("articulationsPer16BarsEngine")
+    arts = engine or ml.get("articulationsPer16Bars") or {}
     axes[1].bar(list(arts.keys()), list(arts.values()), color=COLORS["mids"])
     axes[1].axhline(2, color="r", ls="--", lw=0.8)
-    axes[1].set_title("Mid articulations per 16 bars (take)")
+    axes[1].set_xlabel("take (16 bars)")
+    axes[1].set_title("Mid articulations per 16 bars (" + ("engine count, as C-B5" if engine else "score heuristic, as C-B5") + ")")
     save(fig, outdir, "mids-lead")
 
 
@@ -311,6 +368,53 @@ def plot_cadence(cap, m, outdir):
     save(fig, outdir, "cadence")
 
 
+def plot_lead_salience(m, outdir):
+    """C-B11: lead minus the dialogue and lead minus all other sections per lead note (500 Hz to 4 kHz,
+    first 400 ms), against time, coloured by section; and the per-section medians."""
+    ls = m.get("leadSalience")
+    if not ls or ls.get("skipped"):
+        return empty(outdir, "lead-salience", (ls or {}).get("skipped", "no data"))
+    per = ls["perNote"]
+    secs = sorted({str(r["section"]) for r in per})
+    palette = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#7f7f7f"]
+    col = {s: palette[i % len(palette)] for i, s in enumerate(secs)}
+    fig, axes = plt.subplots(1, 2, figsize=(14, 4.5), gridspec_kw={"width_ratios": [3, 2]})
+    ax = axes[0]
+    for sname in secs:
+        rows = [r for r in per if str(r["section"]) == sname]
+        t = [r["onFrame"] / m.get("rate", 48000) for r in rows]
+        ax.scatter(t, [r["leadMinusOthersDb"] for r in rows], color=col[sname], marker="o", s=18, label=f"{sname}: vs all others")
+        if any("leadMinusDialogueDb" in r for r in rows):
+            ax.scatter([tt for tt, r in zip(t, rows) if "leadMinusDialogueDb" in r],
+                       [r["leadMinusDialogueDb"] for r in rows if "leadMinusDialogueDb" in r],
+                       color=col[sname], marker="x", s=18)
+    ax.axhline(0, color="k", lw=0.6)
+    ax.axhline(-4, color="r", ls="--", lw=0.8)
+    ax.set_ylim(-30, 20)
+    ax.set_xlabel("seconds (o: lead minus all others; x: lead minus dialogue)")
+    ax.set_ylabel("dB in 500 Hz to 4 kHz, first 400 ms of each note")
+    ax.legend(fontsize=7, ncol=2)
+    ax.grid(alpha=0.3)
+    title = f"Lead salience: median vs others {ls['medianLeadMinusOthersDb']:.1f} dB"
+    if ls.get("underDialogueFraction") is not None:
+        title += f", under the dialogue in {ls['underDialogueFraction']:.0%} of {ls['notes']} notes"
+    ax.set_title(title)
+    ax = axes[1]
+    by = ls.get("bySection") or {}
+    names = list(by)
+    x = np.arange(len(names))
+    ax.bar(x - 0.2, [by[n]["medianLeadMinusOthersDb"] for n in names], 0.4, label="vs all others", color="#d62728")
+    ax.bar(x + 0.2, [by[n].get("medianLeadMinusDialogueDb", np.nan) for n in names], 0.4, label="vs dialogue", color="#ff7f0e")
+    ax.axhline(-4, color="r", ls="--", lw=0.8)
+    ax.axhline(0, color="k", lw=0.6)
+    ax.set_xticks(x, [f"{n}\n(n={by[n]['notes']})" for n in names], fontsize=7)
+    ax.set_ylabel("median dB")
+    ax.legend(fontsize=8)
+    ax.grid(alpha=0.3)
+    ax.set_title("By section")
+    save(fig, outdir, "lead-salience")
+
+
 def make_all(cap, metrics, aux, outdir, log=print):
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -327,6 +431,7 @@ def make_all(cap, metrics, aux, outdir, log=print):
             ("bed", lambda: plot_bed(metrics, outdir)),
             ("mids-lead", lambda: plot_mids_lead(metrics, outdir)),
             ("theme-return", lambda: plot_theme_return(metrics, outdir)),
+            ("lead-salience", lambda: plot_lead_salience(metrics, outdir)),
             ("cadence", lambda: plot_cadence(cap, metrics, outdir))]
     for name, job in jobs:
         try:

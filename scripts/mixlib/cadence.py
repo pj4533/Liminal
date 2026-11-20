@@ -188,6 +188,68 @@ def plan_cadence(cap):
     return out
 
 
+COMMIT_MARGIN = 0.30  # DialogueCueCoordinator.commitMargin
+STAGES = ("decodeMs", "transcribeMs", "classifyMs", "analyzeMs", "bankMs", "planMs", "renderMs")
+# Optional per-cue fields another package adds to dialogueTimings (tolerated when absent).
+OPTIONAL_TIMING_FIELDS = ("thermalState", "residentMB", "cacheEntries", "cacheBytes")
+
+
+def _pct(vals):
+    v = np.asarray(vals, dtype=float)
+    return {"p50": float(np.percentile(v, 50)), "p95": float(np.percentile(v, 95)), "max": float(v.max()),
+            "mean": float(v.mean())}
+
+
+def stage_timing(timings):
+    """Per-cue stage totals (p50, p95, max) and each stage's spread, from manifest.dialogueTimings. The
+    live-order wall time (`wallMs`, harness simulation of the scheduling lead) is summarised when present,
+    and the optional thermal, memory and cache fields are passed through."""
+    totals = [t["totalMs"] for t in timings if t.get("totalMs") is not None]
+    if not totals:
+        return None
+    p = _pct(totals)
+    out = {"count": len(totals), "totalMsMean": p["mean"], "totalMsP50": p["p50"], "totalMsP95": p["p95"], "totalMsMax": p["max"]}
+    for stage in STAGES:
+        vals = [t[stage] for t in timings if t.get(stage) is not None]
+        if vals:
+            q = _pct(vals)
+            out[stage + "P50"], out[stage + "P95"], out[stage + "Max"] = q["p50"], q["p95"], q["max"]
+    walls = [t["wallMs"] for t in timings if t.get("wallMs") is not None]
+    if walls:
+        q = _pct(walls)
+        out["wallMsP50"], out["wallMsP95"], out["wallMsMax"] = q["p50"], q["p95"], q["max"]
+    cue_leads = [t["leadSeconds"] for t in timings if t.get("leadSeconds") is not None]
+    if cue_leads:
+        out["cueLeadSecondsMin"] = float(min(cue_leads))
+        out["cueLeadSecondsP50"] = float(np.percentile(cue_leads, 50))
+    for key in OPTIONAL_TIMING_FIELDS:
+        vals = [t[key] for t in timings if t.get(key) is not None]
+        if not vals:
+            continue
+        if all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in vals):
+            out[key] = {"max": float(max(vals)), "last": float(vals[-1])}
+        else:
+            counts = {}
+            for v in vals:
+                counts[str(v)] = counts.get(str(v), 0) + 1
+            out[key] = {"counts": counts, "last": str(vals[-1])}
+    out["perCue"] = [{k: t.get(k) for k in ("cue", "totalMs", "wallMs", "analysisStartFrame", "committedFrame",
+                                           "earliestStartFrame", "firstEventFrame", "leadSeconds", "liveLeadSeconds",
+                                           "eventsUnderCommitMargin", "transcribeMs", "decodeMs") + OPTIONAL_TIMING_FIELDS
+                      if t.get(k) is not None} for t in timings]
+    return out
+
+
+def lead_model(cap, timings):
+    """How the capture set committedFrame: `live-order simulation` when the harness recorded the
+    analysis start and wall times (fix1-C), else the older synchronous plan at the cue frame."""
+    if any(t.get("analysisStartFrame") is not None for t in timings):
+        return "live-order simulation: analysis starts the live scheduling lead before the bed; committed after measured wall time"
+    if cap.chops() and any(c.get("committedFrame") is not None for c in cap.chops()):
+        return "synchronous plan at the cue frame (committedFrame = cue frame; the lead floor holds by construction)"
+    return None
+
+
 def event_key(c):
     if c.get("padID") is not None:
         return ("pad", str(c.get("padID")), str(c.get("transform")), c.get("sourceStart"), c.get("sourceEnd"))
@@ -330,17 +392,16 @@ def measure_cadence(cap):
     out["dryOverlaps"] = overlaps
 
     timings = cap.manifest.get("dialogueTimings") or []
-    totals = np.array([t["totalMs"] for t in timings if t.get("totalMs") is not None], dtype=float)
-    if len(totals):
-        out["stageTiming"] = {"count": int(len(totals)), "totalMsMean": float(totals.mean()),
-                              "totalMsP95": float(np.percentile(totals, 95)), "totalMsMax": float(totals.max())}
-        for stage in ("classifyMs", "analyzeMs", "bankMs", "planMs", "renderMs"):
-            vals = [t[stage] for t in timings if t.get(stage) is not None]
-            if vals:
-                out["stageTiming"][stage + "Max"] = float(max(vals))
+    st = stage_timing(timings)
+    if st:
+        out["stageTiming"] = st
     leads = [(e["frame"] - int(e["raw"]["committedFrame"])) / rate for e in ev if e["raw"].get("committedFrame") is not None]
     if leads:
         out["leadSecondsMin"] = float(min(leads))
+        out["leadSecondsP10"] = float(np.percentile(leads, 10))
+        out["leadEvents"] = len(leads)
+        out["eventsUnderCommitMargin"] = int(sum(1 for v in leads if v < COMMIT_MARGIN - 1e-6))
+    out["leadModel"] = lead_model(cap, timings)
 
     # Hook statements: engine data (the repeated head of each echo block); without a plan log, the first
     # two events of each 16-bar window.
@@ -365,6 +426,13 @@ def measure_cadence(cap):
         out["accentKickDistanceMsP10"] = float(np.percentile(dist, 10))
         out["accentsAtLeast50msFraction"] = float((dist >= 50).mean())
         out["accents"] = len(accents)
+        # Chance level: the share of eighth-note grid points in the scored range that are 50 ms or more from
+        # a kick. Accents placed on the grid without regard to the kicks would score about this.
+        eighth = cap.beat_frames / 2
+        grid = np.arange(0, cap.scored_frames, eighth)
+        if len(grid):
+            gd = np.array([np.min(np.abs(kicks - x)) for x in grid]) / rate * 1000
+            out["eighthGridAtLeast50msFraction"] = float((gd >= 50).mean())
     motif = measure_motif(cap, ev)
     if motif:
         out["motif"] = motif

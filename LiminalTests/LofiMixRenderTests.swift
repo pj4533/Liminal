@@ -121,7 +121,9 @@ struct LofiMixRenderTests {
             drums = try LofiDrumTake(recording: drumFixture(clock: clock), clock: clock)
         }
         var footageHash = config.noFootage ? "none" : "public-formant-fixture-v1"
-        var reel: [(buffer: AVAudioPCMBuffer, title: String, offset: Double, id: String)] = []
+        var reel: [(buffer: AVAudioPCMBuffer, title: String, offset: Double, id: String, decodeMs: Double)] = []
+        /// Wall time of the bed decode for a footage cue that is not part of a reel (explicit or cached file).
+        var cueDecodeMs = 0.0
         let cue: AVAudioPCMBuffer?
         if config.noFootage {
             cue = nil
@@ -131,8 +133,10 @@ struct LofiMixRenderTests {
             let source = config.out.appending(component: "input").appendingPathExtension(String(suffix.dropFirst()))
             try FileManager.default.moveItem(at: download, to: source)
             footageHash = SHA256.hash(data: try Data(contentsOf: source, options: .mappedIfSafe)).description
+            let decodeStarted = ContinuousClock.now
             cue = try await ArchiveAudioDecoder.decode(url: source, sourceStart: 0, sourceLength: 13, rate: 1,
                                                         format: format)
+            cueDecodeMs = DialogueCueCoordinator.ms(ContinuousClock.now - decodeStarted)
         } else if config.filmReel == true || config.sameFilm == true {
             let directory = ArchiveClipStore.defaultDirectory()
             struct Catalog: Decodable { let clips: [ArchiveClip] }
@@ -145,10 +149,12 @@ struct LofiMixRenderTests {
                 guard seconds >= 5 else { continue }
                 let offset = max(0, clip.duration - seconds - 0.1) * rng.range(0.12...0.78)
                 let url = directory.appending(path: clip.fileName)
+                let decodeStarted = ContinuousClock.now
                 guard let buffer = try? await ArchiveAudioDecoder.decode(url: url, sourceStart: offset,
                     sourceLength: seconds, rate: 1, format: format) else { continue }
+                let decodeMs = DialogueCueCoordinator.ms(ContinuousClock.now - decodeStarted)
                 hashes.append(SHA256.hash(data: try Data(contentsOf: url, options: .mappedIfSafe)).description)
-                reel.append((buffer, clip.title, offset, clip.id))
+                reel.append((buffer, clip.title, offset, clip.id, decodeMs))
                 if config.sameFilm == true || reel.count >= (config.bars + 7) / 8 { break }
             }
             cue = try #require(reel.first?.buffer, "No cached film reel with audio")
@@ -160,8 +166,10 @@ struct LofiMixRenderTests {
                 .sorted { $0.lastPathComponent < $1.lastPathComponent }
             var selected: AVAudioPCMBuffer?
             for url in sources.prefix(12) {
+                let decodeStarted = ContinuousClock.now
                 if let decoded = try? await ArchiveAudioDecoder.decode(url: url, sourceStart: 0, sourceLength: 13,
                                                                        rate: 1, format: format) {
+                    cueDecodeMs = DialogueCueCoordinator.ms(ContinuousClock.now - decodeStarted)
                     selected = decoded
                     footageHash = SHA256.hash(data: try Data(contentsOf: url, options: .mappedIfSafe)).description
                     break
@@ -275,21 +283,21 @@ struct LofiMixRenderTests {
         let dialogueMode = LofiCaptureHooks.option("dialogue") ?? "engine"
         let director = DialogueDirector()
         var memory = DialoguePerformanceMemory()
-        // `transcription=apple` (`check-lofi.sh --transcribe`): transcribe every cue's source with the
-        // installed on-device model before the render starts, so the offline loop stays synchronous.
+        // `transcription=apple` (`check-lofi.sh --transcribe`): transcribe each cue's source with the
+        // installed on-device model when its cue comes up, timed, so the live-order simulation below
+        // charges the recognition to that cue. A source heard before reuses its transcript (the bank cache).
         let transcribe = dialogueMode != "legacy" && cue != nil
             && LofiCaptureHooks.option("transcription")?.lowercased() == "apple"
         var transcripts: [String: CaptureTranscript] = [:]
         var cueTranscripts: [[String: Any]] = []
-        if transcribe {
-            let sources = cueFrames.indices.compactMap { index -> DialogueSource? in
-                let film = reel.isEmpty ? nil : reel[index % reel.count]
-                guard let buffer = film?.buffer ?? cue else { return nil }
-                return DialogueSource(contentID: film?.id ?? "fixture", cueToken: index + 1, buffer: buffer,
-                                      sourceStart: film?.offset ?? 0, rate: 1)
-            }
-            transcripts = await Self.captureTranscripts(sources)
-        }
+        let speechContext = transcribe ? await Self.transcriptionContext() : nil
+        // Live-order simulation of the scheduling lead (plan 6.1). The footage service calls
+        // `scheduleAudio` when the weaver prepares the next piece, `FootageWeaver.Timing.lead` before its
+        // crossfade, polled at 2 Hz (so up to `footagePollSeconds` later); the very first piece starts
+        // `FootageWeaver.firstLead` after it is prepared. The bed is decoded, then the dialogue task runs
+        // classify, analyze, bank, plan and render. The bed itself is due `FootageWeaver.soundDelay` after
+        // the piece starts; that margin is not credited here (conservative).
+        let pieceLead = FootageWeaver.Timing.speed(.fast).lead - Self.footagePollSeconds
         var cueIndex = 0
         var cursor = 0
         var noProgress = 0
@@ -321,6 +329,17 @@ struct LofiMixRenderTests {
                                                 sourceStart: film?.offset ?? 0, rate: 1)
                     let seconds = Double(cue.frameLength) / format.sampleRate
                     let reuse = director.cached(source)
+                    // The live order: the work starts the scheduling lead before the bed, after the bed decode.
+                    let liveLead = cueIndex == 0 ? FootageWeaver.firstLead : pieceLead
+                    let analysisStart = time - liveLead
+                    let decodeMs = film?.decodeMs ?? cueDecodeMs
+                    // Transcription runs beside classification; the capture's build waits for both.
+                    var transcribeMs = 0.0
+                    if let speechContext, transcripts[Self.transcriptKey(source)] == nil {
+                        let started = ContinuousClock.now
+                        transcripts[Self.transcriptKey(source)] = await Self.captureTranscript(source, context: speechContext)
+                        transcribeMs = DialogueCueCoordinator.ms(ContinuousClock.now - started)
+                    }
                     var speech = reuse?.analysis.speech ?? []
                     var classifyMs = 0.0
                     if reuse == nil {
@@ -328,6 +347,9 @@ struct LofiMixRenderTests {
                         speech = await LofiSpeechFocus.classify(cue, seconds: seconds, budget: DialogueCueCoordinator.classifyBudget)
                         classifyMs = DialogueCueCoordinator.ms(ContinuousClock.now - started)
                     }
+                    // As in `DialogueCueCoordinator.run`: the earliest start is "now" plus the commit margin
+                    // once classification is done; the plan is committed when the render finishes.
+                    let classified = analysisStart + (decodeMs + max(classifyMs, transcribeMs)) / 1000
                     let take = Int((Double(cursor) / clock.framesPerBeat + 0.01) / 64)
                     let info = LofiTransportInfo(revision: 1, takeIndex: take, phraseAtTakeStart: take * LofiDrumTake.phraseCount,
                                                  origin: Double(take * takeFrames) / format.sampleRate,
@@ -335,15 +357,38 @@ struct LofiMixRenderTests {
                                                  options: options, timing: (takes[take] ?? drums).timing)
                     let window = DialogueCueCoordinator.window(due: time, span: seconds, transport: info)
                     let captured = transcribe ? transcripts[Self.transcriptKey(source)] : nil
+                    let earliest = classified + DialogueCueCoordinator.commitMargin
                     let built = DialogueCueCoordinator.build(source: source, speech: speech, transcript: captured?.transcript,
                                                              transport: info,
-                                                             window: window, earliestStart: time + DialogueCueCoordinator.commitMargin,
+                                                             window: window, earliestStart: earliest,
                                                              memory: memory, seed: config.seed &+ UInt64(cueIndex),
                                                              classifyMs: classifyMs, reuse: reuse)
                     if reuse == nil { director.store(source, analysis: built.analysis, bank: built.bank) }
                     memory = built.memory
-                    DialogueCueCoordinator.report(built, cue: token, lead: built.firstStart.map { $0 - time })
-                    dialogueTimings.append(built.timings.dictionary(cue: cueIndex))
+                    let stages = built.timings
+                    let wallMs = decodeMs + max(classifyMs, transcribeMs) + stages.analyzeMs + stages.bankMs
+                        + stages.planMs + stages.renderMs
+                    let committed = analysisStart + wallMs / 1000
+                    let committedFrame = Int((committed * format.sampleRate).rounded())
+                    DialogueCueCoordinator.report(built, cue: token, lead: built.firstStart.map { $0 - committed })
+                    var timing = stages.dictionary(cue: cueIndex)
+                    let tenth = { (v: Double) in (v * 10).rounded() / 10 }
+                    timing["decodeMs"] = tenth(decodeMs)
+                    timing["transcribeMs"] = tenth(transcribeMs)
+                    timing["wallMs"] = tenth(wallMs)
+                    timing["cueFrame"] = cursor
+                    timing["liveLeadSeconds"] = liveLead
+                    timing["analysisStartFrame"] = Int((analysisStart * format.sampleRate).rounded())
+                    timing["earliestStartFrame"] = Int((earliest * format.sampleRate).rounded())
+                    timing["committedFrame"] = committedFrame
+                    if let first = built.firstStart {
+                        timing["firstEventFrame"] = Int((first * format.sampleRate).rounded())
+                        timing["leadSeconds"] = ((first - committed) * 1000).rounded() / 1000
+                    }
+                    timing["eventsUnderCommitMargin"] = built.chops.filter {
+                        $0.event.startTime < committed + DialogueCueCoordinator.commitMargin
+                    }.count
+                    dialogueTimings.append(timing)
                     if transcribe {
                         cueTranscripts.append(Self.cueTranscriptReport(built, cue: cueIndex, source: source,
                                                                        captured: captured, reused: reuse != nil))
@@ -361,7 +406,7 @@ struct LofiMixRenderTests {
                                 "block": e.block, "protected": e.protected,
                                 "accentFrame": Int((e.accentTime * format.sampleRate).rounded()),
                                 "transform": e.transform.name, "text": e.text.map { $0 as Any } ?? NSNull(),
-                                "committedFrame": cursor, "bankID": bankID, "slot": e.slot,
+                                "committedFrame": committedFrame, "bankID": bankID, "slot": e.slot,
                                 "cell": e.cell?.rawValue ?? NSNull(), "piece": e.piece.map { $0 as Any } ?? NSNull(),
                                 "effect": e.effect.name, "reversed": e.effect == .reversed,
                                 "dryFrames": Int(chop.buffer.frameLength) - { if case .echoThrow(_, let tail) = e.effect {
@@ -468,50 +513,61 @@ struct LofiMixRenderTests {
         "\(source.contentID)@\(Int((source.sourceStart * 1000).rounded()))/\(source.frameCount)"
     }
 
-    /// Transcribes each distinct source with the Apple provider's own analysis, without its live
-    /// deadline (offline wall time does not matter). Installed model only: when the assets are
-    /// missing or the framework is unavailable, every source maps to nil and the capture continues
-    /// on the acoustic plan. Never starts a download.
-    @MainActor private static func captureTranscripts(_ sources: [DialogueSource]) async -> [String: CaptureTranscript] {
+    /// The scheduling lead's poll: ArchiveFootageService's weave loop ticks at 2 Hz (a 500 ms
+    /// `Task.sleep`), so `scheduleAudio` can begin up to this long after `FootageWeaver.Timing.lead`.
+    static let footagePollSeconds = 0.5
+
+    /// The installed on-device model's status and, when it is ready, the provider. Installed model only:
+    /// never starts a download. Without it every cue maps to nil and the capture continues on the
+    /// acoustic plan.
+    nonisolated struct TranscriptionContext: @unchecked Sendable {
+        let status: String
+        let provider: AppleSpeechTranscriptProvider?
+        let reason: String?
+    }
+
+    @MainActor private static func transcriptionContext() async -> TranscriptionContext {
         let status = await DialogueSpeechAssets.status(mode: DialogueTranscriptionMode.current, environment: .live)
         let provider = status == .ready ? AppleSpeechTranscriptProvider.live() : nil
-        var result: [String: CaptureTranscript] = [:]
-        guard let provider else {
+        guard provider != nil else {
             let reason = status == .ready ? "SpeechAnalyzer is unavailable in this OS" : status.title
             print("Capture transcription: on-device \(DialogueTranscription.localeIdentifier) speech model status " +
                   "\(status.name) (\(reason)); no download is started, every cue uses the acoustic plan")
-            for source in sources {
-                result[transcriptKey(source)] = .init(transcript: nil, status: status.name, words: 0, text: nil,
-                                                      recognitionMs: nil, error: reason)
-            }
-            return result
+            return .init(status: status.name, provider: nil, reason: reason)
         }
-        for source in sources where result[transcriptKey(source)] == nil {
-            let frames = AppleSpeechTranscriptProvider.fedFrames(source, maximumSeconds: provider.maximumSeconds)
-            let started = ContinuousClock.now
-            var entry = CaptureTranscript(transcript: nil, status: status.name, words: 0, text: nil, recognitionMs: nil,
-                                          error: "empty source")
-            if frames > 0 {
-                do {
-                    let recognition = try await provider.analyze(source, frames, provider.locale)
-                    let transcript = AppleSpeechTranscriptProvider.transcript(from: recognition, source: source,
-                                                                              fedFrames: frames, locale: provider.locale)
-                    let words = transcript?.words ?? []
-                    entry = .init(transcript: transcript, status: status.name, words: words.count,
-                                  text: words.isEmpty ? nil : words.map(\.text).joined(separator: " "),
-                                  recognitionMs: DialogueCueCoordinator.ms(ContinuousClock.now - started),
-                                  error: transcript == nil ? "no words recognized" : nil)
-                } catch {
-                    entry = .init(transcript: nil, status: status.name, words: 0, text: nil,
-                                  recognitionMs: DialogueCueCoordinator.ms(ContinuousClock.now - started),
-                                  error: String(describing: error))
-                }
-            }
-            print("Capture transcription: \(source.contentID) at \(source.sourceStart) s, \(entry.words) words" +
-                  (entry.error.map { " (\($0))" } ?? ""))
-            result[transcriptKey(source)] = entry
+        return .init(status: status.name, provider: provider, reason: nil)
+    }
+
+    /// Transcribes one source with the Apple provider's own analysis, without its live deadline (the
+    /// caller times it and charges it to the cue).
+    @MainActor private static func captureTranscript(_ source: DialogueSource, context: TranscriptionContext) async -> CaptureTranscript {
+        let status = context.status
+        guard let provider = context.provider else {
+            return .init(transcript: nil, status: status, words: 0, text: nil, recognitionMs: nil, error: context.reason)
         }
-        return result
+        let frames = AppleSpeechTranscriptProvider.fedFrames(source, maximumSeconds: provider.maximumSeconds)
+        let started = ContinuousClock.now
+        var entry = CaptureTranscript(transcript: nil, status: status, words: 0, text: nil, recognitionMs: nil,
+                                      error: "empty source")
+        if frames > 0 {
+            do {
+                let recognition = try await provider.analyze(source, frames, provider.locale)
+                let transcript = AppleSpeechTranscriptProvider.transcript(from: recognition, source: source,
+                                                                          fedFrames: frames, locale: provider.locale)
+                let words = transcript?.words ?? []
+                entry = .init(transcript: transcript, status: status, words: words.count,
+                              text: words.isEmpty ? nil : words.map(\.text).joined(separator: " "),
+                              recognitionMs: DialogueCueCoordinator.ms(ContinuousClock.now - started),
+                              error: transcript == nil ? "no words recognized" : nil)
+            } catch {
+                entry = .init(transcript: nil, status: status, words: 0, text: nil,
+                              recognitionMs: DialogueCueCoordinator.ms(ContinuousClock.now - started),
+                              error: String(describing: error))
+            }
+        }
+        print("Capture transcription: \(source.contentID) at \(source.sourceStart) s, \(entry.words) words" +
+              (entry.error.map { " (\($0))" } ?? ""))
+        return entry
     }
 
     /// `dialogueTranscripts[]`: whether the cue's plan used a transcript, and the recognized text
