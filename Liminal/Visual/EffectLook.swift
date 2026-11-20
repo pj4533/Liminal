@@ -22,6 +22,9 @@ nonisolated struct EffectLook: Sendable, Equatable {
     /// Seconds the current crossfade lasts (docs/plans/transitions.md 4): the fresh-image hold is anchored
     /// to its end, so a long transition still gets the same clear time after it. 1.5 = the classic timing.
     var transitionDuration: Float = 1.5
+    /// A drop (docs/plans/drop-transitions.md 3.5): the fresh fade is done by the cut, so the base effects
+    /// are fully calm on the new picture's first frame. nil = the bell timing.
+    var freshFadeCap: Float? = nil
 
     static let defaultIntensity: Float = 0.5
 
@@ -104,7 +107,7 @@ nonisolated struct EffectLook: Sendable, Equatable {
         guard let age = imageAge else { return 1 }
         let k = min(max(imageInterval / 30, 0.33), 1)
         let extra = max(transitionDuration - 1.5, 0)
-        let fade = max(Tuning.freshFade, 0.4 * transitionDuration)
+        let fade = min(max(Tuning.freshFade, 0.4 * transitionDuration), max(freshFadeCap ?? .infinity, 0.05))
         let holdEnd = max((Tuning.freshHoldEnd + extra) * k, transitionDuration)
         let end = max((Tuning.freshEnd + extra) * k, holdEnd + 1)
         return 1 - Self.smoothstep(0, fade, age) * (1 - Self.smoothstep(holdEnd, end, age))

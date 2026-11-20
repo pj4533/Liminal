@@ -299,7 +299,8 @@ nonisolated struct FootageWeaver {
         if let grid {
             let boundary = grid.nextBoundary(after: max(last.start + last.fadeIn, t + 0.5))
             let fade = boundary.fill.dissolveBeats * grid.beatDuration
-            let start = boundary.time - fade * 0.5
+            // The piece change is complete on the downbeat, with the picture's drop cut (drop-transitions.md 3.5).
+            let start = boundary.time - fade
             guard hasClip, t >= start - timing.lead else { return .none }
             awaiting = true
             return .prepare(makeRequest(slot: 1 - last.slot, start: start, fadeIn: fade, conditions: c,

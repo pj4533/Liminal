@@ -15,6 +15,8 @@ import Foundation
 
 nonisolated enum TransitionFamily: String, Sendable {
     case flow, colour, geometric, temporal
+    /// Drop families (docs/plans/drop-transitions.md 4.1): row tears and rolls, block glitches, hard cuts.
+    case scan, block, cut
 }
 
 /// Raw values are the shader's `txStyle` (EffectsRenderer.metal, TX_* constants).
@@ -23,9 +25,30 @@ nonisolated enum TransitionStyle: Int, CaseIterable, Sendable {
     /// Default of `compute` (golden parity) and the hidden control of the judge sets; never picked.
     case classic = 0
     case tide, facets, prism, rainbow, kaleidoscope, whirlpool, dive, afterimage, ripple, solarize, melt, shatter
+    // Drop styles (docs/plans/drop-transitions.md 4.1): glitches that build over a Lo-Fi drum fill and end
+    // on the downbeat with a hard cut to the new picture. Never offered outside a drop.
+    case tear = 13, blocks, mosh, crush, vhs, sort, punch, slitscan, jumpcut, fracture, shutter, `static`, bleed, scramble
 
-    /// The styles the director picks from.
-    static let family: [TransitionStyle] = allCases.filter { $0 != .classic }
+    /// The styles the director picks from for an ordinary (bell) crossfade: surge, swap, settle.
+    static let family: [TransitionStyle] = [.tide, .facets, .prism, .rainbow, .kaleidoscope, .whirlpool, .dive,
+                                            .afterimage, .ripple, .solarize, .melt, .shatter]
+
+    /// The new glitch styles of a drop.
+    static let glitches: [TransitionStyle] = [.tear, .blocks, .mosh, .crush, .vhs, .sort, .punch, .slitscan,
+                                              .jumpcut, .fracture, .shutter, .static, .bleed, .scramble]
+    /// Bell styles that also run as an "out" in a drop (the surge without the settle). Rainbow, afterimage,
+    /// tide, ripple, prism and solarize are left out: their identity is the gradual exchange or the settle.
+    static let outs: [TransitionStyle] = [.whirlpool, .kaleidoscope, .dive, .melt, .shatter, .facets]
+    /// The styles the director picks from for a drop.
+    static let dropFamily: [TransitionStyle] = glitches + outs
+
+    /// Offered in a drop below intensity 0.25 (each with a blackout or collapse finisher).
+    var isDropGentle: Bool {
+        switch self {
+        case .tear, .crush, .vhs, .slitscan, .shutter, .melt: return true
+        default: return false
+        }
+    }
 
     var name: String { String(describing: self) }
 
@@ -40,6 +63,9 @@ nonisolated enum TransitionStyle: Int, CaseIterable, Sendable {
         case .prism, .rainbow, .solarize: return .colour
         case .kaleidoscope, .whirlpool, .dive, .shatter, .facets: return .geometric
         case .afterimage: return .temporal
+        case .tear, .vhs, .sort, .slitscan: return .scan
+        case .blocks, .mosh, .crush, .static, .bleed, .scramble: return .block
+        case .punch, .jumpcut, .fracture, .shutter: return .cut
         }
     }
 
@@ -68,6 +94,10 @@ nonisolated enum TransitionStyle: Int, CaseIterable, Sendable {
         case .solarize:     return TransitionShape(s0: 0.30, s1: 0.68, duration: (2.4, 3.4), soft: 0.30)
         case .melt:         return TransitionShape(s0: 0.30, s1: 0.70, duration: (2.6, 3.6), soft: 0.12)
         case .shatter:      return TransitionShape(s0: 0.30, s1: 0.70, duration: (2.2, 3.0), soft: 0.20)
+        // Drop styles: the build is the whole duration (the fill), hard block edges where Bleed leaks.
+        case .tear, .blocks, .mosh, .crush, .vhs, .sort, .punch, .slitscan, .jumpcut, .fracture, .shutter,
+             .static, .bleed, .scramble:
+            return TransitionShape(s0: 0, s1: 1, duration: (1.5, 4.5), soft: 0.02)
         }
     }
 }
@@ -92,6 +122,9 @@ nonisolated struct TransitionSpec: Sendable, Equatable {
     var duration: Float
     /// Reverses the swap order (edges in, darks first, near first ...).
     var flip: Bool
+    /// A drop (docs/plans/drop-transitions.md): the outgoing picture breaks up over the whole duration and
+    /// the new one is cut in at progress 1. nil = the bell (surge, swap, settle).
+    var drop: DropPlan? = nil
 
     static let classic = TransitionSpec(style: .classic, seed: 0, duration: 1.5, flip: false)
 
@@ -108,6 +141,7 @@ nonisolated struct TransitionSpec: Sendable, Equatable {
     /// Classic keeps its sin(pi * tp).
     func envelope(_ tp: Float) -> Float {
         let t = min(max(tp, 0), 1)
+        if let d = drop { return t >= 1 ? 0 : d.strength * d.intensity(t) }
         if style == .classic { return sin(Float.pi * t) }
         let s = style.shape
         return EffectLook.smoothstep(0, s.s0, t) * (1 - EffectLook.smoothstep(s.s1, 1, t))
@@ -116,6 +150,11 @@ nonisolated struct TransitionSpec: Sendable, Equatable {
     /// Swap progress M(tp), 0...1, confined to the swap window. Classic: ease-in-out cubic over the whole duration.
     func swap(_ tp: Float) -> Float {
         let t = min(max(tp, 0), 1)
+        if let d = drop {
+            // Only Bleed lets blocks of the new picture through before the cut.
+            if t >= 1 { return 1 }
+            return style == .bleed ? DropPlan.bleedLeak * d.strength * d.intensity(t) : 0
+        }
         if style == .classic { return t < 0.5 ? 4 * t * t * t : 1 - pow(-2 * t + 2, 3) / 2 }
         // Linear inside the window: the mask's own smoothstep gives every pixel a C1 change, and a
         // linear sweep spreads the exchange evenly over the window (a smoothstep sweep crowded it
@@ -131,7 +170,134 @@ nonisolated struct TransitionSpec: Sendable, Equatable {
     var musicDuration: Double { Double(2 * swapCentre * duration) }
 
     /// Signed mask softness for the shader (`txSoft`): negative reverses the order.
-    var shaderSoft: Float { style.shape.soft * (flip ? -1 : 1) }
+    var shaderSoft: Float { (drop != nil ? 0.02 : style.shape.soft) * (flip ? -1 : 1) }
+
+    /// Finisher ramp of a drop (`txFinish`), 0...1 over the last part of the build; 0 for a bell and after the cut.
+    func finish(_ tp: Float) -> Float {
+        guard let d = drop, d.finisher != .none, tp < 1 else { return 0 }
+        let share = max(d.finisher.window(build: duration), 0)
+        return min(max((tp - (1 - share)) / share, 0), 1)
+    }
+
+    /// A pinned drop (debug flags, shader bench): the style's default colour layer and finisher unless given.
+    static func pinnedDrop(_ style: TransitionStyle, seed n: Int, duration: Float, colour: DropColour? = nil,
+                           finisher: DropFinisher? = nil, strength: Float = 1) -> TransitionSpec {
+        var s = pinned(style, seed: n, duration: duration)
+        s.duration = duration
+        s.drop = DropPlan(colour: colour ?? style.defaultDropColour, finisher: finisher ?? style.defaultDropFinisher,
+                          curve: DropPlan.curve(build: duration), strength: strength)
+        return s
+    }
+}
+
+// MARK: - Drops (docs/plans/drop-transitions.md 3-4)
+
+/// Colour layer of a drop, on the blended colour at the end of the shader (`txLayers % 8`).
+nonisolated enum DropColour: Int, CaseIterable, Sendable {
+    case none, split, posterize, falsecolour, grain, scanlines
+    var name: String { String(describing: self) }
+    init?(name: String) {
+        guard let c = Self.allCases.first(where: { $0.name == name.lowercased() }) else { return nil }
+        self = c
+    }
+}
+
+/// The last part of a drop's build (`txLayers / 8`): the frame before the cut is its peak.
+nonisolated enum DropFinisher: Int, CaseIterable, Sendable {
+    case none, whiteout, blackout, invert, collapse
+    var name: String { String(describing: self) }
+    init?(name: String) {
+        guard let c = Self.allCases.first(where: { $0.name == name.lowercased() }) else { return nil }
+        self = c
+    }
+    /// Seconds -> share of the build the finisher ramps over (at least two 60 Hz frames).
+    func window(build: Float) -> Float {
+        let b = max(build, 0.05)
+        let minShare = (2.0 / 60.0) / b
+        switch self {
+        case .none: return 0
+        case .whiteout: return min(max(0.18, minShare), 1)
+        case .blackout: return min(max(0.12, minShare), 1)
+        case .invert: return min(minShare, 1)
+        case .collapse: return min(max(0.15, minShare), 1)
+        }
+    }
+}
+
+/// What a drop adds to its `TransitionSpec`.
+nonisolated struct DropPlan: Sendable, Equatable {
+    var colour: DropColour
+    var finisher: DropFinisher
+    /// k of the intensity curve a(p) = (e^(k p) - 1) / (e^k - 1).
+    var curve: Float
+    /// 1 at a turnaround (new take), 0.7 at the halfway change or without drum takes.
+    var strength: Float
+
+    static let halfwayStrength: Float = 0.7
+    static let bleedLeak: Float = 0.35
+
+    /// The build's intensity at progress p (before `strength`): rises monotonically to 1 at p = 1.
+    func intensity(_ p: Float) -> Float {
+        let t = min(max(p, 0), 1)
+        let k = max(curve, 0.01)
+        return (exp(k * t) - 1) / (exp(k) - 1)
+    }
+
+    /// Steeper for builds of 1.2 s or more, so short builds are visible sooner.
+    static func curve(build seconds: Float) -> Float { seconds >= 1.2 ? 4 : 2.5 }
+}
+
+/// One frame of a drop, at the time the frame reaches the display.
+nonisolated struct DropFrame: Sendable, Equatable {
+    /// 0...1 over the build.
+    var progress: Float
+    /// progress >= 1: render an ordinary frame of the new picture.
+    var done: Bool
+    /// 0...1 transient on each of the fill's hits.
+    var kick: Float = 0
+    /// Integer-valued re-hash counter: hits so far plus a 4 -> 24 Hz clock.
+    var step: Float = 0
+
+    /// - Parameters: hitsBefore = fill hits at or before the frame, sinceLastHit = seconds since the latest one.
+    static func make(progress p: Double, build seconds: Double, hitsBefore: Int, sinceLastHit: Double?) -> DropFrame {
+        let t = min(max(p, 0), 1)
+        let kick = sinceLastHit.map { $0 >= 0 ? exp(-$0 / 0.07) : 0 } ?? 0
+        let clock = floor(max(seconds, 0) * (4 * t + 10 * t * t))
+        return DropFrame(progress: Float(t), done: p >= 1, kick: Float(kick), step: Float(hitsBefore) + Float(clock))
+    }
+
+    /// A drop frame from a time list (seconds from the build start), as the shader bench and tests give it.
+    static func make(at time: Double, build seconds: Double, hits: [Double]) -> DropFrame {
+        var n = 0
+        var last: Double?
+        for h in hits where h <= time { n += 1; last = h }
+        return make(progress: seconds > 0 ? time / seconds : 1, build: seconds, hitsBefore: n, sinceLastHit: last.map { time - $0 })
+    }
+}
+
+nonisolated extension TransitionStyle {
+    /// The heaviest colour layer that suits the style (pinned drops, offline clips).
+    var defaultDropColour: DropColour {
+        switch self {
+        case .crush: return .posterize
+        case .tear, .slitscan, .punch: return .split
+        case .vhs, .shutter: return .scanlines
+        case .blocks, .mosh, .bleed, .scramble: return .falsecolour
+        case .static, .jumpcut: return .grain
+        case .sort, .fracture: return .posterize
+        default: return .split
+        }
+    }
+
+    var defaultDropFinisher: DropFinisher {
+        switch self {
+        case .tear, .vhs, .crush: return .collapse
+        case .punch, .sort: return .whiteout
+        case .blocks, .static, .scramble: return .invert
+        case .shutter: return .none
+        default: return .blackout
+        }
+    }
 }
 
 // MARK: - What a style pushes (plan 6)
@@ -240,6 +406,49 @@ nonisolated struct TransitionBoost: Sendable, Equatable {
             b.noise = tri(0.022, 0.048, 0.088) * e   // round 2: a little less, softer edge ("harsh, messy")
             b.chromaticMul = 1 + 3 * e
             b.water = tri(0.03, 0.06, 0.11) * e
+        // Drop glitches (docs/plans/drop-transitions.md 4.1): the shader does the breaking up; these add
+        // the live effects' share. `shaderAmount` is the style's own amount, read with txEnv.
+        case .tear:
+            b.shaderAmount = tri(0.15, 0.30, 0.45)
+            b.chromaticMul = 1 + 2 * e
+        case .blocks:
+            b.shaderAmount = tri(0.10, 0.20, 0.30)
+            b.chromaticMul = 1 + 2 * e
+        case .mosh:
+            // Datamosh: the trails hold the old picture while its blocks slide.
+            b.shaderAmount = tri(0.02, 0.05, 0.08)
+            b.feedbackTarget = 0.72
+            b.feedbackPull = e
+            b.feedbackWarpMul = 1 + 4 * e
+        case .crush:
+            b.shaderAmount = tri(40, 24, 14)   // cells across the frame at the peak
+        case .vhs:
+            b.shaderAmount = tri(0.2, 0.5, 0.8)   // vertical roll
+            b.chromaticAdd = 0.012 * e
+            b.noise = tri(0, 0.006, 0.012) * e
+        case .sort:
+            b.shaderAmount = tri(0.08, 0.16, 0.24)   // smear reach
+            b.bloomAdd = 0.10 * e
+        case .punch:
+            b.shaderAmount = tri(0.20, 0.35, 0.50)   // zoom at the peak
+            b.chromaticMul = 1 + 4 * e
+        case .slitscan:
+            b.shaderAmount = tri(0.05, 0.10, 0.16)
+            b.chromaticMul = 1 + 2 * e
+        case .jumpcut:
+            b.shaderAmount = tri(0.10, 0.20, 0.30)
+        case .fracture:
+            b.shaderAmount = tri(0.5, 0.8, 1.0)
+            b.chromaticMul = 1 + 2 * e
+        case .shutter:
+            b.chromaticMul = 1 + 3 * e
+        case .static:
+            b.shaderAmount = tri(0.6, 0.8, 0.95)   // noise coverage at the peak
+        case .bleed:
+            b.shaderAmount = tri(0.10, 0.20, 0.30)
+            b.chromaticMul = 1 + 2 * e
+        case .scramble:
+            b.chromaticMul = 1 + 2 * e
         }
         return b
     }
@@ -312,7 +521,7 @@ nonisolated struct TransitionDirector: Sendable {
         let e = min(max(energy ?? 0.5, 0), 1)
         let d = EffectLook.macroDrive(time: time, intensity: i)
         var style: TransitionStyle
-        if let p = pinnedStyle {
+        if let p = pinnedStyle, TransitionStyle.family.contains(p) || p == .classic {
             style = p
         } else {
             let pool = Self.eligible(history: history, intensity: i, hasDepth: hasDepth)
@@ -337,6 +546,100 @@ nonisolated struct TransitionDirector: Sendable {
             return spec
         }
         return TransitionSpec(style: style, seed: seed, duration: duration, flip: flip)
+    }
+
+    // MARK: Drops (docs/plans/drop-transitions.md 4.4)
+
+    /// Debug: always this colour layer / finisher in a drop.
+    var pinnedColour: DropColour?
+    var pinnedFinisher: DropFinisher?
+    private(set) var finisherHistory: [DropFinisher] = []
+
+    /// Drop weights: wild stretches favour block and cut glitches, clear stretches the scan ones; short
+    /// builds favour the styles that read within a beat.
+    static func dropWeight(_ s: TransitionStyle, drive d: Float, build seconds: Float) -> Float {
+        var w: Float = TransitionStyle.outs.contains(s) ? 0.5 : 1
+        switch s {
+        case .blocks, .mosh, .static, .scramble, .jumpcut, .fracture, .punch: w *= 1 + d
+        case .tear, .vhs, .slitscan, .crush, .shutter, .sort: w *= 2 - d
+        default: break
+        }
+        if seconds < 1.5, [.punch, .jumpcut, .shutter, .static].contains(s) { w *= 2 }
+        return max(w, 0.01)
+    }
+
+    /// Eligible drop styles: the gentle set below intensity 0.25, then the shared recency and family rules
+    /// (relaxed step by step only when nothing is left).
+    static func dropEligible(history: [TransitionStyle], intensity: Float) -> [TransitionStyle] {
+        let base = TransitionStyle.dropFamily.filter { intensity >= 0.25 || $0.isDropGentle }
+        let last = history.last
+        for k in stride(from: recency, through: 1, by: -1) {
+            let recent = Set(history.suffix(k))
+            for sameFamilyOK in [false, true] {
+                let pool = base.filter { s in
+                    !recent.contains(s) && (sameFamilyOK || last == nil || s.familyGroup != last!.familyGroup)
+                }
+                if !pool.isEmpty { return pool }
+            }
+        }
+        return base.filter { $0 != last }.isEmpty ? base : base.filter { $0 != last }
+    }
+
+    /// The drop for one Lo-Fi drum boundary. Draws the style, then the colour layer and the finisher.
+    /// - Parameters: build = seconds from the fill start to the downbeat; halfway = the change at beat 32
+    ///   (the same take continues); strength = 1 at a turnaround, 0.7 at halfway or without drum takes.
+    mutating func nextDrop(time: Float, intensity: Float, build: Float, halfway: Bool, strength: Float) -> TransitionSpec {
+        let i = min(max(intensity, 0), 1)
+        let d = EffectLook.macroDrive(time: time, intensity: i)
+        var style: TransitionStyle
+        if let p = pinnedStyle, TransitionStyle.dropFamily.contains(p) {
+            style = p
+        } else {
+            let pool = Self.dropEligible(history: history, intensity: i)
+            let ws = pool.map { Self.dropWeight($0, drive: d, build: build) }
+            var r = nextUnit() * ws.reduce(0, +)
+            style = pool.last!
+            for (s, w) in zip(pool, ws) {
+                if r < w { style = s; break }
+                r -= w
+            }
+        }
+        history.append(style)
+        if history.count > 16 { history.removeFirst(history.count - 16) }
+
+        // Colour layer: crush is always posterized; otherwise a draw weighted toward the style's own layer.
+        var colour: DropColour
+        let cu = nextUnit()
+        if style == .crush {
+            colour = .posterize
+        } else if cu < 0.4 {
+            colour = style.defaultDropColour
+        } else {
+            let others = DropColour.allCases
+            colour = others[min(Int((cu - 0.4) / 0.6 * Float(others.count)), others.count - 1)]
+        }
+        if let c = pinnedColour { colour = c }
+
+        // Finisher: never twice running; halfway never draws a whiteout or an invert, and below intensity
+        // 0.25 only the blackout or the collapse hide the cut.
+        var allowed: [DropFinisher] = halfway ? [.none, .blackout, .collapse] : DropFinisher.allCases
+        if i < 0.25 { allowed = [.blackout, .collapse] }
+        if style == .shutter { allowed = allowed.filter { $0 != .collapse } }   // the bars close by themselves
+        if let last = finisherHistory.last, allowed.count > 1 { allowed.removeAll { $0 == last } }
+        let fu = nextUnit()
+        var finisher = allowed[min(Int(fu * Float(allowed.count)), allowed.count - 1)]
+        if let f = pinnedFinisher { finisher = f }
+        finisherHistory.append(finisher)
+        if finisherHistory.count > 8 { finisherHistory.removeFirst(finisherHistory.count - 8) }
+
+        let seed = nextUnit(), flip = nextUnit() < 0.5
+        let duration = max(build, 0.05)
+        var spec = pinnedSeed.map { TransitionSpec.pinned(style, seed: $0, duration: duration) }
+            ?? TransitionSpec(style: style, seed: seed, duration: duration, flip: flip)
+        spec.duration = duration
+        spec.drop = DropPlan(colour: colour, finisher: finisher, curve: DropPlan.curve(build: duration),
+                             strength: min(max(strength, 0), 1))
+        return spec
     }
 
     /// 1.5...4.5 s and at most 20 % of the image interval (never below 1.5 s).

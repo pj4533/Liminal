@@ -77,6 +77,11 @@ struct EffectsUniforms {
     var videoKeyAmtB: Float = 0
     var tunnelStrength: Float = 0  // Maximum peripheral radial displacement during the image push
     var outgoingZoomScale: Float = 0  // Frozen crop of the fading image; zero outside a swap
+    // Drop transitions (docs/plans/drop-transitions.md 5; appended last, defaults 0 = no drop).
+    var txStep: Float = 0  // integer-valued re-hash counter (DropFrame.step)
+    var txKick: Float = 0  // 0...1 transient on each fill hit
+    var txLayers: Float = 0  // DropColour + 8 * DropFinisher
+    var txFinish: Float = 0  // finisher ramp, 0...1
 }
 
 /// Ghost tap data for shader. Must match Metal struct layout.

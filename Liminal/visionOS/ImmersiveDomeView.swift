@@ -41,7 +41,11 @@ struct CGImageTransitionState {
     /// Raw linear transition progress (0-1)
     var transitionProgress: Float {
         guard let startTime = transitionStartTime else { return 0 }
-        if let beatReveal { return max(0.000001, Float(beatReveal.progress(at: ArchiveFootageService.uptime()))) }
+        if let beatReveal {
+            // A drop is evaluated when the frame reaches the display, so its cut lands on the downbeat.
+            let lead = beatReveal.isDrop ? LofiImageReveal.displayLead : 0
+            return max(0.000001, Float(beatReveal.progress(at: ArchiveFootageService.uptime() + lead)))
+        }
         let elapsed = Date().timeIntervalSince(startTime)
         let progress = min(elapsed / Double(max(spec.duration, 0.1)), 1.0)
         return Float(progress)
@@ -58,6 +62,12 @@ struct CGImageTransitionState {
     var isTransitioning: Bool {
         guard transitionStartTime != nil else { return false }
         return transitionProgress < 1.0
+    }
+
+    /// The running drop's frame at this frame's presentation time (nil outside a drop).
+    var dropFrame: DropFrame? {
+        guard transitionStartTime != nil, let beatReveal, beatReveal.isDrop else { return nil }
+        return beatReveal.frame(presentedAt: ArchiveFootageService.uptime() + LofiImageReveal.displayLead)
     }
 
     mutating func setInitialImage(_ image: CGImage) {
@@ -485,6 +495,7 @@ struct ImmersiveDomeView: View {
             var transitionStartEffectTime: Float?
             var zoom = ImageZoomTiming()
             var lastEnergy: Float?   // music energy of the last frame (nil when the visuals do not follow the music)
+            var wasInDrop = false    // the previous frame was inside a drop build (its successor is the cut)
             // Spatial comfort: Depth setting eased, slow re-centre on the head (docs/plans/spatial.md 5).
             var depthSmoother = DepthSettingSmoother()
             var recentre = ShellRecentre(centre: (shellRoot?.position ?? Self.shellCentre) + DebugLaunchOptions.shellHeadOffset)
@@ -630,11 +641,20 @@ struct ImmersiveDomeView: View {
                 // (transitionProgress stays at 1.0 after transition completes)
                 // Per-image vibrance factors (measured once per image, cached), blended across a crossfade
                 var vibrance = ImageColorStats.cachedFactors(key: cgImage) { cgImage }
+                // A drop (docs/plans/drop-transitions.md 3.5): only the old picture until the cut, then a step.
+                let dropFrame = transitionState.dropFrame
+                let inDrop = dropFrame.map { !$0.done } ?? false
                 if transitionState.isTransitioning, let prev = transitionState.previousImage {
                     let from = ImageColorStats.cachedFactors(key: prev) { prev }
-                    vibrance = VibranceFactors.lerp(from, vibrance, transitionState.transitionProgress)
+                    vibrance = inDrop ? from : VibranceFactors.lerp(from, vibrance, transitionState.transitionProgress)
                 }
                 let transitionProgress = transitionState.isTransitioning ? transitionState.transitionProgress : 0
+                // The first clean frame after a drop: the trails hold the wrecked old picture, so none of it.
+                let cutFrame = wasInDrop && !inDrop
+                if cutFrame, let reveal = transitionState.beatReveal {
+                    LMLog.visual.info("Lo-Fi drop cut frame starts \((ArchiveFootageService.uptime() - (reveal.downbeat - LofiImageReveal.displayLead)) * 1000, format: .fixed(precision: 1)) ms from downbeat minus lead")
+                }
+                wasInDrop = inDrop
                 // Music -> visuals: one seqlock read and ~10 one-pole updates. visionOS has no un-synced
                 // hue drift (baseHueRate 0). Frozen time bypasses the reactor (deterministic captures).
                 let musicBus = music.musicState
@@ -653,7 +673,8 @@ struct ImmersiveDomeView: View {
                         ? intensityTarget : intensitySmoother.next(target: intensityTarget, time: effectTime),
                     imageAge: transitionStartEffectTime.map { effectTime - $0 }.flatMap { $0 >= 0 ? $0 : nil },
                     imageInterval: Float(settings.imageInterval),
-                    transitionDuration: transitionState.spec.duration)
+                    transitionDuration: transitionState.spec.duration,
+                    freshFadeCap: transitionState.spec.drop != nil ? transitionState.spec.duration : nil)
                 let footageFrame = footage.frame(image: cgImage)
                 if frameCount % 30 == 0 {
                     footage.update(.init(transitionRunning: transitionState.isTransitioning,
@@ -672,8 +693,10 @@ struct ImmersiveDomeView: View {
                     zoomAge: zoom.age(at: effectTime),
                     outgoingZoomScale: transitionState.isTransitioning ? zoom.outgoingScale : 0,
                     transition: transitionState.spec,
-                    video: footageFrame.state
+                    video: footageFrame.state,
+                    drop: transitionState.isTransitioning ? dropFrame : nil
                 )
+                if cutFrame { uniforms.feedbackMix = 0 }
                 // Two footage layers (A27): a layer without its stage texture is skipped.
                 if footageFrame.texture == nil { uniforms.videoMix = 0 }
                 if footageFrame.textureB == nil { uniforms.videoMixB = 0 }
@@ -701,10 +724,13 @@ struct ImmersiveDomeView: View {
                 let meshStart = Date()
                 let depthSetting = depthSmoother.next(target: DebugLaunchOptions.shellDepth ?? settings.depthStrength,
                                                       dt: Float(frameInterval / 1000))
-                let reliefK = ShellLayout.reliefStrength(
-                    depth: depthSetting,
-                    drive: look.drive(time: effectTime), transitionProgress: transitionProgress)
-                let reliefW = relief.weight(transitionProgress: transitionState.isTransitioning ? transitionState.transitionProgress : nil,
+                // A drop flattens the shell as the picture breaks up and steps to the new relief at the cut.
+                let reliefK = inDrop
+                    ? ShellLayout.reliefStrength(depth: depthSetting, drive: look.drive(time: effectTime),
+                                                 dropEnvelope: transitionState.spec.envelope(transitionProgress))
+                    : ShellLayout.reliefStrength(depth: depthSetting, drive: look.drive(time: effectTime),
+                                                 transitionProgress: transitionState.spec.drop != nil ? 0 : transitionProgress)
+                let reliefW = relief.weight(transitionProgress: inDrop ? 0 : (transitionState.isTransitioning && transitionState.spec.drop == nil ? transitionState.transitionProgress : nil),
                                             now: frameStartTime.timeIntervalSince1970)
                 // Music -> geometry: breathing swells 2 -> 3 cm with the music's energy and slow pulse.
                 let breathing = ShellLayout.breathingAmplitude(amount: modulation.amount, energy: modulation.energy,

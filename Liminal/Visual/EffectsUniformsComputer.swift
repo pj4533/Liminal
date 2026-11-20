@@ -44,6 +44,8 @@ enum EffectsUniformsComputer {
     ///     added after the budget, times the style's envelope; `.classic` is the pre-family crossfade.
     ///     With `transitionProgress` 0 every style gives the same uniforms as no transition at all.
     ///   - video: Archive footage of this frame (docs/plans/archive-video.md 2.2). `.off` = no footage.
+    ///   - drop: The frame of a running drop (docs/plans/drop-transitions.md 3.3), at its presentation time.
+    ///     With `done` (or progress 1 of a drop spec) the result is exactly a frame without a transition.
     /// - Returns: Complete EffectsUniforms ready for the shader
     static func compute(
         time: Float,
@@ -56,9 +58,15 @@ enum EffectsUniformsComputer {
         zoomAge: Float? = nil,
         outgoingZoomScale: Float = 0,
         transition: TransitionSpec = .classic,
-        video: VideoCompositeState = .off
+        video: VideoCompositeState = .off,
+        drop: DropFrame? = nil
     ) -> EffectsUniforms {
         typealias T = EffectLook.Tuning
+        // A finished drop is an ordinary frame of the new picture: no transition, no outgoing crop.
+        let isDrop = transition.drop != nil
+        let dropDone = isDrop && ((drop?.done ?? false) || transitionProgress >= 1)
+        let transitionProgress: Float = dropDone ? 0 : (isDrop ? (drop?.progress ?? transitionProgress) : transitionProgress)
+        let outgoingZoomScale: Float = dropDone ? 0 : outgoingZoomScale
         let a = music.amount
         let e = music.energy
         let i = min(max(look.intensity, 0), 1)
@@ -72,7 +80,7 @@ enum EffectsUniformsComputer {
         let inTransition = transitionProgress > 0
         let env = inTransition ? transition.envelope(tp) : 0
         // The slow onset follower may swell a style's envelope by up to 12 % (plan 7.3); the swap never moves.
-        let swell = transition.style == .classic ? 1 : 1 + 0.12 * min(max(a * music.pulseMotion, 0), 1)
+        let swell = transition.style == .classic || isDrop ? 1 : 1 + 0.12 * min(max(a * music.pulseMotion, 0), 1)
         let tb = inTransition ? TransitionBoost.make(transition, intensity: i, envelope: env * swell, tp: tp) : TransitionBoost()
 
         // Framing belongs to the image. Clarity, music, and transition boosts cannot reverse it.
@@ -166,6 +174,15 @@ enum EffectsUniformsComputer {
             uniforms.txSeed = transition.seed
             uniforms.txSoft = transition.shaderSoft
             uniforms.txAmount = tb.shaderAmount
+            if let plan = transition.drop {
+                // The drummer's own hits jolt the picture; the step counter re-hashes the glitches.
+                let kick = drop?.kick ?? 0
+                uniforms.txKick = kick
+                uniforms.txStep = drop?.step ?? floor(transition.duration * (4 * tp + 10 * tp * tp))
+                uniforms.txLayers = Float(plan.colour.rawValue + 8 * plan.finisher.rawValue)
+                uniforms.txFinish = transition.finish(tp)
+                uniforms.chromaticAmount += 0.012 * kick * env
+            }
         }
         // Archive footage (docs/plans/archive-video.md 2.2): with `.off` the video uniforms stay 0 and
         // nothing above changes.

@@ -2,25 +2,91 @@ import Foundation
 import Combine
 import OSLog
 
-/// A Lo-Fi image change timed to the drums. The style comes from the `TransitionDirector`, like every
-/// other crossfade, so Lo-Fi keeps the whole family. Its timing puts the end of that style's swap
-/// window on the fill's downbeat: the effects surge and the pictures exchange inside the warp while
-/// the drums fill, the new picture is fully in on the downbeat, and the look settles into the new section.
+/// A Lo-Fi image change timed to the drums (docs/plans/drop-transitions.md).
+///
+/// A drop (the default): the outgoing picture starts breaking up when the outgoing take's fill starts,
+/// gets more broken up through the fill, and the new picture is cut in, clean, on the audible downbeat of
+/// the next section. "Fade out, but no fade in." The renderers evaluate it at the time their frame reaches
+/// the display (`displayLead`), so the first clean frame lands on the hit.
+///
+/// The bell (`-LiminalDropOff YES`, T43): the end of the style's swap window on the downbeat, then the settle.
 nonisolated struct LofiImageReveal: Sendable {
     let downbeat: Double
+    /// Uptime of the fill's start (a drop's progress 0); for a bell, its start.
+    let fillStart: Double
     let spec: TransitionSpec
-    var duration: Double { Double(spec.duration) }
-    /// The exchange completes on the downbeat (`swap(progress(at: downbeat)) == 1`).
-    var start: Double { downbeat - Double(spec.style.shape.s1) * duration }
-    func progress(at uptime: Double) -> Double { min(1, max(0, (uptime - start) / duration)) }
+    /// Uptime of the fill's attacks, ascending (at most 32).
+    var hits: [Double] = []
+    var fill: LofiFill = .turnaround
 
-    /// - Parameter pick: the director's choice for this crossfade, given the time between image changes.
-    static func next(on grid: LofiTakeGrid, after uptime: Double,
-                     pick: (_ imageInterval: Double) -> TransitionSpec) -> Self {
+    /// The image is picked up and uploaded this long before the build's first visible change (T39 hitch).
+    static let preRoll = 0.15
+
+    /// Seconds from a frame's draw to its presentation (docs/plans/drop-transitions.md 3.2): macOS 25 ms
+    /// (a measured value replaces it once the presented handler has seen frames); visionOS 28 ms, an
+    /// estimate (two 90 Hz frames plus half a frame) that only a device can check. `-LiminalDropLead`.
+    static var displayLead: Double {
+        if let l = DebugLaunchOptions.dropLead { return l }
+        #if os(visionOS)
+        return 0.028
+        #else
+        return 0.025
+        #endif
+    }
+
+    var isDrop: Bool { spec.drop != nil }
+    var duration: Double { isDrop ? downbeat - fillStart : Double(spec.duration) }
+    /// When the image is shown (the crossfade machinery starts): the pre-roll before a drop's build.
+    var start: Double { isDrop ? fillStart - Self.preRoll : fillStart }
+
+    func progress(at uptime: Double) -> Double { min(1, max(0, rawProgress(uptime))) }
+
+    private func rawProgress(_ t: Double) -> Double { (t - fillStart) / max(duration, 1e-3) }
+
+    /// The drop frame presented at `t` (uptime): progress, cut, the hit transient and the step counter.
+    func frame(presentedAt t: Double) -> DropFrame {
+        var n = 0
+        var last: Double?
+        for h in hits where h <= t { n += 1; last = h }
+        return DropFrame.make(progress: rawProgress(t), build: duration, hitsBefore: n, sinceLastHit: last.map { t - $0 })
+    }
+
+    /// The bell reveal of T43: the swap ends on the downbeat.
+    static func bell(downbeat: Double, spec: TransitionSpec) -> Self {
+        Self(downbeat: downbeat, fillStart: downbeat - Double(spec.style.shape.s1) * Double(spec.duration), spec: spec)
+    }
+
+    /// Shortest time between planning and the downbeat that still gets a drop; later boundaries are skipped
+    /// (late is worse than missing).
+    static let minimumPlanning = 0.6
+
+    /// The next drum boundary after `uptime` and its reveal, or nil when it is too close to plan.
+    /// - Parameters: fills = the audible take's fills (nil: the default builds); hasDrums = recorded drum
+    ///   takes are playing; pickDrop(build, fill, strength) and pickBell(imageInterval) ask the director.
+    static func next(on grid: LofiTakeGrid, after uptime: Double, now: Double, fills: LofiTakeFills?, hasDrums: Bool,
+                     drop: Bool = true,
+                     pickDrop: (_ build: Double, _ fill: LofiFill, _ strength: Float) -> TransitionSpec,
+                     pickBell: (_ imageInterval: Double) -> TransitionSpec) -> (boundary: Double, reveal: Self?) {
         let boundary = grid.nextBoundary(after: uptime)
         // Boundaries after the turnaround run at the committed new tempo (`nextBoundary`).
-        let beat = boundary.time > grid.origin + 64 * grid.beatDuration + 1e-9 ? grid.nextBeatDuration ?? grid.beatDuration : grid.beatDuration
-        return Self(downbeat: boundary.time, spec: beatAligned(pick(32 * beat), beat: beat))
+        let inTake = boundary.time <= grid.origin + 64 * grid.beatDuration + 1e-9
+        let beat = inTake ? grid.beatDuration : grid.nextBeatDuration ?? grid.beatDuration
+        guard drop else {
+            return (boundary.time, bell(downbeat: boundary.time, spec: beatAligned(pickBell(32 * beat), beat: beat)))
+        }
+        guard boundary.time - now >= minimumPlanning else { return (boundary.time, nil) }
+        let b: Double = boundary.fill == .halfway ? 32 : 64
+        // The fill belongs to the take that plays it; past this take the default build is used.
+        let takeFills = inTake && hasDrums ? fills ?? .defaults : .defaults
+        let startBeat = LofiFillDetector.clampedStartBeat(takeFills.startBeat(boundary.fill), boundary: b, beatDuration: beat)
+        var fillStart = boundary.time - (b - startBeat) * beat
+        fillStart = max(fillStart, now + preRoll)
+        let hits = inTake && hasDrums
+            ? takeFills.hits(boundary.fill).map { boundary.time - (b - $0) * beat }.filter { $0 >= fillStart }
+            : []
+        let strength: Float = boundary.fill == .turnaround && hasDrums ? 1 : DropPlan.halfwayStrength
+        let spec = pickDrop(boundary.time - fillStart, boundary.fill, strength)
+        return (boundary.time, Self(downbeat: boundary.time, fillStart: fillStart, spec: spec, hits: hits, fill: boundary.fill))
     }
 
     /// Snaps the lead-in (start to downbeat) to whole beats, at least two, so the surge begins on a beat of the fill.
@@ -80,6 +146,14 @@ final class VisualEngine: ObservableObject {
             else { LMLog.visual.warning("Unknown -LiminalTransitionStyle \(name, privacy: .public)") }
         }
         d.pinnedSeed = DebugLaunchOptions.transitionSeed
+        if let name = DebugLaunchOptions.dropColour {
+            if let c = DropColour(name: name) { d.pinnedColour = c }
+            else { LMLog.visual.warning("Unknown -LiminalDropColour \(name, privacy: .public)") }
+        }
+        if let name = DebugLaunchOptions.dropFinisher {
+            if let f = DropFinisher(name: name) { d.pinnedFinisher = f }
+            else { LMLog.visual.warning("Unknown -LiminalDropFinisher \(name, privacy: .public)") }
+        }
         return d
     }()
     private var scheduledTimer: Timer?
@@ -205,6 +279,15 @@ final class VisualEngine: ObservableObject {
         return spec
     }
 
+    private func pickDrop(build: Double, fill: LofiFill, strength: Float) -> TransitionSpec {
+        let c = pickContext
+        let spec = transitionDirector.nextDrop(time: c.effectTime, intensity: c.intensity, build: Float(build),
+                                               halfway: fill == .halfway, strength: strength)
+        let plan = spec.drop
+        LMLog.visual.info("🌀 TRANSITION drop style=\(spec.style.name, privacy: .public) colour=\(plan?.colour.name ?? "-", privacy: .public) finisher=\(plan?.finisher.name ?? "-", privacy: .public) build=\(String(format: "%.2f", build), privacy: .public)s strength=\(String(format: "%.2f", strength), privacy: .public) seed=\(String(format: "%.3f", spec.seed), privacy: .public)")
+        return spec
+    }
+
     /// Manually request the next image
     func advance() {
         guard fillTask == nil else { return }
@@ -240,7 +323,23 @@ final class VisualEngine: ObservableObject {
                 try? await Task.sleep(for: .milliseconds(15))
                 continue
             }
-            let cue = LofiImageReveal.next(on: grid, after: max(now(), lastDownbeat + 0.01)) { pickTransition(imageInterval: $0) }
+            // The audible take's fills, when the side channel describes the same take as the grid.
+            let transport = bus.transport()
+            let sameTake = transport.map { abs($0.origin - grid.origin) < 0.001 } ?? false
+            let timing = sameTake ? transport?.timing : nil
+            let hasDrums = timing.map { !$0.landmarks.isEmpty } ?? false
+            let planned = LofiImageReveal.next(
+                on: grid, after: max(now(), lastDownbeat + 0.01), now: now(), fills: timing?.fills, hasDrums: hasDrums,
+                drop: !DebugLaunchOptions.dropOff,
+                pickDrop: { pickDrop(build: $0, fill: $1, strength: $2) },
+                pickBell: { pickTransition(imageInterval: $0) })
+            guard let cue = planned.reveal else {
+                // Too close to plan a build: the picture stays for this boundary.
+                LMLog.visual.info("Lo-Fi image reveal skipped: downbeat \(planned.boundary, format: .fixed(precision: 3)) is \((planned.boundary - now()) * 1000, format: .fixed(precision: 0)) ms away")
+                lastDownbeat = planned.boundary
+                do { try await Task.sleep(for: .seconds(max(0, planned.boundary + 0.25 - now()))) } catch { return }
+                continue
+            }
             ArchiveFootageService.shared.expectNextImage(after: max(0, cue.downbeat - now()))
             // Give live generation most of the phrase, with six seconds left for
             // a local decode, crop, colour analysis and both platforms' GPU upload.
@@ -261,11 +360,16 @@ final class VisualEngine: ObservableObject {
                 stagedImage = imageQueue.standbyImage(index: standbyIndex)
             }
             do { try await Task.sleep(for: .seconds(max(0, cue.start - now()))) } catch { return }
+            // Route recovery re-arms the transport on a new origin: a cue planned on the old grid is re-planned.
+            if let fresh = bus.read().lofiTakeGrid, abs(fresh.nextBoundary(after: now()).time - cue.downbeat) > 0.001 {
+                LMLog.visual.info("Lo-Fi image reveal re-planned: the take grid moved")
+                continue
+            }
             if let item = stagedImage, !isClearing, imageQueue.store.clearGeneration == cacheEpoch {
                 reveal = cue
                 imageQueue.showReserved(item)
                 standbyIndex += 1
-                LMLog.visual.info("Lo-Fi image reveal at downbeat \(cue.downbeat, format: .fixed(precision: 3)); start error \((now() - cue.start) * 1000, format: .fixed(precision: 1)) ms")
+                LMLog.visual.info("Lo-Fi image reveal at downbeat \(cue.downbeat, format: .fixed(precision: 3)); start error \((now() - cue.start) * 1000, format: .fixed(precision: 1)) ms; \(cue.isDrop ? "drop" : "bell", privacy: .public) build \(cue.duration, format: .fixed(precision: 2)) s, \(cue.hits.count) hits")
             }
             stagedImage = nil
             lastDownbeat = cue.downbeat

@@ -79,9 +79,9 @@ nonisolated enum LofiFill: Sendable {
     var buildBeats: Double { self == .halfway ? 2 : 4 }
     var dissolveBeats: Double { self == .halfway ? 0.75 : 0.375 }
 
-    /// A smooth rise into one downbeat, followed by a much shorter release.
-    func accent(beatsFromBoundary beat: Double) -> Float {
-        let u = min(1, max(0, beat <= 0 ? 1 + beat / buildBeats : 1 - beat / 0.75))
+    /// A smooth rise into one downbeat, followed by a much shorter release (`release` beats; 0 = none).
+    func accent(beatsFromBoundary beat: Double, release: Double = 0.75) -> Float {
+        let u = min(1, max(0, beat <= 0 ? 1 + beat / buildBeats : (release > 0 ? 1 - beat / release : 0)))
         return Float(u * u * (3 - 2 * u))
     }
 }
@@ -100,6 +100,15 @@ nonisolated struct LofiTakeGrid: Sendable {
         let turn = LofiFill.turnaround.accent(beatsFromBoundary: beat - 64)
         let arrival = takeIndex == 0 ? 0 : LofiFill.turnaround.accent(beatsFromBoundary: beat)
         return max(halfway, turn, arrival)
+    }
+
+    /// The visual fill accent (bloom, vibrance): the same rise, gone on the downbeat, so nothing in the
+    /// picture is still releasing after the drop's cut. The audio renderer keeps its own release.
+    func visualAccent(at time: Double) -> Float {
+        let beat = (time - origin) / beatDuration
+        let halfway = 0.65 * LofiFill.halfway.accent(beatsFromBoundary: beat - 32, release: 0)
+        let turn = LofiFill.turnaround.accent(beatsFromBoundary: beat - 64, release: 0)
+        return max(halfway, turn)
     }
 
     func nextBoundary(after time: Double) -> (time: Double, fill: LofiFill) {
