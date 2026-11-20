@@ -10,6 +10,7 @@ Run the macOS score, transport, DSP, and archive timing tests with an explicit d
 xcodebuild test -scheme Liminal -destination 'platform=macOS' \
   -only-testing:LiminalTests/LofiTests \
   -only-testing:LiminalTests/LofiCompositionTests \
+  -only-testing:LiminalTests/LofiGuitarPhrasingTests \
   -only-testing:LiminalTests/LofiProductionTests \
   -only-testing:LiminalTests/ArchiveVoiceRenderTests \
   -only-testing:LiminalTests/LofiDialogueSamplerTests \
