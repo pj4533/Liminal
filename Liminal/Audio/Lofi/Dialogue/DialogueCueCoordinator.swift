@@ -26,15 +26,21 @@ nonisolated enum DialogueCueCoordinator {
         var bankMs: Double = 0
         var planMs: Double = 0
         var renderMs: Double = 0
+        /// Thermal state, footprint and bank cache size when the plan was built (handoff requirement).
+        /// `build` samples it with this plan's own analysis and bank; the director's `run` replaces the
+        /// cache fields with its whole cache.
+        var cost = DialogueCost()
         var totalMs: Double { classifyMs + analyzeMs + bankMs + planMs + renderMs }
 
-        /// The manifest's `dialogueTimings[]` element (plan 3.2).
+        /// The manifest's `dialogueTimings[]` element (plan 3.2), with the cost fields `thermalState`,
+        /// `residentMB`, `cacheEntries` and `cacheBytes`.
         func dictionary(cue: Int) -> [String: Any] {
             var result: [String: Any] = ["cue": cue]
             for (key, value) in [("classifyMs", classifyMs), ("analyzeMs", analyzeMs), ("bankMs", bankMs),
                                  ("planMs", planMs), ("renderMs", renderMs), ("totalMs", totalMs)] {
                 result[key] = (value * 10).rounded() / 10
             }
+            result.merge(cost.dictionary) { a, _ in a }
             return result
         }
     }
@@ -57,7 +63,7 @@ nonisolated enum DialogueCueCoordinator {
         let chops: [DialogueChop]
         /// The performance memory after this plan; the owner commits it only when the plan is posted.
         let memory: DialoguePerformanceMemory
-        let timings: Timings
+        var timings: Timings
         let snapshot: DialogueTransportSnapshot
         let window: Range<Double>
         let earliestStart: Double
@@ -158,6 +164,7 @@ nonisolated enum DialogueCueCoordinator {
             t = clock.now
             let chops = motif.render()
             timings.renderMs = ms(clock.now - t)
+            timings.cost = .sample(analysis: analysis, bank: bank)
             return Built(analysis: analysis, bank: bank, played: motif.motif.bank, plan: motif.plan, chops: chops, memory: memory,
                          timings: timings, snapshot: snapshot, window: window, earliestStart: earliestStart,
                          log: motif.log, motif: motif.motif)
@@ -169,6 +176,7 @@ nonisolated enum DialogueCueCoordinator {
         t = clock.now
         let chops = played.map { DialogueEngine.render(plan, bank: $0, source: source, analysis: analysis) } ?? []
         timings.renderMs = ms(clock.now - t)
+        timings.cost = .sample(analysis: analysis, bank: bank)
         return Built(analysis: analysis, bank: bank, played: played, plan: plan, chops: chops, memory: memory, timings: timings,
                      snapshot: snapshot, window: window, earliestStart: earliestStart, log: DialogueEngine.log(plan, bank: played))
     }
@@ -205,6 +213,7 @@ nonisolated enum DialogueCueCoordinator {
             t = clock.now
             let chops = motif.render()
             timings.renderMs = ms(clock.now - t)
+            timings.cost = .sample(analysis: acoustic.analysis, bank: refined)
             return Built(analysis: acoustic.analysis, bank: refined, played: motif.motif.bank, plan: motif.plan, chops: chops,
                          memory: memory, timings: timings, snapshot: acoustic.snapshot, window: window, earliestStart: earliest,
                          log: motif.log, motif: motif.motif)
@@ -225,6 +234,7 @@ nonisolated enum DialogueCueCoordinator {
         t = clock.now
         let chops = DialogueEngine.render(plan, bank: rotated, source: source, analysis: acoustic.analysis)
         timings.renderMs = ms(clock.now - t)
+        timings.cost = .sample(analysis: acoustic.analysis, bank: refined)
         return Built(analysis: acoustic.analysis, bank: refined, played: rotated, plan: plan, chops: chops, memory: memory, timings: timings,
                      snapshot: acoustic.snapshot, window: window, earliestStart: max(acoustic.earliestStart, from),
                      log: DialogueEngine.log(plan, bank: rotated))
@@ -235,7 +245,7 @@ nonisolated enum DialogueCueCoordinator {
         let families = built.plan.blocks.map(\.family.rawValue).joined(separator: ",")
         let t = built.timings
         let leadText = lead.map { String(format: "%.2f", $0) } ?? "-"
-        LMLog.audio.info("Lo-Fi dialogue plan cue=\(cue) rev=\(built.plan.revision) bank=\(String(built.plan.bankID, radix: 16), privacy: .public) families=\(families, privacy: .public) events=\(built.chops.count) classify=\(t.classifyMs, format: .fixed(precision: 0))ms analyze=\(t.analyzeMs, format: .fixed(precision: 0))ms bank=\(t.bankMs, format: .fixed(precision: 0))ms plan=\(t.planMs, format: .fixed(precision: 0))ms render=\(t.renderMs, format: .fixed(precision: 0))ms lead=\(leadText, privacy: .public)s")
+        LMLog.audio.info("Lo-Fi dialogue plan cue=\(cue) rev=\(built.plan.revision) bank=\(String(built.plan.bankID, radix: 16), privacy: .public) families=\(families, privacy: .public) events=\(built.chops.count) classify=\(t.classifyMs, format: .fixed(precision: 0))ms analyze=\(t.analyzeMs, format: .fixed(precision: 0))ms bank=\(t.bankMs, format: .fixed(precision: 0))ms plan=\(t.planMs, format: .fixed(precision: 0))ms render=\(t.renderMs, format: .fixed(precision: 0))ms lead=\(leadText, privacy: .public)s thermal=\(t.cost.thermalState, privacy: .public) resident=\(t.cost.residentMB, format: .fixed(precision: 0))MB cache=\(t.cost.cacheEntries)/\(t.cost.cacheBytes / 1024)KB")
         if LofiCaptureHooks.isEnabled {
             var log = built.log
             log["timings"] = t.dictionary(cue: cue)
@@ -253,8 +263,8 @@ nonisolated enum DialogueCueCoordinator {
 /// footage service. Lock-guarded; thread completion order never selects a phrase because memory
 /// is committed only for posted plans and checked against a generation counter.
 nonisolated final class DialogueDirector: @unchecked Sendable {
-    /// Entries that keep the source PCM, and entries kept in all (plan 4.5).
-    static let cacheWithPCM = 4
+    /// Entries kept (plan 4.5). Entries hold analyses and banks only, never the bed PCM: a source's
+    /// frames are rendered from the buffer of the cue that plays them.
     static let cacheEntries = 12
 
     struct CacheKey: Hashable, Sendable {
@@ -262,12 +272,16 @@ nonisolated final class DialogueDirector: @unchecked Sendable {
         /// Source start to 10 ms.
         let start: Int
         let frames: Int
+        /// Film seconds per buffer second, to 0.001: two cues of one film at different rates have
+        /// different time bases, so pad frames of one never index the other's buffer.
+        let rate: Int
         let analysisVersion: Int
 
         init(_ source: DialogueSource) {
             contentID = source.contentID
             start = Int((source.sourceStart * 100).rounded())
             frames = min(source.frameCount, Int(DialogueTuning.analysisSeconds * source.sampleRate))
+            rate = Int((source.rate * 1000).rounded())
             analysisVersion = DialogueEngine.analysisVersion
         }
     }
@@ -279,8 +293,17 @@ nonisolated final class DialogueDirector: @unchecked Sendable {
         /// Transcript-refined banks keyed by `locale|modelVersion`.
         var refined: [String: DialoguePadBank] = [:]
         var transcript: DialogueTranscript?
-        /// PCM retained only by the newest `cacheWithPCM` entries.
-        var source: DialogueSource?
+
+        /// Whether the entry was analysed on this source's exact time base and length.
+        func matches(_ source: DialogueSource) -> Bool {
+            analysis.clock.rate == source.rate && analysis.clock.sampleRate == source.sampleRate
+                && analysis.bufferFrames == source.frameCount
+        }
+
+        var bytes: Int {
+            DialogueCost.bytes(analysis) + DialogueCost.bytes(acoustic) + DialogueCost.bytes(transcript)
+                + refined.values.reduce(0) { $0 + DialogueCost.bytes($1) }
+        }
     }
 
     private struct State {
@@ -324,8 +347,20 @@ nonisolated final class DialogueDirector: @unchecked Sendable {
 
     var memory: DialoguePerformanceMemory { state.withLock { $0.memory } }
     var generation: Int { state.withLock { $0.generation } }
-    var cacheCount: (entries: Int, withPCM: Int) {
-        state.withLock { s in (s.cache.count, s.cache.filter { $0.source != nil }.count) }
+    var cacheCount: Int { state.withLock { $0.cache.count } }
+
+    /// Entries and their estimated bytes (analyses, banks, transcripts) for the cost log.
+    var cacheFootprint: (entries: Int, bytes: Int) {
+        state.withLock { s in (s.cache.count, s.cache.reduce(0) { $0 + $1.bytes }) }
+    }
+
+    /// `timings.cost` with the director's whole cache in place of the plan's own analysis and bank.
+    private func withCacheCost(_ built: DialogueCueCoordinator.Built) -> DialogueCueCoordinator.Built {
+        var built = built
+        let footprint = cacheFootprint
+        built.timings.cost.cacheEntries = footprint.entries
+        built.timings.cost.cacheBytes = footprint.bytes
+        return built
     }
 
     func resetMemory() { state.withLock { $0.memory = DialoguePerformanceMemory(); $0.generation += 1 } }
@@ -337,9 +372,9 @@ nonisolated final class DialogueDirector: @unchecked Sendable {
     func cached(_ source: DialogueSource) -> DialogueCueCoordinator.Reuse? {
         let key = CacheKey(source)
         return state.withLock { s -> DialogueCueCoordinator.Reuse? in
-            guard let index = s.cache.firstIndex(where: { $0.key == key }) else { return nil }
-            var entry = s.cache.remove(at: index)
-            if entry.source == nil { entry.source = source }
+            // An entry on another time base or length is a miss; `store` then replaces it.
+            guard let index = s.cache.firstIndex(where: { $0.key == key }), s.cache[index].matches(source) else { return nil }
+            let entry = s.cache.remove(at: index)
             s.cache.insert(entry, at: 0)
             Self.trim(&s.cache)
             if let transcript = entry.transcript, let refined = entry.refined[Self.model(transcript)] {
@@ -352,12 +387,12 @@ nonisolated final class DialogueDirector: @unchecked Sendable {
     func store(_ source: DialogueSource, analysis: DialogueAnalysis, bank: DialoguePadBank?) {
         let key = CacheKey(source)
         state.withLock { s in
-            if let index = s.cache.firstIndex(where: { $0.key == key }) {
-                var entry = s.cache.remove(at: index)
-                entry.source = source
+            if let index = s.cache.firstIndex(where: { $0.key == key }), s.cache[index].matches(source) {
+                let entry = s.cache.remove(at: index)
                 s.cache.insert(entry, at: 0)
             } else {
-                s.cache.insert(Entry(key: key, analysis: analysis, acoustic: bank, source: source), at: 0)
+                s.cache.removeAll { $0.key == key }
+                s.cache.insert(Entry(key: key, analysis: analysis, acoustic: bank), at: 0)
             }
             Self.trim(&s.cache)
         }
@@ -367,7 +402,7 @@ nonisolated final class DialogueDirector: @unchecked Sendable {
     func store(_ source: DialogueSource, transcript: DialogueTranscript, refined: DialoguePadBank?) {
         let key = CacheKey(source)
         state.withLock { s in
-            guard let index = s.cache.firstIndex(where: { $0.key == key }) else { return }
+            guard let index = s.cache.firstIndex(where: { $0.key == key }), s.cache[index].matches(source) else { return }
             s.cache[index].transcript = transcript
             if let refined { s.cache[index].refined[Self.model(transcript)] = refined }
         }
@@ -375,19 +410,18 @@ nonisolated final class DialogueDirector: @unchecked Sendable {
 
     func cachedTranscript(_ source: DialogueSource) -> DialogueTranscript? {
         let key = CacheKey(source)
-        return state.withLock { s in s.cache.first { $0.key == key }?.transcript }
+        return state.withLock { s in s.cache.first { $0.key == key && $0.matches(source) }?.transcript }
     }
 
     func cachedBankID(_ source: DialogueSource) -> UInt64? {
         let key = CacheKey(source)
-        return state.withLock { s in s.cache.first { $0.key == key }.flatMap { $0.acoustic?.bankID } }
+        return state.withLock { s in s.cache.first { $0.key == key && $0.matches(source) }.flatMap { $0.acoustic?.bankID } }
     }
 
     private static func model(_ t: DialogueTranscript) -> String { "\(t.locale)|\(t.modelVersion)" }
 
     private static func trim(_ cache: inout [Entry]) {
         if cache.count > cacheEntries { cache.removeLast(cache.count - cacheEntries) }
-        for i in cache.indices where i >= cacheWithPCM { cache[i].source = nil }
     }
 
     // MARK: Memory
@@ -467,11 +501,12 @@ nonisolated final class DialogueDirector: @unchecked Sendable {
             let (memory, generation) = memorySnapshot()
             memoryBefore = memory
             let earliest = now() + DialogueCueCoordinator.commitMargin
-            let candidate = DialogueCueCoordinator.build(source: source, speech: speech, transcript: reuse?.transcript,
+            var candidate = DialogueCueCoordinator.build(source: source, speech: speech, transcript: reuse?.transcript,
                                                          transport: info, window: window, earliestStart: earliest,
                                                          memory: memory, seed: seed, revision: 0, classifyMs: classifyMs,
                                                          reuse: reuse)
             if reuse == nil { store(source, analysis: candidate.analysis, bank: candidate.bank) }
+            candidate = withCacheCost(candidate)
             reuse = reuse ?? .init(analysis: candidate.analysis, bank: candidate.bank)
             classifyMs = 0
             guard !Task.isCancelled else { return finish("cancelled") }
@@ -515,9 +550,10 @@ nonisolated final class DialogueDirector: @unchecked Sendable {
             let refined = transcript.flatMap { DialogueEngine.bank(acoustic.analysis, transcript: $0, seed: seed) }
             if let transcript { store(source, transcript: transcript, refined: refined) }
             let from = now() + DialogueCueCoordinator.commitMargin
-            let rebuilt = DialogueCueCoordinator.build(source: source, speech: speech, transcript: nil, transport: latest,
-                                                       window: window, earliestStart: from, memory: memoryBefore, seed: seed,
-                                                       revision: 1, reuse: .init(analysis: acoustic.analysis, bank: refined ?? acoustic.bank))
+            let rebuilt = withCacheCost(DialogueCueCoordinator.build(source: source, speech: speech, transcript: nil,
+                                                       transport: latest, window: window, earliestStart: from,
+                                                       memory: memoryBefore, seed: seed, revision: 1,
+                                                       reuse: .init(analysis: acoustic.analysis, bank: refined ?? acoustic.bank)))
             guard !Task.isCancelled, isCurrent(), transport()?.revision == latest.revision,
                   state.withLock({ $0.generation }) == generation else { return outcome }
             LMLog.audio.info("Lo-Fi dialogue cue=\(source.cueToken) transport revision \(info.revision) -> \(latest.revision) during recognition: plan rebuilt")
@@ -542,13 +578,14 @@ nonisolated final class DialogueDirector: @unchecked Sendable {
         let blocks = DialogueCueCoordinator.blocks(acoustic.snapshot, window: acoustic.window)
         let from = blocks.map { acoustic.snapshot.time(beat: Double(16 * $0)) }
             .first { $0 > arrived + DialogueCueCoordinator.transcriptReplanMargin && $0 < acoustic.window.upperBound }
-        guard let from, let refined = DialogueCueCoordinator.replan(acoustic, memoryBefore: memoryBefore, source: source,
+        guard let from, var refined = DialogueCueCoordinator.replan(acoustic, memoryBefore: memoryBefore, source: source,
                                                                      transcript: transcript, from: from, seed: seed,
                                                                      revision: 1) else {
             store(source, transcript: transcript, refined: nil)
             return outcome
         }
         store(source, transcript: transcript, refined: refined.bank)
+        refined = withCacheCost(refined)
         guard !Task.isCancelled, isCurrent(), state.withLock({ $0.generation }) == generation else { return outcome }
         let plan = ArchiveVoice.ChopPlan(token: source.cueToken, revision: 1, replaceFrom: from, chops: refined.chops)
         post(plan)

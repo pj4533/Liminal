@@ -1,4 +1,5 @@
 import AVFoundation
+import Darwin
 import Foundation
 
 /// Facade of the dialogue engine (plan 3.4): analysis, bank, performance, rendering and logs.
@@ -11,11 +12,15 @@ nonisolated enum DialogueEngine {
         var bankMs: Double = 0
         var planMs: Double = 0
         var renderMs: Double = 0
+        /// Device cost beside the stage timings (handoff requirement); sampled once per plan.
+        var cost = DialogueCost()
         var totalMs: Double { analyzeMs + bankMs + planMs + renderMs }
 
-        var dictionary: [String: Double] {
-            ["analyzeMs": analyzeMs, "bankMs": bankMs, "planMs": planMs, "renderMs": renderMs, "totalMs": totalMs]
-                .mapValues { ($0 * 10).rounded() / 10 }
+        var dictionary: [String: Any] {
+            var result: [String: Any] = ["analyzeMs": analyzeMs, "bankMs": bankMs, "planMs": planMs, "renderMs": renderMs,
+                                         "totalMs": totalMs].mapValues { ($0 * 10).rounded() / 10 }
+            result.merge(cost.dictionary) { a, _ in a }
+            return result
         }
     }
 
@@ -90,6 +95,7 @@ nonisolated enum DialogueEngine {
             t = clock.now
             let chops = motif.render()
             timings.renderMs = ms(clock.now - t)
+            timings.cost = .sample(analysis: analysis, bank: bank)
             return Prepared(analysis: analysis, bank: motif.motif.bank, plan: motif.plan, chops: chops, timings: timings,
                             motifs: motif.motifs)
         }
@@ -100,6 +106,7 @@ nonisolated enum DialogueEngine {
         t = clock.now
         let chops = played.map { render(plan, bank: $0, source: source, analysis: analysis) } ?? []
         timings.renderMs = ms(clock.now - t)
+        timings.cost = .sample(analysis: analysis, bank: bank)
         return Prepared(analysis: analysis, bank: played, plan: plan, chops: chops, timings: timings)
     }
 
@@ -173,5 +180,88 @@ nonisolated enum DialogueEngine {
         case .returnTheme: "returnTheme"
         case .variation: "variation"
         }
+    }
+}
+
+/// What one plan cost the device beyond wall-clock stage timings (handoff: memory and thermal cost).
+/// Sampled on the coordinator's utility task, never on the audio thread. The manifest keys are
+/// `thermalState`, `residentMB`, `cacheEntries` and `cacheBytes`; a plan built outside the director (the
+/// offline capture) has no bank cache, so its cache fields count only that plan's own analysis and bank.
+nonisolated struct DialogueCost: Sendable, Equatable {
+    var thermalState = "unknown"
+    /// `task_info(TASK_VM_INFO).phys_footprint` in MB (what Activity Monitor and jetsam count).
+    var residentMB = 0.0
+    var cacheEntries = 0
+    /// Estimated bytes of the cached analyses and banks (the bed PCM is not cached).
+    var cacheBytes = 0
+
+    var dictionary: [String: Any] {
+        ["thermalState": thermalState, "residentMB": (residentMB * 10).rounded() / 10,
+         "cacheEntries": cacheEntries, "cacheBytes": cacheBytes]
+    }
+
+    /// Thermal state and footprint now, with the given cache totals.
+    static func sample(cacheEntries: Int, cacheBytes: Int) -> Self {
+        Self(thermalState: thermalName(ProcessInfo.processInfo.thermalState),
+             residentMB: Double(residentFootprint() ?? 0) / 1_048_576, cacheEntries: cacheEntries, cacheBytes: cacheBytes)
+    }
+
+    /// A plan without the director's cache: one entry, this plan's analysis and bank.
+    static func sample(analysis: DialogueAnalysis, bank: DialoguePadBank?) -> Self {
+        sample(cacheEntries: 1, cacheBytes: bytes(analysis) + bytes(bank))
+    }
+
+    static func thermalName(_ state: ProcessInfo.ThermalState) -> String {
+        switch state {
+        case .nominal: "nominal"
+        case .fair: "fair"
+        case .serious: "serious"
+        case .critical: "critical"
+        @unknown default: "unknown"
+        }
+    }
+
+    /// The process's physical footprint in bytes, or nil when the kernel call fails.
+    static func residentFootprint() -> UInt64? {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+        let result = withUnsafeMutablePointer(to: &info) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+            }
+        }
+        return result == KERN_SUCCESS ? info.phys_footprint : nil
+    }
+
+    /// Estimated heap bytes of an analysis: its feature arrays, units, speech windows and rejections.
+    static func bytes(_ analysis: DialogueAnalysis) -> Int {
+        var total = MemoryLayout<DialogueAnalysis>.stride
+        if let f = analysis.features {
+            total += f.bands.count * MemoryLayout<SIMD3<Float>>.stride
+            total += (f.energy.count + f.intensity.count + f.fine.count) * MemoryLayout<Float>.stride
+            total += f.nuclei.count * MemoryLayout<DialogueNucleus>.stride
+            total += f.active.count * MemoryLayout<Bool>.stride + f.pauses.count * MemoryLayout<Range<Int>>.stride
+        }
+        total += analysis.units.count * MemoryLayout<SpeechUnit>.stride + analysis.units.reduce(0) { $0 + ($1.text?.utf8.count ?? 0) }
+        total += analysis.speech.count * MemoryLayout<LofiSpeechFocus.Window>.stride
+        total += analysis.rejections.count * MemoryLayout<DialogueRejection>.stride
+        return total
+    }
+
+    /// Estimated heap bytes of a bank: its pads, sibling groups, orders and text.
+    static func bytes(_ bank: DialoguePadBank?) -> Int {
+        guard let bank else { return 0 }
+        var total = MemoryLayout<DialoguePadBank>.stride + bank.pads.count * MemoryLayout<DialoguePad>.stride
+        total += bank.pads.reduce(0) { $0 + ($1.text?.utf8.count ?? 0) }
+        total += bank.siblingGroups.reduce(0) { $0 + $1.count } * MemoryLayout<Int>.stride
+        total += (bank.originalOrder.count + bank.arrangedOrder.count) * MemoryLayout<Int>.stride
+        total += bank.rejections.count * MemoryLayout<DialogueRejection>.stride + (bank.intendedText?.utf8.count ?? 0)
+        return total
+    }
+
+    /// Estimated bytes of a transcript's words.
+    static func bytes(_ transcript: DialogueTranscript?) -> Int {
+        guard let transcript else { return 0 }
+        return transcript.words.count * MemoryLayout<DialogueTranscript.Word>.stride + transcript.words.reduce(0) { $0 + $1.text.utf8.count }
     }
 }
