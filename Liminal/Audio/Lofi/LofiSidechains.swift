@@ -85,16 +85,19 @@ nonisolated struct LofiKickDuck {
             // Square-root scaling: a kick at half the median strength still ducks about 2.8 dB (linear
             // scaling gave the soft kicks of the 62 BPM take 1.5 dB), a ghost at a twentieth about 0.9 dB.
             let level = min(1, (kick.strength / reference).squareRoot())
-            for i in from..<to where target[i] < level { target[i] = level }
+            var i = from
+            while i < to { if target[i] < level { target[i] = level }; i += 1 }
         }
         func step(_ seconds: Double) -> Float { Float(1 - exp(-1 / (seconds * sampleRate))) }
         let attack = step(Self.attack), release = step(Self.release)
         var amount: Float = 0
         var gains = [Float](repeating: 1, count: count)
-        for i in 0..<total {
+        var i = 0
+        while i < total {
             let t = target[i]
             amount += (t > amount ? attack : release) * (t - amount)
             if i >= preroll { gains[i - preroll] = 1 - depth * amount }
+            i += 1
         }
         return gains
     }

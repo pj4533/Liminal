@@ -239,7 +239,10 @@ nonisolated enum LofiRenderer {
             try spaceR.withUnsafeMutableBufferPointer { outR in
                 let captureStart = captureWindow.lowerBound, captureEnd = captureWindow.upperBound
                 let wetGain = Self.wetGain, capturing = !effectChannels.isEmpty
-                for frame in range {
+                // A `while` loop: `for in` over a range goes through the generic iterator in Debug builds.
+                var frame = range.lowerBound
+                while frame < range.upperBound {
+                    defer { frame += 1 }
                     if frame & 8191 == 0 { try Task.checkCancellation() }
                     let space = spaceTrack[frame]
                     let returns = effects.processReturns(
@@ -292,9 +295,11 @@ nonisolated enum LofiRenderer {
         var rng = MusicRNG(seed: seed).fork(12)
         var hiss: Float = 0
         hissTrack.withUnsafeMutableBufferPointer { track in
-            for frame in 0..<n {
+            var frame = 0
+            while frame < n {
                 hiss += 0.10 * (rng.rangeF(-1...1) - hiss)
                 track[frame] *= hiss * 0.005
+                frame += 1
             }
         }
         let count = vDSP_Length(n)
@@ -376,12 +381,14 @@ nonisolated enum LofiRenderer {
             carryL.withUnsafeBufferPointer { carryL in
                 carryR.withUnsafeBufferPointer { carryR in
                     let wetL = wetChannels[0], wetR = wetChannels[1]
-                    for frame in 0..<n {
+                    var frame = 0
+                    while frame < n {
                         let revealed = reveal ? Self.returnCarryGain(beat: Double(frame) / clock.framesPerBeat, hold: hold) : 1
                         let wet = boundedWet((revealed * (wetL[frame] * trim + ducked[frame] * carryL[frame]),
                                               revealed * (wetR[frame] * trim + ducked[frame] * carryR[frame])))
                         wetL[frame] = wet.left
                         wetR[frame] = wet.right
+                        frame += 1
                     }
                 }
             }

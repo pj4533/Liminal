@@ -67,7 +67,8 @@ nonisolated enum LofiSaturation {
         stuffed.initialize(repeating: 0, count: stuffedCount + taps)
         // Zero-stuff after `taps - 1` leading zeros so correlation becomes causal convolution.
         let lead = taps - 1
-        for i in 0..<count { stuffed[lead + i * factor] = buffer[i].isFinite ? buffer[i] : 0 }
+        var i = 0
+        while i < count { stuffed[lead + i * factor] = buffer[i].isFinite ? buffer[i] : 0; i += 1 }
         let high = UnsafeMutablePointer<Float>.allocate(capacity: stuffedCount + taps)
         defer { high.deallocate() }
         high.initialize(repeating: 0, count: stuffedCount + taps)

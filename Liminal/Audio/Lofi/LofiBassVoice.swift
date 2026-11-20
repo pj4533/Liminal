@@ -385,13 +385,15 @@ nonisolated enum LofiBassVoice: Int, CaseIterable, Sendable {
                 out.withUnsafeMutableBufferPointer { o in
                     var position = 0.0
                     let last = pcm.count - 1
-                    for i in 0..<count {
+                    var i = 0
+                    while i < count {
                         let j = Int(position)
                         guard j < last else { break }
                         let f = Float(position - Double(j))
                         o[i] = pcm[j] + f * (pcm[j + 1] - pcm[j])
                         position += speed
                         used = i + 1
+                        i += 1
                     }
                 }
             }

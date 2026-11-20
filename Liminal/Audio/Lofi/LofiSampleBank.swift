@@ -86,7 +86,9 @@ nonisolated struct LofiSampleBank: Sendable {
         sample.pcm.withUnsafeBufferPointer { pcmBuffer in
         guard let pcm = pcmBuffer.baseAddress else { return }
         let pcmCount = pcmBuffer.count
-        for i in 0..<count {
+        var i = -1
+        while i + 1 < count {
+            i += 1
             let j = Int(position)
             guard j + 1 < pcmCount else { break }
             let fraction = Float(position - Double(j))

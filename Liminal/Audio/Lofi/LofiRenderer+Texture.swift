@@ -365,7 +365,9 @@ nonisolated extension LofiRenderer {
             otherMono.withUnsafeBufferPointer { otherMono in
             leadOn.withUnsafeBufferPointer { leadOn in
             midOn.withUnsafeBufferPointer { midOn in
-                for frame in 0..<n {
+                var frame = -1
+                while frame + 1 < n {
+                    frame += 1
                     let l = leadMeter.band(leadMono[frame], high: high, low: low) * leadGain
                     let m = midMeter.band(midMono[frame], high: high, low: low)
                     let o = otherGain == 0 ? 0 : otherMeter.band(otherMono[frame], high: high, low: low)

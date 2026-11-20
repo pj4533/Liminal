@@ -61,7 +61,8 @@ nonisolated extension LofiRenderer {
         // Headroom guard after the chain and the edge envelope, then the kick duck (mono), keyed by the
         // take's kick landmarks when it has confident kicks, else by the level detector.
         envelope.withUnsafeBufferPointer { e in
-            for frame in 0..<n { bassL[frame] = headroom(bassL[frame]) * e[frame] }
+            var frame = 0
+            while frame < n { bassL[frame] = headroom(bassL[frame]) * e[frame]; frame += 1 }
         }
         var gains: [Float]?
         if let drums, let landmark = LofiKickDuck.landmarkGains(drums.landmarks.filter { !struck.contains($0.attackFrame) },
