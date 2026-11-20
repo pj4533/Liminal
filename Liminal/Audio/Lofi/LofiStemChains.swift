@@ -83,8 +83,10 @@ nonisolated enum LofiStemChains {
             .highpass(hz: 350, q: butterworthQ), .lowpass(hz: 4_500, q: butterworthQ),
             .peak(hz: 2_500, q: 1.0, gainDB: -2),
         ]
-        /// Duck keyed by the dry lead so notes are heard dry first and the room blooms after them.
-        var duckDepthDB: Float = 4
+        /// Duck keyed by the dry lead so notes are heard dry first and the room blooms after them. 5 dB
+        /// since the mix rebalance (D118, was 4): with the held pad's reverb C-B7 read 2.35 dB and C-B11
+        /// -2.59 dB (gates 2.2 and -2.6); at 5 they read 2.43 and -2.51.
+        var duckDepthDB: Float = 5
         /// Envelope follower of the lead's block peaks: fast attack, a short hold, then release.
         var duckAttack = 0.002
         var duckHold = 0.030

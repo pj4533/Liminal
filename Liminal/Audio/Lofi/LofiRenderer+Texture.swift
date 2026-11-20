@@ -115,9 +115,10 @@ nonisolated extension LofiRenderer {
 
     /// Where lead and pad sound together, the ducked pad (with any shell) sits this far under the lead in
     /// 400 Hz to 3 kHz on the steep meter (C-B5 gate 5.0 to 7.5 dB). Plan start 6.5: the chords stem read
-    /// -21.9 LUFS (gate -22 to -24); 6.8 read C-B5 7.41 dB, too near the ceiling; 6.6 reads 7.21 dB and
-    /// -22.3 LUFS on the reference capture (20 November 2026).
-    static let padUnderLeadDB: Float = 6.6
+    /// -21.9 LUFS (gate -22 to -24); PADS chose 6.6 (C-B5 7.21 dB, -22.3 LUFS). With the bass merged the
+    /// chords' whole-file 300 to 800 Hz stayed over its +2 dB gate, so the mix rebalance (D118) set 6.85
+    /// and then 7.0: C-B5 7.47 dB, chords -23.6 LUFS, 300 to 800 Hz +1.75 dB (20 November 2026).
+    static let padUnderLeadDB: Float = 7.0
     /// Nominal pad gain when a phrase has too little overlap to measure, and the factor it may move.
     static let padTrim: Float = 2.0
     static let padGainRange: Float = 8.0

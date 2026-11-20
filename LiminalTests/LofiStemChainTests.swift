@@ -189,8 +189,10 @@ struct LofiStemChainTests {
         #expect(abs(Self.analyticDB(lead.filters, 2_800) - 1.5) <= 0.5)
         #expect(abs(Self.analyticDB(lead.filters, 9_000) + 3) <= 0.5)
         #expect(abs(Self.analyticDB(LofiStemChains.Mids.standard.filters, 400) + 3) <= 0.5)
-        #expect(abs(Self.analyticDB(LofiStemChains.Mids.standard.filters, 1_600) - 1.5) <= 0.5)
-        // The pad (D117): 220 Hz high-pass and 2.8 kHz low-pass at their corners, dips at 380 Hz and 2 kHz.
+        // The shells' former +1.5 dB at 1.6 kHz was removed in the mix rebalance (D118): it held the chords'
+        // 1 to 4 kHz under 8 dB below the melody's.
+        #expect(abs(Self.analyticDB(LofiStemChains.Mids.standard.filters, 1_600)) <= 0.5)
+        // The pad (D117, corners from the D118 rebalance): 300 Hz high-pass and 2.2 kHz low-pass, dips at 380 Hz and 2 kHz.
         #expect(Self.analyticDB(LofiStemChains.Pad.standard.filters, 220) <= -3)
         #expect(Self.analyticDB(LofiStemChains.Pad.standard.filters, 380) <= -3)
         #expect(Self.analyticDB(LofiStemChains.Pad.standard.filters, 2_000) <= -2.5)
