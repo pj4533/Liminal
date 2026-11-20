@@ -375,6 +375,45 @@ struct LofiStemChainTests {
         #expect(gains.allSatisfy { $0 >= 1 - LofiKickDuck.depth - 1e-6 && $0 <= 1 })
     }
 
+    /// The landmark-keyed duck reaches its depth on every confident kick, including the second kick of a
+    /// double 220 ms after a stronger one (the level detector skipped those), barely moves for a ghost kick,
+    /// and gives way to the detector for a take without confident kicks.
+    @Test func landmarkKickDuckDucksBothKicksOfADouble() throws {
+        let rate = Self.rate
+        func frame(_ seconds: Double) -> Int { Int(seconds * rate) }
+        func kick(_ at: Double, strength: Float, confidence: Float = 0.95) -> LofiDrumLandmark {
+            LofiDrumLandmark(kind: .kick, attackFrame: frame(at), peakFrame: frame(at + 0.02), strength: strength,
+                             confidence: confidence, lowRiseFrame: frame(at + 0.010))
+        }
+        let landmarks = [kick(0.70, strength: 0.92), kick(0.92, strength: 0.79), kick(1.60, strength: 0.05),
+                         kick(2.20, strength: 0.9), kick(2.60, strength: 1, confidence: 0.3),
+                         LofiDrumLandmark(kind: .snare, attackFrame: frame(1.45), peakFrame: frame(1.46), strength: 1, confidence: 1)]
+        // The phrase starts 0.5 s into the take: the preroll carries nothing in.
+        let start = frame(0.5), count = frame(2.5)
+        let gains = try #require(LofiKickDuck.landmarkGains(landmarks, start: start, count: count, sampleRate: rate))
+        #expect(gains.count == count)
+        #expect(gains.allSatisfy { $0 >= 1 - LofiKickDuck.depth - 1e-6 && $0 <= 1 })
+        func db(_ seconds: Double) -> Double { -Self.db(Double(gains[frame(seconds) - start])) }
+        func window(_ from: Double, _ to: Double) -> Double {
+            let slice = gains[(frame(from) - start)..<(frame(to) - start)]
+            return -Self.db(Double(slice.reduce(0, +) / Float(slice.count)))
+        }
+        let full = -Self.db(Double(1 - LofiKickDuck.depth))
+        // The C-B2 windows: 8 to 48 ms after the attack against 48 to 8 ms before it.
+        for at in [0.70, 0.92, 2.20] {
+            let duck = window(at + 0.008, at + 0.048) - window(at - 0.048, at - 0.008)
+            #expect(duck > 1.5 && duck < 4.5, "kick at \(at) s: duck \(duck) dB")
+        }
+        #expect(db(0.735) > full - 0.5)
+        // The second kick of the double ducks to near full depth again (strength 0.79 of a 0.9 median).
+        #expect(db(0.955) > 0.8 * full)
+        // The ghost kick and the low-confidence kick barely move the bass; the snare never does.
+        #expect(window(1.60, 1.70) < 0.4)
+        #expect(db(2.64) < db(2.24) - 2)
+        #expect(db(1.5) < 0.1)
+        #expect(LofiKickDuck.landmarkGains([landmarks[4], landmarks[5]], start: 0, count: count, sampleRate: rate) == nil)
+    }
+
     @Test func leadMidsAndSpaceLeaveTheLowEndToDrumsAndBass() throws {
         let drums = try Self.phraseDrums()
         let take = Self.channels(drums.buffer)
@@ -409,16 +448,45 @@ struct LofiStemChainTests {
                 - Self.bandDB(upper.left, upper.left, low: 600, high: nil) > 1)
     }
 
+    /// Two lead phrases with a rest: the duck reaches its depth on the onsets, eases to the sustain
+    /// share while the notes hold, and is fully open in the rest.
+    @Test func spaceDuckFollowsLeadOnsetsAndReleasesInRests() {
+        let rate = Self.rate
+        let n = Int(4 * rate)
+        var lead = [Float](repeating: 0, count: n)
+        for onset in [0.2, 0.7, 2.6] {
+            let start = Int(onset * rate)
+            for i in 0..<Int(0.45 * rate) where start + i < n {
+                let t = Double(i) / rate
+                lead[start + i] += Float(0.5 * sin(2 * .pi * 440 * t) * min(1, t / 0.004) * exp(-t / 0.6))
+            }
+        }
+        let settings = LofiStemChains.Space.standard
+        let duck = lead.withUnsafeBufferPointer {
+            LofiStemChains.spaceDuck(leadLeft: $0.baseAddress!, leadRight: $0.baseAddress!, count: n, sampleRate: rate)
+        }
+        func reduction(at seconds: Double) -> Float { -20 * log10f(duck.gain[Int(seconds * rate)]) }
+        #expect(duck.maxDB > settings.duckDepthDB - 0.5 && duck.maxDB <= settings.duckDepthDB + 1e-3)
+        #expect(reduction(at: 0.215) > settings.duckDepthDB - 1, "onset \(reduction(at: 0.215)) dB")
+        // Late in a held note only the sustain share remains.
+        #expect(reduction(at: 0.62) < settings.duckDepthDB * (settings.duckSustainShare + 0.25), "sustain \(reduction(at: 0.62)) dB")
+        // In the rest between the phrases the duck is open.
+        #expect(reduction(at: 2.2) < 0.01, "rest \(reduction(at: 2.2)) dB")
+        #expect(duck.meanDB < 2.5)
+    }
+
     @Test func spaceDucksUnderTheLeadAndItsCarriedTailIsFilteredOnce() throws {
         let previous = try Self.phrase(index: 0)
         let next = try Self.phrase(index: 1, carry: previous.tail)
         let alone = try Self.phrase(index: 1)
         let n = next.clock.frameCount
         let dry = Self.channels(next.dry)
-        let duck = LofiRenderer.spaceDuck(lead: dry, gain: 1, frames: n, sampleRate: Self.rate)
+        let duck = LofiRenderer.spaceDuck(lead: dry, gain: 1, frames: n, sampleRate: Self.rate,
+                                          onsets: LofiRenderer.leadOnsets(next.score, clock: next.clock))
         let depth = -Self.db(Double(duck.gain.min() ?? 1))
         print(String(format: "CHAIN space duck max %.2f dB, mean %.2f dB", depth, duck.meanDB))
         #expect((3...5).contains(depth))
+        #expect(duck.meanDB <= 2.2, "space duck mean \(duck.meanDB) dB")
         // Joined output minus the phrase alone is the carried tail exactly once, under the same duck.
         // A second filter pass on the tail would leave a filtered residual here.
         let joined = Self.channels(next.wet), own = Self.channels(alone.wet)

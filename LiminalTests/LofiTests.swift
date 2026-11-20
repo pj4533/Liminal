@@ -165,7 +165,8 @@ struct LofiTests {
         let n = Int(next.dry.frameLength)
         let duck = LofiRenderer.spaceDuck(lead: (Array(UnsafeBufferPointer(start: lead[0], count: n)),
                                                  Array(UnsafeBufferPointer(start: lead[1], count: n))),
-                                          gain: 1, frames: n, sampleRate: next.clock.sampleRate)
+                                          gain: 1, frames: n, sampleRate: next.clock.sampleRate,
+                                          onsets: LofiRenderer.leadOnsets(next.score, clock: next.clock))
         #expect(abs(wet[audible] - dry[audible] - duck.gain[audible] * carry.left) < 0.0000001)
     }
 

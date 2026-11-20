@@ -311,9 +311,9 @@ nonisolated enum DialogueChopRenderer {
     }
 }
 
-/// The per-cut vocal chain (plan 8.5), offline: HPF 120 Hz at 18 dB per octave, a -2.5 dB bell at 300 Hz,
-/// a +3 dB presence bell at 3 kHz, a 5-8 kHz de-esser, a 3:1 compressor taking 3 to 6 dB off the peaks,
-/// then a low-pass at 7.5 kHz for speech pads and 5.5 kHz for texture. Levelling follows in the renderer.
+/// The per-cut vocal chain (plan 8.5, tucked on 19 November 2026), offline: HPF 200 Hz at 18 dB per octave,
+/// -4 dB at 300 Hz, a narrow -2 dB dip at 650 Hz for the lead, -4 dB at 2.8 kHz, a 5-8 kHz de-esser, a 4:1
+/// compressor, then a low-pass at 4.2 kHz for speech pads and 3.4 kHz for texture. Levelling follows in the renderer.
 nonisolated enum DialogueChopChain {
     struct Dynamics: OptionSet, Sendable {
         let rawValue: Int
@@ -329,6 +329,10 @@ nonisolated enum DialogueChopChain {
     /// Tuck pass (19 November 2026): a 2.8 kHz cut instead of a presence boost (+4.5 dB at 3.4 kHz
     /// after calibration, +3 dB at 3 kHz before). A boost there is what made the chops sit on top of the beat.
     static let presenceHz = 2800.0, presenceQ = 0.7, presenceDB = -4.0
+    /// Band separation from the lead (19 November 2026): a narrow -2 dB dip at 650 Hz, the middle of the
+    /// sampled leads' 500 Hz to 1 kHz body, so the melody is heard through the chops without being raised
+    /// (user direction: the melody tucks in too). Q 2 keeps it to about a third of an octave.
+    static let leadRoomHz = 650.0, leadRoomQ = 2.0, leadRoomDB = -2.0
     static let deEssBand = 5_000.0...8_000.0
     static let deEssMaxDB: Float = 4.5
     /// Firmer than plan 8.5's 3:1 at 9 dB under the peak (user direction of 19 November 2026: the chops glued
@@ -472,6 +476,7 @@ nonisolated enum DialogueChopChain {
     static func preFilters(sampleRate: Double) -> [LofiBiquad.Kind] {
         // 3rd-order Butterworth high-pass: a 1st-order section (below) and a Q 1 biquad.
         [.highpass(hz: highpassHz, q: 1.0), .peak(hz: mudHz, q: mudQ, gainDB: mudDB),
+         .peak(hz: leadRoomHz, q: leadRoomQ, gainDB: leadRoomDB),
          .peak(hz: presenceHz, q: presenceQ, gainDB: presenceDB)]
     }
 

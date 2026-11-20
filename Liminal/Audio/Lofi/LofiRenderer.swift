@@ -303,7 +303,8 @@ nonisolated enum LofiRenderer {
         // Space: filtered once over phrase plus tail, so the carried tail is never filtered again,
         // then ducked under the dry lead. The duck applies to this phrase's frames (own and carried).
         let spaceStats = LofiStemChains.applySpace(left: &spaceL, right: &spaceR, sampleRate: sampleRate)
-        let duck = Self.spaceDuck(lead: lead, gain: dryLeadGain, frames: n, sampleRate: sampleRate)
+        let duck = Self.spaceDuck(lead: lead, gain: dryLeadGain, frames: n, sampleRate: sampleRate,
+                                  onsets: Self.leadOnsets(score, clock: clock))
         // Bass: mono chain on the rendered voice, before the edge envelope and the kick duck.
         guard let bassL = left.baseAddress, let bassR = right.baseAddress else { throw RenderError.buffer }
         vDSP_vadd(bassL, 1, bassR, 1, bassL, 1, vDSP_Length(n))
@@ -329,6 +330,7 @@ nonisolated enum LofiRenderer {
         }
         let count = vDSP_Length(n)
         var leadLevel = dryLeadGain, mixLevel = midsGain, meter = Self.midsMeterTrim
+        var spaceTrim = LofiStemChains.Space.standard.outputGain
         for channel in 0..<2 {
             let source = channel == 0 ? lead.left : lead.right
             let mids = channel == 0 ? texture.left : texture.right
@@ -338,6 +340,7 @@ nonisolated enum LofiRenderer {
             vDSP_vsma(mids, 1, &mixLevel, hissTrack, 1, textureChannels[channel], 1, count)
             vDSP_vmul(textureChannels[channel], 1, envelope, 1, textureChannels[channel], 1, count)
             vDSP_vmul(space, 1, duck.gain, 1, wetChannels[channel], 1, count)
+            vDSP_vsmul(wetChannels[channel], 1, &spaceTrim, wetChannels[channel], 1, count)
         }
         // The balance meters the mids at their former level, so raising them never turns the
         // lead down with them; it then follows the tail.
@@ -356,10 +359,25 @@ nonisolated enum LofiRenderer {
         vDSP_vclip(fade, 1, &zero, &one, &fade, 1, vDSP_Length(tailCount))
         spaceL.withUnsafeBufferPointer { vDSP_vmul($0.baseAddress! + n, 1, fade, 1, &tailL, 1, vDSP_Length(tailCount)) }
         spaceR.withUnsafeBufferPointer { vDSP_vmul($0.baseAddress! + n, 1, fade, 1, &tailR, 1, vDSP_Length(tailCount)) }
+        // The carried tail takes the space trim here, as this phrase's own space did above.
+        vDSP_vsmul(tailL, 1, &spaceTrim, &tailL, 1, vDSP_Length(tailCount))
+        vDSP_vsmul(tailR, 1, &spaceTrim, &tailR, 1, vDSP_Length(tailCount))
         balance.observe(tailL, tailR)
-        // Bass: headroom guard after the chain, edge envelope, then the kick duck (mono).
+        // Bass: headroom guard after the chain, edge envelope, then the kick duck (mono), keyed by the
+        // take's kick landmarks when it has confident kicks, else by the level detector.
+        let landmarkDuck = drums.flatMap {
+            LofiKickDuck.landmarkGains($0.landmarks, start: drumOffset, count: n, sampleRate: sampleRate)
+        }
         envelope.withUnsafeBufferPointer { envelope in
-            if let drumChannels {
+            if let landmarkDuck {
+                var deepest: Float = 1
+                for frame in 0..<n {
+                    let kickGain = landmarkDuck[frame]
+                    deepest = kickGain < deepest ? kickGain : deepest
+                    bassL[frame] = headroom(bassL[frame]) * envelope[frame] * kickGain
+                }
+                bassStats.extra["kickDuckMaxDb"] = -20 * log10f(deepest)
+            } else if let drumChannels {
                 let drumL = drumChannels[0] + drumOffset, drumR = drumChannels[1] + drumOffset
                 var deepest: Float = 1
                 for frame in 0..<n {
@@ -374,7 +392,7 @@ nonisolated enum LofiRenderer {
         }
         bassR.update(from: bassL, count: n)
         let trim = balance.gain
-        report(score, clock: clock, phrase: phrase,
+        report(score, clock: clock, phrase: phrase, bass: UnsafePointer(bassL),
                levels: ["leadGain": dryLeadGain, "sendGain": sendGain, "midsGain": midsGain, "balanceTrim": trim])
         if LofiCaptureHooks.isEnabled {
             var space = spaceStats
@@ -460,8 +478,13 @@ nonisolated enum LofiRenderer {
 
     /// The space duck of a phrase (`LofiStemChains.spaceDuck`) keyed by its dry lead at `gain`.
     /// Scale invariant, so the dry stem itself reproduces it.
+    /// Phrase-local start frames of the scored lead notes: the onsets that key the space duck.
+    static func leadOnsets(_ score: LofiScore, clock: LofiClock) -> [Int] {
+        score.notes.filter { $0.part == .lead }.map { clock.frame(at: $0.beat) }
+    }
+
     static func spaceDuck(lead: (left: [Float], right: [Float]), gain: Float, frames n: Int,
-                          sampleRate: Double) -> (gain: [Float], meanDB: Float, maxDB: Float) {
+                          sampleRate: Double, onsets: [Int]? = nil) -> (gain: [Float], meanDB: Float, maxDB: Float) {
         var l = Array(lead.left.prefix(n)), r = Array(lead.right.prefix(n))
         var g = gain
         vDSP_vsmul(l, 1, &g, &l, 1, vDSP_Length(l.count))
@@ -469,7 +492,7 @@ nonisolated enum LofiRenderer {
         return l.withUnsafeBufferPointer { lp in
             r.withUnsafeBufferPointer { rp in
                 LofiStemChains.spaceDuck(leadLeft: lp.baseAddress!, leadRight: rp.baseAddress!, count: min(lp.count, rp.count),
-                                         sampleRate: sampleRate)
+                                         sampleRate: sampleRate, onsets: onsets)
             }
         }
     }
@@ -600,16 +623,30 @@ nonisolated enum LofiRenderer {
     }
 
     /// Capture-only: one `diagnostics.bass` element per phrase, frames on the capture timeline
-    /// (phrase index times phrase frames). `attackFrame` is the note start plus the voice's attack lead.
-    private static func report(_ score: LofiScore, clock: LofiClock, phrase: Int, levels: [String: Float]) {
+    /// (phrase index times phrase frames). `attackFrame` is the note start plus the voice's attack lead
+    /// (its 20 percent point). For an accent aligned to a kick, `alignedKickFrame` is the kick's broadband
+    /// attack, `kickLowRiseFrame` the kick's 40-160 Hz half-amplitude rise measured on the take, and
+    /// `bassLowRiseFrame` the same measure on this phrase's finished bass stem (after the chain, the
+    /// headroom guard and the kick duck); `bassLowRiseFrame - kickLowRiseFrame` is the real alignment error.
+    private static func report(_ score: LofiScore, clock: LofiClock, phrase: Int, bass: UnsafePointer<Float>,
+                               levels: [String: Float]) {
         guard LofiCaptureHooks.isEnabled else { return }
         let origin = phrase * clock.frameCount
         let lead = Int((score.bassVoice.attackLead * clock.sampleRate).rounded())
         let notes: [[String: Any]] = score.notes.filter { $0.part == .bass }.map { note in
-            let frame = origin + clock.frame(at: note.beat)
+            let local = clock.frame(at: note.beat)
+            let frame = origin + local
             let kick = score.bassAnchors.first { $0.noteBeat == note.beat }
-            return ["frame": frame, "attackFrame": frame + lead, "midi": note.midi,
-                    "alignedKickFrame": kick.map { origin + clock.frame(at: $0.kickBeat) as Any } ?? NSNull()]
+            var row: [String: Any] = ["frame": frame, "attackFrame": frame + lead, "midi": note.midi,
+                                      "alignedKickFrame": kick.map { origin + clock.frame(at: $0.kickBeat) as Any } ?? NSNull()]
+            if let kick {
+                row["kickLowRiseFrame"] = origin + clock.frame(at: kick.kickLowRiseBeat)
+                let rise = LofiDrumLandmarks.lowBandRise(bass, count: clock.frameCount, around: local + lead,
+                                                         sampleRate: clock.sampleRate)
+                row["bassLowRiseFrame"] = rise.map { origin + $0 as Any } ?? NSNull()
+                row["plannedBassLowRiseFrame"] = frame + clock.frame(at: kick.bassLowRiseBeats)
+            }
+            return row
         }
         LofiCaptureHooks.appendReport("bass", ["phrase": phrase, "voice": String(describing: score.bassVoice),
                                                "notes": notes] as [String: Any])
