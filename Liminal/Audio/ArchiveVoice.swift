@@ -23,6 +23,9 @@ nonisolated final class ArchiveVoice {
         var chops: [LofiDialogueSampler.Hit] = []
         /// The footage service's cue token. Plans with this token belong to this cue. Nil means a new one.
         var token: Int? = nil
+        /// The Lo-Fi transport when the bed was posted: places the theme return's bed dip without any
+        /// dialogue plan (a film with no speech still dips under the hook).
+        var transport: LofiTransportInfo? = nil
     }
 
     /// A dialogue performance for one cue (plan 3.6, 6.3), posted with `MusicControl.archiveChops`.
@@ -229,14 +232,21 @@ nonisolated final class ArchiveVoice {
     private var lastBedGain: Float = 1
     /// Beat seconds of the Lo-Fi transport (from `setEchoTempo`) and the theme returns it implies.
     private var chopBeat: Double?
-    private var returnStarts: [Double] = []
+    /// Theme return downbeats (transport seconds). `precise` ones come from the transport or a plan's
+    /// events; the others are estimated from the audible phrase callback and yield to a precise one.
+    private struct ReturnMark { let start: Double; let precise: Bool }
+    private var returnStarts: [ReturnMark] = []
     private var lastChopGain: Float = 0
     /// Not yet queued chops, sorted by start, and the ones already on the player (pruned).
     private var storedChops: [ScheduledChop] = []
     private var queuedChops: [ScheduledChop] = []
     private var timeline: ChopTimeline?
-    /// The newest cue token whose bed has begun; plans for older tokens are stale.
+    /// The newest cue token whose bed has begun; plans for older tokens are stale. Only chops with
+    /// this token are queued (and duck anything): a plan for a later cue waits, inert, for its bed.
     private var currentCueToken: Int?
+    /// Cues the footage service abandoned after their analysis started (`archiveChopsCancel`). A late
+    /// plan for one of them is ignored. Tokens below the current cue are pruned (already stale).
+    private var cancelledTokens: Set<Int> = []
     /// Highest plan revision stored per cue token.
     private var planRevisions: [Int: Int] = [:]
     /// Conductor seconds after which the chop fader closes (the cue's end plus the tail).
@@ -278,23 +288,61 @@ nonisolated final class ArchiveVoice {
         guard let timeline, let beat = chopBeat, !returnStarts.isEmpty else { return false }
         let now = timeline.anchor + (t + 0.01 - timeline.conductorAnchor)
         let length = LofiBed.returnDipBeats * beat, lead = LofiBed.returnDipLeadBeats * beat
-        return returnStarts.contains { now + lead >= $0 && now < $0 + length }
+        return returnStarts.contains { now + lead >= $0.start && now < $0.start + length }
+    }
+
+    /// Adds one return downbeat. Duplicates within a quarter second (precise) or 0.75 s (an estimate)
+    /// merge; a precise time replaces an estimate. The dip needs the chop timeline's conductor-to-transport
+    /// mapping even when no chop has been queued (a film with no speech), so the next modulation tick
+    /// starts it: only that tick's time is exact in manual rendering (a control's is a step old).
+    private func addReturn(_ start: Double, precise: Bool) {
+        guard start.isFinite else { return }
+        if let i = returnStarts.firstIndex(where: { abs($0.start - start) < (precise && $0.precise ? 0.25 : 0.75) }) {
+            if precise && !returnStarts[i].precise { returnStarts[i] = ReturnMark(start: start, precise: true) }
+            return
+        }
+        returnStarts.append(ReturnMark(start: start, precise: precise))
+        let horizon = (returnStarts.map(\.start).max() ?? 0) - 600
+        returnStarts.removeAll { $0.start < horizon }
+    }
+
+    /// Return downbeats of the take the transport describes and, when it is already queued, the next
+    /// one: the returns are the phrases `LofiScore.section(at:)` names `.returnTheme`.
+    private func noteReturnStarts(_ info: LofiTransportInfo) {
+        let phrases = LofiDrumTake.phraseCount
+        let phraseBeats = Int(LofiClock.beats)
+        for k in 0..<phrases where LofiScore.section(at: info.phraseAtTakeStart + k) == .returnTheme {
+            addReturn(info.origin + Double(k * phraseBeats) * info.beatDuration, precise: true)
+        }
+        guard let next = info.nextBeatDuration else { return }
+        let nextOrigin = info.origin + Double(phrases * phraseBeats) * info.beatDuration
+        for k in 0..<phrases where LofiScore.section(at: info.phraseAtTakeStart + phrases + k) == .returnTheme {
+            addReturn(nextOrigin + Double(k * phraseBeats) * next, precise: true)
+        }
+    }
+
+    /// The Lo-Fi phrase `index` just became audible (`LofiPlayback.onPhrase` through the conductor).
+    /// When the next phrase is a theme return, its downbeat is about one phrase from now. An estimate:
+    /// the callback is polled, so it may be a few tens of milliseconds late; the dip's 3-beat lead and
+    /// 0.3 s ramp absorb that. A transport or plan time replaces it.
+    func notePhrase(_ index: Int, beatDuration: Double, now: Double) {
+        guard beatLocked, beatDuration.isFinite, beatDuration > 0,
+              LofiScore.section(at: index + 1) == .returnTheme else { return }
+        addReturn(transportNow(now) + LofiClock.beats * beatDuration, precise: false)
     }
 
     /// Return starts (transport seconds) implied by a plan's events: every event knows its block (the
     /// global phrase) and sixteenth slot, and the return is the fourth phrase of each 16-bar take
     /// (`LofiScore`). Events of the take's first three blocks place it before it begins.
+    /// Fallback beside the transport and phrase sources above (kept for the offline capture, whose
+    /// cues carry no transport).
     private func noteReturnStarts(_ events: [DialogueEvent]) {
         guard let beat = chopBeat else { return }
         for event in events where event.block >= 0 {
             let position = event.block % 4
             let blockStart = event.accentTime - Double(event.slot) * beat / 4
-            let start = blockStart + Double(3 - position) * 16 * beat
-            guard start.isFinite, !returnStarts.contains(where: { abs($0 - start) < 0.25 }) else { continue }
-            returnStarts.append(start)
+            addReturn(blockStart + Double(3 - position) * 16 * beat, precise: true)
         }
-        let horizon = (returnStarts.max() ?? 0) - 600
-        returnStarts.removeAll { $0 < horizon }
     }
 
     /// The Lo-Fi lead, mids and space faders this voice ducks under featured chops. Call once after
@@ -415,6 +463,10 @@ nonisolated final class ArchiveVoice {
             LMLog.audio.error("📼🔊 archive cue format mismatch \(cue.buffer.format.description, privacy: .public) vs \(self.format.description, privacy: .public)")
             return
         }
+        // The cue owns the chop timeline from the moment its bed is posted, also while the old bed
+        // fades out for 0.27 s: its chops in that crossfade still play.
+        var cue = cue
+        cue.token = adoptChopToken(cue.token)
         if playing && strip.fadeValue > 0.001 {
             pending = cue
             strip.fade(to: 0, over: 0.24, now: now)
@@ -451,14 +503,23 @@ nonisolated final class ArchiveVoice {
 
     /// A new bed adopts its token: older cues' unqueued chops are dropped (the old bed is fading out),
     /// and legacy sampler hits join the same scheduled list as plan chops.
-    private func beginChops(for cue: Cue, now: Double, seconds: Double) {
-        lastTime = now
-        let token = cue.token ?? (max(currentCueToken ?? 0, planRevisions.keys.max() ?? 0) + 1)
+    /// Makes `requested` (or a fresh token) the current cue's: only its chops are queued from now on,
+    /// and older cues' unqueued chops, revisions and cancellations go.
+    private func adoptChopToken(_ requested: Int?) -> Int {
+        let token = requested ?? (max(currentCueToken ?? 0, planRevisions.keys.max() ?? 0) + 1)
         currentCueToken = token
         storedChops.removeAll { $0.token < token }
         planRevisions = planRevisions.filter { $0.key >= token }
+        cancelledTokens = cancelledTokens.filter { $0 >= token }
+        return token
+    }
+
+    private func beginChops(for cue: Cue, now: Double, seconds: Double) {
+        lastTime = now
+        let token = adoptChopToken(cue.token)
         chopsUntil = now + seconds + Self.chopTailSeconds
-        if !cue.chops.isEmpty, beatLocked {
+        if beatLocked, let info = cue.transport { noteReturnStarts(info) }
+        if !cue.chops.isEmpty, beatLocked, !cancelledTokens.contains(token) {
             planRevisions[token] = max(planRevisions[token] ?? 0, 0)
             store(cue.chops.map { ScheduledChop(token: token, start: $0.time, buffer: $0.buffer, duck: true) })
             LMLog.audio.info("Lo-Fi film sampler stored \(cue.chops.count) hits for this picture")
@@ -476,6 +537,10 @@ nonisolated final class ArchiveVoice {
             LMLog.audio.info("Lo-Fi dialogue plan for stale cue \(plan.token) ignored")
             return
         }
+        if cancelledTokens.contains(plan.token) {
+            LMLog.audio.info("Lo-Fi dialogue plan for cancelled cue \(plan.token) ignored")
+            return
+        }
         if let stored = planRevisions[plan.token], plan.revision <= stored { return }
         planRevisions[plan.token] = plan.revision
         storedChops.removeAll { $0.token == plan.token && $0.start >= plan.replaceFrom }
@@ -489,6 +554,17 @@ nonisolated final class ArchiveVoice {
         LMLog.audio.info("Lo-Fi dialogue plan cue=\(plan.token) revision=\(plan.revision) stored \(incoming.count) chops")
         blendSoundtrack(at: now)
         updateChopGain(at: now)
+    }
+
+    /// The footage service abandoned cue `token` (its bed never began, or footage stopped): its stored
+    /// chops and revisions go, and any later plan for it is ignored. Queued audio is never moved.
+    func cancelChops(token: Int) {
+        if let current = currentCueToken, token < current { return }
+        cancelledTokens.insert(token)
+        let before = storedChops.count
+        storedChops.removeAll { $0.token == token }
+        planRevisions[token] = nil
+        LMLog.audio.info("Lo-Fi dialogue cue=\(token) cancelled, \(before - self.storedChops.count) stored chops dropped")
     }
 
     private func store(_ chops: [ScheduledChop]) {
@@ -525,6 +601,7 @@ nonisolated final class ArchiveVoice {
         return made
     }
 
+    /// Keeps `cancelledTokens`: a late plan for an abandoned cue must not come back after a restart.
     private func stopChopTimeline() {
         chops.player.stop()
         timeline = nil
@@ -545,12 +622,18 @@ nonisolated final class ArchiveVoice {
         queuedChops.removeAll { $0.end < now - 1 }
         dropWindows.removeAll { $0.upperBound < t - 1 }
         duckWindows.removeAll { $0.upperBound < t - 1 }
-        guard beatLocked, let first = storedChops.first, first.start < now + Self.chopQueueAhead else { return }
+        // Only the begun cue's chops are due. A later cue's plan stays stored, inert (no audio, no duck),
+        // until its bed begins and `beginChops` adopts its token; it never blocks the current cue's chops.
+        let horizon = now + Self.chopQueueAhead
+        if beatLocked, timeline == nil, !returnStarts.isEmpty { _ = startChopTimeline(at: t) }
+        guard beatLocked, let current = currentCueToken,
+              storedChops.contains(where: { $0.token == current && $0.start < horizon }) else { return }
         let timeline = startChopTimeline(at: t)
         let rate = format.sampleRate
         var dropped = 0
-        while let chop = storedChops.first, chop.start < now + Self.chopQueueAhead {
-            storedChops.removeFirst()
+        let due = storedChops.filter { $0.token == current && $0.start < horizon }
+        storedChops.removeAll { $0.token <= current && $0.start < horizon }
+        for chop in due {
             let frame = AVAudioFramePosition(((chop.start - timeline.anchor) * rate).rounded())
             guard chop.start >= now + timeline.margin, frame >= 0 else {
                 dropped += 1

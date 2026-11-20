@@ -412,11 +412,108 @@ struct DialogueRuntimeTests {
         for i in 1...DialogueDirector.cacheEntries {
             director.store(Self.fixture.source(contentID: "cache-\(i)"), analysis: built.analysis, bank: built.bank)
         }
-        let counts = director.cacheCount
-        #expect(counts.entries == DialogueDirector.cacheEntries)
-        #expect(counts.withPCM == DialogueDirector.cacheWithPCM)
+        #expect(director.cacheCount == DialogueDirector.cacheEntries)
         #expect(director.cached(source) == nil, "the oldest entry is evicted")
         #expect(director.cached(Self.fixture.source(contentID: "cache-1")) != nil)
+    }
+
+    // MARK: Route recovery, cache key and cost (fix1-A)
+
+    /// Sixteenth-grid error of every accent against a transport origin.
+    private static func gridError(_ chops: [DialogueChop], origin: Double, beat: Double = beat) -> Double {
+        let sixteenth = beat / 4
+        return chops.map { chop in
+            let position = (chop.event.accentTime - origin) / sixteenth
+            return abs(position - position.rounded()) * sixteenth
+        }.max() ?? 0
+    }
+
+    /// `GenerativeEngine.recoverStoppedGraph` re-arms the transport: a new revision on a new origin that is
+    /// off the old sixteenth grid. A bump while the plan is built replans on the new grid; nothing is
+    /// posted against the old revision.
+    @Test func aRouteRecoveryRevisionBumpMidPlanReplansOnTheNewGrid() async throws {
+        let start = Self.uptime()
+        let old = Self.info(origin: start, revision: 1)
+        // 0.37 s is 1.73 sixteenths at 70 BPM: no chop of the old grid fits the new one.
+        let rearmed = Self.info(origin: start + 0.37, revision: 2)
+        let window = DialogueCueCoordinator.window(due: start + 0.5, span: 8 * Self.bar, transport: old)
+        let director = DialogueDirector(.neutral(transcriptProvider: { NullTranscriptProvider() }))
+        let bump = Transport(old, later: rearmed)
+        let recorder = Recorder()
+        let outcome = await run(director, info: old, window: window, transport: { bump.read() }, recorder: recorder).value
+        try #require(recorder.plans.count == 1, "one plan, built on the re-armed transport")
+        #expect(outcome.built.allSatisfy { $0.plan.transportRevision == 2 }, "no plan against the old revision")
+        let built = try #require(outcome.built.first)
+        #expect(built.snapshot.origin == rearmed.origin)
+        let chops = recorder.plans[0].chops
+        try #require(!chops.isEmpty)
+        let slack = DialogueTuning.gestureOffsetSeconds.upperBound + 1e-6
+        #expect(Self.gridError(chops, origin: rearmed.origin) <= slack, "chops sit on the re-armed grid")
+        #expect(Self.gridError(chops, origin: old.origin) > slack, "and not on the stale one")
+    }
+
+    /// The same bump after the acoustic plan is posted (recovery while the transcript runs): the stale
+    /// plan is replaced from the commit margin with revision 1 chops on the new grid only.
+    @Test func aRouteRecoveryAfterThePlanIsPostedRebuildsItOnTheNewGrid() async throws {
+        let transcript = DialogueFixtures.transcript(Self.fixture)
+        let director = DialogueDirector(.neutral(transcriptProvider: {
+            FixtureTranscriptProvider(transcript, delay: .milliseconds(700))
+        }))
+        let start = Self.uptime()
+        let old = Self.info(origin: start, revision: 1)
+        let rearmed = Self.info(origin: start + 0.37, revision: 2)
+        let window = DialogueCueCoordinator.window(due: start + 0.2, span: 8 * Self.bar, transport: old)
+        let posted = Mutex(false)
+        let recorder = Recorder()
+        let source = Self.fixture.source(contentID: "runtime", cueToken: 1)
+        let outcome = await Task.detached(priority: .utility) {
+            await director.run(source: source, window: window, seed: 9,
+                               transport: { posted.withLock { $0 } ? rearmed : old }, isCurrent: { true },
+                               post: { recorder.add($0); posted.withLock { $0 = true } })
+        }.value
+        let plans = recorder.plans
+        try #require(plans.count == 2, "the stale plan, then its rebuild")
+        #expect(plans[1].revision > plans[0].revision, "the rebuild outranks the stale plan")
+        let rebuilt = try #require(outcome.built.last)
+        #expect(rebuilt.plan.transportRevision == 2)
+        #expect(plans[1].chops.allSatisfy { $0.event.startTime >= plans[1].replaceFrom })
+        if !plans[1].chops.isEmpty {
+            #expect(Self.gridError(plans[1].chops, origin: rearmed.origin) <= DialogueTuning.gestureOffsetSeconds.upperBound + 1e-6)
+        }
+    }
+
+    @Test func theBankCacheKeepsOneEntryPerPlaybackRate() throws {
+        let director = DialogueDirector()
+        let native = Self.fixture.source(contentID: "film", sourceStart: 12.5, rate: 1)
+        let slowed = Self.fixture.source(contentID: "film", sourceStart: 12.5, rate: 0.985)
+        for source in [native, slowed] {
+            let analysis = DialogueEngine.analyze(source, speech: [])
+            director.store(source, analysis: analysis, bank: DialogueEngine.bank(analysis, transcript: nil, seed: 4))
+        }
+        #expect(DialogueDirector.CacheKey(native) != DialogueDirector.CacheKey(slowed))
+        #expect(director.cacheCount == 2, "two rates are two entries")
+        #expect(try #require(director.cached(native)).analysis.clock.rate == 1)
+        #expect(try #require(director.cached(slowed)).analysis.clock.rate == 0.985)
+        // A rate that rounds to the same key but differs is still a miss (a different time base).
+        #expect(director.cached(Self.fixture.source(contentID: "film", sourceStart: 12.5, rate: 1.0004)) == nil)
+    }
+
+    @Test func eachPlanLogsThermalStateFootprintAndCacheSize() async throws {
+        let director = DialogueDirector(.neutral(transcriptProvider: { NullTranscriptProvider() }))
+        let start = Self.uptime()
+        let info = Self.info(origin: start)
+        let window = DialogueCueCoordinator.window(due: start + 0.3, span: 8 * Self.bar, transport: info)
+        let outcome = await run(director, info: info, window: window, recorder: Recorder()).value
+        let built = try #require(outcome.built.first)
+        let entry = built.timings.dictionary(cue: 1)
+        for key in ["classifyMs", "analyzeMs", "bankMs", "planMs", "renderMs", "totalMs"] { #expect(entry[key] is Double, "\(key)") }
+        let thermal = try #require(entry["thermalState"] as? String)
+        #expect(["nominal", "fair", "serious", "critical"].contains(thermal))
+        #expect(try #require(entry["residentMB"] as? Double) > 1)
+        #expect(entry["cacheEntries"] as? Int == 1)
+        #expect(try #require(entry["cacheBytes"] as? Int) > 1000)
+        #expect(JSONSerialization.isValidJSONObject(entry))
+        print("DIALOGUE-COST \(entry.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: " "))")
     }
 
     @Test func transportSnapshotAndWindowFollowTheTake() throws {

@@ -237,15 +237,18 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
         // Take this run's tasks before clearing `running`: a launch that follows at once (footage turned
         // back on, Play again) then stores its own tasks, which this halt never cancels.
         let old = tasks.withLock { t -> [Task<Void, Never>] in defer { t = [] }; return t }
-        let wasRunning = shared.withLock { s -> Bool in
+        let (wasRunning, pendingToken) = shared.withLock { s -> (Bool, Int?) in
             defer {
                 s.running = false; s.pieces = []; s.disabling = false; s.disablingSince = nil; s.audio = nil
                 s.pendingAudio = nil; s.attemptedAudioPiece = nil
             }
-            return s.running
+            return (s.running, s.pendingAudio?.token)
         }
         old.forEach { $0.cancel() }
         cancelDialogue()
+        // A cue still waiting for its bed may already have a plan at the conductor: drop it now rather
+        // than when its wait loop next wakes.
+        if let pendingToken { music.withLock { $0 }?.post(.archiveChopsCancel(token: pendingToken)) }
         guard wasRunning else { return }
         sources.forEach { $0.stop() }
         shared.withLock { s in if !s.enabled { s.status = "Archive footage off" } }
@@ -357,7 +360,14 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
             // The bed never waits for dialogue analysis: the coordinator runs beside this loop and
             // posts its plan at a safe bar boundary (plan 6.2).
             var posted = false
-            defer { if !posted { self.cancelDialogue(matching: token) } }
+            // An abandoned cue (too late, footage off or stopping, replaced by a newer cue) cancels its
+            // analysis task and any plan it already posted: that plan's chops never begin (plan 6.3).
+            defer {
+                if !posted {
+                    self.cancelDialogue(matching: token)
+                    sink.post(.archiveChopsCancel(token: token))
+                }
+            }
             self.startDialogue(token: token, piece: piece, cue: cue, clip: clip, url: url, bed: buffer, due: due, sink: sink)
             let deadline = start + cue.fadeOutAt
             while true {
@@ -384,7 +394,8 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
                 s.audio = AudioState(cue: cue, token: token, pieceIndex: piece.index, begun: true)
                 sink.post(.archiveBegin(ArchiveVoice.Cue(buffer: ready, gain: g,
                     fadeIn: max(0.35, cue.fadeIn - max(late, 0)),
-                    label: title, claritySeed: piece.seed, activity: activity, token: token)))
+                    label: title, claritySeed: piece.seed, activity: activity, token: token,
+                    transport: sink.transport())))
                 return true
             }
             if posted && late > 0.1 {
