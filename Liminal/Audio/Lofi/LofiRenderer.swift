@@ -168,8 +168,7 @@ nonisolated enum LofiRenderer {
         let texture = (left: mids.left, right: mids.right)
         textureLower = (quiet, quiet)
         textureUpper = (quiet, quiet)
-        // The program trim (D114) moves the dry lead, its sends and the matched mids together.
-        let dryLeadGain = leadGain(for: lead, frames: n, sampleRate: sampleRate) * powf(10, score.preset.levelDB / 20)
+        let dryLeadGain = leadGain(for: lead, frames: n, sampleRate: sampleRate)
         if let leadAccent {
             vDSP_vadd(lead.left, 1, leadAccent.left, 1, &lead.left, 1, vDSP_Length(frames))
             vDSP_vadd(lead.right, 1, leadAccent.right, 1, &lead.right, 1, vDSP_Length(frames))
@@ -374,9 +373,13 @@ nonisolated enum LofiRenderer {
             }
         }
         bassR.update(from: bassL, count: n)
-        let trim = balance.gain
+        // The program's loudness-match trim (D114) follows the balance, which only turns phrases down:
+        // a plucked program held under the 400 ms and peak ceilings can still come up to the grand.
+        let programTrim = powf(10, score.preset.levelDB / 20)
+        let trim = balance.gain * programTrim
         report(score, clock: clock, phrase: phrase,
-               levels: ["leadGain": dryLeadGain, "sendGain": sendGain, "midsGain": midsGain, "balanceTrim": trim])
+               levels: ["leadGain": dryLeadGain, "sendGain": sendGain, "midsGain": midsGain, "balanceTrim": balance.gain,
+                        "programTrim": programTrim])
         if LofiCaptureHooks.isEnabled {
             var space = spaceStats
             space.grMeanDb = duck.meanDB
