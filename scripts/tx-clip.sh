@@ -7,6 +7,9 @@
 #   scripts/tx-clip.sh --a A.jpg --b B.jpg --out DIR [--style classic|tide|facets|...] [--seed 0] [--intensity 0.5]
 #                      [--start 113] [--duration S (default: 1.5 classic, else the style's mid range)] [--pre 1] [--post 3] [--fps 30] [--shader FILE.metal]
 #                      [--depth B-depth.png] [--no-score] [--no-clip]
+#                      [--drop --fill S [--hits a,b,..] [--tx-colour NAME] [--tx-finisher NAME] [--tx-strength X]]
+#   --drop renders a drop (docs/plans/drop-transitions.md): A breaks up over the fill, B is cut in at the
+#   downbeat; scored with tx-check.py score --drop (use --fps 60 so the cut frame is exact).
 # Writes
 #   DIR/frames/f0000-L.png ... + sequence.json   the transition (left eye, 768x512, 30 fps)
 #   DIR/ref-a/, DIR/ref-b/                       image A / image B alone, effects off, same timeline
@@ -18,7 +21,7 @@ set -euo pipefail
 
 SCRIPT_DIR="${0:A:h}"
 FFMPEG="${FFMPEG:-/opt/homebrew/bin/ffmpeg}"
-A="" B="" OUT="" STYLE="classic" SEED=0 FPS=30 SCORE=1 CLIP=1
+A="" B="" OUT="" STYLE="classic" SEED=0 FPS=30 SCORE=1 CLIP=1 DROP=0
 pass=()
 while (( $# )); do
   case "$1" in
@@ -35,6 +38,12 @@ while (( $# )); do
     --post) pass+=(--seq-post "$2"); shift 2 ;;
     --shader) pass+=(--shader "$2"); shift 2 ;;
     --depth) pass+=(--depth "$2"); shift 2 ;;
+    --drop) pass+=(--drop); DROP=1; shift ;;
+    --fill) pass+=(--fill "$2"); shift 2 ;;
+    --hits) pass+=(--hits "$2"); shift 2 ;;
+    --tx-colour) pass+=(--tx-colour "$2"); shift 2 ;;
+    --tx-finisher) pass+=(--tx-finisher "$2"); shift 2 ;;
+    --tx-strength) pass+=(--tx-strength "$2"); shift 2 ;;
     --no-score) SCORE=0; shift ;;
     --no-clip) CLIP=0; shift ;;
     *) echo "unknown argument $1" >&2; exit 2 ;;
@@ -60,5 +69,5 @@ fi
 python3 "$SCRIPT_DIR/tx-check.py" sheet "$OUT" "$OUT/filmstrip.png" > /dev/null
 if (( SCORE )); then
   python3 "$SCRIPT_DIR/tx-check.py" plot "$OUT" "$OUT/plot.png" > /dev/null
-  python3 "$SCRIPT_DIR/tx-check.py" score "$OUT"
+  if (( DROP )); then python3 "$SCRIPT_DIR/tx-check.py" score --drop "$OUT"; else python3 "$SCRIPT_DIR/tx-check.py" score "$OUT"; fi
 fi

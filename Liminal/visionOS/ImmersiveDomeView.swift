@@ -598,7 +598,10 @@ struct ImmersiveDomeView: View {
                     relief.imageChanged(generation: generation)
                     if !wasFirst { transitionStartEffectTime = effectTime }
                     let zoomStart = wasFirst && DebugLaunchOptions.freezeTime != nil ? 0 : effectTime
-                    zoom.imageChanged(at: zoomStart, replacing: !wasFirst)
+                    // A drop: the new picture's push starts on the cut, not under the build.
+                    let cut = !wasFirst ? transitionState.beatReveal.flatMap { r in
+                        r.isDrop ? zoomStart + Float(r.downbeat - ArchiveFootageService.uptime()) : nil } : nil
+                    zoom.imageChanged(at: zoomStart, replacing: !wasFirst, holdUntil: cut)
                     LMLog.visual.info("🎬 New image detected (gen \(generation)), triggering transition (prepared off-main in \(String(format: "%.1f", prepared.milliseconds), privacy: .public)ms)")
                     // Visuals -> music at the crossfade start.
                     postVisualMood(metadata: metadata, image: framedImage, imageChanged: !wasFirst,
@@ -674,7 +677,7 @@ struct ImmersiveDomeView: View {
                     imageAge: transitionStartEffectTime.map { effectTime - $0 }.flatMap { $0 >= 0 ? $0 : nil },
                     imageInterval: Float(settings.imageInterval),
                     transitionDuration: transitionState.spec.duration,
-                    freshFadeCap: transitionState.spec.drop != nil ? transitionState.spec.duration : nil)
+                    freshFadeEnd: transitionState.spec.drop != nil ? transitionState.spec.duration : nil)
                 let footageFrame = footage.frame(image: cgImage)
                 if frameCount % 30 == 0 {
                     footage.update(.init(transitionRunning: transitionState.isTransitioning,

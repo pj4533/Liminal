@@ -293,7 +293,7 @@ final class MusicSyncBox {
         let age = transitionStart.map { effectTime - $0 }.flatMap { $0 >= 0 ? $0 : nil }
         return EffectLook(intensity: i, imageAge: age, imageInterval: Float(imageInterval),
                           transitionDuration: transition.duration,
-                          freshFadeCap: transition.drop != nil ? transition.duration : nil)
+                          freshFadeEnd: transition.drop != nil ? transition.duration : nil)
     }
 }
 
@@ -500,7 +500,10 @@ struct VisualDisplayView: View {
                     let time = DebugLaunchOptions.effectTime(Float(effectController.time))
                     if started { sync.transitionStart = time }
                     let zoomStart = !hadFrame && DebugLaunchOptions.freezeTime != nil ? 0 : time
-                    sync.zoom.imageChanged(at: zoomStart, replacing: started)
+                    // A drop: the new picture's push starts on the cut, not under the build.
+                    let cut = started ? visualEngine.reveal.flatMap { r in
+                        r.isDrop ? zoomStart + Float(r.downbeat - ArchiveFootageService.uptime()) : nil } : nil
+                    sync.zoom.imageChanged(at: zoomStart, replacing: started, holdUntil: cut)
                     postMood(for: image, imageChanged: started)
                 }
             } else {

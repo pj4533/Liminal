@@ -243,8 +243,8 @@ nonisolated struct DropPlan: Sendable, Equatable {
         return (exp(k * t) - 1) / (exp(k) - 1)
     }
 
-    /// Steeper for builds of 1.2 s or more, so short builds are visible sooner.
-    static func curve(build seconds: Float) -> Float { seconds >= 1.2 ? 4 : 2.5 }
+    /// Steeper for builds of 1.2 s or more; short builds are flatter so they are visible sooner (T45).
+    static func curve(build seconds: Float) -> Float { seconds >= 1.2 ? 2.5 : 1.5 }
 }
 
 /// One frame of a drop, at the time the frame reaches the display.
@@ -282,7 +282,10 @@ nonisolated extension TransitionStyle {
         case .crush: return .posterize
         case .tear, .slitscan, .punch: return .split
         case .vhs, .shutter: return .scanlines
-        case .blocks, .mosh, .bleed, .scramble: return .falsecolour
+        case .blocks: return .falsecolour
+        case .mosh: return .none
+        case .bleed: return .split
+        case .scramble: return .posterize
         case .static, .jumpcut: return .grain
         case .sort, .fracture: return .posterize
         default: return .split
@@ -293,7 +296,7 @@ nonisolated extension TransitionStyle {
         switch self {
         case .tear, .vhs, .crush: return .collapse
         case .punch, .sort: return .whiteout
-        case .blocks, .static, .scramble: return .invert
+        case .blocks, .static: return .invert
         case .shutter: return .none
         default: return .blackout
         }
@@ -416,7 +419,7 @@ nonisolated struct TransitionBoost: Sendable, Equatable {
             b.chromaticMul = 1 + 2 * e
         case .mosh:
             // Datamosh: the trails hold the old picture while its blocks slide.
-            b.shaderAmount = tri(0.02, 0.05, 0.08)
+            b.shaderAmount = tri(0.04, 0.08, 0.12)
             b.feedbackTarget = 0.72
             b.feedbackPull = e
             b.feedbackWarpMul = 1 + 4 * e
@@ -433,7 +436,7 @@ nonisolated struct TransitionBoost: Sendable, Equatable {
             b.shaderAmount = tri(0.20, 0.35, 0.50)   // zoom at the peak
             b.chromaticMul = 1 + 4 * e
         case .slitscan:
-            b.shaderAmount = tri(0.05, 0.10, 0.16)
+            b.shaderAmount = tri(0.08, 0.16, 0.24)
             b.chromaticMul = 1 + 2 * e
         case .jumpcut:
             b.shaderAmount = tri(0.10, 0.20, 0.30)

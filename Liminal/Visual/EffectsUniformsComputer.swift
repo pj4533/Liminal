@@ -11,13 +11,26 @@ import Foundation
 /// Tracks framing separately from the image transition's effect envelope.
 struct ImageZoomTiming {
     private var start: Float = 0
+    /// A drop keeps the outgoing picture's framing running until its cut (`holdUntil`).
+    private var heldStart: Float?
     private(set) var outgoingScale: Float = 0
 
-    func age(at time: Float) -> Float { max(0, time - start) }
+    func age(at time: Float) -> Float {
+        if let h = heldStart, time < start { return max(0, time - h) }
+        return max(0, time - start)
+    }
 
-    mutating func imageChanged(at time: Float, replacing: Bool) {
+    /// - Parameter holdUntil: a drop's cut on the same clock: the old framing keeps moving until then and
+    ///   the new picture's push starts on its first frame (docs/plans/drop-transitions.md 3.5).
+    mutating func imageChanged(at time: Float, replacing: Bool, holdUntil: Float? = nil) {
         outgoingScale = replacing ? EffectsUniformsComputer.imageZoomScale(age: age(at: time)) : 0
-        start = time
+        if let h = holdUntil, replacing, h > time {
+            heldStart = time - age(at: time)
+            start = h
+        } else {
+            heldStart = nil
+            start = time
+        }
     }
 }
 
@@ -66,7 +79,8 @@ enum EffectsUniformsComputer {
         let isDrop = transition.drop != nil
         let dropDone = isDrop && ((drop?.done ?? false) || transitionProgress >= 1)
         let transitionProgress: Float = dropDone ? 0 : (isDrop ? (drop?.progress ?? transitionProgress) : transitionProgress)
-        let outgoingZoomScale: Float = dropDone ? 0 : outgoingZoomScale
+        // A drop keeps the old framing itself (ImageZoomTiming holdUntil), so it needs no outgoing crop.
+        let outgoingZoomScale: Float = isDrop ? 0 : outgoingZoomScale
         let a = music.amount
         let e = music.energy
         let i = min(max(look.intensity, 0), 1)
@@ -81,7 +95,9 @@ enum EffectsUniformsComputer {
         let env = inTransition ? transition.envelope(tp) : 0
         // The slow onset follower may swell a style's envelope by up to 12 % (plan 7.3); the swap never moves.
         let swell = transition.style == .classic || isDrop ? 1 : 1 + 0.12 * min(max(a * music.pulseMotion, 0), 1)
-        let tb = inTransition ? TransitionBoost.make(transition, intensity: i, envelope: env * swell, tp: tp) : TransitionBoost()
+        // The bell styles that run as a drop's "out" push 40 % harder: without the settle they must wreck the picture.
+        let outBoost: Float = isDrop && TransitionStyle.outs.contains(transition.style) ? 1.4 : 1
+        let tb = inTransition ? TransitionBoost.make(transition, intensity: i, envelope: min(env * swell * outBoost, 1.4), tp: tp) : TransitionBoost()
 
         // Framing belongs to the image. Clarity, music, and transition boosts cannot reverse it.
         let scale = imageZoomScale(age: zoomAge ?? look.imageAge ?? time)

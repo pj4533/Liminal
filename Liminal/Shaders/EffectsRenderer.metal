@@ -571,7 +571,7 @@ static inline WarpOut distortedUV(float2 texCoord, constant EffectsUniforms &uni
                 else o.field = 1.0;
             } else if (style == TX_CRUSH) {
                 // Resolution crush: the frame falls to a few big pixels at the cut.
-                float cells = mix(512.0, max(amt, 4.0), a * a);
+                float cells = 512.0 * pow(max(amt, 4.0) / 512.0, a);   // even steps in resolution
                 float2 grid = float2(cells, cells * 0.6667);
                 uv = (floor(uv * grid) + 0.5) / grid;
             } else if (style == TX_VHS) {
@@ -584,7 +584,7 @@ static inline WarpOut distortedUV(float2 texCoord, constant EffectsUniforms &uni
             } else if (style == TX_PUNCH) {
                 // Zoom punch about a seeded centre, kicked by the hits.
                 float2 c0 = 0.5 + 0.3 * (float2(fract(sd * 5.3), fract(sd * 8.9)) - 0.5);
-                float sc = 1.0 + amt * a * a + 0.08 * kick;
+                float sc = 1.0 + amt * a + 0.2 * kick * a + 0.1 * kick;
                 uv = c0 + (uv - c0) / sc;
             } else if (style == TX_SLITSCAN) {
                 // Rows sheared by a travelling wave, strongest at one edge; the wave number steps.
@@ -613,11 +613,11 @@ static inline WarpOut distortedUV(float2 texCoord, constant EffectsUniforms &uni
                 float sn = sincos(af, cs);
                 uv = mix(uv, 0.5 + r * float2(cs, sn), a * amt);
             } else if (style == TX_SCRAMBLE) {
-                // Tile shuffle: the frame cut into g x g tiles; a share a of them trade places.
-                float gi = floor(min(a, 0.999) * 5.0);
-                float g = gi < 1.0 ? 2.0 : (gi < 2.0 ? 3.0 : (gi < 3.0 ? 4.0 : (gi < 4.0 ? 6.0 : 8.0)));
+                // Tile shuffle: the frame cut into g x g tiles (4-8 from the seed; larger tiles swapped
+                // whole-frame luma, a flash); a share a of them trade places, re-drawn every fourth step.
+                float g = 4.0 + floor(sd * 4.99);
                 float2 tile = floor(saturate(uv) * g);
-                float hold = floor(n / 3.0);
+                float hold = floor(n / 4.0);
                 float id = tile.x + tile.y * g;
                 if (txHash(float2(id, sd * 9.0 + hold)) < a) {
                     float2 to = floor(txHash2(float2(id + 7.7, hold + sd)) * g);
@@ -1059,7 +1059,7 @@ static inline half3 dropLayers(half3 c, float2 texCoord, float2 fragPos, constan
         c = mix(c, nz, 0.85h * gate);
     }
     if (colour == DC_POSTERIZE) {
-        half lv = mix(32.0h, 4.0h, a * a);
+        half lv = mix(32.0h, 4.0h, a);
         c = floor(c * lv + 0.5h) / lv;
     } else if (colour == DC_FALSECOLOUR) {
         float2 cell = floor(texCoord * float2(16.0, 10.0));
