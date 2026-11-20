@@ -26,8 +26,10 @@ Four web research passes and one read of the code produced these notes. Each not
 | [pad-chords.md](pad-chords.md) | Pads that sit under a lead: hold and legato revoicing, 3-4 note shells below the lead, swell envelopes, pocket EQ, heavy but controlled reverb, ducking, width, and the frequency checks for mud and masking |
 | [bass-sources.md](bass-sources.md) | Redistributable bass samples. CC0 shortlist: Karoryfer Sneakybass (upright: finger, ghost, mute), Swagbass (flatwound electric), Ergo EUB, FreePats Finger Bass YR and Lately Bass. Rejected: non-commercial or EULA licences (Rickenbacker 4001, Pianobook, Spitfire LABS, Ableton, Splice, samplefocus) |
 | [code-scout.md](code-scout.md) | How the bass and chord (texture/mids) channels worked before the rework: types, constants, tests, criteria and constraints |
+| [bass-tone-diagnosis.md](bass-tone-diagnosis.md) | Stage-by-stage diagnosis of the D116 bass stem ("tinny", "too filtered but not completely"): band shares, the sampled body as the source of everything above 300 Hz, the late noisy upright bloom, choppy notes, chain additions, ruled-out causes (2026-11-20, `$S` is the session scratchpad) |
+| [bass-tone-research-audit.md](bass-tone-research-audit.md) | Audit of the D116 bass code against dub and boom bap sources: nine deviations, third-octave targets, sources and gaps (2026-11-20) |
 
-The implementation plan built from these notes is [docs/plans/bass-and-pads.md](../../plans/bass-and-pads.md). In brief:
+The bass tone was reworked afterwards (D119, plan [bass-tone-redo.md](../../plans/bass-tone-redo.md)) from the two bass-tone files above. The implementation plan built from the first notes is [docs/plans/bass-and-pads.md](../../plans/bass-and-pads.md). In brief:
 
 - **Bass:** a synthesized sub under a sampled CC0 upright or flatwound body. The line is a two-bar riddim cell locked to the kicks, with thump, walk, hold and ghost strokes, drop-outs, filter sweeps and dub throws sent into the reverb and echo stem.
 - **Chords:** a held three-voice grain pad below the lead, with one legato revoicing per phrase, a pocket EQ, and reverb feeds that leave out the feedback echo.

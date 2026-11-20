@@ -2,7 +2,7 @@
 
 Date: 2026-11-20. Base: `main` at bab3fed. Status: built (see Outcome).
 
-Inputs: the listening note on the D116 bass ("tinny", "too filtered but not completely", "weird high end", wants "continuous, warm bass tones, but with a really hard slap that lines up with where the drums hit"), the stage-by-stage diagnosis (`bass-diag/DIAG.md`) and the research audit (`bass-diag/AUDIT.md`), both in the session scratchpad. Reference captures: `cap-fix-1` (current, seed 2077, 72 BPM, 32 bars) and `final-main` (the earlier approved pure-synth bass).
+Inputs: the listening note on the D116 bass ("tinny", "too filtered but not completely", "weird high end", wants "continuous, warm bass tones, but with a really hard slap that lines up with where the drums hit"), the stage-by-stage diagnosis ([`bass-tone-diagnosis.md`](../research/bass-and-pads/bass-tone-diagnosis.md)) and the research audit ([`bass-tone-research-audit.md`](../research/bass-and-pads/bass-tone-research-audit.md)). Reference captures: `cap-fix-1` (current, seed 2077, 72 BPM, 32 bars) and `final-main` (the earlier approved pure-synth bass).
 
 Scope: the bass voice, the bass chain and the bass note lengths. Drums, pad, melody, reverb, chops, bed and master settings are not touched. This plan supersedes sections 2.2, 2.3 and 2.5.7 of `docs/plans/bass-and-pads.md` and its bass band gates in 5.5.
 
