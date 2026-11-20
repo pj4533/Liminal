@@ -407,7 +407,6 @@ struct LofiStemChainTests {
         #expect(highDuck > 0.2 * lowDuck && highDuck < 0.45 * lowDuck)
     }
 
-    /// At most `LofiKickDuck.depth` (4 dB since mix calibration; 3 dB before), 1.5 to 4.5 dB after each kick.
     /// The capture-only tape null (D121): a slow gain change leaves almost no residual, a tanh stage
     /// driven into its shoulder leaves its harmonics, and the 1-4 kHz band sees a 300 Hz tone's 3rd to 13th.
     @Test func tapeNullSeparatesGainFromShapeChange() throws {
@@ -426,6 +425,7 @@ struct LofiStemChainTests {
         #expect(tape.band1to4kDB > -3)
     }
 
+    /// At most `LofiKickDuck.depth` (4 dB since mix calibration; 3 dB before), 1.5 to 4.5 dB after each kick.
     @Test func kickDuckIsBounded() {
         let fixture = Self.drumFixture(seconds: 4)
         var duck = LofiKickDuck(sampleRate: Self.rate)
