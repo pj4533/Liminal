@@ -510,8 +510,10 @@ nonisolated extension LofiScore {
     /// broadband attack and its 2 ms-power low-band rise (`lowRiseFrame`). Measured on the 25 installed
     /// AJ Hall takes (20 November 2026): median 0.48 on the 72 BPM take (11.6 ms after the attack, p10 to
     /// p90 10.7 to 12.2 ms over 70 kicks); over all takes the error of 0.47 has median 0.5 ms, p10 -7 ms,
-    /// p90 +24 ms (slow kicks whose body swells late).
-    static let bassKickRiseShare = 0.47
+    /// p90 +24 ms (slow kicks whose body swells late). The mix rebalance (D118) set 0.40: at 0.47 the three
+    /// 70 BPM matrix cases (seed 1042) read the bass 4.7 to 5.0 ms late (signed median; C-B2 allows 5 ms
+    /// and the `same` case failed at 5.19), and seed 2077 at 72 BPM read +1.3 ms; at 0.40 it reads 0.42 ms.
+    static let bassKickRiseShare = 0.40
 
     /// Phrase-local beats of the attack and the C-B2 rise target of each confident kick in the phrase,
     /// with the frame arithmetic of `LofiTimingField.kicks`.
