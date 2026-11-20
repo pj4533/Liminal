@@ -426,6 +426,115 @@ struct ArchiveVoiceRenderTests {
         // The dry chop path is 0.72; the fader is min(cueGain, 1.15) = 1 regardless of the bed fade.
         #expect(abs(x[found]) > 0.65 && abs(x[found]) < 0.8, "chop peak \(x[found])")
     }
+
+    // MARK: Cue ownership of chops (fix1-A)
+
+    /// A featured chop (at least 0.5 s): an impulse at sample 0, then silence.
+    private func featured(_ probe: ChopProbe, at start: Double, seconds: Double = 0.6) throws -> DialogueChop {
+        let n = AVAudioFrameCount(seconds * probe.rate)
+        let buffer = try #require(AVAudioPCMBuffer(pcmFormat: probe.engine.archiveFormat, frameCapacity: n))
+        buffer.frameLength = n
+        for c in 0..<Int(buffer.format.channelCount) {
+            buffer.floatChannelData![c].update(repeating: 0, count: Int(n))
+            buffer.floatChannelData![c][0] = 1
+        }
+        let event = DialogueEvent(padID: 0, role: .head, block: 0, slot: 0, accentTime: start, startTime: start,
+                                  duration: seconds, gainDB: 0, protected: false, chokeAt: nil, text: nil,
+                                  transform: .native, padKey: 2, snareLanded: false)
+        return DialogueChop(event: event, buffer: buffer)
+    }
+
+    @Test func aLaterCuesPlanIsInertUntilItsBedBeginsThenPlaysNormally() throws {
+        let probe = try ChopProbe(seed: 7)
+        let bed = try probe.silence(6)
+        let control = 0.7, early = 1.1, crossfade = 1.45, adopted = 2.4
+        let earlyChop = try featured(probe, at: early), adoptedChop = try featured(probe, at: adopted)
+        var steps = Set<String>()
+        func once(_ key: String, _ body: () -> Void) { if steps.insert(key).inserted { body() } }
+        var duckedBeforeAdoption = false, duckedAfterAdoption = false
+        var countsWhileInert: (stored: Int, queued: Int)?
+        let x = try probe.render(seconds: 3.2) { t in
+            let engine = probe.engine
+            if t >= 0.2 { once("bed1") { engine.post(.archiveBegin(ArchiveVoice.Cue(buffer: bed, gain: 1, fadeIn: 0.1, label: "one", token: 1))) } }
+            // Cue 2's analysis finished before its bed: the plan reaches the voice while cue 1 plays.
+            if t >= 0.3 { once("plan2") { engine.post(.archiveChops(.init(token: 2, revision: 0, chops: [earlyChop, probe.chop(at: crossfade), adoptedChop]))) } }
+            if t >= 0.35 { once("plan1") { engine.post(.archiveChops(.init(token: 1, revision: 0, chops: [probe.chop(at: control)]))) } }
+            if t >= 1.2 { once("counts") { countsWhileInert = engine.archive.chopCounts } }
+            // Bed 2 is posted at 1.3 s and adopts its stored plan at once; it sounds after bed 1's 0.27 s fade.
+            if t >= 1.3 { once("bed2") { engine.post(.archiveBegin(ArchiveVoice.Cue(buffer: bed, gain: 1, fadeIn: 0.1, label: "two", token: 2))) } }
+            if t > early + 0.03 && t < early + 0.45 && engine.archive.isMusicDucked { duckedBeforeAdoption = true }
+            if t > adopted + 0.05 && t < adopted + 0.5 && engine.archive.isMusicDucked { duckedAfterAdoption = true }
+        }
+        #expect(probe.onset(x, near: control) != nil, "cue 1's own chop plays")
+        #expect(probe.onset(x, near: early) == nil, "cue 2's chop before its bed began stays silent")
+        #expect(!duckedBeforeAdoption, "an inert chop opens no duck window")
+        let counts = try #require(countsWhileInert)
+        #expect(counts.stored == 3 && counts.queued == 1, "cue 2's chops wait stored, unqueued: \(counts)")
+        #expect(probe.onset(x, near: crossfade) != nil, "cue 2's chop inside the bed crossfade plays")
+        let found = try #require(probe.onset(x, near: adopted), "the adopted plan plays once bed 2 begins")
+        #expect(abs(found - Int((adopted * probe.rate).rounded())) <= 1)
+        #expect(duckedAfterAdoption, "the adopted featured chop ducks the music")
+    }
+
+    @Test func aCancelledCueIgnoresALatePlanAndQueuesNothing() throws {
+        let probe = try ChopProbe(seed: 8)
+        let bed = try probe.silence(6)
+        let control = 1.0, first = 1.6, late = 1.9
+        let firstChop = try featured(probe, at: first), lateChop = try featured(probe, at: late)
+        var steps = Set<String>()
+        func once(_ key: String, _ body: () -> Void) { if steps.insert(key).inserted { body() } }
+        var countsAfterLatePlan: (stored: Int, queued: Int)?
+        var ducked = false
+        let x = try probe.render(seconds: 2.8) { t in
+            let engine = probe.engine
+            if t >= 0.2 { once("bed1") { engine.post(.archiveBegin(ArchiveVoice.Cue(buffer: bed, gain: 1, fadeIn: 0.1, label: "one", token: 1))) } }
+            if t >= 0.25 { once("plan1") { engine.post(.archiveChops(.init(token: 1, revision: 0, chops: [probe.chop(at: control)]))) } }
+            if t >= 0.3 { once("plan2") { engine.post(.archiveChops(.init(token: 2, revision: 0, chops: [firstChop]))) } }
+            // The footage service abandons cue 2; its still-running analysis then posts a refinement.
+            if t >= 0.5 { once("cancel") { engine.post(.archiveChopsCancel(token: 2)) } }
+            if t >= 0.6 { once("late") { engine.post(.archiveChops(.init(token: 2, revision: 1, replaceFrom: 1.7, chops: [lateChop]))) } }
+            if t >= 0.8 { once("counts") { countsAfterLatePlan = engine.archive.chopCounts } }
+            // Even a bed with that token (which the footage service never posts) cannot revive the plan.
+            if t >= 1.2 { once("bed2") { engine.post(.archiveBegin(ArchiveVoice.Cue(buffer: bed, gain: 1, fadeIn: 0.1, label: "two", token: 2))) } }
+            if t > first && t < late + 0.55 && engine.archive.isMusicDucked { ducked = true }
+        }
+        let counts = try #require(countsAfterLatePlan)
+        #expect(counts.stored == 0, "the cancelled cue keeps no stored chops: \(counts)")
+        #expect(counts.queued == 1, "only cue 1's chop is on the player")
+        #expect(probe.onset(x, near: control) != nil)
+        #expect(probe.onset(x, near: first) == nil && probe.onset(x, near: late) == nil, "nothing of cue 2 sounds")
+        #expect(!ducked)
+    }
+
+    @Test func theThemeReturnDipsTheBedWithoutAnyDialoguePlan() throws {
+        let probe = try ChopProbe(seed: 9)
+        let rate = probe.rate
+        let n = AVAudioFrameCount(6 * rate)
+        let bed = try #require(AVAudioPCMBuffer(pcmFormat: probe.engine.archiveFormat, frameCapacity: n))
+        bed.frameLength = n
+        for c in 0..<Int(bed.format.channelCount) {
+            for i in 0..<Int(n) { bed.floatChannelData![c][i] = 0.3 * Float(sin(2 * Double.pi * 900 * Double(i) / rate)) }
+        }
+        // The take's return phrase (phrase 3, beat 48) starts at 4.0 s; the dip opens 3 beats early (1.6 s).
+        let beat = 0.8, returnStart = 4.0
+        let info = LofiTransportInfo(revision: 1, takeIndex: 0, phraseAtTakeStart: 0, origin: returnStart - 48 * beat,
+                                     beatDuration: beat, nextBeatDuration: nil, seed: 3, options: LofiOptions(), timing: nil)
+        var begun = false
+        let x = try probe.render(seconds: 3.4) { t in
+            if !begun, t >= 0.2 {
+                begun = true
+                probe.engine.post(.archiveBegin(ArchiveVoice.Cue(buffer: bed, gain: 1, fadeIn: 0.1, label: "no speech", token: 1,
+                                                                 transport: info)))
+            }
+        }
+        func rms(_ a: Double, _ b: Double) -> Double {
+            let slice = x[Int(a * rate)..<Int(b * rate)]
+            return 10 * log10(max(slice.reduce(0) { $0 + Double($1 * $1) } / Double(slice.count), 1e-20))
+        }
+        let before = rms(0.9, 1.4), during = rms(2.4, 3.3)
+        #expect(before > -60, "the bed is audible before the dip (\(before) dB)")
+        #expect(during < before - 8, "the bed dips under the return with no chops: \(before) -> \(during) dB")
+    }
 }
 
 struct LofiDialogueSamplerTests {

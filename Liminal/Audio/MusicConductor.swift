@@ -16,6 +16,9 @@ nonisolated enum MusicControl {
     case archiveBegin(ArchiveVoice.Cue), archiveEnd(fade: Double), archiveGain(Float)
     /// A dialogue performance for a cue (plan 6.3): stored, then queued incrementally on the chop timeline.
     case archiveChops(ArchiveVoice.ChopPlan)
+    /// The footage service abandoned cue `token` after its dialogue work started (the bed never began,
+    /// or footage stopped): its stored chops are dropped and later plans for it ignored.
+    case archiveChopsCancel(token: Int)
 }
 
 /// Owns time, randomness, harmony, scenes and layers (decisions D3-D6). Runs on its own serial queue in
@@ -176,6 +179,7 @@ nonisolated final class MusicConductor: @unchecked Sendable {
         queue.async { [self] in
             guard archiveOnly, began, !stopping else { return }
             archive?.setEchoTempo(beatDuration)
+            archive?.notePhrase(phrase, beatDuration: beatDuration, now: scheduler.now)
             mix.syncDelay(toBeatDuration: beatDuration, pattern: .choose(seed: seed, phrase: phrase), now: scheduler.now)
         }
     }
@@ -312,6 +316,7 @@ nonisolated final class MusicConductor: @unchecked Sendable {
         case .archiveEnd(let fade): archive?.end(fade: fade, now: scheduler.now)
         case .archiveGain(let g): archive?.setGain(g)
         case .archiveChops(let plan): if began && !stopping { archive?.perform(plan, now: scheduler.now) }
+        case .archiveChopsCancel(let token): archive?.cancelChops(token: token)
         }
     }
 
