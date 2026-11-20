@@ -27,6 +27,11 @@ nonisolated extension LofiScore {
     static let bassBreathRest = 0.35
     /// The strike layer moves at most this far (seconds) from its note's start onto the kick's attack.
     static let bassStrikeAdvance = 0.025
+    /// A sustained note whose last `bassEndingKickWindow` beats would sound over a kick it is not anchored
+    /// to (confidence at least `bassEndingKickConfidence`, the C-B2 measure's) ends `bassAccentClearance`
+    /// before that kick instead: a note fading out under a kick at the same level cancels it (D119).
+    static let bassEndingKickWindow = 0.06
+    static let bassEndingKickConfidence: Float = 0.5
     /// A shortened bass note keeps at least this many beats of sustain.
     static let bassShortestLength = 0.12
     /// Sounding beats per bar at most, and per phrase for the full sections (plan bass-tone-redo 4.2).
@@ -256,8 +261,18 @@ nonisolated extension LofiScore {
             if let anchor { anchors.append(anchor) }
         }
         placed.sort { $0.note.beat < $1.note.beat }
+        let endingKicks = timing.map { field -> [Double] in
+            let fpb = field.framesPerBeat
+            let start = Int((Double(timingStartBeat) * fpb).rounded())
+            return field.landmarks.compactMap { mark in
+                guard mark.kind == .kick, mark.confidence >= bassEndingKickConfidence,
+                      (start..<(start + field.phraseFrames)).contains(mark.attackFrame) else { return nil }
+                return Double(mark.attackFrame - start) / fpb
+            }
+        } ?? []
         var notes = fit(placed.map(\.note), roles: placed.map(\.role), anchors: anchors, voice: voice,
-                        beatSeconds: beatSeconds, end: end, full: section != .breakdown && section != .answer)
+                        beatSeconds: beatSeconds, end: end, full: section != .breakdown && section != .answer,
+                        endingKicks: endingKicks)
         anchors = anchors.filter { a in notes.contains { $0.beat == a.noteBeat } }
 
         // One slide per phrase at most, into a non-anchored walk or hold.
@@ -497,7 +512,7 @@ nonisolated extension LofiScore {
     /// one breath per cell. Everything ends by `end`; the sounding length per bar and per phrase keeps to
     /// the limits.
     static func fit(_ input: [Note], roles inputRoles: [BassRole], anchors: [BassAnchor], voice: LofiBassVoice,
-                    beatSeconds: Double, end: Double, full: Bool) -> [Note] {
+                    beatSeconds: Double, end: Double, full: Bool, endingKicks: [Double] = []) -> [Note] {
         var notes = input
         var roles = inputRoles
         func crisp(_ i: Int) -> Bool {
@@ -569,6 +584,23 @@ nonisolated extension LofiScore {
                 notes[m] = notes[m].with(length: notes[m].length - cut)
                 total -= cut
             }
+        }
+        // A sustained note never fades out under a kick it is not anchored to.
+        // Last, so no later pass stretches a note back over the kick.
+        let clearance = bassAccentClearance / beatSeconds
+        i = 0
+        while i < notes.count {
+            let note = notes[i]
+            let sounding = note.beat + note.length + release(i)
+            // Kicks a note is anchored to (this one's or its successor's) are where the bass and kick hit together.
+            let own = anchors.filter { anchor in notes.contains { $0.beat == anchor.noteBeat } }.map(\.kickBeat)
+            if let kick = endingKicks.filter({ k in k > note.beat + bassKickSafety && k < sounding + clearance
+                                                && k > note.beat + note.length - bassEndingKickWindow
+                                                && !own.contains { abs($0 - k) < 1e-6 } }).min() {
+                let length = kick - note.beat - release(i) - clearance
+                if length >= bassShortestLength, length < note.length { notes[i] = note.with(length: length) }
+            }
+            i += 1
         }
         return notes
     }
