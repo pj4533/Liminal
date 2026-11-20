@@ -125,6 +125,12 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
         let device = MTLCreateSystemDefaultDevice()
         let made = (0..<2).compactMap { _ in device.flatMap { VideoFrameSource(device: $0) } }
         sources = made.count == 2 ? made : []
+        // Launch cleanup off the main actor (A31): the store's load deletes footage files its index does not
+        // list; stale CFNetwork downloads and old fixtures go from tmp/. Nothing that can play is touched.
+        Task.detached(priority: .utility) { [store] in
+            await store.load()
+            ArchiveDiskSweep.sweepTemporaryDirectory()
+        }
     }
 
     static func uptime() -> Double { Double(DispatchTime.now().uptimeNanoseconds) / 1e9 }

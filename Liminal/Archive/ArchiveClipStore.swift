@@ -4,12 +4,14 @@
 //
 //  Disk cache of downloaded footage (docs/plans/archive-video.md 1.4): films and excerpts in
 //  Application Support/Liminal/ArchiveFootage/ with an index.json. Holds the pinned titles and
-//  two discoveries, within a 3 GB budget.
+//  two discoveries, within a 3 GB budget. At load it deletes files the index does not list
+//  (docs/decisions/archive-video.md A31).
 //
 
 import AVFoundation
 import CoreGraphics
 import Foundation
+import os
 
 /// One cached clip.
 nonisolated struct ArchiveClip: Codable, Sendable, Equatable, Identifiable {
@@ -144,6 +146,12 @@ actor ArchiveClipStore {
         }
         for id in ArchiveCachePolicy.excessDiscoveries(index.clips) { remove(id, rememberDiscovery: true) }
         if index.clips.count != before { save() }
+        // Files the index does not list (an index that failed to decode, a crash between a move and the
+        // index write, older builds) are never played or evicted: delete them.
+        let swept = ArchiveDiskSweep.remove(ArchiveDiskSweep.orphans(in: directory, indexed: Set(index.clips.map(\.fileName))))
+        if swept.count > 0 {
+            LMLog.visual.info("📼 swept \(swept.count) unindexed files (\(String(format: "%.1f", Double(swept.bytes) / 1e6), privacy: .public) MB) from the footage cache")
+        }
     }
 
     private func save() {
@@ -184,6 +192,8 @@ actor ArchiveClipStore {
             throw AddFailure.insufficientCacheSpace
         }
         let dest = directory.appendingPathComponent(clip.fileName)
+        // An unindexed file of the same name would make the move fail on every retry.
+        if !index.clips.contains(where: { $0.fileName == clip.fileName }) { try? FileManager.default.removeItem(at: dest) }
         try FileManager.default.moveItem(at: file, to: dest)
         let victims = [replacement].compactMap { $0 } + evict
         for id in victims { remove(id, rememberDiscovery: true) }
@@ -215,6 +225,77 @@ actor ArchiveClipStore {
         for c in index.clips where !keeping.contains(c.id) { try? FileManager.default.removeItem(at: url(for: c)) }
         index.clips.removeAll { !keeping.contains($0.id) }
         save()
+    }
+}
+
+// MARK: - Disk sweep
+
+/// Launch-time cleanup of files nothing tracks (A31). Pure file-system helpers, run off the main actor:
+/// orphans in the footage directory and stale temporary files in the app's (sandboxed) `tmp/`.
+nonisolated enum ArchiveDiskSweep {
+    /// An interrupted `URLSession` download leaves `CFNetworkDownload_*.tmp` behind; a live one is
+    /// written continuously, so anything untouched for 10 minutes is abandoned.
+    static let downloadAge: TimeInterval = 10 * 60
+    /// Test and automation fixtures (`liminal-*`), left an hour so a running test keeps its own.
+    static let fixtureAge: TimeInterval = 60 * 60
+
+    /// Entries of `directory` other than `index.json` and the indexed file names.
+    static func orphans(in directory: URL, indexed: Set<String>) -> [URL] {
+        let items = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
+        return items.filter { $0.lastPathComponent != "index.json" && !indexed.contains($0.lastPathComponent) }
+    }
+
+    /// Stale CFNetwork download files and old `liminal-*` fixtures in `tmp`.
+    static func staleTemporaryItems(in tmp: URL, now: Date = Date()) -> [URL] {
+        let keys: Set<URLResourceKey> = [.contentModificationDateKey]
+        let items = (try? FileManager.default.contentsOfDirectory(at: tmp, includingPropertiesForKeys: Array(keys))) ?? []
+        return items.filter { url in
+            let name = url.lastPathComponent
+            let age: TimeInterval
+            if name.hasPrefix("CFNetworkDownload_") && name.hasSuffix(".tmp") {
+                age = downloadAge
+            } else if name.lowercased().hasPrefix("liminal") {
+                age = fixtureAge
+            } else {
+                return false
+            }
+            let modified = (try? url.resourceValues(forKeys: keys).contentModificationDate) ?? .distantPast
+            return now.timeIntervalSince(modified) >= age
+        }
+    }
+
+    /// Deletes `urls` and returns how many went and their logical size.
+    @discardableResult
+    static func remove(_ urls: [URL]) -> (count: Int, bytes: Int64) {
+        let fm = FileManager.default
+        var count = 0
+        var bytes: Int64 = 0
+        for url in urls {
+            let size = logicalSize(url)
+            guard (try? fm.removeItem(at: url)) != nil else { continue }
+            count += 1
+            bytes += size
+        }
+        return (count, bytes)
+    }
+
+    /// File size, or the sum over a directory's files (logical bytes, not allocated blocks).
+    static func logicalSize(_ url: URL) -> Int64 {
+        let keys: Set<URLResourceKey> = [.fileSizeKey, .isDirectoryKey]
+        guard let v = try? url.resourceValues(forKeys: keys) else { return 0 }
+        guard v.isDirectory == true else { return Int64(v.fileSize ?? 0) }
+        var total: Int64 = 0
+        let e = FileManager.default.enumerator(at: url, includingPropertiesForKeys: Array(keys))
+        while let f = e?.nextObject() as? URL { total += Int64((try? f.resourceValues(forKeys: keys))?.fileSize ?? 0) }
+        return total
+    }
+
+    /// Sweeps the app's temporary directory (once at launch, detached from the main actor).
+    static func sweepTemporaryDirectory(_ tmp: URL = FileManager.default.temporaryDirectory) {
+        let swept = remove(staleTemporaryItems(in: tmp))
+        if swept.count > 0 {
+            LMLog.visual.info("📼 swept \(swept.count) stale temporary items (\(String(format: "%.1f", Double(swept.bytes) / 1e6), privacy: .public) MB) from tmp")
+        }
     }
 }
 
