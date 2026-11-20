@@ -76,6 +76,7 @@ nonisolated struct LofiEffects {
     /// Per-sample constants of the gesture, resolved once (the effect loop runs unoptimized in Debug).
     private let gains: (echo: Float, room: Float, color: Float)
     private let isTape: Bool
+    private let padLevel: Float
     private let beatStep: Float
     private var orbit: Float = 0
 
@@ -85,6 +86,7 @@ nonisolated struct LofiEffects {
         self.gesture = gesture
         gains = gesture.returnGains
         isTape = gesture == .tape
+        padLevel = Self.padSendLevel(gesture: gesture, profile: profile)
         beatStep = 1 / Float(clock.framesPerBeat)
         let taps = gesture.taps(for: profile)
         echoL = Delay(frames: clock.frame(at: taps.left), damping: 0.23)
@@ -96,8 +98,26 @@ nonisolated struct LofiEffects {
         motion = LofiMotion(clock: clock, tonic: tonic, scale: scale, seed: seed, gesture: gesture)
     }
 
+    /// Feeds of the held pad's send (D117): mostly plate and late room, a little Ensemble, almost no
+    /// feedback echo (a held chord recirculating in the echo is what would wash out). The shells keep
+    /// the `texture` feeds. The send arrives pre-filtered (280 Hz to 4 kHz) and 45 ms late.
+    static let padFeeds = (plate: Float(0.90), room: Float(0.55), ensemble: Float(0.20), echo: Float(0.08))
+
+    /// The pad send's level into the rack, divided by the phrase's room weight (gesture return gain,
+    /// program diffusion, and the fourth root of the room decay against 5 s), so the pad's return sits the
+    /// same 3 to 6 dB under the dry pad whichever gesture the phrase draws (measured spread without it:
+    /// 5 dB between cloud and resonance).
+    static func padSendLevel(gesture: Gesture, profile: LofiPreset.Space) -> Float {
+        let weight = gesture.returnGains.room * profile.diffusion * Float(pow(gesture.roomDecay / 5, 0.25))
+        return padSendTrim / max(0.2, weight)
+    }
+    static let padSendTrim: Float = 1.0
+
     @_transparent
-    mutating func processReturns(lead: Stereo, texture: Stereo, grains: Stereo, space: Float) -> Returns {
+    mutating func processReturns(lead: Stereo, texture: Stereo, pad: Stereo = (0, 0), grains: Stereo,
+                                 space: Float) -> Returns {
+        let feeds = Self.padFeeds
+        let pad = (left: pad.left * padLevel, right: pad.right * padLevel)
         let dryPeak = max(abs(lead.left), abs(lead.right))
         leadPresence += (dryPeak - leadPresence) * (dryPeak > leadPresence ? 0.00085 : 0.00010)
         let presence = min(1, 13 * leadPresence)
@@ -107,20 +127,26 @@ nonisolated struct LofiEffects {
         let scatter = particleTap.read()
         let grainL = grains.left * profile.particles
         let grainR = grains.right * profile.particles
-        echoL.write(tape(0.76 * lead.left + 0.37 * texture.right + 0.47 * grainR + echoB * feedback))
-        echoR.write(tape(0.76 * lead.right + 0.37 * texture.left + 0.47 * grainL + echoA * feedback))
+        echoL.write(tape(0.76 * lead.left + 0.37 * texture.right + feeds.echo * pad.right + 0.47 * grainR
+                         + echoB * feedback))
+        echoR.write(tape(0.76 * lead.right + 0.37 * texture.left + feeds.echo * pad.left + 0.47 * grainL
+                         + echoA * feedback))
         particleTap.write(tape(0.27 * (grainL - grainR) + 0.24 * (echoA - echoB) + 0.30 * scatter))
         let animated = motion.process(lead: lead, texture: texture, grain: (grainL + 0.29 * echoA, grainR + 0.29 * echoB))
         orbit += beatStep
-        let smear = ensemble.process(left: 0.55 * grainL + 0.54 * animated.left + 0.28 * texture.right,
-                                     right: 0.55 * grainR + 0.54 * animated.right + 0.28 * texture.left, beat: orbit)
-        let early = plate.process(1.05 * lead.left + 1.05 * texture.left + 0.27 * grainL,
-                                  1.05 * lead.right + 1.05 * texture.right + 0.27 * grainR)
+        let smear = ensemble.process(left: 0.55 * grainL + 0.54 * animated.left + 0.28 * texture.right
+                                         + feeds.ensemble * pad.right,
+                                     right: 0.55 * grainR + 0.54 * animated.right + 0.28 * texture.left
+                                         + feeds.ensemble * pad.left, beat: orbit)
+        let early = plate.process(1.05 * lead.left + 1.05 * texture.left + feeds.plate * pad.left + 0.27 * grainL,
+                                  1.05 * lead.right + 1.05 * texture.right + feeds.plate * pad.right + 0.27 * grainR)
         let swell = 0.78 + 0.22 * cosf(orbit * .pi * 0.5)
         let toneL = 0.48 * echoA + 0.64 * grainL + smear.left + scatter
         let toneR = 0.48 * echoB + 0.64 * grainR + smear.right - scatter
-        let late = room.process(0.73 * early.left + swell * toneL + 0.58 * lead.left + 0.45 * texture.left,
-                                0.73 * early.right + swell * toneR + 0.58 * lead.right + 0.45 * texture.right)
+        let late = room.process(0.73 * early.left + swell * toneL + 0.58 * lead.left + 0.45 * texture.left
+                                    + feeds.room * pad.left,
+                                0.73 * early.right + swell * toneR + 0.58 * lead.right + 0.45 * texture.right
+                                    + feeds.room * pad.right)
         // Briefly make room for the attack, then let the space and repeats carry the phrase.
         let echoGain = gains.echo * (0.96 + 0.23 * space - 0.12 * presence)
         let roomGain = gains.room * profile.diffusion * (1.30 + 0.60 * space - 0.22 * presence)
@@ -232,8 +258,9 @@ nonisolated struct LofiEffects {
         var result = (left: silence, right: silence)
         var rng = MusicRNG(seed: seed).fork(110)
         let leadNotes = score.notes.filter { $0.part == .lead }
-        let mids = score.notes.filter { $0.part == .texture }
-        let anchors = [leadNotes.first, leadNotes.last, mids.first].compactMap { $0 }
+        // The texture anchor is the first answer shell, or none: the held pad is never granulated (D117).
+        let shells = score.notes.filter { $0.part == .texture && $0.articulation != .pad }
+        let anchors = [leadNotes.first, leadNotes.last, shells.first].compactMap { $0 }
         for note in anchors {
             let sustained = note.part == .texture
             let duration = min(note.length * 0.68, sustained ? 0.64 : 0.53)

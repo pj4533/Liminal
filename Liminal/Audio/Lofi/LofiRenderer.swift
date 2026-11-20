@@ -91,10 +91,9 @@ nonisolated enum LofiRenderer {
         let quiet = [Float](repeating: 0, count: frames)
         var lead = (left: quiet, right: quiet)
         var leadSend = (left: quiet, right: quiet)
-        // The two shell voices render apart so the mids chain can place them (plan 8.4).
-        var textureLower = (left: quiet, right: quiet)
-        var textureUpper = (left: quiet, right: quiet)
-        var textureSend = (left: quiet, right: quiet)
+        // The two shell voices render apart so the mids chain can place them (plan 8.4); the held pad
+        // and the sends render beside them (D117).
+        var textureVoices = TextureVoices(frames: frames)
         var leadSampleCount = 0
         // A note's extra gain is kept apart until the phrase's lead gain is measured, so a revealed
         // note stands out instead of turning the whole phrase down.
@@ -123,9 +122,8 @@ nonisolated enum LofiRenderer {
                         leadAccent = accent
                     }
                 } else {
-                    addTexture(note, send: send, sample: sample, score: score, clock: clock,
-                               isUpper: upperVoices.contains(index), lower: &textureLower,
-                               upper: &textureUpper, sendStem: &textureSend)
+                    addTexture(note, send: send, sample: sample, samples: samples, score: score, clock: clock,
+                               isUpper: upperVoices.contains(index), into: &textureVoices)
                 }
             }
         }
@@ -136,17 +134,16 @@ nonisolated enum LofiRenderer {
         // Lead and mids chains on the full phrase-plus-tail arrays, from silence, before any edge.
         let leadStats = LofiStemChains.applyLead(left: &lead.left, right: &lead.right, accent: &leadAccent,
                                                  sampleRate: sampleRate)
-        let mids = LofiStemChains.applyMids(lower: textureLower, upper: textureUpper, sampleRate: sampleRate)
-        let texture = (left: mids.left, right: mids.right)
-        textureLower = (quiet, quiet)
-        textureUpper = (quiet, quiet)
         let dryLeadGain = leadGain(for: lead, frames: n, sampleRate: sampleRate)
         if let leadAccent {
             vDSP_vadd(lead.left, 1, leadAccent.left, 1, &lead.left, 1, vDSP_Length(frames))
             vDSP_vadd(lead.right, 1, leadAccent.right, 1, &lead.right, 1, vDSP_Length(frames))
         }
         let sendGain = min(1.6, sqrtf(dryLeadGain / 1.23))
-        let midsGain = midsLevel(lead: lead, leadGain: dryLeadGain, texture: texture, score: score, clock: clock)
+        let mids = finishTexture(&textureVoices, lead: lead, leadGain: dryLeadGain, score: score, clock: clock)
+        let textureSend = textureVoices.shellSend
+        textureVoices.shellSend = ([], [])
+        let padSend = mids.padSend.left.isEmpty ? (left: quiet, right: quiet) : mids.padSend
         let gesture = LofiEffects.Gesture.selection(seed: drift.seed, phrase: phrase)
         var effectRNG = MusicRNG(seed: drift.seed).fork(UInt64(phrase) + 450)
         let effectSeed = effectRNG.next()
@@ -224,6 +221,7 @@ nonisolated enum LofiRenderer {
         // Raw pointers keep the per-sample effect loop fast in unoptimized builds; the arrays are not
         // resized while these are in use. The replay writes into `grains` once, between two runs.
         let sendL = leadSend.left, sendR = leadSend.right, texSendL = textureSend.left, texSendR = textureSend.right
+        let padSendL = padSend.left, padSendR = padSend.right
         func run(_ range: Range<Int>) throws {
             guard !range.isEmpty else { return }
             let grainL = grains.left, grainR = grains.right
@@ -231,6 +229,8 @@ nonisolated enum LofiRenderer {
             try sendR.withUnsafeBufferPointer { sendR in
             try texSendL.withUnsafeBufferPointer { texSendL in
             try texSendR.withUnsafeBufferPointer { texSendR in
+            try padSendL.withUnsafeBufferPointer { padSendL in
+            try padSendR.withUnsafeBufferPointer { padSendR in
             try grainL.withUnsafeBufferPointer { grainL in
             try grainR.withUnsafeBufferPointer { grainR in
             try spaceTrack.withUnsafeBufferPointer { spaceTrack in
@@ -245,6 +245,7 @@ nonisolated enum LofiRenderer {
                     let returns = effects.processReturns(
                         lead: (sendGain * sendL[frame], sendGain * sendR[frame]),
                         texture: (texSendL[frame], texSendR[frame]),
+                        pad: (padSendL[frame], padSendR[frame]),
                         grains: (sendGain * grainL[frame], sendGain * grainR[frame]),
                         space: space)
                     if capturing, frame < n {
@@ -262,7 +263,7 @@ nonisolated enum LofiRenderer {
                     outL[frame] = wetGain * filtered.left
                     outR[frame] = wetGain * filtered.right
                 }
-            }}}}}}}}}}
+            }}}}}}}}}}}}
         }
         let release = captureWindow.upperBound
         if replay != nil, release > 0, release <= frames {
@@ -297,15 +298,15 @@ nonisolated enum LofiRenderer {
             }
         }
         let count = vDSP_Length(n)
-        var leadLevel = dryLeadGain, mixLevel = midsGain, meter = Self.midsMeterTrim
+        var leadLevel = dryLeadGain, mixLevel: Float = 1, meter: Float = 1
         var spaceTrim = LofiStemChains.Space.standard.outputGain
         for channel in 0..<2 {
             let source = channel == 0 ? lead.left : lead.right
-            let mids = channel == 0 ? texture.left : texture.right
+            let chords = channel == 0 ? mids.left : mids.right
             let space = channel == 0 ? spaceL : spaceR
             vDSP_vsmul(source, 1, &leadLevel, dryChannels[channel], 1, count)
             vDSP_vmul(dryChannels[channel], 1, envelope, 1, dryChannels[channel], 1, count)
-            mixTexture(mids, level: &mixLevel, hiss: hissTrack, envelope: envelope, into: textureChannels[channel], count: count)
+            mixTexture(chords, level: &mixLevel, hiss: hissTrack, envelope: envelope, into: textureChannels[channel], count: count)
             vDSP_vmul(space, 1, duck.gain, 1, wetChannels[channel], 1, count)
             vDSP_vsmul(wetChannels[channel], 1, &spaceTrim, wetChannels[channel], 1, count)
         }
@@ -313,9 +314,9 @@ nonisolated enum LofiRenderer {
         // lead down with them; it then follows the tail.
         var balance = InstrumentBalance(sampleRate: sampleRate)
         var meteredL = [Float](repeating: 0, count: n), meteredR = meteredL
-        vDSP_vsma(texture.left, 1, &meter, dryChannels[0], 1, &meteredL, 1, count)
+        vDSP_vsma(mids.meteredLeft, 1, &meter, dryChannels[0], 1, &meteredL, 1, count)
         vDSP_vadd(meteredL, 1, wetChannels[0], 1, &meteredL, 1, count)
-        vDSP_vsma(texture.right, 1, &meter, dryChannels[1], 1, &meteredR, 1, count)
+        vDSP_vsma(mids.meteredRight, 1, &meter, dryChannels[1], 1, &meteredR, 1, count)
         vDSP_vadd(meteredR, 1, wetChannels[1], 1, &meteredR, 1, count)
         balance.observe(meteredL, meteredR)
         // Store pre-limit samples so an overlapping tail goes through the linked knee only once.
@@ -338,7 +339,8 @@ nonisolated enum LofiRenderer {
         let trim = balance.gain * programTrim
         reportBass(score, clock: clock, phrase: phrase, bass: UnsafePointer(bassL))
         reportMusicLevels(score, phrase: phrase,
-               levels: ["leadGain": dryLeadGain, "sendGain": sendGain, "midsGain": midsGain, "balanceTrim": balance.gain,
+               levels: ["leadGain": dryLeadGain, "sendGain": sendGain, "midsGain": mids.shellGain, "padGain": mids.padGain,
+                        "padDuckMeanDb": mids.padDuckMeanDB, "balanceTrim": balance.gain,
                         "programTrim": programTrim])
         if LofiCaptureHooks.isEnabled {
             var space = spaceStats

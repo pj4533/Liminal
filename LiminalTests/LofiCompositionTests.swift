@@ -45,8 +45,9 @@ struct LofiCompositionTests {
                 #expect(current.scale == mode)
                 #expect(current.notes.allSatisfy { mode.intervals.contains($0.midi % 12) })
                 let notes = melody(current)
+                // The held pad sounds under the ending rest (D117); everything else ends before it.
                 let mids = current.notes.filter { $0.part != .bass }
-                #expect(mids.allSatisfy { $0.beat + $0.length <= current.endingRest.lowerBound })
+                #expect(mids.filter { $0.articulation != .pad }.allSatisfy { $0.beat + $0.length <= current.endingRest.lowerBound })
                 #expect(notes.allSatisfy { (53...72).contains($0.midi) })
                 // Rewritten for the riddim line (plan 2.8): structural notes in 28...41, octave ornaments up to 53.
                 let bassNotes = current.notes.filter { $0.part == .bass }
@@ -61,8 +62,12 @@ struct LofiCompositionTests {
                     #expect(notes.count == 4)
                     #expect(notes.last?.beat ?? 0 > 10)
                 } else {
-                    let shells = mids.filter { $0.part == .texture }.count
-                    #expect((4...8).contains(shells) && shells.isMultiple(of: 2))
+                    // Rewritten for the held pad (D117): two or three held voices and one revoicing, plus at
+                    // most one two-note answer shell (it was two to four shell pairs).
+                    let shells = mids.filter { $0.part == .texture && $0.articulation != .pad }.count
+                    let pad = mids.filter { $0.articulation == .pad }.count
+                    #expect(shells == 0 || shells == 2)
+                    #expect((2...4).contains(pad))
                 }
             }
         }
@@ -153,7 +158,16 @@ struct LofiCompositionTests {
         #expect(abs(bass[0].beat - max(0, Double(clock.frame(at: 0.10)) / clock.framesPerBeat - lead)) < 1e-9)
         #expect(locked.bassAnchors.count >= 1 && locked.bassAnchors.first?.noteBeat == bass[0].beat)
         #expect(!locked.bassAnchors.contains { abs($0.kickBeat - 8.3) < 0.01 })
-        #expect(locked.notes.filter { $0.part != .bass } == grid.notes.filter { $0.part != .bass })
+        // The held pad's end follows the beat length (D117), and `grid` is scored at the default tempo while
+        // `locked` passes 70 BPM, so the pad is compared apart from its length.
+        func unmoved(_ score: LofiScore) -> [LofiScore.Note] {
+            score.notes.filter { $0.part != .bass }.map { note in
+                note.articulation == .pad
+                    ? LofiScore.Note(part: note.part, midi: note.midi, beat: note.beat, length: 0, velocity: note.velocity,
+                                     color: note.color, send: note.send, articulation: .pad) : note
+            }
+        }
+        #expect(unmoved(locked) == unmoved(grid))
     }
 
     @Test(arguments: ["kawai", "osiris", "uprightkw", "nylon", "steel", "archtop", "jazzbox", "flatwound", "upright"])
