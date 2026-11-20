@@ -116,13 +116,17 @@ struct LofiTests {
         }
     }
 
-    @Test func sustainedOrganAndItsReturnsStayInsideTheInstrumentMix() throws {
-        let phrase = try LofiRenderer.render(seed: 1042, section: .variation, options: .init(tempo: 70),
-                                             sampleRate: 48_000, drift: .init(seed: 1042), startBeat: 16)
+    @Test func strummedGuitarAndItsReturnsStayInsideTheInstrumentMix() throws {
+        // The first guitar phrase of seed 1042: its strums and fingerpicking stay at the piano's level.
+        let index = try #require((0..<16).first { LofiPreset.selection(seed: 1042, phrase: $0).family == .guitar })
+        let phrase = try LofiRenderer.render(seed: 1042, section: LofiScore.section(at: index), options: .init(tempo: 70),
+                                             sampleRate: 48_000, drift: .init(seed: 1042),
+                                             startBeat: Double(index) * LofiClock.beats)
         let dry = try #require(phrase.dry.floatChannelData)
         let wet = try #require(phrase.wet.floatChannelData)
         let texture = try #require(phrase.texture.floatChannelData)
-        #expect(phrase.score.preset.family == .organ)
+        #expect(phrase.score.preset.family == .guitar)
+        #expect(phrase.score.notes.contains { $0.part == .ornament })
         let window = 19_200
         var energy = [Double](repeating: 0, count: window)
         var sum = 0.0

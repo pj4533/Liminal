@@ -13,7 +13,7 @@ nonisolated struct LofiSampleBank: Sendable {
 
     static let bundled = Self(urls: Bundle.main.urls(forResourcesWithExtension: "wav", subdirectory: nil) ?? [])
     // These original files retain source labels one octave below concert pitch.
-    private static let octaveLowLabels: Set<String> = ["upright", "yamaha", "pizz", "cellopluck", "organ", "psaltery"]
+    private static let octaveLowLabels: Set<String> = ["upright", "yamaha", "pizz", "cellopluck"]
     private let groups: [String: [Sample]]
 
     init(urls: [URL]) {

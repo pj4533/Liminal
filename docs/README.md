@@ -15,7 +15,8 @@
 | [MPC chopping plan](plans/mpc-chopping.md) | Work packages, acceptance criteria and deferred items |
 | [MPC chopping measurements](plans/mpc-chopping-measurements.md) | Baseline and final matrix results, criteria changes and listening checks |
 | [Lo-Fi instrument qualification](research/lofi-instrument-qualification.md) | Sampler comparison, articulation, pitch, and phrase memory |
-| [Lo-Fi instrument recordings](lofi-samples.md) | Sources for the twelve keyboards, plucked strings, mallets, organ and bass recorder programs |
+| [Lo-Fi instrument recordings](lofi-samples.md) | Sources for the twenty piano, plucked string and guitar programs |
+| [Instrument source survey](research/instrument-sources.md) | Redistributable piano, guitar and string recordings, licences, and the ones rejected |
 | [Architecture](architecture.md) | Audio and rendering pipelines, dependencies and attribution |
 | [Development reference](development.md) | Debug flags, automation scripts and contributing |
 | [Decision records](decisions/README.md) | Design rationale and review index |
