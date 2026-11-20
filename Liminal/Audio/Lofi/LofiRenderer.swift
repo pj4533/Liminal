@@ -544,8 +544,8 @@ nonisolated enum LofiRenderer {
     private static func midsLevel(lead: (left: [Float], right: [Float]), leadGain: Float,
                                   texture: (left: [Float], right: [Float]), score: LofiScore,
                                   clock: LofiClock) -> Float {
-        // A breakdown's single soft answer keeps its nominal, quieter level.
-        guard score.section != .breakdown else { return midsTrim }
+        // Breakdowns are matched too (19 November 2026): with the darker acoustic and guitar programs a
+        // breakdown's shells at the nominal level sat over the lead (C-B5 lead minus mids read -1.6 dB).
         let n = clock.frameCount
         var leadOn = [Bool](repeating: false, count: n), midOn = leadOn
         for note in score.notes where note.part != .bass {

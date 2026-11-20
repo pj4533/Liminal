@@ -123,8 +123,10 @@ nonisolated final class ArchiveVoice {
         /// Context gain outside and under a chop that ducks the bed (chops may duck the bed; the bed keys nothing).
         /// Mix calibration raised both by 2.5 dB (1.76 and 1.31 at the baseline): the bed stays at least
         /// 10 dB under the music in gaps on every matrix case while its audibility index rises.
-        static let contextGain: Float = 2.35
-        static let underChopGain: Float = 1.749
+        /// The acoustic programs (19 November 2026) made the music about 0.5 dB quieter in gaps, so both
+        /// gains came down 0.5 dB (2.35 and 1.749 before) to keep the bed 10 dB under the music.
+        static let contextGain: Float = 2.22
+        static let underChopGain: Float = 1.651
         /// Under the theme return's opening bar the bed steps down so the hook is heard over it (C-B6);
         /// the music stays on top of the bed, the bed still keys nothing. Gain relative to `contextGain`.
         static let returnDipGain: Float = 0.126
