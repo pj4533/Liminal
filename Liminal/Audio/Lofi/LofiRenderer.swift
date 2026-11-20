@@ -127,15 +127,15 @@ nonisolated enum LofiRenderer {
             try Task.checkCancellation()
             switch note.part {
             case .bass: LofiBassVoice.add(note, voice: score.bassVoice, clock: clock, left: left, right: right)
-            case .lead, .texture:
+            case .lead, .texture, .ornament:
                 let sample = samples.sample(for: score.preset, midi: note.midi, velocity: note.velocity)
                 // A revealed return note scales its whole send, the fixed part included, so the
                 // score's 40 percent reduction is a 40 percent lower send level.
                 let floor: Float = note.gain == LofiScore.returnRevealGain ? 0.44 * LofiScore.returnRevealSend : 0.44
                 let send = LofiScore.Note(part: note.part, midi: note.midi, beat: note.beat, length: note.length,
-                             velocity: note.velocity * (note.part == .lead ? floor + 0.72 * note.send : note.send), color: note.color)
-                if note.part == .lead {
-                    if sample != nil { leadSampleCount += 1 }
+                             velocity: note.velocity * (note.part.playsLead ? floor + 0.72 * note.send : note.send), color: note.color)
+                if note.part.playsLead {
+                    if note.part == .lead, sample != nil { leadSampleCount += 1 }
                     addInstrument(note, sample: sample, score: score, clock: clock, into: &lead)
                     addInstrument(send, sample: sample, score: score, clock: clock, into: &leadSend)
                     if note.gain != 1 {
@@ -168,7 +168,8 @@ nonisolated enum LofiRenderer {
         let texture = (left: mids.left, right: mids.right)
         textureLower = (quiet, quiet)
         textureUpper = (quiet, quiet)
-        let dryLeadGain = leadGain(for: lead, frames: n, sampleRate: sampleRate)
+        // The program trim (D114) moves the dry lead, its sends and the matched mids together.
+        let dryLeadGain = leadGain(for: lead, frames: n, sampleRate: sampleRate) * powf(10, score.preset.levelDB / 20)
         if let leadAccent {
             vDSP_vadd(lead.left, 1, leadAccent.left, 1, &lead.left, 1, vDSP_Length(frames))
             vDSP_vadd(lead.right, 1, leadAccent.right, 1, &lead.right, 1, vDSP_Length(frames))
@@ -547,7 +548,7 @@ nonisolated enum LofiRenderer {
         for note in score.notes where note.part != .bass {
             let range = max(0, clock.frame(at: note.beat))..<min(n, clock.frame(at: note.beat + note.length))
             guard !range.isEmpty else { continue }
-            if note.part == .lead {
+            if note.part.playsLead {
                 leadOn.withUnsafeMutableBufferPointer { $0[range].update(repeating: true) }
             } else {
                 midOn.withUnsafeMutableBufferPointer { $0[range].update(repeating: true) }

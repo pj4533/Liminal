@@ -115,7 +115,15 @@ nonisolated struct LofiTakeGrid: Sendable {
 }
 
 nonisolated struct LofiScore: Sendable, Equatable {
-    enum Part: Int, Sendable { case texture, bass, lead }
+    /// `ornament` is the lead instrument's own extra strings (guitar strums, double stops, grace
+    /// notes and broken chords, `LofiGuitarPhrasing`). It renders with the lead but is never part
+    /// of the melody line, so the hook, its spacing and its register stay exactly as scored.
+    enum Part: Int, Sendable {
+        case texture, bass, lead, ornament
+
+        /// Rendered into the lead stem.
+        var playsLead: Bool { self == .lead || self == .ornament }
+    }
     enum Section: Int, Sendable { case theme, answer, breakdown, returnTheme, variation }
 
     /// How a note is played. Mids use the three shell gestures; everything else is `normal`.
@@ -219,12 +227,20 @@ nonisolated struct LofiScore: Sendable, Equatable {
                             attackLeadBeats: voice.attackLead / max(0.001, beatSeconds))
         let reply = section == .answer || section == .variation
         let chordDegree = reply ? harmony.nearest(5, in: scale.intervals) : 0
+        // Guitar programs add their own strings around the unchanged melody.
+        let ornaments = preset.family == .guitar
+            ? LofiGuitarPhrasing.ornaments(lead: lead, section: section,
+                                           chord: harmony.notes(for: chordDegree, intervals: [0, 3, 7]),
+                                           scale: harmony.pitches(in: LofiGuitarPhrasing.lowestPitch...72),
+                                           fingerstyle: preset.fingerstyle, beatSeconds: beatSeconds,
+                                           random: phraseRandom.fork(2_407))
+            : []
         let quiet = section == .returnTheme ? max(2, protected, lead.count > 1 ? lead[1].beat + 1.5 : 0) : 0
         let texture = mids(lead: lead, harmony: harmony, section: section, chordDegree: chordDegree,
-                           quietUntil: quiet, random: phraseRandom)
-        let ending = (lead + texture).map { $0.beat + $0.length }.max() ?? 0
+                           quietUntil: quiet, extraOnsets: ornaments.map(\.beat), random: phraseRandom)
+        let ending = (lead + ornaments + texture).map { $0.beat + $0.length }.max() ?? 0
         let rest = ending...LofiClock.beats
-        let notes = (bass.notes + texture + lead).sorted { lhs, rhs in
+        let notes = (bass.notes + texture + lead + ornaments).sorted { lhs, rhs in
             if lhs.beat != rhs.beat { return lhs.beat < rhs.beat }
             if lhs.part != rhs.part { return lhs.part.rawValue < rhs.part.rawValue }
             return lhs.midi < rhs.midi
@@ -392,9 +408,7 @@ nonisolated struct LofiScore: Sendable, Equatable {
         switch preset.family {
         case .piano: (length, tone) = (1.0, 0.63)
         case .strings: (length, tone) = (0.61, 0.45)
-        case .organ: (length, tone) = (1.42, 0.40)
-        case .mallets: (length, tone) = (0.80, 0.44)
-        case .wind: (length, tone) = (1.12, 0.36)
+        case .guitar: (length, tone) = (0.92, 0.42)
         }
         var color = random.fork(913)
         return line.enumerated().map { i, note in
@@ -467,11 +481,11 @@ nonisolated struct LofiScore: Sendable, Equatable {
     /// gap, a longer answer after a cell's landing note, or the rolled two-note shell. No mid
     /// onset doubles a lead attack. A breakdown keeps at most one soft answer.
     private static func mids(lead: [Note], harmony: Harmony, section: Section, chordDegree: Int,
-                             quietUntil: Double, random: MusicRNG) -> [Note] {
+                             quietUntil: Double, extraOnsets: [Double] = [], random: MusicRNG) -> [Note] {
         var rng = random.fork(136)
         let home = voicing(for: 0, previous: (49, 55), harmony: harmony)
         let voices = chordDegree == 0 ? home : voicing(for: chordDegree, previous: home, harmony: harmony)
-        let onsets = lead.map(\.beat)
+        let onsets = lead.map(\.beat) + extraOnsets
         func clear(_ beat: Double) -> Bool {
             beat >= quietUntil && onsets.allSatisfy { abs($0 - beat) >= midOnsetClearance - 1e-9 }
         }

@@ -68,14 +68,25 @@ struct LofiCompositionTests {
         let bank = LofiSampleBank.bundled
         let programs = (0..<48).map { LofiPreset.selection(seed: 32, phrase: $0) }
         #expect(Set(programs.prefix(16).map(\.name)).count == 12)
+        // D114 groups are named by measured concert pitch.
         let concertRoots = [
-            "fmkeys": [48, 52, 56, 60, 64, 68, 72],
-            "vibes": [57, 60, 64, 67, 71, 74],
-            "marimba": [48, 55, 59, 65, 72],
-            "bassrec": [54, 58, 60, 64, 68, 72]
+            "kawai": [48, 52, 56, 60, 64, 68, 72],
+            "folkharp": [48, 52, 56, 60, 64, 68, 72],
+            "nylon": [48, 52, 55, 59, 62, 65, 69, 71],
+            "osiris": [48, 52, 57, 60, 64, 69, 72],
+            "uprightkw": [48, 54, 57, 60, 63, 66, 69, 72],
+            "steel": [46, 52, 55, 58, 61, 64, 68],
+            "archtop": [45, 48, 54, 57, 60, 63, 66, 72],
+            "jazzbox": [45, 48, 54, 57, 60, 63, 66, 72],
+            "flatwound": [45, 51, 57, 60, 63, 66, 72]
         ]
+        let everyProgram = (0..<400).map { LofiPreset.selection(seed: 32, phrase: $0) }
+        #expect(Set(everyProgram.map(\.name)).count == 20)
+        #expect(Set(everyProgram.map(\.family)) == [.piano, .strings, .guitar])
+        let removed: Set<String> = ["fmkeys", "vibes", "marimba", "organ", "bassrec", "psaltery"]
+        #expect(everyProgram.allSatisfy { !removed.contains($0.sampleGroup) })
         for (group, roots) in concertRoots {
-            let preset = try #require(programs.first { $0.sampleGroup == group })
+            let preset = try #require(everyProgram.first { $0.sampleGroup == group })
             for root in roots {
                 let sample = try #require(bank.sample(for: preset, midi: root))
                 #expect(sample.root == root && sample.recordedRoot == root)
@@ -143,17 +154,18 @@ struct LofiCompositionTests {
         #expect(far[0].beat == 0 && far[2].beat == 8)
     }
 
-    @Test func quietOrganPlaysItsIntendedOctave() throws {
-        let organ = try #require((0..<16).map { LofiPreset.selection(seed: 32, phrase: $0) }
-            .first { $0.sampleGroup == "organ" })
-        let sample = try #require(LofiSampleBank.bundled.sample(for: organ, midi: 60))
+    @Test(arguments: ["kawai", "osiris", "uprightkw", "nylon", "steel", "archtop", "jazzbox", "flatwound", "upright"])
+    func sampledProgramsPlayTheirIntendedOctave(group: String) throws {
+        let program = try #require((0..<400).map { LofiPreset.selection(seed: 32, phrase: $0) }
+            .first { $0.sampleGroup == group })
+        let sample = try #require(LofiSampleBank.bundled.sample(for: program, midi: 60))
         let clock = LofiClock(tempo: 70, sampleRate: 16_000)
-        let c4 = LofiScore.Note(part: .lead, midi: 60, beat: 0, length: 1, velocity: 0.62)
+        let c4 = LofiScore.Note(part: .lead, midi: 60, beat: 0, length: 1, velocity: 0.55)
         var left = [Float](repeating: 0, count: 12_000)
         var right = left
         left.withUnsafeMutableBufferPointer { l in
             right.withUnsafeMutableBufferPointer { r in
-                LofiSampleBank.add(c4, from: sample, preset: organ, clock: clock, left: l, right: r)
+                LofiSampleBank.add(c4, from: sample, preset: program, clock: clock, left: l, right: r)
             }
         }
         func amplitude(near frequency: Double) -> Double {
@@ -169,7 +181,9 @@ struct LofiCompositionTests {
             }
             return hypot(real, imaginary)
         }
-        #expect(amplitude(near: 261.63) > 5 * amplitude(near: 523.25))
+        // C4 must be present; an octave error would leave 261.63 Hz near silent.
+        #expect(amplitude(near: 261.63) > 0.3 * amplitude(near: 523.25), "\(group)")
+        #expect(amplitude(near: 261.63) > 5 * amplitude(near: 130.81), "\(group)")
     }
 
     @Test func virtualRecordsKeepTheirProvenanceAndEditOnlyThePlannedGap() throws {

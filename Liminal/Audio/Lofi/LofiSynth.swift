@@ -16,7 +16,7 @@ nonisolated enum LofiSynth {
         let attack: Double, release: Double, gain: Float, pan: Float
         switch note.part {
         case .texture: (attack, release, gain, pan) = (1.35, 2.7, 0.076, Float(note.midi % 5 - 2) * 0.28)
-        case .lead, .bass: (attack, release, gain, pan) = (0.020, 0.45, 0.105, 0) // bass returned above
+        case .lead, .ornament, .bass: (attack, release, gain, pan) = (0.020, 0.45, 0.105, 0) // bass returned above
         }
         let tail = max(1, Int(rate * release))
         let count = min(left.count - start, span + tail)
@@ -37,7 +37,7 @@ nonisolated enum LofiSynth {
                 let harmonic = sin(p) + sin(p * 1.004) + sin(p * 0.997)
                 let air = sin(2.008 * p) + 0.32 * sin(3.01 * p + sin(t * 1.9))
                 wave = harmonic * 0.25 + air * (0.08 + 0.15 * swell)
-            case .lead, .bass: wave = (sin(phase) + 0.15 * sin(2 * phase) * exp(-t * 5)) * exp(-t * 0.8)
+            case .lead, .ornament, .bass: wave = (sin(phase) + 0.15 * sin(2 * phase) * exp(-t * 5)) * exp(-t * 0.8)
             }
             let value = Float(wave * rise * rise * fall * fall * edge) * gain * note.velocity
             left[start + i] += value * a

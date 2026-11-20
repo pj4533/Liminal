@@ -1,8 +1,10 @@
 import Foundation
 
-/// Each take introduces a keyboard hook, two contrasting voices, then the same hook.
+/// Each take introduces a piano hook, a plucked string and a guitar in its middle phrases, then the
+/// same hook. Programs are rows of a table: several may share one sample group and differ only in
+/// tone, wow and space, so a new recording or a new effect amount is one line (D114).
 nonisolated struct LofiPreset: Equatable, Sendable {
-    enum Family: Int, CaseIterable, Sendable { case piano, strings, organ, mallets, wind }
+    enum Family: Int, CaseIterable, Sendable { case piano, strings, guitar }
 
     struct Space: Sendable {
         let taps: (left: Double, right: Double)
@@ -24,13 +26,19 @@ nonisolated struct LofiPreset: Equatable, Sendable {
     let release: Double
     let gain: Float
     let space: Space
+    /// Guitar programs only: 0 leans to strummed chords and double stops, 1 to fingerpicked
+    /// broken chords (`LofiGuitarPhrasing`).
+    let fingerstyle: Double
+    /// Level trim in dB after the phrase's dry lead gain, from the D114 per-program loudness match
+    /// (integrated level of dry, mids and effects together against the Steinway Grand), -6 to +2 dB.
+    let levelDB: Float
 
     static func selection(seed: UInt64, phrase: Int) -> Self {
         let root = MusicRNG(seed: seed).fork(253)
         let record = phrase / 4
         let piano = root.fork(100).shuffledCycle(keys, index: record)
         let strings = root.fork(101).shuffledCycle(plucks, index: record)
-        let answer = root.fork(102).shuffledCycle(answers, index: record)
+        let answer = root.fork(102).shuffledCycle(guitars, index: record)
         var order = root.fork(UInt64(record) + 615)
         let voices = order.chance(0.60) ? [piano, strings, answer, piano] : [piano, answer, strings, piano]
         return voices[phrase % 4]
@@ -38,7 +46,8 @@ nonisolated struct LofiPreset: Equatable, Sendable {
 
     private init(_ name: String, _ sampleGroup: String, _ family: Family, _ brightness: Double, _ movement: Double,
                  _ attack: Double, _ release: Double, _ gain: Float, _ taps: (Double, Double),
-                 _ feedback: Float, _ diffusion: Float, _ particles: Float, _ stereo: Float) {
+                 _ feedback: Float, _ diffusion: Float, _ particles: Float, _ stereo: Float,
+                 fingerstyle: Double = 0, level: Float = 0) {
         self.name = name
         self.sampleGroup = sampleGroup
         self.family = family
@@ -48,28 +57,50 @@ nonisolated struct LofiPreset: Equatable, Sendable {
         self.release = release
         self.gain = gain
         self.space = Space(taps: taps, feedback: feedback, diffusion: diffusion, particles: particles, stereo: stereo)
+        self.fingerstyle = fingerstyle
+        self.levelDB = min(2, max(-6, level))
     }
 
     static func == (lhs: Self, rhs: Self) -> Bool { lhs.name == rhs.name }
 
+    // Columns: name, sample group, family, brightness, movement (wow), attack, release, gain,
+    // echo taps (beats), echo feedback, room (diffusion), grains (particles), stereo; then the
+    // guitar's fingerstyle lean and the loudness-match trim.
+    // Acoustic and lo-fi pianos only. "Felt" and "tape" rows are darker, softer at the hammer,
+    // wobblier and wetter; "close" rows are drier; the rest sit in between (D114).
     private static let keys: [Self] = [
         .init("Steinway Grand", "grand", .piano, 0.62, 0.32, 0.003, 0.27, 0.49, (0.75, 1.5), 0.52, 1.04, 0.84, 0.42),
+        .init("Felt Steinway", "grand", .piano, 0.30, 0.46, 0.013, 0.34, 0.49, (1, 1.75), 0.56, 1.22, 0.96, 0.55),
+        .init("Kawai Grand", "kawai", .piano, 0.52, 0.22, 0.004, 0.30, 0.49, (1, 1.5), 0.50, 1.18, 0.86, 0.50),
+        .init("Close Kawai", "kawai", .piano, 0.48, 0.12, 0.004, 0.24, 0.49, (0.75, 1.25), 0.40, 0.84, 0.62, 0.36),
+        .init("Felt Osiris", "osiris", .piano, 0.28, 0.52, 0.012, 0.36, 0.49, (1, 1.75), 0.57, 1.26, 1.00, 0.58),
+        .init("Quiet Osiris", "osiris", .piano, 0.44, 0.16, 0.006, 0.28, 0.49, (0.75, 1.25), 0.42, 0.88, 0.66, 0.40),
+        .init("Living Room Upright", "uprightkw", .piano, 0.42, 0.30, 0.006, 0.30, 0.50, (1, 1.5), 0.50, 1.12, 0.84, 0.50),
         .init("Knight Upright", "upright", .piano, 0.49, 0.18, 0.006, 0.31, 0.50, (1, 1.75), 0.50, 1.10, 0.80, 0.57),
-        .init("Yamaha Upright", "yamaha", .piano, 0.47, 0.20, 0.006, 0.30, 0.52, (1, 1.5), 0.48, 1.13, 0.80, 0.52),
-        .init("Yamaha TX81Z FM Piano", "fmkeys", .piano, 0.41, 0.11, 0.009, 0.30, 0.45, (0.75, 1.5), 0.44, 1.00, 0.69, 0.43)
+        .init("Tape Upright", "upright", .piano, 0.30, 0.55, 0.010, 0.33, 0.50, (0.75, 1.5), 0.55, 1.16, 1.00, 0.52),
+        .init("Yamaha Upright", "yamaha", .piano, 0.47, 0.20, 0.006, 0.30, 0.52, (1, 1.5), 0.48, 1.13, 0.80, 0.52)
     ]
 
     private static let plucks: [Self] = [
         .init("Pizzicato Viola", "pizz", .strings, 0.61, 0.26, 0.004, 0.22, 0.54, (0.75, 1.75), 0.61, 1.06, 0.87, 0.73),
         .init("Pizzicato Cello", "cellopluck", .strings, 0.50, 0.19, 0.006, 0.29, 0.55, (0.75, 1.5), 0.53, 1.12, 0.86, 0.60),
         .init("Concert Harp", "harp", .strings, 0.51, 0.16, 0.004, 0.29, 0.51, (1, 1.75), 0.51, 1.18, 0.88, 0.61),
-        .init("Plucked Psaltery", "psaltery", .strings, 0.40, 0.14, 0.004, 0.27, 0.46, (0.75, 1.25), 0.42, 0.99, 0.69, 0.46)
+        .init("Folk Harp", "folkharp", .strings, 0.44, 0.20, 0.004, 0.30, 0.51, (0.75, 1.5), 0.50, 1.14, 0.84, 0.58)
     ]
 
-    private static let answers: [Self] = [
-        .init("Soft Vibraphone", "vibes", .mallets, 0.42, 0.08, 0.010, 0.32, 0.44, (0.75, 1.5), 0.42, 1.00, 0.60, 0.51),
-        .init("Wood Marimba", "marimba", .mallets, 0.46, 0.10, 0.006, 0.22, 0.47, (0.75, 1.25), 0.46, 0.98, 0.68, 0.49),
-        .init("Quiet Pipe Organ", "organ", .organ, 0.38, 0.09, 0.021, 0.24, 0.34, (0.5, 1.5), 0.39, 0.91, 0.59, 0.34),
-        .init("Bass Recorder", "bassrec", .wind, 0.33, 0.06, 0.030, 0.20, 0.37, (1.0, 1.5), 0.38, 0.96, 0.53, 0.38)
+    /// Clean guitars only, never distorted. They play guitar figures, not keyboard lines.
+    private static let guitars: [Self] = [
+        .init("Nylon Fingerstyle", "nylon", .guitar, 0.42, 0.18, 0.004, 0.30, 0.50, (0.75, 1.5), 0.50, 1.08, 0.82, 0.55,
+              fingerstyle: 0.8),
+        .init("Nylon Strum", "nylon", .guitar, 0.36, 0.26, 0.005, 0.32, 0.50, (1, 1.75), 0.53, 1.20, 0.90, 0.60,
+              fingerstyle: 0.25),
+        .init("Steel Acoustic", "steel", .guitar, 0.26, 0.20, 0.005, 0.30, 0.50, (0.75, 1.5), 0.50, 1.10, 0.82, 0.54,
+              fingerstyle: 0.4),
+        .init("Archtop Acoustic", "archtop", .guitar, 0.40, 0.18, 0.004, 0.28, 0.50, (0.75, 1.25), 0.46, 1.02, 0.78, 0.50,
+              fingerstyle: 0.55),
+        .init("Archtop Jazz", "jazzbox", .guitar, 0.30, 0.16, 0.006, 0.30, 0.48, (1, 1.5), 0.48, 1.04, 0.76, 0.48,
+              fingerstyle: 0.3),
+        .init("Flatwound Tape", "flatwound", .guitar, 0.26, 0.46, 0.008, 0.32, 0.48, (1, 1.5), 0.55, 1.16, 0.96, 0.54,
+              fingerstyle: 0.6)
     ]
 }
