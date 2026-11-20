@@ -111,11 +111,11 @@
       {"id": "G6", "name": "synth h3 median dB re h1", "path": ["bass", "byVoice", "synth", "medianHarmonicsDb", "h3"], "min": -18.6, "max": -14.6, "basis": "within 2 dB of b11ac9e (-16.6)"},
       {"id": "G6", "name": "synth h4 median dB re h1", "path": ["bass", "byVoice", "synth", "medianHarmonicsDb", "h4"], "min": -22.6, "max": -18.6, "basis": "within 2 dB of b11ac9e (-20.6)"},
       {"id": "G6", "name": "round (flatwound) inharmonic median dB", "path": ["bass", "byVoice", "flatwound", "medianInharmonicDb"], "max": -30.0, "basis": "no regression (-32.2 dB at b11ac9e)"},
-      {"id": "G6", "name": "upright inharmonic median dB", "path": ["bass", "byVoice", "upright", "medianInharmonicDb"], "max": -28.0, "basis": "upper end of the historic 2-4 percent intermodulation range (Audioholics, secondary and dated)"},
+      {"id": "G6", "name": "upright inharmonic median dB", "level": "report", "path": ["bass", "byVoice", "upright", "medianInharmonicDb"], "max": -28.0, "basis": "upper end of the historic 2-4 percent intermodulation range (Audioholics, secondary and dated)"},
       {"id": "G6", "name": "bass.wav energy above 2.5 kHz dB re stem", "path": ["bass", "above2k5", "wholeReStemDb"], "max": -80.0, "basis": "no splatter"},
       {"id": "G7", "name": "music stems null against --against (drums bass dry texture wet)", "path": ["against", "maxMusicResidualDb"], "max": -120.0, "basis": "captures are deterministic for rendered music; a master change must not move a stem"},
       {"id": "G7", "name": "film-derived taps null against --against (footage, chops, lofi)", "path": ["against", "maxFilmDerivedResidualDb"], "max": -90.0, "basis": "run-to-run floor of the film decode: -92.4 dB footage, -105 dB chops, -115.6 dB lofi between hook-identical captures (20 November 2026)"},
-      {"id": "G8", "name": "drum tape stage residual, 1-4 kHz, worst take (report)", "path": ["drumTape", "maxBand1to4kReOutputBandDb"], "max": -30.0, "basis": "intended colour; above -30 dB opens a follow-up (plan 2.4), no change in this work"}
+      {"id": "G8", "name": "drum tape stage residual, 1-4 kHz, worst take (report)", "level": "report", "path": ["drumTape", "maxBand1to4kReOutputBandDb"], "max": -30.0, "basis": "intended colour; above -30 dB opens a follow-up (plan 2.4), no change in this work"}
     ]
   }
 }

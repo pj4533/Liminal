@@ -356,12 +356,17 @@ struct LofiMasterBusTests {
             #expect(Meter.calibratedTrim(current: 0, observation: .init(lufs: -16, samplePeak: 0.5), target: -12, limiter: load) == 0)
             #expect(Meter.calibratedTrim(current: 0, observation: .init(lufs: -9, samplePeak: 0.5), target: -12, limiter: load) == -1)
         }
-        // Soft-clip reduction over 1 dB in the epoch also holds upward steps (D121), so a quiet programme is
-        // not driven back into the clip; downward steps still pass. At 1 dB or less it does not hold.
+        // Soft-clip reduction over 0.5 dB in the epoch holds upward steps (D121), so a quiet programme is
+        // not driven back into the clip; downward steps still pass. At 0.5 dB or less it does not hold.
+        let held = Meter.LimiterLoad(meanDB: 0.1, p95DB: 0.5, clipMaxDB: 0.7)
+        #expect(held.blocksUpward && !held.forcesDownward)
+        #expect(!Meter.LimiterLoad(meanDB: 0.1, p95DB: 0.5, clipMaxDB: 0.5).blocksUpward)
+        #expect(Meter.calibratedTrim(current: 0, observation: .init(lufs: -17, samplePeak: 0.5), target: -14, limiter: held) == 0)
+        #expect(Meter.calibratedTrim(current: 0, observation: .init(lufs: -11, samplePeak: 0.5), target: -14, limiter: held) == -1)
+        // Over 1 dB the trim steps down by at least 0.5 dB, even when the programme reads under the target.
         let clipped = Meter.LimiterLoad(meanDB: 0.1, p95DB: 0.5, clipMaxDB: 1.2)
-        #expect(clipped.blocksUpward)
-        #expect(!Meter.LimiterLoad(meanDB: 0.1, p95DB: 0.5, clipMaxDB: 1.0).blocksUpward)
-        #expect(Meter.calibratedTrim(current: 0, observation: .init(lufs: -17, samplePeak: 0.5), target: -14, limiter: clipped) == 0)
+        #expect(clipped.forcesDownward)
+        #expect(Meter.calibratedTrim(current: 1.5, observation: .init(lufs: -17, samplePeak: 0.5), target: -14, limiter: clipped) == 1)
         #expect(Meter.calibratedTrim(current: 0, observation: .init(lufs: -11, samplePeak: 0.5), target: -14, limiter: clipped) == -1)
         // Ambient keeps -18 LUFS and the sample-peak test.
         #expect(Meter.calibratedTrim(current: 0, observation: .init(lufs: -23, samplePeak: 0.3)) == 1)
@@ -388,17 +393,19 @@ struct LofiMasterBusTests {
         lofi.applyObservation(.init(lufs: -20, samplePeak: 0.95))
         #expect(lofi.calibrationOffsetDB == 1)
 
-        // Loud program: heavy limiter reduction holds the trim even though the estimate is low.
+        // Loud program: heavy limiter reduction holds the trim even though the estimate is low, and the clip
+        // at its cap (over 1 dB) steps it down 0.5 dB (D121).
         // About +12 dBFS: more than the 1.7:1 glue and the 2 dB clip can take, so the limiter carries over 3 dB.
         try rig.schedule(rig.lofi, Self.tone(frames, amplitude: 4, hz: 90))
         _ = try await rig.render(frames)
         let meters = lofi.finisher.meters
         print("Loud Lo-Fi epoch: limiter \(meters.limiterDB), glue \(meters.glueDB), clip \(meters.clipDB)")
         #expect(meters.limiterDB.mean > 2.5)
+        #expect(meters.clipDB.max > 1)
         lofi.applyObservation(.init(lufs: -20, samplePeak: 0.89))
-        #expect(lofi.calibrationOffsetDB == 1)
+        #expect(lofi.calibrationOffsetDB == 0.5)
         lofi.applyObservation(.init(lufs: -9, samplePeak: 0.89))
-        #expect(lofi.calibrationOffsetDB == 0)
+        #expect(lofi.calibrationOffsetDB == -0.5)
     }
 
     // MARK: Fallback

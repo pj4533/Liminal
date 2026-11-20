@@ -470,9 +470,14 @@ nonisolated struct LofiMasterMeter {
         let p95DB: Float
         var clipMaxDB: Float = 0
         /// Upward steps are held while the limiter already works this hard, or while the soft clip went past
-        /// 1 dB in the epoch (D121: a quieter programme must not be driven back into the clip).
+        /// 0.5 dB in the epoch (D121: a quieter programme must not be driven back into the clip; G1 allows
+        /// no burst over 1 dB and few over 0.5 dB).
         var blocksUpward: Bool { meanDB > 2.5 || p95DB > 4.5 || clipMaxDB > Self.clipHoldDB }
-        static let clipHoldDB: Float = 1
+        /// Past this the trim steps down instead of holding, so a raised trim cannot keep the clip engaged.
+        var forcesDownward: Bool { clipMaxDB > Self.clipBackoffDB }
+        static let clipHoldDB: Float = 0.5
+        static let clipBackoffDB: Float = 1
+        static let backoffStepDB: Float = -0.5
     }
 
     private static let maximumHops = 1_200
@@ -551,7 +556,8 @@ nonisolated struct LofiMasterMeter {
 
     /// One epoch's trim step toward `target`: at most 1 dB per epoch, inside -3 to +2 dB. Without a limiter
     /// load (Ambient chain), peaks within 0.5 dB of the sample ceiling block upward steps; with one (Lo-Fi
-    /// finisher), heavy limiter reduction or soft-clip reduction over 1 dB in the epoch blocks them instead.
+    /// finisher), heavy limiter reduction or soft-clip reduction over 0.5 dB in the epoch blocks them instead, and soft-clip
+    /// reduction over 1 dB steps the trim down by at least 0.5 dB.
     static func calibratedTrim(current: Float, observation: Observation,
                                target: Float = LofiMasterBus.ambientTargetLUFS,
                                limiter: LimiterLoad? = nil) -> Float {
@@ -564,7 +570,8 @@ nonisolated struct LofiMasterMeter {
         } else {
             blocked = observation.samplePeak >= dbToGain(LofiMasterBus.safetyTrimDB - 0.5)
         }
-        let safe = blocked ? min(0, suggested) : suggested
+        var safe = blocked ? min(0, suggested) : suggested
+        if let limiter, limiter.forcesDownward { safe = min(safe, LimiterLoad.backoffStepDB) }
         return min(2, max(-3, current + safe))
     }
 }

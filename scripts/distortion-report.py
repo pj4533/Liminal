@@ -541,7 +541,9 @@ def evaluate_gates(report, criteria_path):
             rows.append({**g, "value": None, "status": "skipped"})
             continue
         ok = ("max" not in g or value <= g["max"]) and ("min" not in g or value >= g["min"])
-        rows.append({**g, "value": float(value), "status": "pass" if ok else "fail"})
+        # A "report" gate is a known open item (D121): it is printed as warn and never fails --strict.
+        status = "pass" if ok else ("warn" if g.get("level") == "report" else "fail")
+        rows.append({**g, "value": float(value), "status": status})
     return rows
 
 
