@@ -1,6 +1,6 @@
 # Bass tone redo: a warm, continuous dub tone with a strike on the kick
 
-Date: 2026-11-20. Base: `main` at bab3fed. Status: plan, not built.
+Date: 2026-11-20. Base: `main` at bab3fed. Status: built (see Outcome).
 
 Inputs: the listening note on the D116 bass ("tinny", "too filtered but not completely", "weird high end", wants "continuous, warm bass tones, but with a really hard slap that lines up with where the drums hit"), the stage-by-stage diagnosis (`bass-diag/DIAG.md`) and the research audit (`bass-diag/AUDIT.md`), both in the session scratchpad. Reference captures: `cap-fix-1` (current, seed 2077, 72 BPM, 32 bars) and `final-main` (the earlier approved pure-synth bass).
 
@@ -253,3 +253,12 @@ For each: `solo-stems.py` output, then copy `02-bass.m4a` (the solo bass at fina
 5. **The slap may still be too polite, or too bright.** The strike level (-10 dB) and its 1.2 kHz ceiling are start values with no source behind them; the audit found no numeric reference for dub bass attack. This is why three tones are rendered. The strike level is the one constant the user is most likely to want moved after listening.
 6. **Research basis.** The spectral targets are engineering judgement anchored on the approved earlier stem, not on measured reference records.
 7. **Throw send frozen on old code.** It keeps the duplicated D116 body path alive in `LofiBassThrow`; note this in D119 so it is not mistaken for dead code.
+
+## Outcome (2026-11-20)
+
+Built on `main` (D119). Final constants: sub partials 0, -14, -17, -21 dB under the 160 Hz zero-phase crossover; body levelled to 13 dB under the steady sub (`upright` 12.5), extra 110 Hz 4-pole high-pass, low-pass 400 Hz (`upright` 360) at 24 dB per octave, body rise 30 ms unstruck and 40 ms struck; strike 1 ms rise, 10 ms decay, zero at 80 ms (100 ms upright), 300 Hz to 650 Hz (24 dB per octave), peak -2 dB re the sub's peak (`upright` -5, `synth` -3), placed on the kick's broadband attack; filter opening 300 Hz over 8 ms; chain harmonics drive 2, bias 0.08, 200-450 Hz, mix 0.15; compressor 9 dB under the reference; EQ +0.5 dB at 80 Hz, -1 dB at 300 Hz, 1.4 kHz 24 dB per octave; output trim -4.45 dB. A sustained note that would fade out under a kick it is not anchored to (0.06 beats or its release) ends 30 ms before it (risk 3: the matrix `ref` case read a -3.6 dB kick and bass sum there).
+
+Gate readings on `cap-tone-11` (seed 2077): every section 6.1 to 6.3 gate passes (table in D119 and `NOTES-tone.md`); 6.4: strict report without failures and the same warn IDs as `cap-fix-1`, C-B2 0.33 / 0.63 ms, 57 measured, sum +0.98 / -1.78 dB, duck 3.39 dB, C-B3 +0.96 dB and -12.2 dB; 6.5: bass -0.97 LU under the drums, other stems within 0.1 LU, true peak -1.20 dBTP, limiter mean 0.02 dB, pre-master bands within 0.4 dB. Drum stem identical; dry and texture differ by at most 6e-4 (balance meter, the throw return of longer thrown notes). `synth` passes every tone gate; `upright` fails the 250 Hz band (-23.4 against -23) and reads C-B3 +1.001 dB. Matrix on the default: `ref` and `nofilm` pass, `long` C-B8, `fast` C-B8, C-D6, C-D9, `same` C-B6 (the bab3fed failures). Phrase render 1105 ms per phrase (bab3fed 1069).
+
+Deviations: the strike measures start at the strike, not the note start; brightness is a band-power ratio, not a centroid; the body is levelled rather than normalized once (the plucked samples decay 15 dB in half a second); the strike is louder (-2 dB, not -10) and narrower (300-650 Hz) than the start values, which gave 1-6 dB of contrast; unit-test bounds the sampled tones cannot meet are set to their measured values (D119).
+

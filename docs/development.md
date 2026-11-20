@@ -53,6 +53,7 @@ Two commands capture Lo-Fi audio offline and measure it. Both need FFmpeg, Pytho
 # One capture, then the full report (JSON, Markdown, PNGs, audition files)
 DD=$S/dd-name scripts/mix-report.sh --out DIR [--baseline DIR] [--strict] [--no-plots] [--case NAME] \
     [check-lofi.sh options: --private-drums --film-reel --bars 32 --seed 1042 --bpm 70 --hook k=v ...]
+    (--hook bassTone=round|upright|synth renders another bass tone; the app always plays LofiBassTone.standard)
 
 # The five-case matrix (ref, long, fast, same, nofilm), run one after another
 DD=$S/dd-name scripts/mix-matrix.sh --out DIR [--baseline DIR] [--cases ref,long,fast,same,nofilm] [--strict] [--prune-wavs]
@@ -128,7 +129,8 @@ Pass as launch arguments, for example `-LiminalAutoPlay YES`. Defined in `Limina
 | `archive-curate.py`, `archive-fetch-fixture.sh` | Build the bundled Prelinger seed list / download one fixture clip to a scratch folder |
 | `mix-report.sh`, `mix-matrix.sh` | Capture Lo-Fi audio offline and measure the mix against `mix-criteria.json` (one capture or the five-case matrix); `mixlib/` holds the analysis modules. See Mix verification above |
 | `solo-stems.py` | Turn a capture into a full-mix file plus one file per channel (drums, bass, chords, melody, reverb-echo, chops, film footage) at its level in the final mix, through the same master gain trace, so the stems sum to `master.wav`. `scripts/solo-stems.py CAPTURE OUT [--wav]` |
-| `stem-bands.py` | Per-stem band levels of a capture (40-120 Hz, 120-300 Hz, 300-800 Hz, 1-4 kHz), whole-file and over the stem's active 400 ms windows (within 30 dB of its loudest), with deltas to a baseline and the band gates of `docs/plans/bass-and-pads.md` 5.5. `scripts/stem-bands.py CAPTURE [--baseline CAPTURE] [--json OUT]` |
+| `stem-bands.py` | Per-stem band levels of a capture (40-120 Hz, 120-300 Hz, 300-800 Hz, 1-4 kHz), whole-file and over the stem's active 400 ms windows (within 30 dB of its loudest), with deltas to a baseline and the band gates of `docs/plans/bass-tone-redo.md` 6.1 and 6.5. `scripts/stem-bands.py CAPTURE [--baseline CAPTURE] [--json OUT]` |
+| `bass-tone.py` | The bass tone gates of `docs/plans/bass-tone-redo.md` 6: third-octave table of `bass.wav` re its 50+63 Hz bands (each band from its centre to the next), power above 300 Hz, the sustain-only 1-4 kHz bands, continuity (sounding ratio, silences over 150 ms, active share) and the strike (300-1500 Hz and 1-3 kHz contrast, peak against the kick's attack, brightest window). `scripts/bass-tone.py CAPTURE [--baseline CAPTURE] [--json OUT]`; self-test in `mixlib/selftest.py` |
 | `prepare-lofi-samples.py`, `lofi-sample-recipes.sh` | Prepare and measure the bundled instrument samples. `--prefix LofiBass` writes bass body files (`LofiBass-<kit>-<stroke>-<midi>[-<rr>].wav`, pitch search from 30 Hz) and `--retune` resamples each file by its measured pitch error until it is within 3 cents; the lead (`LofiLead`) behaviour is the default. Recipes `bass-upright` and `bass-flatwound` rebuild the bass kits ([credits](lofi-samples.md)) |
 | `av-coupling-check.sh` | Offline check of the audio-visual coupling |
 

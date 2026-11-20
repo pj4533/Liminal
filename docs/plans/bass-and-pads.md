@@ -350,6 +350,8 @@ Then `scripts/mix-matrix.sh --strict`: no failure in any of the five cases.
 
 ## Outcome (2026-11-20)
 
+Superseded for the bass tone (voice, chain and note lengths; sections 2.2, 2.3, 2.5.7 and the bass band gates of 5.5) by [bass-tone-redo.md](bass-tone-redo.md) and D119.
+
 Built as planned: the two-layer riddim bass (synthesized phase-exact sub plus a Karoryfer Sneakybass or Swagbass body, anchored to the take's kicks, split kick duck, dub throws into the wet stem) is D116; the held granular pad with one answer shell is D117; the rebalance is D118. Section 5.5 gates all pass on the seed 2077 capture (`cap-mix-14`) against `final-main`, with no strict failure, drums identical, bass -17.9 LUFS at 49 % active, chords -23.6 LUFS at 89 %, master -12.40 LUFS, true peak -1.20 dBTP.
 
 Differences from the plan:
