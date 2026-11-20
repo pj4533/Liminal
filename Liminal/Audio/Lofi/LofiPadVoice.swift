@@ -26,20 +26,24 @@ nonisolated enum LofiPadVoice {
         /// ...or earlier, where the sample has decayed this far under its level at the region's start.
         var regionDecayDB = 15.0
         /// Left against right detune. 0 (plan start 5): both streams share one phase reference, so at pitch
-        /// their fundamentals stay in phase and the pad chain's mono fold below 300 Hz is clean; at plus and
-        /// minus 5 cents the folded lows beat at 1 to 3 Hz, 9 to 30 dB deep (measured, 20 November 2026).
+        /// their fundamentals stay in phase and the pad chain's mono fold below 300 Hz is clean. Detuned by
+        /// plus and minus 5 cents the folded lows beat at 1 to 3 Hz; a shared undetuned stream under 300 Hz
+        /// beat against the detuned sides at the crossover instead (ripple up to 31 dB, 20 November 2026).
         /// The width comes from the independent streams' upper partials and read positions.
         var detuneCents = 0.0
         /// Slow tremolo, plus or minus 0.8 dB at 0.3 Hz, with a different phase per voice.
         var tremoloHz = 0.3
         var tremoloDB: Float = 0.8
         /// Two-pole low-pass in the voice.
-        /// 2.0 kHz (plan start 2.4): at 2.4 a two-voice pad read brighter than a dark upright lead (spectral
-        /// centroid 510 against 440 Hz).
-        var lowpassHz = 2_000.0
-        /// A gentle high-pass in the voice clears the samples' own body noise under the notes (a grand's
-        /// region holds up to -17 dB of it below 150 Hz) before the pad chain's 220 Hz high-pass.
-        var highpassHz = 150.0
+        /// 1.6 kHz (plan start 2.4): at 2.4 a two-voice pad read brighter than a dark upright lead (spectral
+        /// centroid 510 against 440 Hz), and at 2.0 the chords' 1 to 4 kHz sat only 5.7 dB under the melody
+        /// (gate 8) in the reference capture.
+        var lowpassHz = 1_600.0
+        /// A high-pass in the voice clears the samples' own body noise under the notes (a grand's region holds
+        /// up to -17 dB of it below 150 Hz) and, with the pad chain's 220 Hz high-pass, makes a 24 dB per octave
+        /// floor: at 150 Hz the chords' 120 to 300 Hz band read 2.8 dB over the baseline shells and the stem
+        /// -21.2 LUFS (gate -22 to -24) in the reference capture.
+        var highpassHz = 220.0
         /// Linear output level at velocity 1 before the phrase's pad gain (the level is matched per phrase).
         var gain: Float = 0.5
         /// Every grain stream is brought to this RMS (median grain level of its region), so a quickly
@@ -48,7 +52,7 @@ nonisolated enum LofiPadVoice {
         /// Smoothing of the stream's level hold (`holdLevel`).
         var levelHoldSeconds = 0.1
         /// The send's lift into the phrase edge (see `add`).
-        var throwGain: Float = 2.5
+        var throwGain: Float = 2.2
         var throwSeconds = 1.5
         static let standard = Settings()
     }
@@ -106,6 +110,8 @@ nonisolated enum LofiPadVoice {
         } else {
             left = LofiSynth.padTone(midi: note.midi, count: count, rate: rate, detune: detune)
             right = LofiSynth.padTone(midi: note.midi, count: count, rate: rate, detune: 1 / detune)
+            var band = voiceBand(settings, rate: rate)
+            band.process(left: &left, right: &right)
         }
         // Envelope (raised-cosine swell and release, exact zero at both ends) with the tremolo; the send's
         // envelope holds through the release instead (see `add`).
@@ -168,10 +174,6 @@ nonisolated enum LofiPadVoice {
         envelope[0] = 0
         sendEnvelope[count - 1] = 0
         sendEnvelope[0] = 0
-        var lowpass = LofiFilterChain([.highpass(hz: settings.highpassHz, q: LofiStemChains.butterworthQ),
-                                       .lowpass(hz: settings.lowpassHz, q: LofiStemChains.butterworthQ)],
-                                      sampleRate: rate)
-        lowpass.process(left: &left, right: &right)
         var sendLeft = left, sendRight = right
         vDSP_vmul(left, 1, envelope, 1, &left, 1, vDSP_Length(count))
         vDSP_vmul(right, 1, envelope, 1, &right, 1, vDSP_Length(count))
@@ -234,9 +236,18 @@ nonisolated enum LofiPadVoice {
                           median: median, rms: rms, settings: settings, rng: &leftRNG)
         var right = stream(pcm, speed: speed / detune, count: count, rate: rate, lo: lo, hi: hi, period: period,
                            median: median, rms: rms, settings: settings, rng: &rightRNG)
+        // The voice's band first, so the level hold flattens what is heard.
+        var band = voiceBand(settings, rate: rate)
+        band.process(left: &left, right: &right)
         holdLevel(&left, rate: rate, target: Float(settings.grainLevel), settings: settings)
         holdLevel(&right, rate: rate, target: Float(settings.grainLevel), settings: settings)
         return (left, right)
+    }
+
+    /// The voice's two-pole high-pass and low-pass.
+    private static func voiceBand(_ settings: Settings, rate: Double) -> LofiFilterChain {
+        LofiFilterChain([.highpass(hz: settings.highpassHz, q: LofiStemChains.butterworthQ),
+                         .lowpass(hz: settings.lowpassHz, q: LofiStemChains.butterworthQ)], sampleRate: rate)
     }
 
     /// A slow level hold on a grain stream: 25 ms RMS blocks, smoothed over `levelHoldSeconds`, divided out

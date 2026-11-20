@@ -95,9 +95,9 @@ nonisolated extension LofiScore {
 
     /// Pitch classes of the pad on `degree` (relative to the tonic): third, seventh, then the ninth when
     /// the scale has it, else the fifth. Two voices keep the third and seventh.
-    static func padPitchClasses(for degree: Int, voices: Int, harmony: Harmony) -> [Int] {
+    static func padPitchClasses(for degree: Int, voices: Int, harmony: Harmony, ninth: Bool = true) -> [Int] {
         let relative = harmony.scale.intervals
-        let colour = relative.contains((degree + 2) % 12) ? 2 : 7
+        let colour = ninth && relative.contains((degree + 2) % 12) ? 2 : 7
         let classes = harmony.notes(for: degree, intervals: [3, 10, colour])
         return Array(classes.prefix(voices))
     }
@@ -108,7 +108,13 @@ nonisolated extension LofiScore {
     static func padVoicing(for degree: Int, voices: Int, previous: [Int], harmony: Harmony,
                            ceiling: Int, lowestLead: Int = 72) -> [Int] {
         func search(_ count: Int, spacing: ClosedRange<Int>, top: Int, floor: Int) -> [Int]? {
-            let classes = padPitchClasses(for: degree, voices: count, harmony: harmony)
+            // The ninth sits a semitone or tone from the third, so when it does not fit the register with
+            // the spacing, the fifth takes its place.
+            first(count, spacing: spacing, top: top, floor: floor, ninth: true)
+                ?? first(count, spacing: spacing, top: top, floor: floor, ninth: false)
+        }
+        func first(_ count: Int, spacing: ClosedRange<Int>, top: Int, floor: Int, ninth: Bool) -> [Int]? {
+            let classes = padPitchClasses(for: degree, voices: count, harmony: harmony, ninth: ninth)
             let centre = Array(padCentre.prefix(count))
             let pool = padRegister.filter { $0 >= floor && $0 <= top && classes.contains($0 % 12) }
             var best: (cost: Int, voicing: [Int])?
@@ -131,14 +137,21 @@ nonisolated extension LofiScore {
             return best?.voicing
         }
         // Every voice at or above `padLowFloor` (155 Hz: lower fundamentals are what the 220 Hz high-pass
-        // cannot clear) and under the ceiling; when three voices do not fit, the third and seventh alone;
-        // then the top may reach the melody's lowest note (`lowestLead`), then 62; only last the full register.
+        // cannot clear). Three voices under the ceiling, else with the top up to the melody's lowest note;
+        // then the third and seventh alone under those; then 62; only last the full register.
         let floor = padLowFloor, bottom = padRegister.lowerBound
-        for top in [ceiling, max(ceiling, lowestLead), padRegister.upperBound] {
-            if let voicing = search(voices, spacing: 3...7, top: top, floor: floor)
-                ?? search(voices, spacing: 2...9, top: top, floor: floor) { return voicing }
-            if voices > 2, let voicing = search(2, spacing: 3...7, top: top, floor: floor)
-                ?? search(2, spacing: 2...9, top: top, floor: floor) { return voicing }
+        let tops = [ceiling, max(ceiling, lowestLead)]
+        var counts = [voices]
+        if voices > 2 { counts.append(2) }
+        for count in counts {
+            for top in tops {
+                if let voicing = search(count, spacing: 3...7, top: top, floor: floor)
+                    ?? search(count, spacing: 2...9, top: top, floor: floor) { return voicing }
+            }
+        }
+        for count in counts {
+            if let voicing = search(count, spacing: 3...7, top: padRegister.upperBound, floor: floor)
+                ?? search(count, spacing: 2...9, top: padRegister.upperBound, floor: floor) { return voicing }
         }
         let classes = padPitchClasses(for: degree, voices: voices, harmony: harmony)
         return search(voices, spacing: 3...7, top: ceiling, floor: bottom)

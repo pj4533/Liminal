@@ -113,16 +113,20 @@ nonisolated extension LofiRenderer {
 
     // MARK: Pad levels (D117)
 
-    /// Where lead and pad sound together, the ducked pad sits this far under the lead in 400 Hz to 3 kHz
-    /// (C-B5 gate 5.0 to 7.5 dB for the package; the shells were 3.5).
-    static let padUnderLeadDB: Float = 6.5
+    /// Where lead and pad sound together, the ducked pad (with any shell) sits this far under the lead in
+    /// 400 Hz to 3 kHz on the steep meter (C-B5 gate 5.0 to 7.5 dB). Plan start 6.5: the chords stem read
+    /// -21.9 LUFS (gate -22 to -24); 6.8 read C-B5 7.41 dB, too near the ceiling; 6.6 reads 7.21 dB and
+    /// -22.3 LUFS on the reference capture (20 November 2026).
+    static let padUnderLeadDB: Float = 6.6
     /// Nominal pad gain when a phrase has too little overlap to measure, and the factor it may move.
     static let padTrim: Float = 2.0
     static let padGainRange: Float = 8.0
     /// The held pad never peaks above -9 dBFS on the dry texture before the instrument balance.
     static let padPeakCeiling: Float = 0.35
-    /// The pad's contribution to `InstrumentBalance`, calibrated so a held pad does not turn the lead down
-    /// through the balance's three-second window (balance trim within 0.2 dB of the shells-only baseline).
+    /// The pad's contribution to `InstrumentBalance`. The dry pad at this weight barely moves the balance;
+    /// what does is the pad's reverb in the wet stem, which the balance meters in full: on the reference
+    /// capture the two theme phrases come down 0.5 and 0.85 dB (plan gate 0.2; with the pad send off they
+    /// move 0.06 and 0.22 dB). Open issue for MIX (D117).
     static let padMeterTrim: Float = 0.1
     /// The pad send's level at the phrase's pad gain, its band (280 Hz to 4 kHz) and pre-delay (45 ms).
     static let padSendTrim: Float = 0.37

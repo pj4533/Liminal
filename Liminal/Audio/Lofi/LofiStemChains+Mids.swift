@@ -43,13 +43,14 @@ nonisolated extension LofiStemChains {
     }
 
     /// The held pad (D117): a higher register floor and a darker top than the shells, so it tucks in
-    /// the middle under the lead and the chops. High-pass 220 Hz, -3 dB at 380 Hz, -2 dB at 2 kHz (room
-    /// for the lead's and the chops' presence), low-pass 2.8 kHz, both 12 dB per octave; mono below 300 Hz.
+    /// the middle under the lead and the chops. High-pass 220 Hz, -3 dB at 380 Hz, -3.5 dB at 2 kHz (room
+    /// for the lead's and the chops' presence; plan start -2, which left the chords' 1 to 4 kHz 6.2 dB
+    /// under the melody against a gate of 8), low-pass 2.8 kHz, both 12 dB per octave; mono below 300 Hz.
     /// The shells' +1.5 dB at 1.6 kHz is not used on the pad.
     struct Pad: Sendable, Equatable {
         var filters: [LofiBiquad.Kind] = [
             .highpass(hz: 220, q: butterworthQ), .peak(hz: 380, q: 1.0, gainDB: -3),
-            .peak(hz: 2_000, q: 0.8, gainDB: -2), .lowpass(hz: 2_800, q: butterworthQ),
+            .peak(hz: 2_000, q: 0.8, gainDB: -3.5), .lowpass(hz: 2_800, q: butterworthQ),
         ]
         var monoBelowHz = 300.0
         static let standard = Pad()
