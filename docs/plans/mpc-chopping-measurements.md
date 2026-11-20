@@ -172,7 +172,7 @@ The user's direction of 19 November 2026 asked for chops glued into the beat (fi
 - Live returns (`ArchiveVoice.ChopBus`): echo feedback 0.25 → 0.42 and return -16 → -11 dB under dry; room mid decay 0.9 → 1.5 s, low decay 0.6 → 0.8 s, damping 2.2 → 3 kHz, return 0.17 → 0.32 (about 14 dB under dry at 1 kHz).
 - Echo throws (`DialogueMotifTuning`): two repeats at -7 and -13 dB → three at -6, -10 and -15 dB, tail 1.6 → 2.4 beats.
 - Music duck under featured chops (`ArchiveVoice.MusicDuck`): lead -2 → -3 dB, mids -3 → -4 dB, space -4 → -5 dB; attack 30 ms, release 300 ms unchanged. Drums and bass are not ducked.
-- Not done: more frequent reversed pickups and echo throws on most cell endings. These are arrangement changes in `DialogueMotif` cells, not constants (`reversedChance` is not read by the cell code).
+- Not done in this pass: more frequent reversed pickups and echo throws on most cell endings. These are arrangement changes in `DialogueMotif` cells, not constants (`reversedChance` is not read by the cell code). They were done afterwards; see "Heavier chop effects and the line refresh" below.
 
 ### Film bed (`ArchiveVoice`, `MixBus` unchanged)
 
@@ -229,6 +229,93 @@ The no-footage capture is within 0.3 LU. With the film reel the ambient master's
 - No "sound started … late" warning (no bed later than its due time), no repeated-stems or late-phrase warning, no dropped chops. Phrase preparation took 1.25 to 3.17 s, the longest being the first phrase of each take.
 - Dialogue plans: six cues with speech, lead times 2.25 to 4.20 s; stage totals 187 to 314 ms of render. The first cue had no speech and planned rests.
 
+## Heavier chop effects and the line refresh (19 November 2026, after the calibrated clip)
+
+The calibrated clip (32 bars, 72 BPM, seed 2077, private drums, film reel, `--transcribe`) still had light chop effects: 79 of 89 chops dry, 6 echo throws, 1 reversed pickup, and the chop effects return 10.5 dB under the dry chops. It also played one line ("First of all, to try") for all 32 bars.
+
+- **Line refresh (bug fix, guarded).** The user's direction: "I want there to always be fresh samples."
+  - **Cause.** `DialogueMotif.resolve` only tried a new line when the cue's pad bank existed. "Design for Dreaming" narrates over music. Its noise floor is the music, so every line had zero clarity and was rejected as not speech or too quiet. The film had no bank, and loop 2 carried loop 1's line.
+  - **Fix 1:** the motif ranks lines for every cue, bank or not.
+  - **Fix 2, the crate:** `DialoguePerformanceMemory.motifCrate` keeps the last 4 films heard (PCM, analysis, transcript). A loop whose own film has no usable line digs a fresh, unblocked line from the crate, newest film first. It carries the previous line only when no recent film offers one.
+  - **Fix 3:** a loop that could only carry takes a fresh line from a later cue from another film in the same loop.
+  - **Not done:** forcing a buried line through by trusting the transcript over the acoustic rejections. Tried, and the line still had zero clarity.
+  - **Guards:**
+    - `DialogueMotifTests.aLoopWhoseFilmHasNoLineDigsAFreshLineFromTheCrate` checks that no loop carries or repeats the previous loop's line, including when only the first film ever speaks. It fails with the crate disabled.
+    - `aCarriedLoopTakesAFreshLineFromTheNextSpokenCue` covers fix 3.
+    - `scripts/analyze-lofi.py` fails any capture in which a 16-bar loop's main bank is the previous loop's (`stale_motif_lines`). It flags the original capture.
+  - **Result:** the same capture now plays "First of all, to try" (UFO Interview) in bars 1 to 16 and "These will be ejected and infect the rye" (Ergot, from the crate) in bars 17 to 32.
+- **Live returns (`ArchiveVoice.ChopBus`):**
+  - Echo feedback rose from 0.42 to 0.55.
+  - The echo return rose from 11 to 5 dB under dry.
+  - Room mid decay rose from 1.5 to 2.4 s, low decay from 0.8 to 1.2 s, and the return from 0.32 to 0.6.
+- **Echo throws (`DialogueMotifTuning`):** five repeats at -3, -6, -9, -13 and -17 dB (was three at -6, -10 and -15 dB), with the tail extended from 2.4 to 3.5 beats.
+- **Cells:**
+  - Echo throws were added to every stutter variant, two split-pause variants, a reorder variant, call-and-answer, sparse and the return's second bar.
+  - Reversed pickups now come every turnaround (was every second one), and also in a split-pause variant and a sparse variant.
+- **Same capture after the change:**
+  - 88 chops: 12 echo throws (with up to five repeats each), 2 filtered, 2 reversed.
+  - Chop effects return at -23.6 dB mean against -20.0 dB dry (was -31.3 against -20.8).
+  - All 32 bars have a chop.
+  - Master at -11.4 LUFS and -1.1 dBTP.
+  - The analysis reports no failures.
+
+## Tuck pass (19 November 2026, after the heavier-effects clip)
+
+**User direction.** The chops were "way too loud in the mix... they need to fit into the mids and melody better. They just stick out frequency wise." Tuck them with level, compression and blending effects such as light reverb.
+
+**Measurement.** In the heavier-effects capture the chops sat 9 to 15 dB over the melodic stems from 250 Hz to 4 kHz (500 Hz to 1 kHz: -22.8 dB against -37.8 dry and -34.8 wet). They were about 12 dB over the drums there, and above the drums in 2 to 4 kHz.
+
+**Diagnosis.** Calibration had put chops on top by design:
+- a +4.5 dB presence boost at 3.4 kHz;
+- music ducked 3 to 5 dB under every featured chop;
+- the dry path 7 dB hotter than needed.
+
+Common practice for blending vocal samples:
+- complementary EQ cuts around 250 Hz and 2 to 5 kHz;
+- the beat-under-vocal sidechain only when the vocal should sit on top;
+- dark, mid-focused, fairly wet reverb;
+- gentle saturation and bus glue.
+
+Sources: [Sage Audio](https://www.sageaudio.com/articles/how-to-mix-vocals-into-a-beat), [LANDR lo-fi mixing](https://blog.landr.com/lo-fi-mixing), [Antares lo-fi guide](https://www.antarestech.com/blog/the-complete-guide-to-mixing-lo-fi-music).
+
+**Changes:**
+- **Per-cut chain (`DialogueChopChain`):**
+  - high-pass 120 to 200 Hz;
+  - low-mid cut at 300 Hz from -2.5 to -4 dB;
+  - the presence boost (+4.5 dB at 3.4 kHz) replaced by a -4 dB cut at 2.8 kHz;
+  - low-pass 7.5 to 4.2 kHz (texture 5.5 to 3.4 kHz).
+
+  The levelling is K-weighted, so part of a treble cut returns as overall gain. The tilt still moves.
+- **Level (`ArchiveVoice.ChopBus`):** dry 0.72 to 0.28 (-8.2 dB). The room return went from 0.6 to 0.38, so the wet share rises against dry: echo about 4 dB under dry, room about 5. The chops sit in a long, dark room (echo band 400 Hz to 2.5 kHz, room band 300 Hz to 3 kHz, damping 2.2 kHz).
+- **Music duck (`ArchiveVoice.MusicDuck`):** lead -3 to -1 dB, mids -4 to -1 dB, space -5 to -1.5 dB.
+
+**Results (approval capture: 32 bars, 72 BPM, seed 2077, private drums, film reel, transcripts):**
+- **Chops:** -27.4 dBFS RMS (was -19.1), against drums -21.2, melodic dry -28.7 and space -26.4.
+- **Bands:**
+  - 250 to 500 Hz: -32.3 dB, against -31.1 dry and -30.8 wet.
+  - 500 Hz to 1 kHz: -31.3 dB, against -36.8 and -33.4.
+  - 2 to 4 kHz: -38.8 dB, against -39.2 for the drums.
+- **Master:** -12.9 LUFS, -1.2 dBFS peak.
+- **Film bed:** C-B9 passes, with the bed 10.2 dB under the mix in gaps and the chops 7.7 dB over the bed in 1 to 4 kHz.
+
+**Criteria change, C-B8.** It required the chops at least 3 dB (aim +6) over the music in 1 to 4 kHz, which encodes the rejected mix (the calibrated clip measured +5.7 dB). It now reads:
+- SII proxy mean at least 0.30, p10 at least 0.18;
+- 1 to 4 kHz SNR -3 to +2.5 dB, so the upper bound guards against the chops creeping back up;
+- spread at most 2.5 LU, unchanged.
+
+The approval capture passes (0.38, 0.27, +0.18 dB). The calibrated capture now fails it.
+
+**Open, pre-existing.** C-B2 fails on this 72 BPM private-drums capture both before and after these changes. The bass duck under the kick reads -0.48 dB against 1.5 to 4.5. The matrix cases pass it.
+
+## Future: non-word fallback for fresh chops (user idea, 19 November 2026, not built)
+
+The crate covers the common case. A loop whose film has no usable line takes a fresh line from one of the last four films. If a long stretch of footage offers no speech at all, the loop still carries its previous line. The user suggested a fallback instead: "sometimes non-word elements can just sound cool... look at the frequencies and see if it fits, even if it doesn't get recognized as a word."
+
+A possible shape:
+- **Rank non-speech segments as motif lines** when every speech tier fails. Candidates are texture-level units, or 1 to 3 s windows with clear onsets. Score them by spectral fit against the loop's music: low energy under 200 Hz, a spectral centroid near the melodic stems', a 500 Hz to 2 kHz band within a few dB of the mids, and onset strength for rhythmic cuts.
+- **Cut them on onsets** instead of words, and arrange them with the same cells.
+- **Prefer scanning more of the current film** (another section of the same footage) before both the crate and this fallback. The footage pool is large.
+
 ## Auditions
 
 `python3 scripts/mix-report.py $S/cal-final/ref --baseline $S/baseline/ref --auditions` wrote, in `$S/cal-final/ref/report/auditions/`: `master.wav` and `baseline-master.wav` (loudness-matched), `dialogue-in-context.wav`, `return-theme-take0.wav`, `return-theme-take1.wav` and a 16-bar solo of each section (`solo-<section>-bars1-16.wav`). The spectrograms, masking matrices and the other figures are in `$S/cal-final/<case>/report/` (`index.html`).
@@ -248,4 +335,4 @@ The no-footage capture is within 0.3 LU. With the film reel the ambient master's
 - C-B9 audibility (0.13 to 0.21) is close to its new floor on `same`. A brighter or louder film can move it either way; the 10 dB rule has 0.8 dB of margin on `ref`.
 - C-B5 measures short overlaps (0.2 to 0.7 s per phrase), so single notes move it by several dB; the matrix spread is 6.4 to 7.1 dB.
 - The ambient film-reel capture differs by 0.38 LU, from the Lo-Fi input (see Ambient safety).
-- The direction's heavier-effects items that need arrangement changes (reversed pickups every 2 to 4 bars, echo throws on most cell endings) are not done.
+- The direction's heavier-effects items that need arrangement changes (reversed pickups, echo throws on most cell endings) were done afterwards; see "Heavier chop effects and the line refresh".

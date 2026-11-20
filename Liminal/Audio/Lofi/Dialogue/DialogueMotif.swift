@@ -51,13 +51,17 @@ nonisolated enum DialogueMotifTuning {
     /// A line leads at most this many loops (the first time and one return), never two in a row.
     static let lineUses = 2
     static let lineHistory = 8
+    /// Recent films the motif may dig a fresh line from when a loop's own film has none
+    /// (19 November 2026: a narration-over-music film gave no line and one line held 32 bars).
+    static let crateSize = 4
     /// The return's first bar: one short piece this much lower, so the lead's hook stays clear.
     static let returnPieceDB: Float = -3
     /// Echo throw: repeats every 0.75 beat at these levels, band-limited, inside the following space.
     static let echoDelayBeats = 0.75
-    /// Three repeats (two at -7 and -13 dB before; user direction of 19 November 2026: more echo).
-    static let echoGainsDB: [Float] = [-6, -10, -15]
-    static let echoTailBeats = 2.4
+    /// Five repeats (three at -6/-10/-15 dB, two before that; user direction of 19 November 2026:
+    /// "echo more, more repeats").
+    static let echoGainsDB: [Float] = [-3, -6, -9, -13, -17]
+    static let echoTailBeats = 3.5
     static let minimumEchoTailSeconds = 0.25
     static let echoBand = (low: 400.0, high: 3000.0)
     /// The filtered repeat: a 600 Hz to 2.8 kHz band, loudness-matched to the dry piece with at most this make-up.
@@ -186,13 +190,38 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
                                 seed: current.seed, beatDuration: beatDuration, line: current.lineUnit) {
                 return recut
             }
+            // A loop that only carried the previous line takes a fresh line from a later cue in the
+            // same loop, so one film with no usable line cannot hold one line across two loops.
+            if current.carried, current.source.contentID != source.contentID,
+               let fresh = make(loop: loop, source: source, analysis: analysis, transcript: transcript, memory: memory,
+                                seed: seed, beatDuration: beatDuration) {
+                return fresh
+            }
             return current
         }
-        if hasBank, let fresh = make(loop: loop, source: source, analysis: analysis, transcript: transcript, memory: memory,
-                                     seed: seed, beatDuration: beatDuration) {
+        // The motif ranks its own lines, so a cue whose pad bank is empty can still offer one.
+        if let fresh = make(loop: loop, source: source, analysis: analysis, transcript: transcript, memory: memory,
+                            seed: seed, beatDuration: beatDuration) {
             return fresh
         }
+        // This film has no usable line (music under the narration, say): dig a fresh line from the
+        // crate of recent films, newest first, before ever repeating the last loop's line.
+        if let dug = fromCrate(loop: loop, excluding: source.contentID, memory: memory, seed: seed, beatDuration: beatDuration) {
+            return dug
+        }
         if let previous = memory.motif { return previous.carried(to: loop, seed: seed, memory: memory) }
+        return nil
+    }
+
+    /// A fresh line from the crate of recent films (newest first), never this cue's own film.
+    static func fromCrate(loop: Int, excluding contentID: String, memory: DialoguePerformanceMemory, seed: UInt64,
+                          beatDuration: Double) -> DialogueMotif? {
+        for entry in memory.motifCrate.reversed() where entry.source.contentID != contentID {
+            if let dug = make(loop: loop, source: entry.source, analysis: entry.analysis, transcript: entry.transcript,
+                              memory: memory, seed: seed, beatDuration: beatDuration) {
+                return dug
+            }
+        }
         return nil
     }
 
@@ -578,36 +607,37 @@ nonisolated extension DialogueMotif {
                 return [at(0, v % 2 == 0 ? 0 : 2), after(y, 2, min: 0, .echoThrow), after(x, 1, min: 20), after(z, 1, min: 26)]
             case .stutter:
                 switch v % 3 {
-                case 0: return [at(x, 0), after(x, 0), at(y, 10), at(x, 16), after(x, 0), at(z, 24), after(z, 1, min: 28, .filtered)]
-                case 1: return [at(x, 0), at(x, 6), at(z, 10), at(x, 16), after(x, 1), after(x, 1, .filtered), at(y, 28)]
-                default: return [at(xa, 0), after(xa, 0), after(x, 0), at(y, 10), at(z, 16), after(z, 2, .filtered), at(y, 26)]
+                case 0: return [at(x, 0), after(x, 0), at(y, 10, .echoThrow), at(x, 16), after(x, 0), at(z, 24), after(z, 1, min: 28, .filtered)]
+                case 1: return [at(x, 0), at(x, 6), at(z, 10, .echoThrow), at(x, 16), after(x, 1), after(x, 1, .filtered), at(y, 28)]
+                default: return [at(xa, 0), after(xa, 0), after(x, 0), at(y, 10, .echoThrow), at(z, 16), after(z, 2, .filtered), at(y, 26)]
                 }
             case .splitPause:
                 switch v % 3 {
                 case 0: return [at(xa, 0), after(xb, 3), at(z, 12), at(sa, 16), after(sb, 3, .echoThrow)]
-                case 1: return [at(sa, 0), after(sb, 4), at(x, 12), at(xa, 16), after(xb, 2), at(z, 28)]
-                default: return [at(z, 2), at(sa, 8), after(sb, 3), at(sa, 16), after(sa, 1), after(sb, 3), after(x, 1, min: 28)]
+                case 1: return [at(sa, 0), after(sb, 4, .echoThrow), Item(fragment: ya, slot: 16, effect: .reversed), at(xa, 16), after(xb, 2), at(z, 28, .echoThrow)]
+                default: return [at(z, 2), at(sa, 8), after(sb, 3, .echoThrow), at(sa, 16), after(sa, 1), after(sb, 3), after(x, 1, min: 28, .echoThrow)]
                 }
             case .reorder:
                 // Later words before earlier ones ("...want to invest... when they"), always against the source order.
                 switch v % 3 {
                 case 0: return [at(secondHead, 0), after(sa, 0), after(first, 3), at(last, 16), at(first, 22), after(second, 1, min: 26)]
-                case 1: return [at(last, 0), after(first, 2), at(second, 10), at(second, 16), after(first, 1), at(ya, 28)]
+                case 1: return [at(last, 0), after(first, 2, .echoThrow), at(second, 10), at(second, 16), after(first, 1), at(ya, 28, .echoThrow)]
                 default: return [at(last, 0), after(sa, 2), at(first, 10), at(second, 16), after(first, 2, .echoThrow)]
                 }
             case .callAnswer:
-                return v % 2 == 0 ? [at(x, 0), at(y, 10), at(x, 16), at(z, 22), after(y, 1, min: 26)]
+                return v % 2 == 0 ? [at(x, 0), at(y, 10, .echoThrow), at(x, 16), at(z, 22), after(y, 1, min: 26, .echoThrow)]
                     : [at(z, 2), at(x, 10), at(z, 18), at(y, 26, .echoThrow)]
             case .sparse:
-                return v % 2 == 0 ? [at(sa, 4), at(x, 10), at(sb, 20, .echoThrow)] : [at(x, 8), at(z, 16), at(y, 24, .echoThrow)]
+                return v % 2 == 0 ? [at(sa, 4, .echoThrow), at(x, 10), at(sb, 20, .echoThrow)]
+                    : [at(x, 8), Item(fragment: ya, slot: 16, effect: .reversed), at(z, 16), at(y, 24, .echoThrow)]
             case .returnOpen:
                 // The return's first bar carries one short, lower piece late in the bar (the lead's hook
                 // opens it); the second bar restates the focal piece.
                 let short = ([xa, x, sb, ya] + pieces).min { seconds($0) < seconds($1) } ?? x
-                return [at(short, v % 2 == 0 ? 12 : 14, gain: DialogueMotifTuning.returnPieceDB), at(x, 16), after(x, 0), at(z, 22), at(y, 26)]
+                return [at(short, v % 2 == 0 ? 12 : 14, gain: DialogueMotifTuning.returnPieceDB), at(x, 16), after(x, 0), at(z, 22), at(y, 26, .echoThrow)]
             case .turnaround:
                 var list = [at(x, 0), at(z, 6), at(x, 10)]
-                if v % 2 == 1 { list.append(Item(fragment: ya, slot: 16, effect: .reversed)) }
+                list.append(Item(fragment: ya, slot: 16, effect: .reversed))
                 list += [at(xa, 16), after(xa, 0), after(xa, 0), at(y, 24), Item(fragment: x, slot: 32, landing: true)]
                 return list
             case .repair:
@@ -874,9 +904,24 @@ nonisolated enum DialogueMotifPerformer {
     }
 }
 
+/// One recent film the motif can dig a line from: its PCM, analysis and transcript.
+nonisolated struct DialogueMotifCrateEntry: @unchecked Sendable {
+    let source: DialogueSource
+    let analysis: DialogueAnalysis
+    let transcript: DialogueTranscript?
+}
+
 nonisolated extension DialoguePerformanceMemory {
     /// Full-line statements already played in `loop`.
     func motifStatements(loop: Int) -> Int { motif?.loop == loop ? motifLineStatements : 0 }
+
+    /// Keeps the newest entry per film (a transcript revision replaces the acoustic one).
+    mutating func addToCrate(_ entry: DialogueMotifCrateEntry) {
+        guard entry.analysis.features != nil, !entry.analysis.units.isEmpty else { return }
+        motifCrate.removeAll { $0.source.contentID == entry.source.contentID && $0.source.sourceStart == entry.source.sourceStart }
+        motifCrate.append(entry)
+        if motifCrate.count > DialogueMotifTuning.crateSize { motifCrate.removeFirst(motifCrate.count - DialogueMotifTuning.crateSize) }
+    }
 
     mutating func setMotif(_ motif: DialogueMotif, statements: Int) {
         if self.motif?.loop != motif.loop || self.motif?.lineKey != motif.lineKey {
@@ -949,6 +994,7 @@ nonisolated extension DialogueMotif {
             parts.append((part, motif))
         }
         guard let last = parts.last else { return nil }
+        trial.addToCrate(DialogueMotifCrateEntry(source: source, analysis: analysis, transcript: transcript))
         trial.pieceCounter += 1
         memory = trial
         let merged = DialoguePerformancePlan(sourceID: last.plan.sourceID, cueToken: cueToken, bankID: last.plan.bankID,

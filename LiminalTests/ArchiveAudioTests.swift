@@ -251,17 +251,17 @@ struct ArchiveVoiceRenderTests {
         let bedBefore = level(at: 1.0, hz: bedHz), bedDuring = level(at: 1.7, hz: bedHz)
         let cut = level(at: 1.7, hz: chopHz), echo = level(at: 2.5, hz: chopHz)
         print("softened chops: bed before \(bedBefore) during \(bedDuring) cut \(cut) echo \(echo)")
-        // A quiet direct film remains audible before the musical cut enters: the Lo-Fi bed keeps its
-        // baseline, mostly wet chain (user direction, 19 November 2026), so its direct sound is a
-        // tenth to a third of the cut (mix calibration raised the Lo-Fi context gain 2.5 dB; about 0.3).
-        // It stays audible under the cut.
-        #expect(bedBefore > cut * 0.10 && bedBefore < cut * 0.36, "bed before the cut \(bedBefore)")
+        // A quiet direct film remains audible before the musical cut enters, and stays audible under it.
+        // These are raw equal-level tones: the real chops are levelled far above their source, and the
+        // bed's place in the mix (at least 10 dB under the music in gaps) is C-B9 on captures. The tuck
+        // pass (19 November 2026) took the dry chop path from 0.72 to `ChopBus.dryGain`, so the raw cut
+        // now sits near the bed's direct sound.
+        #expect(bedBefore > cut * 0.3 && bedBefore < cut * 2.5, "bed before the cut \(bedBefore), cut \(cut)")
         #expect(bedDuring > bedBefore * 0.25, "bed under the cut \(bedDuring)")
-        // The cut plays through the 0.72 dry path.
-        #expect(cut > 0.055 && cut < 0.096, "cut \(cut)")
-        // The 0.6-second cut has stopped; its dotted-eighth repeat is still audible. The echo return is
-        // band-passed and about 11 dB under the dry line since mix calibration (16 dB in plan 8.5), plus room.
-        #expect(echo > cut * 0.08 && echo < cut * 0.35, "echo \(echo) against the cut \(cut)")
+        #expect(cut > 0.008 && cut < 0.04, "cut \(cut)")
+        // The 0.6-second cut has stopped; its repeats and the long room are still clearly audible (echo
+        // about 5 dB under the dry line with 0.55 feedback since the heavier-effects pass).
+        #expect(echo > cut * 0.15 && echo < cut * 3, "echo \(echo) against the cut \(cut)")
         #expect(level(at: 1.0, hz: chopHz) < 0.0005)
         #expect(peak(at: 3.25) < 0.0001)
     }
@@ -366,7 +366,8 @@ struct ArchiveVoiceRenderTests {
         }
 
         /// First sample above `threshold` within 50 ms of `time`.
-        func onset(_ x: [Float], near time: Double, threshold: Float = 0.3) -> Int? {
+        /// Default threshold: three quarters of the dry chop path, above its echo and room returns.
+        func onset(_ x: [Float], near time: Double, threshold: Float = 0.75 * ArchiveVoice.ChopBus.dryGain) -> Int? {
             let lo = max(0, Int((time - 0.05) * rate)), hi = min(x.count, Int((time + 0.05) * rate))
             return (lo..<hi).first { abs(x[$0]) > threshold }
         }
@@ -423,8 +424,9 @@ struct ArchiveVoiceRenderTests {
             _ = planned
         }
         let found = try #require(probe.onset(x, near: 1.0, threshold: 0.05))
-        // The dry chop path is 0.72; the fader is min(cueGain, 1.15) = 1 regardless of the bed fade.
-        #expect(abs(x[found]) > 0.65 && abs(x[found]) < 0.8, "chop peak \(x[found])")
+        // The dry chop path is `ChopBus.dryGain`; the fader is min(cueGain, 1.15) = 1 regardless of the bed fade.
+        let dry = ArchiveVoice.ChopBus.dryGain
+        #expect(abs(x[found]) > dry * 0.9 && abs(x[found]) < dry * 1.11, "chop peak \(x[found])")
     }
 }
 
