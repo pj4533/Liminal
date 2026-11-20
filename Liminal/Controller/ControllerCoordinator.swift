@@ -69,6 +69,7 @@ final class ControllerCoordinator: ObservableObject {
         // A late callback from a replaced socket cannot release the new session's onsets.
         release(onsets.releaseAll(session: session))
         guard self.session == session else { return }
+        engine?.post(.controllerChopsStop); engine?.lofi.controllerDrums.stop()
         self.session = nil; connected = false
         engine?.controllerVoices.resetWindows(); windows.removeAll()
     }
@@ -76,7 +77,10 @@ final class ControllerCoordinator: ObservableObject {
         let now = ProcessInfo.processInfo.systemUptime
         for onset in released { engine?.controllerVoices.release(onset.voiceToken, over: duration, now: now) }
     }
-    func panic() { release(onsets.releaseAll()) }
+    func panic() {
+        release(onsets.releaseAll())
+        engine?.post(.controllerChopsStop); engine?.lofi.controllerDrums.stop()
+    }
     func reset() {
         panic()
         for channel in ControllerChannel.allCases { engine?.controllerReset(channel) }
@@ -107,6 +111,8 @@ final class ControllerCoordinator: ObservableObject {
             case .all_notes_off:
                 let channel = command.fields["channel"]?.string.flatMap(ControllerChannel.init(rawValue:))
                 release(onsets.releaseAll(session: command.session, channel: channel))
+                if channel == nil || channel == .chops { engine.post(.controllerChopsStop) }
+                if channel == nil || channel == .drums { engine.lofi.controllerDrums.stop() }
             case .note_off, .pad_off:
                 if let onset = onsets.release(session: command.session, noteID: try command.string("note_id")) { release([onset]) }
             case .pressure:
@@ -168,9 +174,46 @@ final class ControllerCoordinator: ObservableObject {
                     engine.controllerVoices.release(voice.token, now: ProcessInfo.processInfo.systemUptime)
                     throw error
                 }
+            case .drum_select, .drum_next:
+                guard engine.musicMode == .lofi else { throw ControllerWire.Failure.inactive_channel }
+                guard engine.isRunning && engine.isPlaybackReady, let info = engine.lofi.stateBus.transport() else { throw ControllerWire.Failure.not_playing }
+                let request = try engine.lofi.controllerDrums.select(action == .drum_select ? command.string("choice_id") : nil, info: info)
+                reply["status"] = .string("pending"); reply["request_id"] = .string(request)
             case .pad_on:
                 guard engine.isRunning && engine.isPlaybackReady else { throw ControllerWire.Failure.not_playing }
-                throw ControllerWire.Failure.not_ready
+                guard let channel = ControllerChannel(rawValue: try command.string("channel")) else { throw ControllerWire.Failure.invalid_channel }
+                guard !effectiveAutomatic(channel), engine.controllerStrips(channel).first?.automatic == false else { throw ControllerWire.Failure.wrong_mode }
+                let pad = Int(try command.integer("pad", in: 0...63))
+                let bankRevision = try command.integer("bank_revision", in: 0...Int64.max)
+                let noteID = try command.string("note_id")
+                guard onsets.onset(session: command.session, noteID: noteID) == nil else { throw ControllerWire.Failure.bad_message }
+                guard onsets.held.count < 48 else { throw ControllerWire.Failure.overloaded }
+                let velocity = Float(try command.integer("velocity", in: 1...127)) / 127
+                guard let info = engine.lofi.stateBus.transport() else { throw ControllerWire.Failure.not_ready }
+                if channel == .chops {
+                    let state = engine.archive.controllerDialogue.read()
+                    guard bankRevision == state.revision else { throw ControllerWire.Failure.stale_bank }
+                    guard let bank = state.bank, bank.transportRevision == info.revision,
+                          bank.pads.contains(where: { $0.index == pad }) else { throw ControllerWire.Failure.not_ready }
+                    let now = ProcessInfo.processInfo.systemUptime
+                    let beat = ceil((now + engine.lofi.controllerLaunchMargin - info.origin) / (info.beatDuration * 0.25)) * 0.25
+                    let start = info.origin + beat * info.beatDuration
+                    guard start < bank.end else { throw ControllerWire.Failure.not_ready }
+                    let token = UUID()
+                    try onsets.insert(.init(session: command.session, noteID: noteID, channel: channel,
+                        instrumentRevision: 0, bankRevision: bankRevision, voiceToken: token))
+                    engine.post(.controllerChop(bank: bankRevision, pad: pad,
+                        velocity: velocity, start: start, token: token))
+                    reply["status"] = .string("pending"); reply["effective_beat"] = .number(beat)
+                } else if channel == .drums {
+                    guard bankRevision == 1 else { throw ControllerWire.Failure.stale_bank }
+                    let choices = engine.lofi.controllerDrums.choices
+                    guard choices.indices.contains(pad), engine.lofi.controllerDrums.readyChoices.contains(choices[pad].id) else { throw ControllerWire.Failure.not_ready }
+                    let request = try engine.lofi.controllerDrums.select(choices[pad].id, info: info, launch: true)
+                    try onsets.insert(.init(session: command.session, noteID: noteID, channel: channel,
+                        instrumentRevision: 0, bankRevision: bankRevision, voiceToken: UUID()))
+                    reply["status"] = .string("pending"); reply["request_id"] = .string(request)
+                } else { throw ControllerWire.Failure.unavailable }
             default: throw ControllerWire.Failure.unavailable
             }
         } catch let failure as ControllerWire.Failure {
@@ -198,8 +241,28 @@ final class ControllerCoordinator: ObservableObject {
 
     private func isActive(_ id: ControllerChannel) -> Bool {
         guard let engine else { return false }
-        if id == .film { return false } // Film capability waits for actual cue publication, never inferred from a setting.
+        if id == .film { return engine.archive.controllerDialogue.read().film } // Film capability waits for actual cue publication, never inferred from a setting.
         return id.rawValue.hasPrefix(engine.musicMode == .lofi ? "lofi." : "ambient.")
+    }
+
+    private func bankState(_ channel: ControllerChannel) -> ControllerWire.Value? {
+        guard let engine else { return nil }
+        if channel == .chops {
+            let state = engine.archive.controllerDialogue.read()
+            guard let bank = state.bank, bank.transportRevision == engine.lofi.stateBus.transport()?.revision else { return nil }
+            return .object(["revision": .integer(state.revision), "bank_id": .string(String(bank.bankID)),
+                "cue_token": .string(String(bank.cueToken)), "plan_revision": .integer(Int64(bank.planRevision)),
+                "transport_revision": .integer(Int64(bank.transportRevision)),
+                "effective_beat": engine.lofi.stateBus.transport().map { .number((bank.activation - $0.origin) / $0.beatDuration) } ?? .null,
+                "pads": .array(bank.pads.map { .object(["index": .integer(Int64($0.index)), "label": .string($0.index == 63 ? "Whole line" : $0.role.capitalized),
+                    "kind": .string($0.role), "ready": .bool(true), "play_mode": .string("one_shot"), "beats": .number($0.beats)]) })])
+        }
+        if channel == .drums, !engine.lofi.controllerDrums.readyChoices.isEmpty {
+            return .object(["revision": .integer(1), "bank_id": .string("drum-choices"), "cue_token": .null, "effective_beat": .null,
+                "pads": .array(engine.lofi.controllerDrums.choices.enumerated().map { .object(["index": .integer(Int64($0.offset)),
+                    "label": .string($0.element.label), "kind": .string("loop"), "ready": .bool(engine.lofi.controllerDrums.readyChoices.contains($0.element.id)), "play_mode": .string("latch"), "beats": .number(64)]) })])
+        }
+        return nil
     }
 
     private func snapshot() -> ControllerServer.Fields {
@@ -211,7 +274,10 @@ final class ControllerCoordinator: ObservableObject {
         engine?.controllerVoices.updateHarmony(tonic: Int(music.tonic), intervals: scale.intervals)
         let channels: [ControllerWire.Value] = ControllerChannel.allCases.map { id in
             let instrument = engine?.controllerVoices.instrument(id)
-            let ready = isActive(id) && engine?.controllerModeReady(id) == true && instrument?.ready == true
+            let padBank = bankState(id)
+            let hasPads = padBank.map { _ in true } ?? false
+            let melodicReady = engine?.controllerModeReady(id) == true && instrument?.ready == true
+            let ready = isActive(id) && (melodicReady || (engine?.controllerModeReady(id) == true && hasPads))
             let pendingWindow: ControllerWire.Value
             if let window = windows[id] {
                 let status = instrument?.base == window.base && instrument?.ready == true ? "applied"
@@ -233,16 +299,19 @@ final class ControllerCoordinator: ObservableObject {
                             "root_midi": .integer(60 + Int64(music.tonic)),
                             "octave_offset": .integer(Int64(((instrument?.base ?? (36 + Int(music.tonic))) - 36 - Int(music.tonic)) / 12)),
                             "pending_window": pendingWindow,
-                            "parameters": .array(parameters), "pad_bank": .null])
+                            "parameters": .array(parameters), "pad_bank": padBank ?? .null])
         }
         let manualReady = ControllerVoiceBank.melodic.contains { id in
             isActive(id) && engine?.controllerModeReady(id) == true && engine?.controllerVoices.instrument(id).ready == true
         }
+        let manualPadsReady = [ControllerChannel.chops, .drums].contains { isActive($0) && bankState($0).map { _ in true } == true }
         let playing = engine?.isRunning == true
         return ["type": .string("state"), "revision": .integer(revision),
-                "capabilities": .object(["transport": .bool(true), "snapshot": .bool(true), "performance_audio": .bool(manualReady),
+                "capabilities": .object(["transport": .bool(true), "snapshot": .bool(true), "performance_audio": .bool(manualReady || manualPadsReady),
                                           "channel_mix": .bool(true), "channel_effects": .bool(true),
                                           "automatic_gates": .bool(true), "manual_notes": .bool(manualReady),
+                                          "manual_pads": .bool(manualPadsReady), "drum_selection": .bool(engine?.musicMode == .lofi),
+                                          "film_mix": .bool(engine?.archive.controllerDialogue.read().film == true),
                                           "isolated_lofi_wet": .bool(LofiBus.isolatedPreparationQualified)]),
                 "transport": .object(["state": .string(playing ? "playing" : "stopped"),
                                       "ready": .bool(engine?.isPlaybackReady == true),
@@ -253,7 +322,7 @@ final class ControllerCoordinator: ObservableObject {
                                       "transport_revision": .integer(Int64(transport?.revision ?? 0))]),
                 "harmony": .object(["root_midi": .integer(60 + Int64(music.tonic)), "tonic": .integer(Int64(music.tonic)), "scale_name": .string(scale.rawValue),
                                     "pitch_classes": .array((0..<12).filter { music.scaleMask & (1 << (($0 + Int(music.tonic)) % 12)) != 0 }.map { .integer(Int64($0)) })]),
-                "channels": .array(channels), "drums": .object(["choices": .array([]), "current_id": .null, "pending": .null])]
+                "channels": .array(channels), "drums": engine?.lofi.controllerDrums.wire ?? .null]
     }
 }
 #endif

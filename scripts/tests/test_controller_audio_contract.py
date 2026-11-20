@@ -46,11 +46,12 @@ class ControllerAudioSourceContract(unittest.TestCase):
 
     def test_manual_readiness_requires_assets_and_source_isolation(self):
         coordinator = source('Liminal/Controller/ControllerCoordinator.swift')
-        self.assertIn('"performance_audio": .bool(manualReady)', coordinator)
+        self.assertIn('"performance_audio": .bool(manualReady || manualPadsReady)', coordinator)
         self.assertIn('"manual_notes": .bool(manualReady)', coordinator)
+        self.assertIn('"manual_pads": .bool(manualPadsReady)', coordinator)
         self.assertIn('engine?.controllerModeReady(id) == true && instrument?.ready == true', coordinator)
         engine = source('Liminal/Audio/GenerativeEngine.swift')
-        self.assertIn('[ControllerChannel.chops, .lofiSpace, .ambientSpace, .film]', engine)
+        self.assertIn('[ControllerChannel.lofiSpace, .ambientSpace, .film]', engine)
 
     def test_onset_hot_path_never_builds_or_renders_instruments(self):
         bank = source('Liminal/Controller/ControllerVoiceBank.swift')

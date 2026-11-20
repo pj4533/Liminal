@@ -66,9 +66,9 @@ nonisolated final class ControllerChannelStrip {
         echoFilters.forEach { $0.stop() }; roomFilter.stop()
     }
 
-    func setAutomatic(_ enabled: Bool) {
+    func setAutomatic(_ enabled: Bool, gateSource: Bool = true) {
         automatic = enabled
-        ParamRamp.setGain(automaticGate, enabled ? 1 : 0, over: 0.03)
+        ParamRamp.setGain(automaticGate, !gateSource || enabled ? 1 : 0, over: 0.03)
     }
 
     /// Strict wire validation is also enforced here for callers outside the protocol.

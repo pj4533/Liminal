@@ -19,6 +19,9 @@ nonisolated enum MusicControl {
     /// The footage service abandoned cue `token` after its dialogue work started (the bed never began,
     /// or footage stopped): its stored chops are dropped and later plans for it ignored.
     case archiveChopsCancel(token: Int)
+    case archiveControllerBank(ControllerDialogueBank)
+    case controllerChopsAutomatic(Bool), controllerChopsStop
+    case controllerChop(bank: Int64, pad: Int, velocity: Float, start: Double, token: UUID)
 }
 
 /// Owns time, randomness, harmony, scenes and layers (decisions D3-D6). Runs on its own serial queue in
@@ -318,6 +321,11 @@ nonisolated final class MusicConductor: @unchecked Sendable {
         case .archiveGain(let g): archive?.setGain(g)
         case .archiveChops(let plan): if began && !stopping { archive?.perform(plan, now: scheduler.now) }
         case .archiveChopsCancel(let token): archive?.cancelChops(token: token)
+        case .archiveControllerBank(let bank): if began && !stopping { archive?.controllerPrepareBank(bank) }
+        case .controllerChopsAutomatic(let automatic): archive?.controllerSetAutomatic(automatic)
+        case .controllerChopsStop: archive?.controllerStopManual()
+        case .controllerChop(let bank, let pad, let velocity, let start, let token):
+            if began && !stopping { archive?.controllerTrigger(bank: bank, pad: pad, velocity: velocity, start: start, token: token) }
         }
     }
 

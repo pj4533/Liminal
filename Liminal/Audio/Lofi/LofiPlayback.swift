@@ -9,6 +9,8 @@ import OSLog
 @MainActor
 final class LofiPlayback {
     let bus: LofiBus
+    lazy var controllerDrums = ControllerDrumPerformance(bus: bus, sampleRate: sampleRate)
+    var controllerLaunchMargin: Double { max(0.12, outputLatency + 0.08) }
     var output: Fader { bus.output }
     /// The faders the archive voice ducks under featured chops; this transport never writes them.
     var duckTargets: (lead: Fader, mids: Fader, space: Fader) { bus.duckTargets }
@@ -122,6 +124,7 @@ final class LofiPlayback {
     }
 
     func stop(immediately: Bool = false) {
+        controllerDrums.stop()
         epoch += 1
         let token = epoch
         loop?.cancel()
@@ -265,6 +268,7 @@ final class LofiPlayback {
                 #endif
             }
         }
+        controllerDrums.tick(info: stateBus.transport(), name: current.breakAudio.drums.name)
         publish(current, frame: frame)
     }
 

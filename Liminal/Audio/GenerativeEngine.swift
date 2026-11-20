@@ -131,6 +131,7 @@ final class GenerativeEngine: ObservableObject {
             controllerStrips(channel).first.map { (channel, $0.manualInput) }
         })
         controllerVoices = ControllerVoiceBank(inputs: inputs, wetInputs: lofi.bus.manualWetInputs, timbres: conductor.controllerTimbres)
+        lofi.controllerDrums.discover()
         engine.output = master.output
         configurationObserver = NotificationCenter.default.publisher(for: .AVAudioEngineConfigurationChange, object: engine.avEngine)
             .receive(on: DispatchQueue.main)
@@ -152,6 +153,7 @@ final class GenerativeEngine: ObservableObject {
     /// Controller-owned nodes only: the original conductor continues to own levels, pans and sends.
     /// Future manual voices connect to `manualInput` on these strips, never stop an automatic layer.
     func controllerStrips(_ channel: ControllerChannel) -> [ControllerChannelStrip] {
+        if channel == .film { return [archive.strip.performance] }
         if channel == .ambientSpace { return [mix.performanceSpace] }
         if let strip = lofi.bus.strips[channel] { return [strip] }
         let layerID: LayerID?
@@ -175,7 +177,7 @@ final class GenerativeEngine: ObservableObject {
 
     func controllerModeReady(_ channel: ControllerChannel) -> Bool {
         // Chops need automatic duck suppression plus a separate manual source in the next stage.
-        ![ControllerChannel.chops, .lofiSpace, .ambientSpace, .film].contains(channel) && controllerMixReady(channel)
+        ![ControllerChannel.lofiSpace, .ambientSpace, .film].contains(channel) && controllerMixReady(channel)
     }
 
     @discardableResult
@@ -188,12 +190,16 @@ final class GenerativeEngine: ObservableObject {
     @discardableResult
     func controllerSetAutomatic(_ channel: ControllerChannel, enabled: Bool) -> Bool {
         guard controllerModeReady(channel) else { return false }
+        if channel == .chops { post(.controllerChopsAutomatic(enabled)) }
+        if channel == .drums { lofi.controllerDrums.setAutomatic(enabled) }
         if channel.rawValue.hasPrefix("lofi.") { return lofi.bus.setAutomatic(channel, enabled: enabled) }
         for strip in controllerStrips(channel) { strip.setAutomatic(enabled) }
         return true
     }
 
     func controllerReset(_ channel: ControllerChannel) {
+        if channel == .chops { post(.controllerChopsAutomatic(true)) }
+        if channel == .drums { lofi.controllerDrums.setAutomatic(true) }
         if channel.rawValue.hasPrefix("lofi.") { lofi.bus.reset(channel) }
         else { for strip in controllerStrips(channel) { strip.reset() } }
     }

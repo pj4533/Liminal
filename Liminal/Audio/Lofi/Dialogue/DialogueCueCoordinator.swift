@@ -325,6 +325,7 @@ nonisolated final class DialogueDirector: @unchecked Sendable {
         var transcriptUsed = false
     }
 
+    private let manualPreparation = ControllerDialoguePreparation()
     private let state = OSAllocatedUnfairLock(initialState: State())
     private let settings: OSAllocatedUnfairLock<Settings>
 
@@ -450,7 +451,22 @@ nonisolated final class DialogueDirector: @unchecked Sendable {
     /// checks cancellation between stages. `post` is the only thing that touches the conductor.
     func run(source: DialogueSource, window: Range<Double>, seed: UInt64,
              transport: @escaping @Sendable () -> LofiTransportInfo?, isCurrent: @escaping @Sendable () -> Bool,
-             post: @escaping @Sendable (ArchiveVoice.ChopPlan) -> Void) async -> Outcome {
+             post: @escaping @Sendable (ArchiveVoice.ChopPlan) -> Void,
+             manualPost: @escaping @Sendable (ControllerDialogueBank) -> Void = { _ in }) async -> Outcome {
+        func announced(_ built: DialogueCueCoordinator.Built, chops: [DialogueChop], from: Double = -.infinity) -> ArchiveVoice.ChopPlan {
+            var plan = ArchiveVoice.ChopPlan(token: source.cueToken, revision: built.plan.revision, replaceFrom: from, chops: chops)
+            if let bank = built.played {
+                plan.bankEpoch = ControllerBankEpoch(cueToken: String(source.cueToken), bankID: String(bank.bankID),
+                    planRevision: Int64(built.plan.revision), transportRevision: built.snapshot.revision)
+                plan.bankActivation = max(built.window.lowerBound, from.isFinite ? from : (built.firstStart ?? built.earliestStart))
+                plan.bankEnd = built.window.upperBound
+            }
+            return plan
+        }
+        func publishManual(_ built: DialogueCueCoordinator.Built, activation: Double) {
+            manualPreparation.submit(built, source: source, activation: activation,
+                valid: { isCurrent() && transport()?.revision == built.snapshot.revision }, post: manualPost)
+        }
         let config = settings.withLock { $0 }
         let now = config.now
         var outcome = Outcome()
@@ -522,19 +538,21 @@ nonisolated final class DialogueDirector: @unchecked Sendable {
             let ready = now()
             let chops = candidate.chops.filter { $0.event.startTime >= ready + DialogueCueCoordinator.commitMargin }
             outcome.readyAt = ready
-            post(ArchiveVoice.ChopPlan(token: source.cueToken, revision: 0, chops: chops))
+            let posted = announced(candidate, chops: chops)
+            post(posted)
             committedGeneration = commit(candidate.memory, expecting: generation)
             if committedGeneration == nil {
                 LMLog.audio.warning("Lo-Fi dialogue cue=\(source.cueToken) memory moved on during the build; not committed")
             }
             built = candidate
-            outcome.posted.append(ArchiveVoice.ChopPlan(token: source.cueToken, revision: 0, chops: chops))
+            outcome.posted.append(posted)
             outcome.built.append(candidate)
             DialogueCueCoordinator.report(candidate, cue: source.cueToken,
                                           lead: candidate.firstStart.map { $0 - (outcome.readyAt ?? 0) })
             break
         }
         guard let acoustic = built else { return finish(outcome.discarded ?? "unsettledTransport") }
+        publishManual(acoustic, activation: max(window.lowerBound, acoustic.firstStart ?? acoustic.earliestStart))
 
         // Transcript refinement: only blocks starting after its arrival plus 0.5 s, posted with a
         // higher revision and `replaceFrom` at that block's start. A late transcript is only cached.
@@ -558,9 +576,9 @@ nonisolated final class DialogueDirector: @unchecked Sendable {
             guard !Task.isCancelled, isCurrent(), transport()?.revision == latest.revision,
                   state.withLock({ $0.generation }) == generation else { return outcome }
             LMLog.audio.info("Lo-Fi dialogue cue=\(source.cueToken) transport revision \(info.revision) -> \(latest.revision) during recognition: plan rebuilt")
-            let plan = ArchiveVoice.ChopPlan(token: source.cueToken, revision: 1, replaceFrom: from,
-                                             chops: rebuilt.chops.filter { $0.event.startTime >= from })
+            let plan = announced(rebuilt, chops: rebuilt.chops.filter { $0.event.startTime >= from }, from: from)
             post(plan)
+            publishManual(rebuilt, activation: from)
             commit(rebuilt.memory, expecting: generation)
             outcome.posted.append(plan)
             outcome.built.append(rebuilt)
@@ -588,8 +606,9 @@ nonisolated final class DialogueDirector: @unchecked Sendable {
         store(source, transcript: transcript, refined: refined.bank)
         refined = withCacheCost(refined)
         guard !Task.isCancelled, isCurrent(), state.withLock({ $0.generation }) == generation else { return outcome }
-        let plan = ArchiveVoice.ChopPlan(token: source.cueToken, revision: 1, replaceFrom: from, chops: refined.chops)
+        let plan = announced(refined, chops: refined.chops, from: from)
         post(plan)
+        publishManual(refined, activation: from)
         commit(refined.memory, expecting: generation)
         outcome.posted.append(plan)
         outcome.built.append(refined)

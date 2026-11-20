@@ -13,6 +13,10 @@ import tree_sitter_swift
 root = Path(__file__).resolve().parents[1]
 paths = [
     'Liminal/Audio/GenerativeEngine.swift',
+    'Liminal/Audio/ArchiveVoice.swift',
+    'Liminal/Audio/Lofi/Dialogue/DialogueCueCoordinator.swift',
+    'LiminalTests/ControllerDialogueTests.swift',
+    'LiminalTests/ControllerDrumTests.swift',
     'Liminal/Audio/Layers/MusicLayer.swift',
     'Liminal/Audio/Lofi/LofiBus.swift',
     'Liminal/Audio/Lofi/LofiEffects.swift',
@@ -36,7 +40,14 @@ for path in paths:
                      if not line.strip().startswith(('#if', '#else', '#endif')))
     if parser.parse(data.encode()).root_node.has_error:
         failed.append(path)
-print(f'Normalized Swift syntax: {len(paths) - len(failed)} passed, {len(failed)} failed')
+# The unchanged full footage-service body has an existing grammar error in its async
+# optional-binding condition. Check the changed call fragment separately, without
+# claiming the full file was parsed or type checked.
+footage = (root / 'Liminal/Archive/ArchiveFootageService.swift').read_text()
+fragment = footage[footage.index('_ = await director.run('):footage.index('manualPost: { sink.post(.archiveControllerBank($0)) })') + len('manualPost: { sink.post(.archiveControllerBank($0)) })')]
+if parser.parse(('func check() async { ' + fragment + ' }').encode()).root_node.has_error:
+    failed.append('ArchiveFootageService changed call fragment')
+print(f'Normalized Swift syntax: {len(paths) + 1 - len(failed)} passed (including changed footage call fragment), {len(failed)} failed')
 for path in failed:
     print(path)
 raise SystemExit(bool(failed))

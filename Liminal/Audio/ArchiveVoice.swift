@@ -4,6 +4,7 @@ import SoundpipeAudioKit
 import AVFoundation
 import Foundation
 import OSLog
+import Darwin
 
 /// A static mix strip for normalised archive audio. During some cues, the direct
 /// sound and speech band open up briefly, then settle back into the shared reverb and tape delay.
@@ -38,13 +39,18 @@ nonisolated final class ArchiveVoice {
         let chops: [DialogueChop]
         /// The chops open drop windows in the film bed (the existing ducking).
         let bedDuck: Bool
+        let manualBank: ControllerDialogueBank?
+        var bankEpoch: ControllerBankEpoch? = nil
+        var bankActivation: Double = .infinity
+        var bankEnd: Double = -.infinity
 
-        init(token: Int, revision: Int, replaceFrom: Double = -.infinity, chops: [DialogueChop], bedDuck: Bool = true) {
+        init(token: Int, revision: Int, replaceFrom: Double = -.infinity, chops: [DialogueChop], bedDuck: Bool = true, manualBank: ControllerDialogueBank? = nil) {
             self.token = token
             self.revision = revision
             self.replaceFrom = replaceFrom
             self.chops = chops
             self.bedDuck = bedDuck
+            self.manualBank = manualBank
         }
     }
 
@@ -85,6 +91,91 @@ nonisolated final class ArchiveVoice {
 
     let source = BufferSource()
     let chops = BufferSource()
+    let manualChops = BufferSource()
+    let automaticChopGate: Fader
+    let manualChopGain: Fader
+    let controllerDialogue = ControllerDialogueState()
+    private var controllerAutomatic = true
+    private var manualBanks: [ControllerDialogueBank] = []
+    private var activeManualKey: String?
+    private var bankAnnouncements: [(epoch: ControllerBankEpoch, activation: Double, end: Double)] = []
+    private var manualLaunch: (bank: Int64, pad: Int, velocity: Float, start: Double, token: UUID)?
+    private var manualStopAt: Double?
+    private var manualDuckWindows: [Range<Double>] = []
+
+    /// Conductor-queue only; the automatic player and planning continue behind this gate.
+    func controllerSetAutomatic(_ automatic: Bool) {
+        controllerAutomatic = automatic
+        ParamRamp.setGain(automaticChopGate, automatic ? 1 : 0, over: 0.03)
+        controllerStopManual()
+        if !automatic { releaseMusicDuck() }
+    }
+
+    func controllerPrepareBank(_ bank: ControllerDialogueBank) {
+        guard !cancelledTokens.contains(bank.cueToken), bank.cueToken >= (currentCueToken ?? 0),
+              bankAnnouncements.contains(where: { $0.epoch.cueToken == String(bank.cueToken) &&
+                  $0.epoch.bankID == String(bank.bankID) && $0.epoch.planRevision == Int64(bank.planRevision) &&
+                  $0.epoch.transportRevision == bank.transportRevision }) else { return }
+        guard !manualBanks.contains(where: { $0.cueToken == bank.cueToken && $0.planRevision > bank.planRevision }) else { return }
+        manualBanks.removeAll { $0.cueToken == bank.cueToken && $0.planRevision == bank.planRevision }
+        manualBanks.append(bank)
+        let active = controllerDialogue.read().bank
+        let preserved = manualBanks.first { bank in active.map { $0.cueToken == bank.cueToken && $0.bankID == bank.bankID && $0.planRevision == bank.planRevision && $0.transportRevision == bank.transportRevision } == true }
+        let next = manualBanks.filter { bank in preserved.map { $0.cueToken != bank.cueToken || $0.planRevision != bank.planRevision || $0.bankID != bank.bankID } ?? true }
+            .max { $0.cueToken == $1.cueToken ? $0.planRevision < $1.planRevision : $0.cueToken < $1.cueToken }
+        manualBanks = [preserved, next].compactMap { $0 }
+    }
+
+    func controllerStopManual() {
+        manualLaunch = nil
+        manualDuckWindows.removeAll()
+        ParamRamp.setGain(manualChopGain, 0, over: 0.02)
+        manualStopAt = lastTime + 0.02
+    }
+
+    func controllerTrigger(bank: Int64, pad: Int, velocity: Float, start: Double, token: UUID) {
+        guard !controllerAutomatic, controllerDialogue.read().revision == bank,
+              controllerDialogue.read().bank?.pads.contains(where: { $0.index == pad }) == true else { return }
+        // Mono choke group. DSP/buffers were prepared on the utility worker.
+        ParamRamp.setGain(manualChopGain, 0, over: 0.02)
+        manualStopAt = lastTime + 0.02
+        manualLaunch = (bank, pad, velocity, start, token)
+    }
+
+    private func updateController(at t: Double) {
+        controllerDialogue.film(playing)
+        let now = transportNow(t)
+        manualBanks.removeAll { $0.cueToken < (currentCueToken ?? 0) || $0.end <= now || cancelledTokens.contains($0.cueToken) }
+        bankAnnouncements.removeAll { Int($0.epoch.cueToken).map { $0 < (currentCueToken ?? 0) } == true || $0.end <= now }
+        let announcement = bankAnnouncements.filter { $0.epoch.cueToken == currentCueToken.map(String.init) && $0.activation <= now }
+            .max { $0.epoch.planRevision < $1.epoch.planRevision }
+        let eligible = manualBanks.filter { bank in bank.cueToken == currentCueToken && bank.activation <= now &&
+            announcement.map { $0.epoch.bankID == String(bank.bankID) && $0.epoch.planRevision == Int64(bank.planRevision) && $0.epoch.transportRevision == bank.transportRevision } == true }
+        let chosen = eligible.max { $0.planRevision < $1.planRevision }
+        let key = chosen.map { "\($0.cueToken):\($0.bankID):\($0.planRevision):\($0.transportRevision)" }
+        if key != activeManualKey {
+            activeManualKey = key
+            controllerDialogue.publish(chosen)
+            // Retired banks cannot leave an unlaunched hit behind. Started hits may finish.
+            manualLaunch = nil
+        }
+        if let stop = manualStopAt, t >= stop { manualChops.player.stop(); manualStopAt = nil }
+        manualDuckWindows.removeAll { $0.upperBound < t - 1 }
+        guard manualStopAt == nil, let launch = manualLaunch else { return }
+        manualLaunch = nil
+        let snapshot = controllerDialogue.read()
+        guard !controllerAutomatic, snapshot.revision == launch.bank, let bank = snapshot.bank,
+              bank.cueToken == currentCueToken, let pad = bank.pads.first(where: { $0.index == launch.pad }),
+              launch.start >= now + 0.015 else { return }
+        let delay = launch.start - now
+        let latency = manualChops.player.outputPresentationLatency
+        guard delay >= latency + 0.01 else { return }
+        manualChops.player.scheduleBuffer(pad.buffer)
+        manualChops.player.play(at: AVAudioTime(hostTime: mach_absolute_time() + AVAudioTime.hostTime(forSeconds: delay - latency)))
+        ParamRamp.setGain(manualChopGain, launch.velocity, over: 0.005)
+        let start = t + delay
+        manualDuckWindows.append(start..<(start + Double(pad.buffer.frameLength) / pad.buffer.format.sampleRate))
+    }
     let bed: Fader
     /// The dry chop path: mono, centred, 0.72 (capture tap `dialogue-dry`).
     let chopDry: Fader
@@ -272,8 +363,8 @@ nonisolated final class ArchiveVoice {
     /// down ramp starts within half a step of 40 ms before the chop.
     private func blendSoundtrack(at time: Double) {
         let ahead = time + 0.01 + LofiBed.duckDown
-        let underDrop = dropWindows.contains { ahead >= $0.lowerBound && time + 0.01 < $0.upperBound }
-        let inReturn = beatLocked && inReturnDip(at: time)
+        let underDrop = (controllerAutomatic ? dropWindows : manualDuckWindows).contains { ahead >= $0.lowerBound && time + 0.01 < $0.upperBound }
+        let inReturn = controllerAutomatic && beatLocked && inReturnDip(at: time)
         var gain: Float = beatLocked ? (underDrop ? LofiBed.underChopGain : LofiBed.contextGain) : 1
         if inReturn { gain = min(gain, LofiBed.contextGain * LofiBed.returnDipGain) }
         guard gain != lastBedGain else { return }
@@ -358,9 +449,10 @@ nonisolated final class ArchiveVoice {
     /// Every conductor step in Lo-Fi (20 ms): the music duck and the bed's context gain follow the
     /// windows of queued featured chops. The attack starts 20 ms before the chop (within half a step).
     func updateDucks(at t: Double) {
+        updateController(at: t)
         guard beatLocked else { return }
         let probe = t + 0.01
-        let ducked = duckWindows.contains { probe + MusicDuck.lead >= $0.lowerBound && probe < $0.upperBound }
+        let ducked = (controllerAutomatic ? duckWindows : manualDuckWindows).contains { probe + MusicDuck.lead >= $0.lowerBound && probe < $0.upperBound }
         if ducked != musicDucked, let duck = musicDuck {
             let over = ducked ? MusicDuck.attack : MusicDuck.release
             ParamRamp.setGain(duck.lead, ducked ? dbToGain(MusicDuck.leadDB) : 1, over: over)
@@ -422,14 +514,17 @@ nonisolated final class ArchiveVoice {
     init(format: AVAudioFormat = Settings.audioFormat) {
         self.format = format
         bed = Fader(source)
-        chopDry = Fader(chops, gain: ChopBus.dryGain)
-        chopEcho = VariableDelay(chops, time: 0.64, feedback: ChopBus.echoFeedback, maximumTime: 2, dryWetMix: 1)
+        automaticChopGate = Fader(chops, gain: 1)
+        manualChopGain = Fader(manualChops, gain: 0)
+        let chopInput = Mixer(automaticChopGate, manualChopGain)
+        chopDry = Fader(chopInput, gain: ChopBus.dryGain)
+        chopEcho = VariableDelay(chopInput, time: 0.64, feedback: ChopBus.echoFeedback, maximumTime: 2, dryWetMix: 1)
         // Echo return: one 0.75-beat slap band-passed to 400 Hz-3 kHz, about 16 dB under the dry line.
         let echoBand = LowPassButterworthFilter(HighPassButterworthFilter(chopEcho, cutoffFrequency: ChopBus.echoBand.low),
                                                 cutoffFrequency: ChopBus.echoBand.high)
         chopEchoReturn = Fader(echoBand, gain: ChopBus.dryGain * dbToGain(ChopBus.echoUnderDryDB))
         // A small, dark room (mid RT about 0.9 s) returned through 300 Hz-4 kHz, about 20 dB under dry.
-        chopRoom = ZitaReverb(Mixer(chops, chopEchoReturn), predelay: 18, crossoverFrequency: 300,
+        chopRoom = ZitaReverb(Mixer(chopInput, chopEchoReturn), predelay: 18, crossoverFrequency: 300,
                               lowReleaseTime: ChopBus.roomLowRelease, midReleaseTime: ChopBus.roomMidRelease,
                               dampingFrequency: ChopBus.roomDamping, dryWetMix: 1)
         let roomBand = LowPassButterworthFilter(HighPassButterworthFilter(chopRoom, cutoffFrequency: ChopBus.roomBand.low),
@@ -510,6 +605,7 @@ nonisolated final class ArchiveVoice {
     private func adoptChopToken(_ requested: Int?) -> Int {
         let token = requested ?? (max(currentCueToken ?? 0, planRevisions.keys.max() ?? 0) + 1)
         currentCueToken = token
+        if controllerDialogue.read().bank?.cueToken != token { controllerDialogue.publish(nil); activeManualKey = nil; manualLaunch = nil }
         storedChops.removeAll { $0.token < token }
         planRevisions = planRevisions.filter { $0.key >= token }
         cancelledTokens = cancelledTokens.filter { $0 >= token }
@@ -545,6 +641,11 @@ nonisolated final class ArchiveVoice {
         }
         if let stored = planRevisions[plan.token], plan.revision <= stored { return }
         planRevisions[plan.token] = plan.revision
+        if let epoch = plan.bankEpoch {
+            bankAnnouncements.append((epoch, plan.bankActivation, plan.bankEnd))
+            bankAnnouncements = Array(bankAnnouncements.suffix(4))
+        }
+        if let bank = plan.manualBank { controllerPrepareBank(bank) }
         storedChops.removeAll { $0.token == plan.token && $0.start >= plan.replaceFrom }
         let queuedEnd = queuedChops.filter { $0.token == plan.token }.map(\.end).max() ?? -.infinity
         let incoming = plan.chops.map {
@@ -561,6 +662,7 @@ nonisolated final class ArchiveVoice {
     /// The footage service abandoned cue `token` (its bed never began, or footage stopped): its stored
     /// chops and revisions go, and any later plan for it is ignored. Queued audio is never moved.
     func cancelChops(token: Int) {
+        if controllerDialogue.read().bank?.cueToken == token { manualLaunch = nil; controllerDialogue.publish(nil); activeManualKey = nil }
         if let current = currentCueToken, token < current { return }
         cancelledTokens.insert(token)
         let before = storedChops.count
@@ -656,6 +758,7 @@ nonisolated final class ArchiveVoice {
 
     /// Fade out over `fade` seconds; the player stops once the fade is complete.
     func end(fade: Double, now: Double) {
+        controllerStopManual()
         pending = nil
         guard playing else { return }
         strip.fade(to: 0, over: fade, now: now)
@@ -689,6 +792,9 @@ nonisolated final class ArchiveVoice {
 
     /// Engine stop and reset: the bed and the chop timeline stop.
     func powerDown() {
+        controllerStopManual(); manualChops.player.stop()
+        manualBanks.removeAll(); bankAnnouncements.removeAll(); activeManualKey = nil; controllerDialogue.publish(nil); controllerDialogue.film(false)
+
         stopChopTimeline()
         retireCurrentCue()
         chopsUntil = -.infinity
@@ -721,6 +827,7 @@ nonisolated final class ArchiveVoice {
     /// 10 Hz with the other strips.
     func modulate(t: Double) {
         lastTime = t
+        if !beatLocked { updateController(at: t) }
         queueDueChops(at: t)
         if playing {
             // A buffer that ran out (it ends with its own 80 ms fade) is released like a finished fade.

@@ -12,6 +12,9 @@ final class LofiBus {
     let wet = ArchiveVoice.BufferSource()
     let isolated = (0..<3).map { _ in ArchiveVoice.BufferSource() }
     let strips: [ControllerChannel: ControllerChannelStrip]
+    let performanceDrums = (0..<2).map { _ in ArchiveVoice.BufferSource() }
+    let performanceDrumGains: [Fader]
+    let automaticDrumGain: Fader
     private let isolatedStrips: [ControllerChannelStrip]
     private let legacyWet: Fader
     private let independentWet: Fader
@@ -27,7 +30,10 @@ final class LofiBus {
 
     init(gain: Float, dialogue: Fader, isolatedPreparationEnabled: Bool = LofiBus.isolatedPreparationQualified) {
         self.isolatedPreparationEnabled = isolatedPreparationEnabled
-        let drum = ControllerChannelStrip(drums), bassStrip = ControllerChannelStrip(bass)
+        automaticDrumGain = Fader(drums, gain: 1)
+        performanceDrumGains = performanceDrums.map { Fader($0, gain: 0) }
+        let drum = ControllerChannelStrip(automaticDrumGain), bassStrip = ControllerChannelStrip(bass)
+        for source in performanceDrumGains { drum.manualInput.addInput(source) }
         let lead = ControllerChannelStrip(dry), mids = ControllerChannelStrip(texture)
         isolatedStrips = isolated.map { ControllerChannelStrip($0) }
         legacyWet = Fader(wet, gain: 1)
@@ -64,8 +70,8 @@ final class LofiBus {
         return true
     }
     @discardableResult func setAutomatic(_ channel: ControllerChannel, enabled: Bool) -> Bool {
-        guard controlsReady(channel), ![ControllerChannel.lofiSpace, .chops].contains(channel), let strip = strips[channel] else { return false }
-        strip.setAutomatic(enabled)
+        guard controlsReady(channel), channel != .lofiSpace, let strip = strips[channel] else { return false }
+        strip.setAutomatic(enabled, gateSource: channel != .chops)
         if let index = sourceIndex(channel) { isolatedStrips[index].setAutomatic(enabled) }
         updateWetSelection()
         return true

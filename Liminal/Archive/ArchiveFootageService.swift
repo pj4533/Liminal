@@ -317,7 +317,8 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
             guard !Task.isCancelled else { return }
             _ = await director.run(source: source, window: window, seed: seed, transport: sink.transport,
                                    isCurrent: { [weak self] in self?.isCurrentAudio(token) ?? false },
-                                   post: { sink.post(.archiveChops($0)) })
+                                   post: { sink.post(.archiveChops($0)) },
+                                   manualPost: { sink.post(.archiveControllerBank($0)) })
         }
         let previous = dialogueTask.withLock { current -> Task<Void, Never>? in
             defer { current = (token, task) }
