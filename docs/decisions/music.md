@@ -699,3 +699,10 @@ Made while building PASS 1 (conductor, harmony, scenes, mix bus, drone/pad/lead/
   - Breakdown phrases now match their mid shells to the lead like every other section. They used to keep the nominal `midsTrim`. C-B5 then read +3.05 dB.
   - `ArchiveVoice.LofiBed` context and under-chop gains came down 0.5 dB (2.35 to 2.22, 1.749 to 1.651). The bed is again at least 10 dB under the music.
   - After both changes, every fail-level criterion passes except C-B2, which fails the same way before this change. Master -12.9 LUFS.
+
+## D115. Bass on the kick's body, landmark-keyed ducks, a released space duck, and master staging (2026-11-20)
+- What: a structural bass accent aligns its own 40-160 Hz rise to the kick's (`LofiDrumLandmark.lowRiseFrame`). The bass duck is keyed by the take's confident kick landmarks (depth by the square root of relative strength), and the level detector is the fallback. The space duck takes its onsets from the scored lead notes, and the space carries a -1.5 dB trim. The chop chain gets a -2 dB, Q 2 dip at 650 Hz. In the Lo-Fi profile the master bus takes both branches in at -2 dB and the finisher input is +6 dB.
+- Why: aligning the bass's 20 percent point to the kick's click put the bass bodies 10 to 11 ms ahead of the kick bodies. The adaptive detector skipped second kicks of doubles (C-B2 duck -0.48 dB at 72 BPM). The space duck held 3.1 to 3.6 dB of its 4 dB all the time. The pre-master peaked up to +0.9 dBFS.
+- Evidence: lag median 1.3 to 3.9 ms (p90 2.6 to 10.2) on every case, from 10 to 11 ms; the bass duck reads 2.3 to 3.5 dB; space GR mean 0.8 to 1.8 dB with 4 dB on onsets; pre-master -2.9 to -4.4 dBFS; LUFS and true peak within 0.05 dB (`plans/mpc-chopping-measurements.md`, "Mix DSP finish").
+- Not done: more lead level, a brighter lead presence, or a firmer lead compressor (user direction: melody instruments tuck in). Drum dips that pushed chop consonants forward contradicted the tuck pass.
+- Alternatives: a lower detector threshold (still level-based, and it ducks on toms and bleed); a single fader after the input mixer (the pre-master tap would still read the hot sum).

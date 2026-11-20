@@ -305,7 +305,43 @@ Sources: [Sage Audio](https://www.sageaudio.com/articles/how-to-mix-vocals-into-
 
 The approval capture passes (0.38, 0.27, +0.18 dB). The calibrated capture now fails it.
 
-**Open, pre-existing.** C-B2 fails on this 72 BPM private-drums capture both before and after these changes. The bass duck under the kick reads -0.48 dB against 1.5 to 4.5. The matrix cases pass it.
+**Open, pre-existing.** C-B2 fails on this 72 BPM private-drums capture both before and after these changes. The bass duck under the kick reads -0.48 dB against 1.5 to 4.5. The matrix cases pass it. Resolved on 20 November 2026; see "Mix DSP finish".
+
+## Mix DSP finish (20 November 2026, after the tuck pass)
+
+Branch `pkg/mix-dsp-finish` from `feature/mpc-chopping` at `7939fc7`, with the unfinished work of `pkg/fix1-B-mix-dsp` (`39a8c9e`) brought in. Measured on `68a59ce`. The tuck chain, the chop level and the film bed are unchanged except for one narrow dip (below). User direction during the package: melody instruments tuck in too, so the lead gets band separation only, never more level or a brighter presence.
+
+**Changes:**
+- **Bass on the kick (C-B2).** Kick landmarks gain `lowRiseFrame`, the 40-160 Hz half-amplitude rise (zero-phase band, 2 ms RMS, searched from 30 ms before to 80 ms after the attack and never past the next kick). A structural accent puts the voice's own low-band rise (`LofiBassVoice.lowRiseLead`) on it, instead of its 20 percent point on the kick's click. The drum audio never moves. The renderer diagnostics keep `attackFrame` and `alignedKickFrame` and add `kickLowRiseFrame`, `bassLowRiseFrame` (measured on the finished bass stem) and `plannedBassLowRiseFrame`.
+- **Kick duck on the bass (C-B2).** The level detector's adaptive threshold (1.8 times a 235 ms background) skipped the second kick of a double. On the 72 BPM take every second kick inside a sustained note got no duck, and the bass was still rising out of the first kick's duck (measured -0.48 dB, emulated -0.23 dB). The duck is now keyed by the take's confident kick landmarks (0.5 or more): from the attack to 40 ms after the low-band rise, depth 4 dB times the square root of the kick's strength against the take's median kick, then the same 3 ms attack and 100 ms release. Linear strength scaling read 1.48 dB on `long`, whose sustained-note kicks are soft (0.3 of the median). The detector remains for a take without landmarks.
+- **Space duck (C-B7, brief item 3).** Keyed on the scored lead onsets: full 4 dB for 30 ms after an onset, decaying over 150 ms to a quarter of the depth while notes sustain, open in rests (2 ms attack, 30 ms hold, 100 ms release, 6 dB knee). The WIP's block-peak onset test never fired on the sampled leads, whose attacks rise over several 32-frame blocks. A -1.5 dB static space trim (also on the carried tail) replaces the part of the old pinned duck that acted as a trim.
+- **Lead against the chops (brief item 1).** A -2 dB dip at 650 Hz, Q 2, in the chop chain at the lead's 500 Hz to 1 kHz body. The WIP's lead lift (+2.5 dB), 1.8 kHz presence bell, firmer lead compressor (3:1 from 5 dB measured the lead 0.7 to 1 dB quieter) and drum dips for chop consonants were all dropped. The lead stem is within 0.3 dB of clip9 in every octave.
+- **Gain staging (brief item 4).** In the Lo-Fi profile both branches enter the master bus at -2 dB (`LofiMasterBus.lofiStagingDB`) and the finisher input rises from +4 to +6 dB. Captures report `masterDynamics.preMasterStagingDb`, and the routing check applies it.
+- **Not done (warn level, not free).** C-M11's sub-25 Hz energy is the kick's 20 to 35 Hz skirt (the drums carry it, 41 dB under the master total). Reaching 50 dB needs a steeper drum high-pass that thins the kick. C-M5's crest (13.2 to 13.5 dB) needs more limiting.
+
+**Results.** User config: 32 bars, 72 BPM, seed 2077, private drums, film reel, `--transcribe`. "Before" is the approved tucked capture `clip9`; `tip` is the feature branch at `6f259e7`, captured the same way for reference.
+
+| Capture | Lag median / p90 ms | Bass duck dB | Kick + bass sum dB | Space GR mean dB (per phrase) | Pre-master peak dBFS | LUFS | dBTP | Lead under dialogue | Chop 1-4 kHz SNR dB | Lead minus space dB |
+|---|---|---|---|---|---|---|---|---|---|---|
+| clip9 (before) | 9.96 / 11.39 | -0.48 | +0.57 | 3.3-3.5 | -1.16 | -12.89 | -1.20 | 46% | +0.18 | 5.15 |
+| final, 72 BPM | 1.29 / 2.65 | 2.37 | +0.67 | 0.8-1.7 | -3.64 | -12.86 | -1.20 | 41% | +1.12 | 3.17 |
+| tip, long | 11.29 / 13.61 | 3.05 | +1.15 | 3.2-3.7 | -1.36 | -13.35 | -1.20 | 35% | +4.14 | 6.36 |
+| final, long | 3.91 / 10.15 | 2.31 | +0.84 | 0.9-1.7 | -3.17 | -13.34 | -1.20 | 32% | +4.66 | 5.00 |
+| tip, fast | 11.03 / 13.13 | 1.64 | +1.14 | 3.2-3.5 | -1.82 | -12.58 | -1.10 | 48% | +4.25 | 8.63 |
+| final, fast | 2.50 / 5.10 | 3.53 | +1.14 | 1.1-1.7 | -4.40 | -12.57 | -1.20 | 48% | +4.63 | 6.68 |
+| final, ref | 1.44 / 3.92 | 2.62 | +1.06 | 0.8-1.6 | -3.22 | -12.70 | -1.20 | 38% | -2.08 | 5.80 |
+| final, same | 3.92 / 7.42 | 2.27 | +0.67 | 0.8-1.8 | -2.91 | -12.76 | -1.20 | 32% | +1.13 | 5.17 |
+| final, nofilm | 1.44 / 3.52 | 2.62 | +0.91 | 0.9-1.6 | -3.40 | -13.34 | -1.20 | - | - | 5.66 |
+
+The space duck still reaches 4 dB on onsets in every phrase. The kick attack-time ratio through the drum bus (C-B4, now measured) is 1.10.
+
+The chops' octave bands (125 Hz to 8 kHz) in the final 72 BPM capture are within 0.5 dB of clip9. The lead is within 0.3 dB, the mids within 0.6 dB, the space -0.4 to +0.2 dB, and drums, bass and bed are unchanged.
+
+**Criteria still failing, all present on the feature tip as well:**
+- **C-B8 on `long` and `fast`.** The chops sit +4.1 to +4.3 dB over the music in 1 to 4 kHz on the tip, and +4.6 here, because the space trim lowers the music by a fraction of a dB. The bound is +2.5. The tuck was calibrated on the 72 BPM capture only. Moving the chops 2 dB down everywhere would take the approved 72 BPM chops 2 dB from clip9, so this needs a tempo- or film-dependent answer in the chop level, outside this package.
+- **C-D6 and C-D9 alternate on the 72 BPM `--transcribe` capture, and fail on `fast`.** When on-device transcription of the first cue takes 0.7 to 1.4 s, the simulated live plan either commits about 30 ms after its first event (C-D6) or starts in bar 2, leaving bar 1 empty (C-D9). The tip shows the same (`tip-72`: C-D9). `fast` fails C-D6 (lead 0.06 s) and C-D9 (occupancy 0.62) on the tip too. These are dialogue runtime and plan measures that these changes do not touch.
+
+Commands: `DD=$S/dd-mixfinish scripts/mix-matrix.sh --out $S/matrix-final --baseline $S/baseline --strict`; `scripts/check-lofi.sh --out $S/final-72 --bars 32 --bpm 72 --seed 2077 --private-drums --film-reel --transcribe`; then `python3 scripts/mix-report.py $S/final-72 --baseline $S/baseline/ref --no-plots --strict`.
 
 ## Future: non-word fallback for fresh chops (user idea, 19 November 2026, not built)
 
@@ -330,7 +366,7 @@ A possible shape:
 
 ## Remaining risks
 
-- The pre-master sum peaks at +0.9 dBFS on `ref` (it was +0.1 at `d6cdb1d` and +1.7 at the baseline). The graph is floating point and the finisher's input gain, glue, clip and limiter come after it, so nothing clips, but the gain staging is 2 dB hotter than the brief's guide. Lowering the Lo-Fi bus and raising the finisher input by the same amount would fix it without changing the sound; that touches `LofiPlayback` and the profile switch, outside this package.
+- Resolved 2026-11-20 (D115): the pre-master sum peaked at +0.9 dBFS on `ref`. The master bus now stages both branches 2 dB lower in the Lo-Fi profile and the finisher input makes it up; the pre-master peaks at -2.9 to -4.4 dBFS.
 - Resolved 2026-11-19 (D113): the return dip no longer relies on the motif plan's block and slot fields. A take that plays no chops (no speech) dips from the transport or the phrase callback.
 - C-B9 audibility (0.13 to 0.21) is close to its new floor on `same`. A brighter or louder film can move it either way; the 10 dB rule has 0.8 dB of margin on `ref`.
 - C-B5 measures short overlaps (0.2 to 0.7 s per phrase), so single notes move it by several dB; the matrix spread is 6.4 to 7.1 dB.

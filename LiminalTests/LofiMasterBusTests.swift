@@ -220,7 +220,12 @@ struct LofiMasterBusTests {
             #expect(Self.db(reconstructed) <= -1.0)
             #expect(sample <= ceiling)
         }
-        let drive = master.lofiFinisherSettings.inputGainDB
+        // Both branches enter at the staging gain and the finisher input makes it up: the net drive is the
+        // +4 dB chosen before the gain staging change of 19 November 2026.
+        let drive = master.lofiFinisherSettings.inputGainDB + LofiMasterBus.lofiStagingDB
+        #expect(abs(drive - 4) < 1e-4)
+        #expect(abs(master.archiveTrim.gain - dbToGain(LofiMasterBus.lofiStagingDB)) < 1e-6)
+        #expect(abs(master.lofiTrim.gain - dbToGain(LofiMasterBus.lofiStagingDB)) < 1e-6)
         #expect(quiet > drive - 1 && quiet < drive + 0.5)
         #expect(loud < quiet - 1.0)
         let meters = master.finisher.meters

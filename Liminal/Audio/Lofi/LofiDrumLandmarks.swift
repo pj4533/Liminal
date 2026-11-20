@@ -12,6 +12,19 @@ nonisolated struct LofiDrumLandmark: Sendable, Equatable {
     let strength: Float
     /// How clearly the spectrum after the attack matches `kind`, 0...1.
     let confidence: Float
+    /// Kicks: where the 40-160 Hz body reaches half its amplitude (`LofiDrumLandmarks.lowBandRise`),
+    /// 7 to 15 ms after the broadband `attackFrame` on AJ Hall's takes. The bass aligns its own low-band
+    /// rise to this frame. Other kinds, and kicks without a measurable body, use `attackFrame`.
+    let lowRiseFrame: Int
+
+    init(kind: Kind, attackFrame: Int, peakFrame: Int, strength: Float, confidence: Float, lowRiseFrame: Int? = nil) {
+        self.kind = kind
+        self.attackFrame = attackFrame
+        self.peakFrame = peakFrame
+        self.strength = strength
+        self.confidence = confidence
+        self.lowRiseFrame = lowRiseFrame ?? attackFrame
+    }
 }
 
 /// Multiband superflux onset detector for full drum takes. It runs once per take, off the audio
@@ -121,7 +134,91 @@ nonisolated enum LofiDrumLandmarks {
             }
         }
         try Task.checkCancellation()
-        return classify(candidates, x, count: count, sampleRate: sampleRate)
+        let classified = classify(candidates, x, count: count, sampleRate: sampleRate)
+        let kickAttacks = classified.filter { $0.kind == .kick }.map(\.attackFrame)
+        return try classified.map { landmark in
+            guard landmark.kind == .kick else { return landmark }
+            try Task.checkCancellation()
+            // The body of a kick never rises before its own click; one closer than that is the ring
+            // of an earlier hit (a double), so the attack itself is kept. The search stops at the next
+            // kick, whose body would otherwise be the window's maximum in a fast double.
+            let next = kickAttacks.first { $0 > landmark.attackFrame }
+            let rise = lowBandRise(x, count: count, around: landmark.attackFrame, sampleRate: sampleRate, until: next)
+                .flatMap { $0 >= landmark.attackFrame ? $0 : nil }
+            return LofiDrumLandmark(kind: landmark.kind, attackFrame: landmark.attackFrame, peakFrame: landmark.peakFrame,
+                                    strength: landmark.strength, confidence: landmark.confidence, lowRiseFrame: rise)
+        }
+    }
+
+    // MARK: Low-band rise
+
+    enum LowRise {
+        /// Band of the kick body and the bass fundamental: 4th-order Butterworth high- and low-pass.
+        static let low = 40.0, high = 160.0
+        /// The rise is searched from `before` to `after` seconds around the hit's attack.
+        static let before = 0.030, after = 0.080
+        /// Filter run-in on each side of the search window, so the zero-phase pass starts settled.
+        static let margin = 0.080
+        /// RMS window of the band envelope.
+        static let rmsSeconds = 0.002
+        /// Share of the window's envelope maximum that marks the rise (-6 dB).
+        static let share: Float = 0.5
+    }
+
+    /// The frame in `[center - before, center + after)` where the zero-phase 40-160 Hz envelope (2 ms
+    /// RMS) rises through `share` (default half) of its maximum over that window on the way to that
+    /// maximum, or nil when the band is silent. `until` ends the window earlier (the next kick). The same measure
+    /// is used for a kick in a take and for a bass voice's own attack, so the two can be aligned. Runs on
+    /// a short segment around `center`, off the audio thread.
+    static func lowBandRise(_ x: UnsafePointer<Float>, count: Int, around center: Int, sampleRate: Double,
+                            share: Float = LowRise.share, until limit: Int? = nil) -> Int? {
+        guard count > 0, sampleRate > 0 else { return nil }
+        let margin = Int(LowRise.margin * sampleRate)
+        let windowStart = max(0, center - Int(LowRise.before * sampleRate))
+        let windowEnd = min(count, center + Int(LowRise.after * sampleRate), limit ?? count)
+        guard windowEnd > windowStart else { return nil }
+        let start = max(0, windowStart - margin), end = min(count, windowEnd + margin)
+        var band = Array(UnsafeBufferPointer(start: x + start, count: end - start))
+        let q = (0.541_196_100_146_197, 1.306_562_964_876_377)
+        let kinds: [LofiBiquad.Kind] = [.highpass(hz: LowRise.low, q: q.0), .highpass(hz: LowRise.low, q: q.1),
+                                        .lowpass(hz: LowRise.high, q: q.0), .lowpass(hz: LowRise.high, q: q.1)]
+        // Forward, then backward: zero phase, so the rise frame carries no filter delay.
+        band.withUnsafeMutableBufferPointer { b in
+            var forward = LofiFilterChain(kinds, sampleRate: sampleRate)
+            forward.process(b.baseAddress!, count: b.count)
+            b.reverse()
+            var backward = LofiFilterChain(kinds, sampleRate: sampleRate)
+            backward.process(b.baseAddress!, count: b.count)
+            b.reverse()
+        }
+        // Centered running power over `rmsSeconds` (Accelerate: squares, then a sliding sum), compared
+        // as power so no square root is needed: half the amplitude is a quarter of the power.
+        let w = max(1, Int(LowRise.rmsSeconds * sampleRate))
+        let lo = windowStart - start, hi = windowEnd - start
+        let first = max(0, lo - w / 2), last = min(band.count, hi - w / 2 + w)
+        guard last - first >= w else { return nil }
+        var squares = [Float](repeating: 0, count: last - first)
+        band.withUnsafeBufferPointer { b in
+            vDSP_vsq(b.baseAddress! + first, 1, &squares, 1, vDSP_Length(last - first))
+        }
+        let sums = max(1, squares.count - w + 1)
+        var power = [Float](repeating: 0, count: sums)
+        vDSP_vswsum(squares, 1, &power, 1, vDSP_Length(sums), vDSP_Length(w))
+        // power[k] covers [first + k, first + k + w), centered on frame first + k + w / 2.
+        let k0 = max(0, lo - w / 2 - first), k1 = min(sums, hi - w / 2 - first)
+        guard k1 > k0 else { return nil }
+        var peak: Float = 0
+        power.withUnsafeBufferPointer { vDSP_maxv($0.baseAddress! + k0, 1, &peak, vDSP_Length(k1 - k0)) }
+        guard peak > 1e-14 * Float(w) else { return nil }
+        // The crossing on the rise into the window's maximum: walk back from the peak to the last frame
+        // under the threshold. A first-crossing search would stop on an earlier note still ringing at the
+        // window's start.
+        let threshold = share * share * peak
+        var top = k0
+        for k in k0..<k1 where power[k] >= peak { top = k; break }
+        var k = top
+        while k > k0, power[k - 1] >= threshold { k -= 1 }
+        return start + first + k + w / 2
     }
 
     // MARK: Novelty

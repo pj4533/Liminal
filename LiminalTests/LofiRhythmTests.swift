@@ -150,6 +150,41 @@ struct LofiRhythmTests {
         #expect(landmarks.allSatisfy { $0.peakFrame >= $0.attackFrame })
     }
 
+    /// A kick's low-band rise follows its beater click, and a bass voice started `lowRiseLead` before
+    /// that rise reaches its own low-band half amplitude on the same frame (the bass-to-kick alignment).
+    @Test func kickLowRiseFollowsTheClickAndTheBassBodyLandsOnIt() throws {
+        let rate = 48_000.0
+        let take = Self.synthetic(rate: rate)
+        let landmarks = try detect(take.mono, rate: rate)
+        let kicks = landmarks.filter { $0.kind == .kick }
+        #expect(!kicks.isEmpty)
+        for kick in kicks {
+            let delay = Double(kick.lowRiseFrame - kick.attackFrame) * 1000 / rate
+            #expect((0...30).contains(delay), "kick at \(kick.attackFrame): low rise \(delay) ms after attack")
+        }
+        #expect(landmarks.filter { $0.kind != .kick }.allSatisfy { $0.lowRiseFrame == $0.attackFrame })
+        let clock = LofiClock(tempo: 70, sampleRate: rate)
+        for voice in LofiBassVoice.allCases {
+            for midi in [28, 36, 43] {
+                let lead = voice.lowRiseLead(midi: midi, sampleRate: rate)
+                #expect((-0.005...0.04).contains(lead), "\(voice) MIDI \(midi): low rise \(lead * 1000) ms")
+                // Place the note so its low rise lands on frame 12 000.
+                let target = 12_000
+                let start = Double(target) / rate - lead
+                var left = [Float](repeating: 0, count: 36_000), right = left
+                let note = LofiScore.Note(part: .bass, midi: midi, beat: start / clock.beatDuration, length: 0.5, velocity: 0.8)
+                left.withUnsafeMutableBufferPointer { l in
+                    right.withUnsafeMutableBufferPointer { r in LofiBassVoice.add(note, voice: voice, clock: clock, left: l, right: r) }
+                }
+                let center = clock.frame(at: note.beat) + Int((voice.attackLead * rate).rounded())
+                let rise = try #require(left.withUnsafeBufferPointer {
+                    LofiDrumLandmarks.lowBandRise($0.baseAddress!, count: $0.count, around: center, sampleRate: rate)
+                })
+                #expect(abs(rise - target) <= Int(0.0005 * rate), "\(voice) MIDI \(midi): rise at \(rise), wanted \(target)")
+            }
+        }
+    }
+
     /// Single-sample clicks at known positions: the stored attack has no window or filter delay.
     @Test(arguments: [44_100.0, 48_000.0])
     func aClickTrackVerifiesLatencyCompensation(rate: Double) throws {

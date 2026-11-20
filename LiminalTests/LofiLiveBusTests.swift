@@ -430,7 +430,7 @@ struct LofiLiveBusTests {
 
     @Test func chopChainResponseMatchesItsDesign() {
         for texture in [false, true] {
-            for hz in [100.0, 300, 3000, 9000] {
+            for hz in [100.0, 300, 650, 3000, 9000] {
                 var x = tone(hz, seconds: 0.6)
                 let input = rms(x, 0.3, 0.6)
                 DialogueChopChain.process(&x, texture: texture, sampleRate: Self.rate, dynamics: [])
@@ -444,7 +444,10 @@ struct LofiLiveBusTests {
         #expect(design(60) < -20)                              // 18 dB per octave below 200 Hz
         #expect(design(300) < -4 && design(300) > -9)          // the low-mid cut over the high-pass skirt
         #expect(design(2800) < -3 && design(2800) > -8)        // a 2.8 kHz cut, not a presence boost
-        #expect(design(1000) > -1.5 && design(1000) < 1)       // the words' core band is left alone
+        // The words' core band is left nearly alone: -1.4 dB from the cuts' skirts, -1.9 dB with the lead's
+        // 650 Hz dip (19 November 2026; the SII proxy measured 0.38 before and 0.39 after on the 72 BPM capture).
+        #expect(design(1000) > -2 && design(1000) < 1)
+        #expect(design(650) < design(1000) - 1)                // the narrow dip at the lead's body
         #expect(design(9000) < -12)                            // 4.2 kHz low-pass
         #expect(DialogueChopChain.magnitudeDB(at: 7000, texture: true, sampleRate: Self.rate) < design(7000) - 3)
     }

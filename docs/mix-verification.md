@@ -145,7 +145,7 @@ ArchiveVoice  bed:  film source -> Fader [film-soundtrack]                      
                     reverb and delay sends, pan) -> MixBus: direct [footage-dry], tape delay                 |
                     [footage-delay], room [footage-room] -> output [footage] ------------------------------+
                                                                                                            |
-pre-master = lofi + footage   [pre-master] -> glue (Apple, bypassed in the lofi profile) [glue]
+pre-master = staging x (lofi + footage)   [pre-master] -> glue (Apple, bypassed in the lofi profile) [glue]
           -> trim [master-in] -> Apple limiter (bypassed in the lofi profile)
           -> LofiMasterFinisher: glue, soft clip, true-peak limiter  (gain-reduction trace -> master-gr.csv)
           -> output [master]
@@ -170,7 +170,7 @@ pre-master = lofi + footage   [pre-master] -> glue (Apple, bypassed in the lofi 
 | `footage-dry.wav`, `footage-delay.wav`, `footage-room.wav` | the three returns of the footage mix bus | bed direct-to-wet (M12) |
 | `footage.wav` | footage mix bus output (the whole treated bed) | bed section |
 | `lofi.wav` | Lo-Fi bus output: drums, bass, dry, texture, wet and dialogue-chops summed | routing identity (M16) |
-| `pre-master.wav` | master bus input: `lofi` plus `footage` | routing identity, inferred gain trace |
+| `pre-master.wav` | master bus input: `lofi` plus `footage`, both at the staging gain (`masterDynamics.preMasterStagingDb`, -2 dB in the lofi profile since 19 November 2026; 0 dB in older captures) | routing identity, inferred gain trace |
 | `glue.wav` | after the Apple glue compressor (a copy of the input in the lofi profile) | reference |
 | `master-in.wav` | after the master trim, the input of the finisher | reference |
 | `master.wav` | master output | everything on the master |
@@ -345,7 +345,7 @@ Only windows that are complete in the scored length are compared (a 32-bar captu
 
 ### M16 Routing (`routing`)
 
-From `analysis.json`: the largest absolute residual of `drums + bass + dry + texture + wet + dialogue-chops - lofi` and of `lofi + footage - pre-master`, over every sample. Both must be 2e-6 or less. A larger value means a stem was tapped at the wrong point or a node is missing from the sum.
+From `analysis.json`: the largest absolute residual of `drums + bass + dry + texture + wet + dialogue-chops - lofi` and of `g (lofi + footage) - pre-master`, over every sample, where g is the master bus staging gain from `masterDynamics.preMasterStagingDb` (0 dB when absent). Both must be 2e-6 or less. A larger value means a stem was tapped at the wrong point or a node is missing from the sum.
 
 ### M17 Lead salience in every phrase (`leadSalience`)
 

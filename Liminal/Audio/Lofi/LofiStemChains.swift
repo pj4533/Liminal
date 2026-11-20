@@ -81,10 +81,16 @@ nonisolated enum LofiStemChains {
 
     /// Dry lead, per phrase (plan 8.4). Complements the renderer's one gain per phrase.
     struct Lead: Sendable, Equatable {
+        /// The 2.8 kHz presence bell (+1.5 dB) sits in the tucked chops' -4 dB cut at 2.8 kHz
+        /// (`DialogueChopChain`); the chops in turn leave a narrow dip at the lead's body (`leadRoomHz`).
+        /// User direction of 19 November 2026: the melody tucks in, so the lead gets no extra level or
+        /// brighter presence against the chops, only this band separation.
         var filters: [LofiBiquad.Kind] = [
             .highpass(hz: 180, q: butterworthQ), .peak(hz: 350, q: 1.0, gainDB: -2),
             .peak(hz: 2_800, q: 0.8, gainDB: 1.5), .lowpass(hz: 9_000, q: butterworthQ),
         ]
+        /// Kept at 2.5:1 from 4 dB (0.4 to 0.7 dB mean): 3:1 from 5 dB measured the lead 0.7 to 1 dB quieter
+        /// on 19 November 2026, against the direction that the melody keeps its level.
         var compressor = Dynamics(ratio: 2.5, kneeDB: 4, attack: 0.015, release: 0.150, thresholdBelowReferenceDB: 4)
         var dynamicsEnabled = true
         static let standard = Lead()
@@ -109,13 +115,29 @@ nonisolated enum LofiStemChains {
             .highpass(hz: 350, q: butterworthQ), .lowpass(hz: 4_500, q: butterworthQ),
             .peak(hz: 2_500, q: 1.0, gainDB: -2),
         ]
-        /// Duck keyed by the dry lead so notes are heard dry first.
+        /// Duck keyed by the dry lead so notes are heard dry first and the room blooms after them.
         var duckDepthDB: Float = 4
-        var duckAttack = 0.010
-        var duckRelease = 0.250
-        /// Full depth when the lead envelope is within `duckKneeDB` of its strong-note level,
-        /// none `2 * duckKneeDB` below it.
-        var duckKneeDB: Float = 9
+        /// Envelope follower of the lead's block peaks: fast attack, a short hold, then release.
+        var duckAttack = 0.002
+        var duckHold = 0.030
+        var duckRelease = 0.100
+        /// The level term: full when the lead envelope reaches its strong-note level (the phrase's
+        /// reference), none `duckKneeDB` below it.
+        var duckKneeDB: Float = 6
+        /// Sustain share of the depth. A note onset (a block peak `duckOnsetJumpDB` over the envelope,
+        /// above the knee) opens the rest of the depth for `duckOnsetHold`, which then decays with
+        /// `duckOnsetDecay`. The pinned duck before 19 November 2026 (9 dB knee, 250 ms release) held 3.1
+        /// to 3.6 dB of its 4 dB in every phrase, a static trim rather than a duck; this shape measured
+        /// 1.5 to 1.6 dB mean (at most 2.0 in a phrase) on the same dry stems, with the full 4 dB on onsets.
+        var duckSustainShare: Float = 0.25
+        var duckOnsetHold = 0.030
+        var duckOnsetDecay = 0.15
+        var duckOnsetJumpDB: Float = 3
+        /// Static level of the space after the duck, -1.5 dB (19 November 2026). The pinned duck held
+        /// 3.1 to 3.6 dB all the time, so part of it was really a trim; with the duck released between
+        /// notes this keeps the space under the lead (C-B7) and near its former overall level.
+        var outputTrimDB: Float = -1.5
+        var outputGain: Float { powf(10, outputTrimDB / 20) }
         static let standard = Space()
     }
 
@@ -346,23 +368,58 @@ nonisolated enum LofiStemChains {
         return stats
     }
 
-    /// The space duck: a linear gain per frame keyed by the dry lead's envelope (attack and release
-    /// from `settings`), full depth near the lead's strong-note level. Scale invariant, so the dry
-    /// stem at any fader gives the same curve.
+    /// The space duck: a linear gain per frame keyed by the dry lead. The depth is the level term
+    /// (the lead's envelope against its strong-note reference over `duckKneeDB`) times the onset
+    /// term (`duckSustainShare` during a sustain, full just after a note onset). It reaches full
+    /// depth only on strong onsets, eases during sustains and releases fully between lead phrases.
+    /// Scale invariant, so the dry stem at any fader gives the same curve.
+    ///
+    /// `onsets` (frames of the scored lead notes) key the onset term. Without them a block peak
+    /// `duckOnsetJumpDB` over the envelope counts as an onset; that detector misses the gradual attacks of
+    /// the sampled leads (32-frame blocks), so the renderer always passes the score.
     static func spaceDuck(leadLeft: UnsafePointer<Float>, leadRight: UnsafePointer<Float>, count: Int,
-                          sampleRate: Double, settings: Space = .standard) -> (gain: [Float], meanDB: Float, maxDB: Float) {
+                          sampleRate: Double, onsets: [Int]? = nil,
+                          settings: Space = .standard) -> (gain: [Float], meanDB: Float, maxDB: Float) {
         guard count > 0 else { return ([], 0, 0) }
+        let onsetBlocks = onsets.map { Set($0.filter { (0..<count).contains($0) }.map { $0 / blockFrames }) }
         let reference = referenceDB(leadLeft, leadRight, count, sampleRate: sampleRate)
         let detector = blockPeaks(leadLeft, leadRight, count)
         let attack = blockCoefficient(settings.duckAttack, sampleRate: sampleRate)
         let release = blockCoefficient(settings.duckRelease, sampleRate: sampleRate)
-        var envelope: Float = 0
-        var depths = [Float](repeating: 0, count: detector.count)
+        let onsetDecay = blockCoefficient(settings.duckOnsetDecay, sampleRate: sampleRate)
+        let holdBlocks = Int((settings.duckHold * sampleRate / Double(blockFrames)).rounded())
+        let onsetHoldBlocks = Int((settings.duckOnsetHold * sampleRate / Double(blockFrames)).rounded())
+        let jump = dbToGain(settings.duckOnsetJumpDB)
         let knee = max(0.1, settings.duckKneeDB)
+        let floor = dbToGain(reference - knee)
+        let share = min(1, max(0, settings.duckSustainShare))
+        var envelope: Float = 0, onset: Float = 0, depth: Float = 0
+        var held = 0, onsetHeld = 0
+        var depths = [Float](repeating: 0, count: detector.count)
+        guard reference > -100 else { return ramp(depths, count: count) }
         for (k, peak) in detector.enumerated() {
-            envelope = peak + (peak > envelope ? attack : release) * (envelope - peak)
-            let over = 20 * log10f(max(envelope, 1e-9)) - (reference - 2 * knee)
-            depths[k] = reference > -100 ? settings.duckDepthDB * min(1, max(0, over / knee)) : 0
+            let isOnset = onsetBlocks.map { $0.contains(k) } ?? (peak > envelope * jump && peak > floor)
+            if isOnset {
+                onset = 1
+                onsetHeld = onsetHoldBlocks
+            } else if onsetHeld > 0 {
+                onsetHeld -= 1
+            } else {
+                onset *= onsetDecay
+            }
+            if peak > envelope {
+                envelope = peak + attack * (envelope - peak)
+                held = holdBlocks
+            } else if held > 0 {
+                held -= 1
+            } else {
+                envelope = peak + release * (envelope - peak)
+            }
+            let over = 20 * log10f(max(envelope, 1e-9)) - (reference - knee)
+            let target = settings.duckDepthDB * min(1, max(0, over / knee)) * (share + (1 - share) * onset)
+            // The onset opens the depth over the attack time rather than in one block.
+            depth = target > depth ? target + attack * (depth - target) : target
+            depths[k] = depth
         }
         return ramp(depths, count: count)
     }

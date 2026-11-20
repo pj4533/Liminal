@@ -145,7 +145,19 @@ nonisolated struct LofiScore: Sendable, Equatable {
     /// A structural bass accent whose audible attack was placed on a played kick (phrase-local beats).
     struct BassAnchor: Equatable, Sendable {
         let noteBeat: Double
+        /// The kick's broadband attack.
         let kickBeat: Double
+        /// The kick's 40-160 Hz half-amplitude rise (`LofiDrumLandmark.lowRiseFrame`), the alignment target.
+        var kickLowRiseBeat: Double
+        /// The voice's own low-band rise after note start, in beats (`LofiBassVoice.lowRiseLead`).
+        var bassLowRiseBeats: Double
+
+        init(noteBeat: Double, kickBeat: Double, kickLowRiseBeat: Double? = nil, bassLowRiseBeats: Double = 0) {
+            self.noteBeat = noteBeat
+            self.kickBeat = kickBeat
+            self.kickLowRiseBeat = kickLowRiseBeat ?? kickBeat
+            self.bassLowRiseBeats = bassLowRiseBeats
+        }
     }
 
     let section: Section
@@ -223,8 +235,8 @@ nonisolated struct LofiScore: Sendable, Equatable {
 
         let voice = bassVoice(seed: seed, section: section, phrase: phrase)
         let bass = bassLine(harmony: harmony, section: section, random: phraseRandom, kickBeats: kickBeats,
-                            timing: timing, timingStartBeat: timingStartBeat,
-                            attackLeadBeats: voice.attackLead / max(0.001, beatSeconds))
+                            timing: timing, timingStartBeat: timingStartBeat, voice: voice,
+                            beatSeconds: max(0.001, beatSeconds))
         let reply = section == .answer || section == .variation
         let chordDegree = reply ? harmony.nearest(5, in: scale.intervals) : 0
         // Guitar programs add their own strings around the unchanged melody.
@@ -420,8 +432,8 @@ nonisolated struct LofiScore: Sendable, Equatable {
     }
 
     private static func bassLine(harmony: Harmony, section: Section, random: MusicRNG, kickBeats: [Double],
-                                 timing: LofiTimingField?, timingStartBeat: Int,
-                                 attackLeadBeats: Double) -> (notes: [Note], anchors: [BassAnchor]) {
+                                 timing: LofiTimingField?, timingStartBeat: Int, voice: LofiBassVoice,
+                                 beatSeconds: Double) -> (notes: [Note], anchors: [BassAnchor]) {
         var rhythm = random.fork(124)
         let related = rhythm.pick([3, 5, 7, 8, 10])
         let home = harmony.bass(0)
@@ -452,18 +464,20 @@ nonisolated struct LofiScore: Sendable, Equatable {
             }
             return (notes, [])
         }
-        // Structural accents put their audible attack on a confident played kick nearby.
-        // Everything else keeps the pocket and leans with the drummer's local timing.
-        let kicks = timing.kicks(phraseStartBeat: timingStartBeat, minConfidence: bassAccentConfidence)
+        // Structural accents put their low-band rise on the low-band rise of a confident played kick
+        // nearby. Everything else keeps the pocket and leans with the drummer's local timing.
+        let kicks = kickRises(timing, phraseStartBeat: timingStartBeat)
         var anchors: [BassAnchor] = []
-        let notes = figures.map { figure -> Note in
+        var notes = figures.map { figure -> Note in
             let beat: Double
             if figure.beat == 0 || figure.beat == 8 {
-                let kick = kicks.filter { abs($0 - figure.beat) <= bassAccentWindow }
-                    .min { abs($0 - figure.beat) < abs($1 - figure.beat) }
+                let kick = kicks.filter { abs($0.attack - figure.beat) <= bassAccentWindow }
+                    .min { abs($0.attack - figure.beat) < abs($1.attack - figure.beat) }
                 if let kick {
-                    beat = max(0, kick - attackLeadBeats)
-                    anchors.append(.init(noteBeat: beat, kickBeat: kick))
+                    let lead = voice.lowRiseLead(midi: figure.midi) / beatSeconds
+                    beat = max(0, kick.lowRise - lead)
+                    anchors.append(.init(noteBeat: beat, kickBeat: kick.attack, kickLowRiseBeat: kick.lowRise,
+                                         bassLowRiseBeats: lead))
                 } else {
                     beat = figure.beat
                 }
@@ -474,7 +488,39 @@ nonisolated struct LofiScore: Sendable, Equatable {
             return Note(part: .bass, midi: figure.midi, beat: beat, length: figure.length,
                         velocity: figure.strength, send: 0)
         }
+        // A note running into an anchored accent smears its attack (a 7.5-beat pickup held 0.55 beats
+        // still sounded under the downbeat): it ends early enough that its release has faded by then.
+        let release = (voice == .classic ? 0.31 : voice.recipe.release) / beatSeconds
+        let clearance = release + bassAccentClearance / beatSeconds
+        for i in notes.indices {
+            guard let next = anchors.first(where: { $0.noteBeat > notes[i].beat })?.noteBeat else { continue }
+            let room = next - notes[i].beat - clearance
+            if notes[i].length > room {
+                let note = notes[i]
+                notes[i] = Note(part: .bass, midi: note.midi, beat: note.beat, length: max(bassShortestLength, room),
+                                velocity: note.velocity, send: 0)
+            }
+        }
         return (notes, anchors)
+    }
+
+    /// A structural accent's predecessor is silent this long (seconds) before the accent starts.
+    static let bassAccentClearance = 0.030
+    /// A shortened bass note keeps at least this many beats of sustain.
+    static let bassShortestLength = 0.12
+
+    /// Phrase-local beats of the attack and the low-band rise of each confident kick in the phrase,
+    /// with the frame arithmetic of `LofiTimingField.kicks`.
+    private static func kickRises(_ timing: LofiTimingField, phraseStartBeat: Int) -> [(attack: Double, lowRise: Double)] {
+        let fpb = timing.framesPerBeat
+        guard fpb > 0 else { return [] }
+        let start = Int((Double(phraseStartBeat) * fpb).rounded())
+        let end = start + timing.phraseFrames
+        return timing.landmarks.compactMap { landmark in
+            guard landmark.kind == .kick, landmark.confidence >= bassAccentConfidence,
+                  (start..<end).contains(landmark.attackFrame) else { return nil }
+            return (Double(landmark.attackFrame - start) / fpb, Double(landmark.lowRiseFrame - start) / fpb)
+        }
     }
 
     /// Two to four shell gestures placed where the melody rests or lands: an off-beat stab in a

@@ -53,8 +53,18 @@ nonisolated struct LofiDrumTake: @unchecked Sendable {
         kicks = try Self.detectKicks(channels, count: count, sampleRate: clock.sampleRate)
         if let chain {
             try Task.checkCancellation()
-            let stats = LofiStemChains.applyDrums(left: channels[0], right: channels[1], count: count,
+            // Capture only: the kick's low-band attack time before and after the drum bus (C-B4).
+            let probe = LofiCaptureHooks.isEnabled ? Self.attackProbe(landmarks) : []
+            let raw = probe.isEmpty ? [] : Self.kickAttackTimes(channels, count: count, at: probe, sampleRate: clock.sampleRate)
+            var stats = LofiStemChains.applyDrums(left: channels[0], right: channels[1], count: count,
                                                   sampleRate: clock.sampleRate, settings: chain)
+            if !probe.isEmpty {
+                let processed = Self.kickAttackTimes(channels, count: count, at: probe, sampleRate: clock.sampleRate)
+                if let before = Self.median(raw), let after = Self.median(processed), before > 0 {
+                    stats.extra["kickAttackRatio"] = Float(after / before)
+                    stats.extra["kickAttackMs"] = Float(after * 1000 / clock.sampleRate)
+                }
+            }
             LofiStemChains.report(stats, bus: "drums", take: LofiStemChains.nextReportedTake())
         }
         // Independent takes can end well away from zero. Taper just the splice,
@@ -65,6 +75,37 @@ nonisolated struct LofiDrumTake: @unchecked Sendable {
             for i in 0..<attack { channel[i] *= Float(i) / Float(attack - 1) }
             for i in 0..<release { channel[count - 1 - i] *= Float(i) / Float(release - 1) }
         }
+    }
+
+    /// The strongest confident kicks of a take (at most 24), for the attack-time probe.
+    private static func attackProbe(_ landmarks: [LofiDrumLandmark]) -> [Int] {
+        landmarks.filter { $0.kind == .kick && $0.confidence >= 0.6 }
+            .sorted { $0.strength > $1.strength }.prefix(24).map(\.attackFrame)
+    }
+
+    /// Frames from 10 to 90 percent of each kick's 40-160 Hz envelope rise (mono sum).
+    private static func kickAttackTimes(_ channels: UnsafePointer<UnsafeMutablePointer<Float>>, count: Int,
+                                        at frames: [Int], sampleRate: Double) -> [Double] {
+        let span = Int(0.3 * sampleRate)
+        var mono = [Float](repeating: 0, count: 2 * span)
+        return frames.compactMap { frame in
+            let start = max(0, frame - span), end = min(count, frame + span)
+            guard end > start else { return nil }
+            for i in start..<end { mono[i - start] = 0.5 * (channels[0][i] + channels[1][i]) }
+            return mono.withUnsafeBufferPointer { m -> Double? in
+                let n = end - start, center = frame - start
+                guard let a = LofiDrumLandmarks.lowBandRise(m.baseAddress!, count: n, around: center, sampleRate: sampleRate, share: 0.1),
+                      let b = LofiDrumLandmarks.lowBandRise(m.baseAddress!, count: n, around: center, sampleRate: sampleRate, share: 0.9),
+                      b > a else { return nil }
+                return Double(b - a)
+            }
+        }
+    }
+
+    private static func median(_ values: [Double]) -> Double? {
+        guard !values.isEmpty else { return nil }
+        let sorted = values.sorted()
+        return sorted[sorted.count / 2]
     }
 
     /// Phrase-local performance times for placing bass attacks. Keep the original take intact.
