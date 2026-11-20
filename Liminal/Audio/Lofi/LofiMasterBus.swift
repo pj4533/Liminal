@@ -29,13 +29,25 @@ final class LofiMasterBus {
     /// soft-clip use (C-M9), kick-synchronous dips (C-M8) and limiter reduction (C-M6) inside their bounds
     /// with some margin (-12.5 LUFS). The section 8.7 start (+6 dB, -14 dB) reached -11.7 LUFS but failed
     /// C-M8 and C-M9 on the raw drum peaks. Revisit once the drum bus chain controls those peaks.
+    ///
+    /// Gain staging (19 November 2026): in the Lo-Fi profile both branches enter `input` at `lofiStagingDB`,
+    /// so the pre-master sum peaks 2 dB lower (+0.9 dBFS before), and the finisher input rises by those 2 dB
+    /// (+4 dB before): its glue, clip and limiter see the same signal and the master is unchanged.
     nonisolated static let lofiSettings: LofiMasterSettings = {
         var settings = LofiMasterSettings.lofi
-        settings.inputGainDB = 4
+        settings.inputGainDB = 4 - lofiStagingDB
         settings.glue?.thresholdDB = -12
         return settings
     }()
 
+    /// Level of both branches into `input` while Lo-Fi is requested (0 dB otherwise). Both move together,
+    /// so the film bed keeps its balance against the music. The Lo-Fi chain makes it up at the finisher
+    /// input, the Ambient fallback chain on `trim`. Captures check that the pre-master is the staging gain
+    /// times the sum of the `lofi` and `footage` taps (`preMasterStagingDb` in `masterDynamics`).
+    nonisolated static let lofiStagingDB: Float = -2
+    /// The archive and Ambient branch, and the Lo-Fi bus, into `input`.
+    let archiveTrim: Fader
+    let lofiTrim: Fader
     let input: Mixer
     let glue: Compressor
     let trim: Fader
@@ -66,7 +78,9 @@ final class LofiMasterBus {
             ? LofiCaptureHooks.option("masterProfile").flatMap(Profile.init(rawValue:)) ?? .lofi
             : .ambient
         lofiFinisherSettings = hooks ? Self.captureOverrides(Self.lofiSettings) : Self.lofiSettings
-        input = Mixer(archiveAndAmbient, lofi)
+        archiveTrim = Fader(archiveAndAmbient)
+        lofiTrim = Fader(lofi)
+        input = Mixer(archiveTrim, lofiTrim)
         glue = Compressor(input, threshold: -15, headRoom: 9, attackTime: 0.027, releaseTime: 0.27, masterGain: 0)
         let finisherReady = !forceFinisherFallback
         let chain: Profile = requested == .lofi && finisherReady ? .lofi : .ambient
@@ -82,7 +96,8 @@ final class LofiMasterBus {
             configure(.lofi)
         } else if chain == .lofi {
             // The unit failed to instantiate after all: restore the Ambient gains.
-            trim.gain = dbToGain(Self.nominalInputTrimDB)
+            trim.gain = dbToGain(trimDB(.ambient))
+            applyStaging()
             output.gain = dbToGain(Self.safetyTrimDB)
         }
         _ = output.avAudioNode.auAudioUnit.token(byAddingRenderObserver: Self.renderObserver(renderedFrames))
@@ -103,6 +118,19 @@ final class LofiMasterBus {
     private static func outputDB(_ chain: Profile) -> Float { chain == .lofi ? 0 : safetyTrimDB }
     private static func nominalTrimDB(_ chain: Profile) -> Float { chain == .lofi ? 0 : nominalInputTrimDB }
 
+    /// The branches' staging gain: `lofiStagingDB` whenever Lo-Fi is requested.
+    private var stagingDB: Float { profile == .lofi ? Self.lofiStagingDB : 0 }
+
+    private func applyStaging() {
+        archiveTrim.gain = dbToGain(stagingDB)
+        lofiTrim.gain = dbToGain(stagingDB)
+    }
+
+    /// `trim` without the calibration gain.
+    private func trimDB(_ chain: Profile) -> Float {
+        Self.nominalTrimDB(chain) + (chain == .lofi ? 0 : -stagingDB)
+    }
+
     /// Selects a profile. With `ramp > 0` while the graph renders, the output fades to silence over `ramp`,
     /// the chain is swapped once that fade has been rendered, and the output rises to the new level over
     /// `ramp`. The output is therefore lowered before the protection changes and raised only after the new
@@ -114,7 +142,16 @@ final class LofiMasterBus {
         let switching = switchTask != nil
         switchTask?.cancel()
         switchTask = nil
-        guard target != activeChain || switching else { return }
+        guard target != activeChain || switching else {
+            // Same chain. On the Ambient chain (also the fallback for a Lo-Fi request) the staging gains
+            // follow the request; on the Lo-Fi chain they are already set and a calibration ramp may run.
+            let staging = dbToGain(stagingDB)
+            if activeChain == .ambient, archiveTrim.gain != staging {
+                applyStaging()
+                trim.gain = dbToGain(calibrationDb) * dbToGain(trimDB(activeChain))
+            }
+            return
+        }
         guard ramp > 0, output.avAudioNode.engine?.isRunning == true else {
             configure(target)
             output.gain = dbToGain(Self.outputDB(target))
@@ -178,7 +215,8 @@ final class LofiMasterBus {
         limiter.avAudioNode.auAudioUnit.shouldBypassEffect = lofi
         finisher.apply(lofi ? lofiFinisherSettings : .passthrough, ramp: 0)
         activeChain = chain
-        trim.gain = dbToGain(calibrationDb) * dbToGain(Self.nominalTrimDB(chain))
+        applyStaging()
+        trim.gain = dbToGain(calibrationDb) * dbToGain(trimDB(chain))
     }
 
     // MARK: Capture hooks
@@ -202,6 +240,7 @@ final class LofiMasterBus {
         let finisher = finisher
         let chain = activeChain.rawValue
         let requested = profile.rawValue
+        let staging = Double(stagingDB)
         let settings = activeChain == .lofi ? lofiFinisherSettings : LofiMasterSettings.passthrough
         LofiCaptureHooks.onFinish {
             let meters = finisher.meters
@@ -224,6 +263,7 @@ final class LofiMasterBus {
             let dynamics: [String: Any] = [
                 "profile": chain, "requestedProfile": requested, "operational": finisher.isOperational,
                 "ceilingDbtp": Double(settings.ceilingDBTP), "latencyFrames": finisher.latencyFrames,
+                "preMasterStagingDb": staging,
                 "glue": stage(meters.glueDB), "clip": clip, "limiter": limiter,
                 "frames": meters.frames, "guardClampCount": meters.guardClampCount,
                 "traceFile": "master-gr.csv", "traceHopFrames": hop, "tracePoints": trace.count,
@@ -249,7 +289,7 @@ final class LofiMasterBus {
     // MARK: Calibration
 
     func setCalibrationGain(_ gain: Float, over: Double) {
-        ParamRamp.setGain(trim, gain * dbToGain(Self.nominalTrimDB(activeChain)), over: over)
+        ParamRamp.setGain(trim, gain * dbToGain(trimDB(activeChain)), over: over)
     }
 
     func setCalibrationBeatDuration(_ duration: Double) {

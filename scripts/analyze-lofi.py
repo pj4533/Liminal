@@ -221,6 +221,12 @@ def analyze(run, true_peak_limit, report):
     if "dialogue-fx" in manifest.get("topology", []):
         buses += ("dialogue-fx",)
     stats = {name: BusStats(rate) for name in buses}
+    # The master bus enters both branches at a staging gain in the Lo-Fi profile (19 November 2026):
+    # the pre-master is that gain times the lofi + footage sum. Older captures have none (0 dB).
+    staging_db = ((manifest.get("diagnostics") or {}).get("masterDynamics") or {}).get("preMasterStagingDb", 0)
+    if type(staging_db) not in (int, float) or not math.isfinite(staging_db):
+        raise AudioCheckError("masterDynamics.preMasterStagingDb must be a finite number")
+    staging = 10 ** (staging_db / 20)
     routing_peak = 0.0
     first_bad_frame = None
     stem_peak = 0.0
@@ -249,7 +255,7 @@ def analyze(run, true_peak_limit, report):
                         first_bad_stem_frame = offset + index // 2
             for index, (combined, music, footage) in enumerate(zip(
                     buffers["pre-master"], buffers["lofi"], buffers["footage"])):
-                residual = abs((music + footage) - combined)
+                residual = abs(staging * (music + footage) - combined)
                 if not math.isfinite(residual):
                     nonfinite_routing_samples += 1
                     continue
@@ -263,6 +269,7 @@ def analyze(run, true_peak_limit, report):
         "musicStemSumPeakResidual": stem_peak,
         "firstMusicFrameOutsideTolerance": first_bad_stem_frame,
         "tolerance": ROUTING_TOLERANCE,
+        "preMasterStagingDb": staging_db,
         "firstFrameOutsideTolerance": first_bad_frame,
         "nonfiniteSamples": nonfinite_routing_samples,
     }
@@ -274,7 +281,7 @@ def analyze(run, true_peak_limit, report):
     if first_bad_stem_frame is not None:
         failures.append(f"lofi differs from the captured music stems at frame {first_bad_stem_frame}")
     if first_bad_frame is not None:
-        failures.append(f"pre-master differs from the lofi + footage sum at frame {first_bad_frame}")
+        failures.append(f"pre-master differs from the staged lofi + footage sum at frame {first_bad_frame}")
     if not has_footage:
         for name in FOOTAGE_BUSES + tuple(n for n in ("dialogue-chops", "dialogue-fx") if n in stats):
             if stats[name].sample_peak > SILENCE_FLOOR:
@@ -414,6 +421,18 @@ def self_test():
         require(any("hasFootage=false" in item for item in bad["failures"]), "silent-bus mutation passed")
         require(bad["routing"]["firstFrameOutsideTolerance"] == 24000, "routing failure time was wrong")
         write_fixture_wave(run / "footage.wav", silence, rate)
+
+        # A staged pre-master (the Lo-Fi profile) matches only with the reported staging gain.
+        staged = array("f", (x * 10 ** (-2 / 20) for x in transient))
+        write_fixture_wave(run / "pre-master.wav", staged, rate, extensible=True)
+        unstaged = measure(run, -1.5)
+        require(any("pre-master differs" in item for item in unstaged["failures"]), "staged pre-master passed without its gain")
+        (run / "manifest.json").write_text(json.dumps({**manifest, "diagnostics": {"masterDynamics": {"preMasterStagingDb": -2}}}),
+                                           encoding="utf-8")
+        staged_ok = measure(run, -1.5)
+        require(staged_ok["routing"]["firstFrameOutsideTolerance"] is None, "staged pre-master failed with its gain")
+        (run / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        write_fixture_wave(run / "pre-master.wav", transient, rate, extensible=True)
 
         intersample = array("f")
         fade_frames = rate // 10
