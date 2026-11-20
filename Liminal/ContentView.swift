@@ -249,6 +249,10 @@ struct SettingsSheetView: View {
                         ClearImagesSection(visualEngine: visualEngine)
                     }
 
+                    #if os(macOS)
+                    ControllerSettingsView(controller: audioEngine.controller)
+                    #endif
+
                     ControlSection(title: "Reset", systemImage: "arrow.counterclockwise") {
                         Button("Reset All Settings", role: .destructive) {
                             settings.resetToDefaults()

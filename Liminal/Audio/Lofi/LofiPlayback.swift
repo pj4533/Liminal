@@ -300,6 +300,7 @@ final class LofiPlayback {
         let absoluteBeat = Double(current.request.index) * LofiClock.beats + beat
         state.density = LofiDrift(seed: current.request.seed).at(absoluteBeat).density * 0.65
         let score = current.music.score
+        state.modeIndex = UInt16(score.scale.index)
         state.tonic = UInt8(score.tonic)
         state.chordRoot = UInt8(score.chordRoot)
         state.scaleMask = score.scale.pitchClassMask(tonic: score.tonic)

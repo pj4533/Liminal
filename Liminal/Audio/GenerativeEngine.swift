@@ -27,6 +27,10 @@ final class GenerativeEngine: ObservableObject {
     /// The archive film's sound strip (docs/plans/archive-video.md 4).
     let archive: ArchiveVoice
     let seed: UInt64
+    #if os(macOS)
+    /// Uses this engine and the existing video-ready gate, never a second audio instance.
+    lazy var controller = ControllerCoordinator(engine: self)
+    #endif
     private var configurationObserver: AnyCancellable?
     private var recovery: Task<Void, Never>?
     private let lofi: LofiPlayback
@@ -182,6 +186,9 @@ final class GenerativeEngine: ObservableObject {
     /// Re-arm the score and its visual clock together once the replacement route is ready.
     private func recoverStoppedGraph() {
         guard isRunning, !engine.avEngine.isRunning, recovery == nil else { return }
+        #if os(macOS)
+        controller.transportDidStop()
+        #endif
         LMLog.audio.warning("Audio route changed while playing; rebuilding playback schedules")
         isPlaybackReady = false
         lofiActive.store(false, ordering: .relaxed)
@@ -210,6 +217,9 @@ final class GenerativeEngine: ObservableObject {
 
     /// Fades out over 2 s; the audio engine keeps running so a restart is instant.
     func stop() {
+        #if os(macOS)
+        controller.transportDidStop()
+        #endif
         guard isRunning else { return }
         recovery?.cancel()
         recovery = nil
@@ -224,6 +234,10 @@ final class GenerativeEngine: ObservableObject {
     }
 
     func shutdown() {
+        #if os(macOS)
+        controller.transportDidStop()
+        controller.setEnabled(false)
+        #endif
         recovery?.cancel()
         recovery = nil
         conductor.stop(fade: 0.05)

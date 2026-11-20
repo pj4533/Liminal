@@ -1,0 +1,12 @@
+{"v":1,"type":"hello","client":"liminal-controller","client_version":"0.1.0"}
+{"v":1,"type":"welcome","session":"test-session","server_id":"test-server","heartbeat_ms":1000,"max_frame_bytes":65536}
+{"v":1,"type":"ping","nonce":42}
+{"v":1,"type":"pong","nonce":42}
+{"v":1,"type":"command","session":"test-session","seq":1,"action":"transport","state":"playing"}
+{"v":1,"type":"command","session":"test-session","seq":2,"action":"parameter","channel":"lofi.bass","parameter":"gain","value":0.5}
+{"v":1,"type":"command","session":"test-session","seq":3,"action":"note_on","channel":"lofi.bass","note_id":"press-1","midi":36,"velocity":100,"instrument_revision":5}
+{"v":1,"type":"command","session":"test-session","seq":4,"action":"pressure","note_id":"press-1","value":0.65}
+{"v":1,"type":"command","session":"test-session","seq":5,"action":"note_off","note_id":"press-1"}
+{"v":1,"type":"ack","seq":1,"ok":true,"revision":12}
+{"v":1,"type":"ack","seq":2,"ok":false,"revision":13,"error":"unavailable"}
+{"v":1,"type":"error","error":"busy"}
