@@ -385,7 +385,7 @@ struct LofiStemChainTests {
             LofiDrumLandmark(kind: .kick, attackFrame: frame(at), peakFrame: frame(at + 0.02), strength: strength,
                              confidence: confidence, lowRiseFrame: frame(at + 0.010))
         }
-        let landmarks = [kick(0.70, strength: 0.92), kick(0.92, strength: 0.79), kick(1.60, strength: 0.05),
+        let landmarks = [kick(0.70, strength: 0.92), kick(0.92, strength: 0.79), kick(1.60, strength: 0.005),
                          kick(2.20, strength: 0.9), kick(2.60, strength: 1, confidence: 0.3),
                          LofiDrumLandmark(kind: .snare, attackFrame: frame(1.45), peakFrame: frame(1.46), strength: 1, confidence: 1)]
         // The phrase starts 0.5 s into the take: the preroll carries nothing in.

@@ -47,9 +47,11 @@ struct LofiArrangementTests {
                 let bass = part(current, .bass)
                 #expect(bass.count == part(plain, .bass).count)
                 #expect(bass.map(\.midi) == part(plain, .bass).map(\.midi))
-                let lead = current.bassVoice.attackLead * clock.sampleRate
                 for (accent, kickBeat) in [(0.0, 0.07), (8.0, 7.93)] {
                     guard let note = bass.first(where: { abs($0.beat - accent) < 0.2 }) else { continue }
+                    // The voice's own 40-160 Hz rise lands on the kick's (a synthetic landmark's low-band
+                    // rise is its attack frame).
+                    let lead = current.bassVoice.lowRiseLead(midi: note.midi) * clock.sampleRate
                     let kickFrame = Double(clock.frame(at: kickBeat))
                     let attack = Double(clock.frame(at: note.beat)) + lead
                     #expect(abs(attack - kickFrame) / clock.sampleRate < 0.002,

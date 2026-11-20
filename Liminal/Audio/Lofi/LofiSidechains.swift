@@ -64,8 +64,8 @@ nonisolated struct LofiKickDuck {
     /// instead of the level detector (19 November 2026). The detector's adaptive threshold (1.8 times a
     /// 235 ms background) skipped the second kick of a double: on the 72 BPM private take half of the kicks
     /// inside sustained notes got no duck of their own and the bass was still rising out of the first
-    /// kick's duck (C-B2 read -0.48 dB). Here every confident kick ducks, scaled by its strength against the
-    /// take's median kick, so ghost kicks barely move the bass. Nil when the take has no confident kick
+    /// kick's duck (C-B2 read -0.48 dB). Here every confident kick ducks, scaled by the square root of its
+    /// strength against the take's median kick, so ghost kicks barely move the bass. Nil when the take has no confident kick
     /// (the detector then runs as before). Offline, on the renderer's thread.
     static func landmarkGains(_ landmarks: [LofiDrumLandmark], start: Int, count: Int, sampleRate: Double) -> [Float]? {
         let kicks = landmarks.filter { $0.kind == .kick && $0.confidence >= landmarkConfidence }
@@ -81,7 +81,9 @@ nonisolated struct LofiKickDuck {
             let from = max(0, kick.attackFrame - origin)
             let to = min(total, max(kick.attackFrame, kick.lowRiseFrame) + hold - origin)
             guard to > from else { continue }
-            let level = min(1, kick.strength / reference)
+            // Square-root scaling: a kick at half the median strength still ducks about 2.8 dB (linear
+            // scaling gave the soft kicks of the 62 BPM take 1.5 dB), a ghost at a twentieth about 0.9 dB.
+            let level = min(1, (kick.strength / reference).squareRoot())
             for i in from..<to where target[i] < level { target[i] = level }
         }
         func step(_ seconds: Double) -> Float { Float(1 - exp(-1 / (seconds * sampleRate))) }
