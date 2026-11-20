@@ -1,9 +1,58 @@
+import Accelerate
 import AVFoundation
 import Foundation
 
 /// Prepares independently routable music stems off the audio thread.
 nonisolated enum LofiRenderer {
-    static let wetGain: Float = 2.25
+    /// Space return level after the space chain (plan 8.4). The chain's 350 Hz high-pass and
+    /// 4.5 kHz low-pass took about 3 dB off the wash (2.25 before); this restores half of it, so
+    /// the space stays at least 3 dB under the lead (C-B7) and the wash stays present.
+    static let wetGain: Float = 2.7
+    /// Nominal dry level of the sampled mid shells on the texture stem (the fixed trim was 0.31).
+    /// Used when a phrase has too little lead and mid overlap to measure (`midsLevel`).
+    /// Raised from 2.2 with the mids chain (plan 8.4), which takes about 2.7 dB off the shells
+    /// (high-pass 160 Hz, -3 dB at 400 Hz): the nominal level is the same as before the chain.
+    /// Mix calibration raised it from 3.0 (+1.6 dB): a breakdown's soft answer, the one phrase that keeps
+    /// it, read 9 dB under the lead in the reference capture.
+    static let midsTrim: Float = 3.6
+    /// Where lead and mids sound together, the mids sit this far under the lead in 400 Hz to 3 kHz
+    /// (M13 asks for 3 to 8 dB). Chosen by measurement on the reference captures.
+    /// 5.5 read 6.1 to 8.2 dB on the matrix (long above 8; the bus ducks under featured chops take the
+    /// mids 1 dB further down than the lead, and loud lead notes over decaying shells dominate the measure), so mix calibration set 3.5.
+    static let midsUnderLeadDB: Float = 3.5
+    /// Shortest lead and mid overlap in a phrase that sets the matched level. 0.25 s left every phrase of
+    /// the short-overlap first take at `midsTrim`, about 1 dB under the lead (mix calibration).
+    static let midsMatchSeconds = 0.1
+    /// The per-phrase mids gain stays within this factor of `midsTrim` either way.
+    static let midsGainRange: Float = 2.5
+    /// Plucked attacks never push the dry mids above -4.4 dBFS before the instrument balance. Mix
+    /// calibration tried 1.0: C-B5 held, but plucked shells then peaked at 0 dBFS on the texture stem and
+    /// the pre-master peak rose 2 dB, so the ceiling stayed.
+    static let midsPeakCeiling: Float = 0.6
+    /// The mids' contribution to `InstrumentBalance`, at the former 0.31 trim.
+    static let midsMeterTrim: Float = 0.31
+    /// The wet stem under a return's opening notes, -9 dB (-6 dB before mix calibration): the carried tail
+    /// and the phrase's own returns dip together, so the room of the first notes blooms after them instead
+    /// of over them. The deeper dip keeps a low-register hook salient (C-B6, case `long`).
+    static let returnCarryFloor: Float = 0.354_813
+    /// The dip is released by the start of the second bar at the latest.
+    static let returnRevealLatestHold = 3.5
+
+    /// How long (in beats) a return holds its wet stem down: through the first two beats, or to
+    /// the end of the second revealed note (at most one second of it) when that falls later.
+    static func returnRevealHold(_ score: LofiScore, clock: LofiClock) -> Double {
+        let second = score.notes.last { $0.part == .lead && $0.gain == LofiScore.returnRevealGain }
+        let end = second.map { $0.beat + min($0.length, 1 / clock.beatDuration) } ?? 0
+        return max(2, min(returnRevealLatestHold, end))
+    }
+
+    /// Smoothly lowers the wet stem as the return enters: down over the first quarter beat (under
+    /// the downbeat), held to `hold`, back up half a beat later.
+    static func returnCarryGain(beat: Double, hold: Double = 2) -> Float {
+        func smooth(_ u: Double) -> Float { let x = Float(min(1, max(0, u))); return x * x * (3 - 2 * x) }
+        let down = smooth(beat / 0.25), up = smooth((beat - hold) / 0.5)
+        return 1 - (1 - returnCarryFloor) * down * (1 - up)
+    }
 
     struct Tail: Sendable {
         let clock: LofiClock
@@ -41,8 +90,11 @@ nonisolated enum LofiRenderer {
                        drumStartBeat: Int = 0, carry: Tail? = nil, samples: LofiSampleBank = .bundled,
                        captureEffects: Bool = false) throws -> Phrase {
         let clock = drums?.clock ?? LofiClock(tempo: options.safeTempo, sampleRate: sampleRate)
+        // A take with landmarks drives bass placement through its timing field; otherwise the old kicks.
+        let timing = drums.flatMap { $0.landmarks.isEmpty ? nil : $0.timing }
         let score = LofiScore.make(seed: seed, section: section, drift: drift, startBeat: startBeat,
-                                   pinnedScale: options.scale, kickBeats: drums?.bassAnchors(startBeat: drumStartBeat) ?? [])
+                                   pinnedScale: options.scale, kickBeats: drums?.bassAnchors(startBeat: drumStartBeat) ?? [],
+                                   timing: timing, timingStartBeat: drumStartBeat, beatSeconds: clock.beatDuration)
         let n = clock.frameCount
         let bass = try stereoBuffer(clock: clock)
         let dry = try stereoBuffer(clock: clock)
@@ -62,23 +114,45 @@ nonisolated enum LofiRenderer {
         let quiet = [Float](repeating: 0, count: frames)
         var lead = (left: quiet, right: quiet)
         var leadSend = (left: quiet, right: quiet)
-        var texture = (left: quiet, right: quiet)
+        // The two shell voices render apart so the mids chain can place them (plan 8.4).
+        var textureLower = (left: quiet, right: quiet)
+        var textureUpper = (left: quiet, right: quiet)
         var textureSend = (left: quiet, right: quiet)
         var leadSampleCount = 0
-        for note in score.notes where note.velocity > 0 {
+        // A note's extra gain is kept apart until the phrase's lead gain is measured, so a revealed
+        // note stands out instead of turning the whole phrase down.
+        var leadAccent: (left: [Float], right: [Float])?
+        let upperVoices = Self.upperShellVoices(score)
+        for (index, note) in score.notes.enumerated() where note.velocity > 0 {
             try Task.checkCancellation()
             switch note.part {
-            case .bass: LofiSynth.add(note, clock: clock, left: left, right: right)
+            case .bass: LofiBassVoice.add(note, voice: score.bassVoice, clock: clock, left: left, right: right)
             case .lead, .texture:
                 let sample = samples.sample(for: score.preset, midi: note.midi, velocity: note.velocity)
+                // A revealed return note scales its whole send, the fixed part included, so the
+                // score's 40 percent reduction is a 40 percent lower send level.
+                let floor: Float = note.gain == LofiScore.returnRevealGain ? 0.44 * LofiScore.returnRevealSend : 0.44
                 let send = LofiScore.Note(part: note.part, midi: note.midi, beat: note.beat, length: note.length,
-                             velocity: note.velocity * (note.part == .lead ? 0.44 + 0.72 * note.send : note.send), color: note.color)
+                             velocity: note.velocity * (note.part == .lead ? floor + 0.72 * note.send : note.send), color: note.color)
                 if note.part == .lead {
                     if sample != nil { leadSampleCount += 1 }
                     addInstrument(note, sample: sample, score: score, clock: clock, into: &lead)
                     addInstrument(send, sample: sample, score: score, clock: clock, into: &leadSend)
+                    if note.gain != 1 {
+                        var accent = leadAccent ?? (quiet, quiet)
+                        let extra = LofiScore.Note(part: .lead, midi: note.midi, beat: note.beat, length: note.length,
+                                                   velocity: note.velocity * (note.gain - 1), color: note.color)
+                        addInstrument(extra, sample: sample, score: score, clock: clock, into: &accent)
+                        leadAccent = accent
+                    }
                 } else {
-                    addInstrument(note, sample: sample, score: score, clock: clock, into: &texture)
+                    let dryNote = LofiScore.Note(part: .texture, midi: note.midi, beat: note.beat, length: note.length,
+                                                 velocity: note.velocity * note.gain, color: note.color)
+                    if upperVoices.contains(index) {
+                        addInstrument(dryNote, sample: sample, score: score, clock: clock, into: &textureUpper)
+                    } else {
+                        addInstrument(dryNote, sample: sample, score: score, clock: clock, into: &textureLower)
+                    }
                     addInstrument(send, sample: sample, score: score, clock: clock, into: &textureSend)
                 }
             }
@@ -86,9 +160,21 @@ nonisolated enum LofiRenderer {
         if let edit = score.virtualRecord {
             LofiVirtualRecord.splice(edit, from: lead, into: &leadSend, clock: clock)
         }
-        let dryLeadGain = leadGain(for: lead, frames: n, sampleRate: sampleRate)
-        let sendGain = min(1.6, sqrtf(dryLeadGain / 1.23))
         let phrase = Int(startBeat / LofiClock.beats)
+        // Lead and mids chains on the full phrase-plus-tail arrays, from silence, before any edge.
+        let leadStats = LofiStemChains.applyLead(left: &lead.left, right: &lead.right, accent: &leadAccent,
+                                                 sampleRate: sampleRate)
+        let mids = LofiStemChains.applyMids(lower: textureLower, upper: textureUpper, sampleRate: sampleRate)
+        let texture = (left: mids.left, right: mids.right)
+        textureLower = (quiet, quiet)
+        textureUpper = (quiet, quiet)
+        let dryLeadGain = leadGain(for: lead, frames: n, sampleRate: sampleRate)
+        if let leadAccent {
+            vDSP_vadd(lead.left, 1, leadAccent.left, 1, &lead.left, 1, vDSP_Length(frames))
+            vDSP_vadd(lead.right, 1, leadAccent.right, 1, &lead.right, 1, vDSP_Length(frames))
+        }
+        let sendGain = min(1.6, sqrtf(dryLeadGain / 1.23))
+        let midsGain = midsLevel(lead: lead, leadGain: dryLeadGain, texture: texture, score: score, clock: clock)
         let gesture = LofiEffects.Gesture.selection(seed: drift.seed, phrase: phrase)
         var effectRNG = MusicRNG(seed: drift.seed).fork(UInt64(phrase) + 450)
         let effectSeed = effectRNG.next()
@@ -137,76 +223,205 @@ nonisolated enum LofiRenderer {
         let tailFade = Float(clock.frame(at: 1.25))
         var tailL = [Float](repeating: 0, count: tailCount)
         var tailR = tailL
+        var spaceL = quiet, spaceR = quiet
+        // Per-frame automation, fill accent and filter sweep, computed ahead of the effect loop.
+        var spaceTrack = Self.automationTrack(automation.map(\.space), frames: frames, clock: clock)
+        var sweepTrack = [Float](repeating: 0, count: frames)
+        do {
+            // 0.5 + 0.5 sin(position * rate + phase), position in beats.
+            var start = filterPhase, step = Float(1 / clock.framesPerBeat) * filterRate, half: Float = 0.5
+            var length = Int32(frames)
+            vDSP_vramp(&start, &step, &sweepTrack, 1, vDSP_Length(frames))
+            vvsinf(&sweepTrack, sweepTrack, &length)
+            vDSP_vsmsa(sweepTrack, 1, &half, &half, &sweepTrack, 1, vDSP_Length(frames))
+        }
+        spaceTrack.withUnsafeMutableBufferPointer { space in
+            sweepTrack.withUnsafeMutableBufferPointer { sweep in
+                if let fill {
+                    let start = max(0, n - clock.frame(at: fill.buildBeats)), end = min(frames, n + clock.frame(at: 0.75))
+                    for frame in start..<end {
+                        let accent = fill.accent(beatsFromBoundary: Double(frame) / clock.framesPerBeat - LofiClock.beats)
+                        space[frame] += 0.25 * accent
+                        sweep[frame] += accent * 0.35
+                    }
+                }
+                var one: Float = 1
+                vDSP_vclip(sweep.baseAddress!, 1, [-1], &one, sweep.baseAddress!, 1, vDSP_Length(frames))
+            }
+        }
+        // Raw pointers keep the per-sample effect loop fast in unoptimized builds; the arrays are not
+        // resized while these are in use. The replay writes into `grains` once, between two runs.
+        let sendL = leadSend.left, sendR = leadSend.right, texSendL = textureSend.left, texSendR = textureSend.right
+        func run(_ range: Range<Int>) throws {
+            guard !range.isEmpty else { return }
+            let grainL = grains.left, grainR = grains.right
+            try sendL.withUnsafeBufferPointer { sendL in
+            try sendR.withUnsafeBufferPointer { sendR in
+            try texSendL.withUnsafeBufferPointer { texSendL in
+            try texSendR.withUnsafeBufferPointer { texSendR in
+            try grainL.withUnsafeBufferPointer { grainL in
+            try grainR.withUnsafeBufferPointer { grainR in
+            try spaceTrack.withUnsafeBufferPointer { spaceTrack in
+            try sweepTrack.withUnsafeBufferPointer { sweepTrack in
+            try spaceL.withUnsafeMutableBufferPointer { outL in
+            try spaceR.withUnsafeMutableBufferPointer { outR in
+                let captureStart = captureWindow.lowerBound, captureEnd = captureWindow.upperBound
+                let wetGain = Self.wetGain, capturing = !effectChannels.isEmpty
+                for frame in range {
+                    if frame & 8191 == 0 { try Task.checkCancellation() }
+                    let space = spaceTrack[frame]
+                    let returns = effects.processReturns(
+                        lead: (sendGain * sendL[frame], sendGain * sendR[frame]),
+                        texture: (texSendL[frame], texSendR[frame]),
+                        grains: (sendGain * grainL[frame], sendGain * grainR[frame]),
+                        space: space)
+                    if capturing, frame < n {
+                        effectChannels[0][0][frame] = returns.echo.left
+                        effectChannels[0][1][frame] = returns.echo.right
+                        effectChannels[1][0][frame] = returns.room.left
+                        effectChannels[1][1][frame] = returns.room.right
+                        effectChannels[2][0][frame] = returns.color.left
+                        effectChannels[2][1][frame] = returns.color.right
+                    }
+                    let filtered = wetTone.process(returns.mix, sweep: sweepTrack[frame], space: space)
+                    if frame >= captureStart, frame < captureEnd {
+                        replay?.record(filtered, at: frame)
+                    }
+                    outL[frame] = wetGain * filtered.left
+                    outR[frame] = wetGain * filtered.right
+                }
+            }}}}}}}}}}
+        }
+        let release = captureWindow.upperBound
+        if replay != nil, release > 0, release <= frames {
+            try run(0..<release)
+            replay?.release(into: &grains)
+            try run(release..<frames)
+        } else {
+            try run(0..<frames)
+        }
+        // Space: filtered once over phrase plus tail, so the carried tail is never filtered again,
+        // then ducked under the dry lead. The duck applies to this phrase's frames (own and carried).
+        let spaceStats = LofiStemChains.applySpace(left: &spaceL, right: &spaceR, sampleRate: sampleRate)
+        let duck = Self.spaceDuck(lead: lead, gain: dryLeadGain, frames: n, sampleRate: sampleRate)
+        // Bass: mono chain on the rendered voice, before the edge envelope and the kick duck.
+        guard let bassL = left.baseAddress, let bassR = right.baseAddress else { throw RenderError.buffer }
+        vDSP_vadd(bassL, 1, bassR, 1, bassL, 1, vDSP_Length(n))
+        var half: Float = 0.5
+        vDSP_vsmul(bassL, 1, &half, bassL, 1, vDSP_Length(n))
+        var bassStats = LofiStemChains.applyBass(bassL, count: n, sampleRate: sampleRate)
+
+        // Stems of the phrase: edge envelope, hiss after the mids chain, duck on the space.
+        var envelope = [Float](repeating: 1, count: n)
+        for i in 0..<min(edge, n) {
+            let e = min(1, Float(i) / Float(edge))
+            envelope[i] = min(envelope[i], e)
+            envelope[n - 1 - i] = min(envelope[n - 1 - i], e)
+        }
+        var hissTrack = Self.automationTrack(automation.map(\.dust), frames: n, clock: clock)
         var rng = MusicRNG(seed: seed).fork(12)
         var hiss: Float = 0
-        var balance = InstrumentBalance(sampleRate: sampleRate)
-        for frame in 0..<frames {
-            if frame.isMultiple(of: 8192) { try Task.checkCancellation() }
-            let position = Double(frame) / clock.framesPerBeat
-            let beat = Int(position)
-            let u = Float(position - Double(beat))
-            let accent = fill?.accent(beatsFromBoundary: position - LofiClock.beats) ?? 0
-            let space = 0.25 * accent + lerp(automation[beat].space, automation[beat + 1].space, u)
-            let dryLead = (lead.left[frame], lead.right[frame])
-            let dryTexture = (texture.left[frame], texture.right[frame])
-            let returns = effects.processReturns(lead: (sendGain * leadSend.left[frame], sendGain * leadSend.right[frame]),
-                                                 texture: (textureSend.left[frame], textureSend.right[frame]),
-                                                 grains: (sendGain * grains.left[frame], sendGain * grains.right[frame]),
-                                                 space: space)
-            if frame < n, !effectChannels.isEmpty {
-                effectChannels[0][0][frame] = returns.echo.left
-                effectChannels[0][1][frame] = returns.echo.right
-                effectChannels[1][0][frame] = returns.room.left
-                effectChannels[1][1][frame] = returns.room.right
-                effectChannels[2][0][frame] = returns.color.left
-                effectChannels[2][1][frame] = returns.color.right
-            }
-            let sweep = 0.5 + 0.5 * sinf(Float(position) * filterRate + filterPhase)
-            let filtered = wetTone.process(returns.mix, sweep: min(1, sweep + accent * 0.35), space: space)
-            if captureWindow.contains(frame) {
-                replay?.capture(filtered, at: frame, into: &grains)
-            }
-            if frame < n {
-                let dust = lerp(automation[beat].dust, automation[beat + 1].dust, u)
+        hissTrack.withUnsafeMutableBufferPointer { track in
+            for frame in 0..<n {
                 hiss += 0.10 * (rng.rangeF(-1...1) - hiss)
-                let envelope = min(1, Float(min(frame, n - 1 - frame)) / Float(edge))
-                dryChannels[0][frame] = dryLeadGain * dryLead.0 * envelope
-                dryChannels[1][frame] = dryLeadGain * dryLead.1 * envelope
-                textureChannels[0][frame] = (0.31 * dryTexture.0 + hiss * 0.005 * dust) * envelope
-                textureChannels[1][frame] = (0.31 * dryTexture.1 + hiss * 0.005 * dust) * envelope
-                wetChannels[0][frame] = Self.wetGain * filtered.left
-                wetChannels[1][frame] = Self.wetGain * filtered.right
-                balance.observe(dryChannels[0][frame] + textureChannels[0][frame] + wetChannels[0][frame],
-                                dryChannels[1][frame] + textureChannels[1][frame] + wetChannels[1][frame])
-                let kickGain = drumChannels.map {
-                    kickDuck.gain(drumLeft: $0[0][drumOffset + frame], drumRight: $0[1][drumOffset + frame])
-                } ?? 1
-                left[frame] = headroom(left[frame]) * envelope * kickGain
-                right[frame] = headroom(right[frame]) * envelope * kickGain
+                track[frame] *= hiss * 0.005
+            }
+        }
+        let count = vDSP_Length(n)
+        var leadLevel = dryLeadGain, mixLevel = midsGain, meter = Self.midsMeterTrim
+        for channel in 0..<2 {
+            let source = channel == 0 ? lead.left : lead.right
+            let mids = channel == 0 ? texture.left : texture.right
+            let space = channel == 0 ? spaceL : spaceR
+            vDSP_vsmul(source, 1, &leadLevel, dryChannels[channel], 1, count)
+            vDSP_vmul(dryChannels[channel], 1, envelope, 1, dryChannels[channel], 1, count)
+            vDSP_vsma(mids, 1, &mixLevel, hissTrack, 1, textureChannels[channel], 1, count)
+            vDSP_vmul(textureChannels[channel], 1, envelope, 1, textureChannels[channel], 1, count)
+            vDSP_vmul(space, 1, duck.gain, 1, wetChannels[channel], 1, count)
+        }
+        // The balance meters the mids at their former level, so raising them never turns the
+        // lead down with them; it then follows the tail.
+        var balance = InstrumentBalance(sampleRate: sampleRate)
+        var meteredL = [Float](repeating: 0, count: n), meteredR = meteredL
+        vDSP_vsma(texture.left, 1, &meter, dryChannels[0], 1, &meteredL, 1, count)
+        vDSP_vadd(meteredL, 1, wetChannels[0], 1, &meteredL, 1, count)
+        vDSP_vsma(texture.right, 1, &meter, dryChannels[1], 1, &meteredR, 1, count)
+        vDSP_vadd(meteredR, 1, wetChannels[1], 1, &meteredR, 1, count)
+        balance.observe(meteredL, meteredR)
+        // Store pre-limit samples so an overlapping tail goes through the linked knee only once.
+        // fade = min(1, (tailCount - 1 - i) / tailFade)
+        var fade = [Float](repeating: 0, count: tailCount)
+        for i in 0..<tailCount { fade[i] = Float(tailCount - 1 - i) / tailFade }
+        var one: Float = 1, zero: Float = 0
+        vDSP_vclip(fade, 1, &zero, &one, &fade, 1, vDSP_Length(tailCount))
+        spaceL.withUnsafeBufferPointer { vDSP_vmul($0.baseAddress! + n, 1, fade, 1, &tailL, 1, vDSP_Length(tailCount)) }
+        spaceR.withUnsafeBufferPointer { vDSP_vmul($0.baseAddress! + n, 1, fade, 1, &tailR, 1, vDSP_Length(tailCount)) }
+        balance.observe(tailL, tailR)
+        // Bass: headroom guard after the chain, edge envelope, then the kick duck (mono).
+        envelope.withUnsafeBufferPointer { envelope in
+            if let drumChannels {
+                let drumL = drumChannels[0] + drumOffset, drumR = drumChannels[1] + drumOffset
+                var deepest: Float = 1
+                for frame in 0..<n {
+                    let kickGain = kickDuck.gain(drumLeft: drumL[frame], drumRight: drumR[frame])
+                    deepest = kickGain < deepest ? kickGain : deepest
+                    bassL[frame] = headroom(bassL[frame]) * envelope[frame] * kickGain
+                }
+                bassStats.extra["kickDuckMaxDb"] = -20 * log10f(deepest)
             } else {
-                // Store pre-limit samples so an overlapping tail goes through the linked knee only once.
-                let fade = min(1, Float(frames - 1 - frame) / tailFade)
-                tailL[frame - n] = Self.wetGain * filtered.left * fade
-                tailR[frame - n] = Self.wetGain * filtered.right * fade
-                balance.observe(tailL[frame - n], tailR[frame - n])
+                for frame in 0..<n { bassL[frame] = headroom(bassL[frame]) * envelope[frame] }
             }
         }
+        bassR.update(from: bassL, count: n)
         let trim = balance.gain
-        for frame in 0..<n {
-            let previous: LofiEffects.Stereo = carry?.sample(frame, at: clock) ?? (0, 0)
-            let wet = boundedWet((wetChannels[0][frame] * trim + previous.left,
-                                  wetChannels[1][frame] * trim + previous.right))
-            for channel in 0..<2 {
-                dryChannels[channel][frame] *= trim
-                textureChannels[channel][frame] *= trim
+        report(score, clock: clock, phrase: phrase,
+               levels: ["leadGain": dryLeadGain, "sendGain": sendGain, "midsGain": midsGain, "balanceTrim": trim])
+        if LofiCaptureHooks.isEnabled {
+            var space = spaceStats
+            space.grMeanDb = duck.meanDB
+            space.grMaxDb = duck.maxDB
+            for (stats, bus) in [(bassStats, "bass"), (leadStats, "dry"), (mids.stats, "texture"), (space, "wet")] {
+                LofiStemChains.report(stats, bus: bus, phrase: phrase)
             }
-            wetChannels[0][frame] = wet.left
-            wetChannels[1][frame] = wet.right
         }
-        for i in tailL.indices {
-            tailL[i] *= trim
-            tailR[i] *= trim
+        let reveal = score.section == .returnTheme
+        let hold = returnRevealHold(score, clock: clock)
+        var level = trim
+        for channel in 0..<2 {
+            vDSP_vsmul(dryChannels[channel], 1, &level, dryChannels[channel], 1, count)
+            vDSP_vsmul(textureChannels[channel], 1, &level, textureChannels[channel], 1, count)
         }
+        // The carried tail on this phrase's clock (resampled only across a tempo change).
+        var carryL = [Float](repeating: 0, count: n), carryR = carryL
+        if let carry {
+            if carry.clock.sampleRate == clock.sampleRate {
+                let count = min(n, carry.left.count)
+                carryL.replaceSubrange(0..<count, with: carry.left[0..<count])
+                carryR.replaceSubrange(0..<count, with: carry.right[0..<count])
+            } else {
+                for frame in 0..<n {
+                    let previous = carry.sample(frame, at: clock)
+                    carryL[frame] = previous.left
+                    carryR[frame] = previous.right
+                }
+            }
+        }
+        duck.gain.withUnsafeBufferPointer { ducked in
+            carryL.withUnsafeBufferPointer { carryL in
+                carryR.withUnsafeBufferPointer { carryR in
+                    let wetL = wetChannels[0], wetR = wetChannels[1]
+                    for frame in 0..<n {
+                        let revealed = reveal ? Self.returnCarryGain(beat: Double(frame) / clock.framesPerBeat, hold: hold) : 1
+                        let wet = boundedWet((revealed * (wetL[frame] * trim + ducked[frame] * carryL[frame]),
+                                              revealed * (wetR[frame] * trim + ducked[frame] * carryR[frame])))
+                        wetL[frame] = wet.left
+                        wetR[frame] = wet.right
+                    }
+                }
+            }
+        }
+        vDSP_vsmul(tailL, 1, &level, &tailL, 1, vDSP_Length(tailCount))
+        vDSP_vsmul(tailR, 1, &level, &tailR, 1, vDSP_Length(tailCount))
         let fallbackWet = try stereoBuffer(clock: clock)
         if let channels = fallbackWet.floatChannelData {
             for i in 0..<min(n, tailCount) {
@@ -218,6 +433,59 @@ nonisolated enum LofiRenderer {
         return Phrase(bass: bass, dry: dry, texture: textureBuffer, wet: wetBuffer, fallbackWet: fallbackWet,
                       clock: clock, score: score, leadSampleCount: leadSampleCount,
                       tail: Tail(clock: clock, left: tailL, right: tailR), effectReturns: effectReturns)
+    }
+
+    /// A per-beat automation value interpolated linearly to every frame (the value at beat `b`
+    /// is `values[b]`), one vector ramp per beat.
+    static func automationTrack(_ values: [Float], frames: Int, clock: LofiClock) -> [Float] {
+        var track = [Float](repeating: 0, count: frames)
+        let fpb = clock.framesPerBeat
+        track.withUnsafeMutableBufferPointer { out in
+            var beat = 0
+            while beat + 1 < values.count {
+                let start = min(frames, Int((Double(beat) * fpb).rounded(.up)))
+                let end = min(frames, Int((Double(beat + 1) * fpb).rounded(.up)))
+                if start >= frames { break }
+                if end > start {
+                    var u0 = Float(Double(start) / fpb - Double(beat)), step = Float(1 / fpb)
+                    vDSP_vramp(&u0, &step, out.baseAddress! + start, 1, vDSP_Length(end - start))
+                    var slope = values[beat + 1] - values[beat], base = values[beat]
+                    vDSP_vsmsa(out.baseAddress! + start, 1, &slope, &base, out.baseAddress! + start, 1, vDSP_Length(end - start))
+                }
+                beat += 1
+            }
+        }
+        return track
+    }
+
+    /// The space duck of a phrase (`LofiStemChains.spaceDuck`) keyed by its dry lead at `gain`.
+    /// Scale invariant, so the dry stem itself reproduces it.
+    static func spaceDuck(lead: (left: [Float], right: [Float]), gain: Float, frames n: Int,
+                          sampleRate: Double) -> (gain: [Float], meanDB: Float, maxDB: Float) {
+        var l = Array(lead.left.prefix(n)), r = Array(lead.right.prefix(n))
+        var g = gain
+        vDSP_vsmul(l, 1, &g, &l, 1, vDSP_Length(l.count))
+        vDSP_vsmul(r, 1, &g, &r, 1, vDSP_Length(r.count))
+        return l.withUnsafeBufferPointer { lp in
+            r.withUnsafeBufferPointer { rp in
+                LofiStemChains.spaceDuck(leadLeft: lp.baseAddress!, leadRight: rp.baseAddress!, count: min(lp.count, rp.count),
+                                         sampleRate: sampleRate)
+            }
+        }
+    }
+
+    /// Indices of the upper note of each two-note mid shell: a texture note whose partner (same
+    /// articulation, lower pitch) starts at the same beat or up to the roll's stagger before it.
+    static func upperShellVoices(_ score: LofiScore) -> Set<Int> {
+        let mids = score.notes.indices.filter { score.notes[$0].part == .texture }
+        return Set(mids.filter { i in
+            let note = score.notes[i]
+            return mids.contains { j in
+                let other = score.notes[j]
+                return j != i && other.articulation == note.articulation && other.midi < note.midi
+                    && other.beat <= note.beat + 1e-9 && other.beat >= note.beat - 0.18
+            }
+        })
     }
 
     static func stereoBuffer(clock: LofiClock, frames: Int? = nil) throws -> AVAudioPCMBuffer {
@@ -238,12 +506,14 @@ nonisolated enum LofiRenderer {
         var peak: Float = 0
         for start in stride(from: 0, to: frames, by: window) {
             let end = min(start + window, frames)
-            var power: Float = 0
-            for frame in start..<end {
-                let left = lead.left[frame], right = lead.right[frame]
-                power += 0.5 * (left * left + right * right)
-                peak = max(peak, abs(left), abs(right))
-            }
+            var l: Float = 0, r: Float = 0, pl: Float = 0, pr: Float = 0
+            let length = vDSP_Length(end - start)
+            lead.left.withUnsafeBufferPointer { vDSP_svesq($0.baseAddress! + start, 1, &l, length) }
+            lead.right.withUnsafeBufferPointer { vDSP_svesq($0.baseAddress! + start, 1, &r, length) }
+            lead.left.withUnsafeBufferPointer { vDSP_maxmgv($0.baseAddress! + start, 1, &pl, length) }
+            lead.right.withUnsafeBufferPointer { vDSP_maxmgv($0.baseAddress! + start, 1, &pr, length) }
+            let power = 0.5 * (l + r)
+            peak = max(peak, pl, pr)
             strongest = max(strongest, power / Float(end - start))
         }
         guard peak > 0.0001 else { return 1 }
@@ -262,6 +532,96 @@ nonisolated enum LofiRenderer {
                 }
             }
         }
+    }
+
+    /// One mids gain per phrase: meter the dry lead (after its gain) and the dry mids in 400 Hz to
+    /// 3 kHz where the score has both sounding, and set the mids `midsUnderLeadDB` under the lead.
+    /// Every program and arrangement then keeps the same relation; the mids never ride per note.
+    private static func midsLevel(lead: (left: [Float], right: [Float]), leadGain: Float,
+                                  texture: (left: [Float], right: [Float]), score: LofiScore,
+                                  clock: LofiClock) -> Float {
+        // A breakdown's single soft answer keeps its nominal, quieter level.
+        guard score.section != .breakdown else { return midsTrim }
+        let n = clock.frameCount
+        var leadOn = [Bool](repeating: false, count: n), midOn = leadOn
+        for note in score.notes where note.part != .bass {
+            let range = max(0, clock.frame(at: note.beat))..<min(n, clock.frame(at: note.beat + note.length))
+            guard !range.isEmpty else { continue }
+            if note.part == .lead {
+                leadOn.withUnsafeMutableBufferPointer { $0[range].update(repeating: true) }
+            } else {
+                midOn.withUnsafeMutableBufferPointer { $0[range].update(repeating: true) }
+            }
+        }
+        let rate = Float(clock.sampleRate)
+        let high = expf(-2 * .pi * 400 / rate), low = 1 - expf(-2 * .pi * 3_000 / rate)
+        struct Meter {
+            var x: Float = 0, hp: Float = 0, lp: Float = 0
+            mutating func band(_ input: Float, high: Float, low: Float) -> Float {
+                hp = high * (hp + input - x)
+                x = input
+                lp += (hp - lp) * low
+                return lp
+            }
+        }
+        var leadMeter = Meter(), midMeter = Meter()
+        var leadPower: Double = 0, midPower: Double = 0
+        var count = 0
+        var peakL: Float = 0, peakR: Float = 0
+        vDSP_maxmgv(texture.left, 1, &peakL, vDSP_Length(n))
+        vDSP_maxmgv(texture.right, 1, &peakR, vDSP_Length(n))
+        let peak = max(peakL, peakR)
+        var leadMono = [Float](repeating: 0, count: n), midMono = leadMono
+        var half: Float = 0.5
+        vDSP_vasm(lead.left, 1, lead.right, 1, &half, &leadMono, 1, vDSP_Length(n))
+        vDSP_vasm(texture.left, 1, texture.right, 1, &half, &midMono, 1, vDSP_Length(n))
+        leadMono.withUnsafeBufferPointer { leadMono in
+            midMono.withUnsafeBufferPointer { midMono in
+            leadOn.withUnsafeBufferPointer { leadOn in
+            midOn.withUnsafeBufferPointer { midOn in
+                for frame in 0..<n {
+                    let l = leadMeter.band(leadMono[frame], high: high, low: low) * leadGain
+                    let m = midMeter.band(midMono[frame], high: high, low: low)
+                    guard leadOn[frame], midOn[frame] else { continue }
+                    leadPower += Double(l * l)
+                    midPower += Double(m * m)
+                    count += 1
+                }
+            }}
+            }
+        }
+        var gain = midsTrim
+        if count >= Int(midsMatchSeconds * clock.sampleRate), midPower > 1e-14, leadPower > 1e-14 {
+            let matched = Float(sqrt(leadPower / midPower)) * powf(10, -midsUnderLeadDB / 20)
+            gain = min(midsTrim * midsGainRange, max(midsTrim / midsGainRange, matched))
+        }
+        // Plucked programs meter quietly over a held shell; never let their attacks overshoot.
+        return peak > 0 ? min(gain, midsPeakCeiling / peak) : gain
+    }
+
+    /// Capture-only: one `diagnostics.bass` element per phrase, frames on the capture timeline
+    /// (phrase index times phrase frames). `attackFrame` is the note start plus the voice's attack lead.
+    private static func report(_ score: LofiScore, clock: LofiClock, phrase: Int, levels: [String: Float]) {
+        guard LofiCaptureHooks.isEnabled else { return }
+        let origin = phrase * clock.frameCount
+        let lead = Int((score.bassVoice.attackLead * clock.sampleRate).rounded())
+        let notes: [[String: Any]] = score.notes.filter { $0.part == .bass }.map { note in
+            let frame = origin + clock.frame(at: note.beat)
+            let kick = score.bassAnchors.first { $0.noteBeat == note.beat }
+            return ["frame": frame, "attackFrame": frame + lead, "midi": note.midi,
+                    "alignedKickFrame": kick.map { origin + clock.frame(at: $0.kickBeat) as Any } ?? NSNull()]
+        }
+        LofiCaptureHooks.appendReport("bass", ["phrase": phrase, "voice": String(describing: score.bassVoice),
+                                               "notes": notes] as [String: Any])
+        // Per-phrase gains of the instrument stems, for the stem-chain and balance work.
+        let mids = score.notes.filter { $0.part == .texture }
+        var entry: [String: Any] = levels.mapValues { Double($0) }
+        entry["phrase"] = phrase
+        entry["section"] = String(describing: score.section)
+        entry["program"] = score.preset.name
+        entry["midEvents"] = mids.count / 2
+        entry["midArticulations"] = mids.map { String(describing: $0.articulation) }
+        LofiCaptureHooks.appendReport("musicLevels", entry)
     }
 
     enum RenderError: Error { case buffer }
@@ -290,7 +650,34 @@ nonisolated enum LofiRenderer {
             peak = max(peak, abs(left), abs(right))
             power += Double(left * left + right * right) * 0.5
             count += 1
-            guard count == blockFrames else { return }
+            if count == blockFrames { flush() }
+        }
+
+        /// Block form of `observe`, vectorized per 50 ms block.
+        mutating func observe(_ left: [Float], _ right: [Float]) {
+            let total = min(left.count, right.count)
+            left.withUnsafeBufferPointer { l in
+                right.withUnsafeBufferPointer { r in
+                    guard let l = l.baseAddress, let r = r.baseAddress else { return }
+                    var i = 0
+                    while i < total {
+                        let take = min(blockFrames - count, total - i)
+                        var pl: Float = 0, pr: Float = 0, ml: Float = 0, mr: Float = 0
+                        vDSP_svesq(l + i, 1, &pl, vDSP_Length(take))
+                        vDSP_svesq(r + i, 1, &pr, vDSP_Length(take))
+                        vDSP_maxmgv(l + i, 1, &ml, vDSP_Length(take))
+                        vDSP_maxmgv(r + i, 1, &mr, vDSP_Length(take))
+                        peak = max(peak, ml, mr)
+                        power += Double(pl + pr) * 0.5
+                        count += take
+                        i += take
+                        if count == blockFrames { flush() }
+                    }
+                }
+            }
+        }
+
+        private mutating func flush() {
             let block = power / Double(count)
             shortSum += block - history[(position + 52) % 60]
             longSum += block - history[position]
@@ -309,14 +696,16 @@ nonisolated enum LofiRenderer {
         }
     }
 
-    private static func boundedWet(_ signal: LofiEffects.Stereo) -> LofiEffects.Stereo {
+    @_transparent
+    static func boundedWet(_ signal: LofiEffects.Stereo) -> LofiEffects.Stereo {
         let peak = max(abs(signal.left), abs(signal.right))
         guard peak > 0.25 else { return signal }
         let gain = (0.25 + 0.13 * tanhf((peak - 0.25) / 0.13)) / peak
         return (signal.left * gain, signal.right * gain)
     }
 
-    private static func headroom(_ sample: Float) -> Float {
+    @_transparent
+    static func headroom(_ sample: Float) -> Float {
         let level = abs(sample)
         guard level > 0.74 else { return sample }
         let limited = 0.74 + 0.099 * tanhf((level - 0.74) / 0.099)
@@ -324,3 +713,4 @@ nonisolated enum LofiRenderer {
     }
 
 }
+

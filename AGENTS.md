@@ -19,13 +19,15 @@ Use installed SDKs and available simulator names. Resolve Swift packages through
 - `Liminal/LiminalApp.swift`, `ContentView.swift`, shared control sections: macOS entry point and UI.
 - `Liminal/visionOS/`: visionOS entry point, control window, immersive depth-displaced shell, head pose, source upload, offscreen rendering and RealityKit materials.
 - `Liminal/Audio/`: GenerativeEngine facade, Ambient scheduler and synthesis layers, shared effects and mix, offline renders, and archive audio voices.
-- `Liminal/Audio/Lofi/`: Lo-Fi form and motifs, acoustic sample playback, full-take drum transport, footage-dialogue chopping, and stereo effects. The score and DSP tests plus `scripts/check-lofi.sh` verify this path. Keep the private drum files and beat-grid catalog out of Git. See [instrument credits](docs/lofi-samples.md) for the bundled CC0 samples.
+- `Liminal/Audio/Lofi/`: Lo-Fi form and motifs, acoustic sample playback, full-take drum transport, footage-dialogue chopping, and stereo effects. The score and DSP tests plus `scripts/check-lofi.sh` verify this path. Keep the private drum files and beat-grid catalog out of Git. See [instrument credits](docs/lofi-samples.md) for the bundled CC0 samples. Related files in this folder: `LofiStemChains` (per-bus chains), `LofiDrumLandmarks` and `LofiTimingField` (drum attack landmarks and the sparse shared timing), `LofiBassVoice` (three bass voices) and `LofiCaptureHooks` (offline capture taps, inert in the app).
+- `Liminal/Audio/Lofi/Dialogue/`: dialogue chopping. Analyzer, speech hierarchy, pad bank builder, motif and performer (performance plans), reorder guard, chop renderer, cue coordinator and director, transcription provider and speech assets. See [architecture](docs/architecture.md#dialogue-chopping-pipeline).
+- `Liminal/Audio/Lofi/DSP/`: biquad, dynamics, loudness, saturation, stereo, true-peak, the master kernel and the master finisher.
 - `Liminal/Visual/`: Gemini client and model routing, prompt construction/history, generation budgets, image queue/store/framing/upscaling/depth, MusicReactor and computed effect uniforms.
 - `Liminal/Shaders/`: GPU effects. `EffectsUniforms.swift` is the CPU-side layout contract.
 - `Liminal/Archive/`: Internet Archive catalog/client, seed list, disk clip cache, frame source, FootageWeaver and compositing/audio.
 - `Liminal/Services/`: persistent settings and environment credentials.
 - `LiminalTests/`: prompt, image, budget, spatial, transition, effect, archive, music and coupling checks. `LiminalUITests/`: UI and launch tests.
-- `scripts/`: simulator interaction, GPU performance, transition/footage clips, music rendering/analysis, archive curation and visual measurements. Inspect script options before execution; some fetch network fixtures or require local tools.
+- `scripts/`: simulator interaction, GPU performance, transition/footage clips, music rendering/analysis, archive curation and visual measurements. `mix-report.sh` and `mix-matrix.sh` capture Lo-Fi audio and measure the mix against `mix-criteria.json`, using the modules in `scripts/mixlib/`; read [mix verification](docs/mix-verification.md) first. Inspect script options before execution; some fetch network fixtures or require local tools.
 - `tools/`: standalone Swift visual/prompt harnesses.
 - `docs/decisions/`: design decisions and review index; `docs/plans/` and `docs/research/`: implementation plans and research. Older architecture documents may predate current decisions.
 - Bundled Core ML resources: DepthAnythingV2SmallF16.mlpackage and realesrgan512.mlmodelc. Do not casually regenerate or delete binary model assets.
@@ -34,11 +36,13 @@ Use installed SDKs and available simulator names. Resolve Swift packages through
 
 Music styles are Drift, Glass, Deep and Garden. Harmony can evolve automatically or pin a scale. MusicState feeds visual modulation; image mood feeds back into music. Preserve audio scheduling and thread boundaries; avoid work or allocation on realtime paths.
 
+In Lo-Fi, dialogue analysis never delays the film bed or the music. A dialogue plan carries its cue token and revision, and stale tokens and lower revisions are ignored. Transcription is optional: the acoustic fallback is always retained and is used whenever transcription is unavailable. Verify mix changes with the [mix verification](docs/mix-verification.md) tools (`scripts/mix-matrix.sh`) rather than by ear.
+
 Images use row zero at the top. Preserve consistent crop/orientation across platforms. CPU and Metal uniform structures must match exactly. EffectsUniformsComputer is shared computation; macOS uses MTKView and visionOS renders into RealityKit drawable textures on a depth-displaced wraparound shell. Simulator depth inference can be zero: use depth fixtures and validate actual hardware separately.
 
 Generation settings live in ImageGenerationConfig; budget caps live in GenerationBudget. Primary model is currently gemini-nano-banana-2.1, fallback gemini-3.1-flash-lite-image. Treat these as repository configuration, not independently verified provider availability. Cache reuse is the fallback when generation is unavailable or capped.
 
-Archive footage weaves changing segments, looks and interaction recipes into the still-image anchor. The 12-film pool keeps ten pinned sources and two rotating discoveries. In Lo-Fi, the filtered continuous soundtrack and beat-scheduled speech have separate audio paths. The dialogue path levels each cut and includes its own delay and room. Preserve fades and cache limits. Retain individual archive source credits.
+Archive footage weaves changing segments, looks and interaction recipes into the still-image anchor. The 12-film pool keeps ten pinned sources and two rotating discoveries. In Lo-Fi, the filtered continuous soundtrack and beat-scheduled speech have separate audio paths. The dialogue path levels each cut and includes its own delay and room. Preserve fades and cache limits. Do not add size caps that change what can play (A31); launch cleanup only removes unindexed footage and stale download temp files. Retain individual archive source credits.
 
 ## Safe validation and visual review
 

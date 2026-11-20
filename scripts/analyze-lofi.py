@@ -285,6 +285,7 @@ def analyze(run, true_peak_limit, report):
         failures.append("lofi: combined music bus is silent")
     if stats["master"].sample_peak <= SILENCE_FLOOR:
         failures.append("master: combined output is silent")
+    failures.extend(stale_motif_lines(manifest))
     if stats["master"].nonfinite:
         return
 
@@ -301,11 +302,50 @@ def analyze(run, true_peak_limit, report):
             failures.append("master: FFmpeg sample peak disagrees with direct PCM peak")
 
 
+def stale_motif_lines(manifest):
+    """Fresh samples every loop (user direction, 19 November 2026): in motif mode each 16-bar loop
+    (four phrases) leads with its own line. Fails when a loop's main bank is the previous loop's."""
+    chops = [c for c in manifest.get("dialogueChops") or [] if c.get("cell") and isinstance(c.get("block"), int)]
+    loops = {}
+    for chop in chops:
+        loops.setdefault(chop["block"] // 4, []).append(chop["bankID"])
+    keys = sorted(loops)
+    failures = []
+    for a, b in zip(keys, keys[1:]):
+        if b != a + 1:
+            continue
+        main_a = max(set(loops[a]), key=loops[a].count)
+        main_b = max(set(loops[b]), key=loops[b].count)
+        if main_a == main_b:
+            failures.append(f"dialogue: loop {b} repeats loop {a}'s line (bank {main_b}); every loop needs a fresh line")
+    return failures
+
+
+def engine_ceiling(run):
+    """The master finisher's own ceiling (diagnostics.masterDynamics.ceilingDbtp) when the capture has one."""
+    try:
+        manifest = json.loads((run / "manifest.json").read_text(encoding="utf-8"))
+        dynamics = (manifest.get("diagnostics") or {}).get("masterDynamics") or {}
+        ceiling = dynamics.get("ceilingDbtp")
+        if dynamics.get("operational", True) and isinstance(ceiling, (int, float)) and math.isfinite(ceiling):
+            return float(ceiling)
+    except (OSError, ValueError):
+        pass
+    return None
+
+
 def measure(run, true_peak_limit):
     report_path = run / "analysis.json"
+    limit_source = "argument"
+    if true_peak_limit is None:
+        true_peak_limit = engine_ceiling(run)
+        limit_source = "manifest masterDynamics.ceilingDbtp"
+        if true_peak_limit is None:
+            true_peak_limit, limit_source = -1.5, "default"
     report = {
         "schema": "liminal-lofi-analysis-v1",
         "truePeakLimitDbtp": true_peak_limit,
+        "truePeakLimitSource": limit_source,
         "failures": [],
         "reproduce": ["python3", "scripts/analyze-lofi.py", str(run),
                       "--max-true-peak", str(true_peak_limit)],
@@ -485,7 +525,8 @@ def ebu_subset():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("capture", type=Path, nargs="?", help="directory containing manifest.json and synchronized WAVs")
-    parser.add_argument("--max-true-peak", type=float, default=-1.5, help="dBTP ceiling, defaults to -1.5")
+    parser.add_argument("--max-true-peak", type=float, default=None,
+                        help="dBTP ceiling; defaults to the engine's masterDynamics.ceilingDbtp from the manifest, else -1.5")
     parser.add_argument("--self-test", action="store_true", help="exercise known and deliberately invalid fixtures")
     parser.add_argument("--ebu-subset", "--ebu-stereo-subset", action="store_true",
                         help="run selected analytic EBU 3341 and 3342 meter fixtures")
@@ -498,7 +539,7 @@ def main():
         return 0
     if options.capture is None or not options.capture.is_dir():
         parser.error("provide an existing capture directory or --self-test")
-    if not math.isfinite(options.max_true_peak):
+    if options.max_true_peak is not None and not math.isfinite(options.max_true_peak):
         parser.error("--max-true-peak must be finite")
     run = options.capture.resolve()
     report = measure(run, options.max_true_peak)

@@ -21,7 +21,9 @@
 #     --seconds  collection window in seconds after warm-up (default 30)
 #     --warmup   seconds to ignore after the first PERF line (default 15)
 #     --freeze   pin effect time to T seconds (deterministic screenshots)
-#     --lofi     run with Lo-Fi, archive footage and cached images; check transport continuity
+#     --lofi     run with Lo-Fi, archive footage and cached images; check transport continuity and
+#                that every live dialogue plan's first event is at least 0.30 s ahead of its commit
+#                (lofi.minDialogueLeadSeconds, lofi.dialogueLeadsUnderCommitMargin)
 #     --split    also pass -LiminalPerfSplitPasses YES (no-op since direct-drawable render)
 #     --app      path to Liminal.app (default: <dd>/Build/Products/Debug-xrsimulator/Liminal.app)
 #     --dd       derived-data dir holding the build (default: $SCRATCH/dd-perf)
@@ -200,6 +202,13 @@ if int(sys.argv[8]):
                        timedRests=rests, masterTapDiscontinuities=gaps,
                        mixEpochs=window.count("Lo-Fi mix epoch:"), filmCues=window.count("archive audio begin"),
                        routeRestarts=window.count("Audio route recovered"))
+    # Live dialogue lead (DialogueCueCoordinator.report): first planned event minus the moment the plan
+    # was ready, over the whole playback. C-D6 in the offline report simulates this; this is the live gate.
+    plans = re.findall(r"Lo-Fi dialogue plan cue=(\d+) rev=(\d+) .*? lead=(-?[0-9.]+|-)s", playback)
+    plan_leads = [float(v) for _, _, v in plans if v != "-"]
+    out["lofi"].update(dialoguePlans=len(plans), dialoguePlansWithEvents=len(plan_leads),
+                       minDialogueLeadSeconds=min(plan_leads, default=None),
+                       dialogueLeadsUnderCommitMargin=sum(1 for v in plan_leads if v < 0.30))
     # A frozen audio clock can still drive pictures. Check the live transport independently.
     if not tempo: failures.append("Lo-Fi transport never started")
     else:
@@ -214,6 +223,8 @@ if int(sys.argv[8]):
     if out["lofi"]["repeatedPhrases"]: failures.append("a phrase missed its preparation deadline")
     if rests: failures.append("phrase scheduling fell back to silence")
     if gaps: failures.append("discontinuous master tap sample clock")
+    if out["lofi"]["dialogueLeadsUnderCommitMargin"]:
+        failures.append("a dialogue plan's first event was under 0.30 s ahead of its commit")
     out["failures"] = failures
 print(json.dumps(out, indent=2))
 sys.exit(1 if failures else 0)

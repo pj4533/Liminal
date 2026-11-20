@@ -2,19 +2,34 @@ import Foundation
 import Combine
 import OSLog
 
-/// On both screens the midpoint of the image exchange belongs to the audible fill.
+/// A Lo-Fi image change timed to the drums. The style comes from the `TransitionDirector`, like every
+/// other crossfade, so Lo-Fi keeps the whole family. Its timing puts the end of that style's swap
+/// window on the fill's downbeat: the effects surge and the pictures exchange inside the warp while
+/// the drums fill, the new picture is fully in on the downbeat, and the look settles into the new section.
 nonisolated struct LofiImageReveal: Sendable {
     let downbeat: Double
-    let duration: Double
-    var start: Double { downbeat - duration / 2 }
-    var spec: TransitionSpec {
-        TransitionSpec(style: .classic, seed: 0, duration: Float(duration), flip: false)
-    }
+    let spec: TransitionSpec
+    var duration: Double { Double(spec.duration) }
+    /// The exchange completes on the downbeat (`swap(progress(at: downbeat)) == 1`).
+    var start: Double { downbeat - Double(spec.style.shape.s1) * duration }
     func progress(at uptime: Double) -> Double { min(1, max(0, (uptime - start) / duration)) }
 
-    static func next(on grid: LofiTakeGrid, after uptime: Double) -> Self {
+    /// - Parameter pick: the director's choice for this crossfade, given the time between image changes.
+    static func next(on grid: LofiTakeGrid, after uptime: Double,
+                     pick: (_ imageInterval: Double) -> TransitionSpec) -> Self {
         let boundary = grid.nextBoundary(after: uptime)
-        return Self(downbeat: boundary.time, duration: boundary.fill.dissolveBeats * grid.beatDuration)
+        // Boundaries after the turnaround run at the committed new tempo (`nextBoundary`).
+        let beat = boundary.time > grid.origin + 64 * grid.beatDuration + 1e-9 ? grid.nextBeatDuration ?? grid.beatDuration : grid.beatDuration
+        return Self(downbeat: boundary.time, spec: beatAligned(pick(32 * beat), beat: beat))
+    }
+
+    /// Snaps the lead-in (start to downbeat) to whole beats, at least two, so the surge begins on a beat of the fill.
+    static func beatAligned(_ spec: TransitionSpec, beat: Double) -> TransitionSpec {
+        var s = spec
+        let end = Double(max(spec.style.shape.s1, 0.05))
+        let beats = max(2, (Double(spec.duration) * end / beat).rounded())
+        s.duration = Float(beats * beat / end)
+        return s
     }
 }
 
@@ -173,9 +188,19 @@ final class VisualEngine: ObservableObject {
     /// The transition for the crossfade that starts now (call once per crossfade).
     /// - Parameters: energy = music energy when the visuals follow the music, else nil.
     func nextTransition(effectTime: Float, intensity: Float, energy: Float?, hasDepth: Bool) -> TransitionSpec {
+        pickContext = (effectTime, intensity, energy, hasDepth)
         if let reveal { return reveal.spec }
-        let spec = transitionDirector.next(time: effectTime, intensity: intensity, energy: energy, hasDepth: hasDepth,
-                                           imageInterval: Float(scheduledInterval))
+        return pickTransition(imageInterval: scheduledInterval)
+    }
+
+    /// The renderers' latest inputs to `nextTransition`; a Lo-Fi reveal is chosen ahead of its crossfade with these.
+    private var pickContext: (effectTime: Float, intensity: Float, energy: Float?, hasDepth: Bool) =
+        (0, DebugLaunchOptions.effectIntensity(setting: SettingsService.shared.effectIntensity), nil, false)
+
+    private func pickTransition(imageInterval: Double) -> TransitionSpec {
+        let c = pickContext
+        let spec = transitionDirector.next(time: c.effectTime, intensity: c.intensity, energy: c.energy,
+                                           hasDepth: c.hasDepth, imageInterval: Float(imageInterval))
         LMLog.visual.info("🌀 TRANSITION style=\(spec.style.name, privacy: .public) seed=\(String(format: "%.3f", spec.seed), privacy: .public) duration=\(String(format: "%.2f", spec.duration), privacy: .public)s flip=\(spec.flip)")
         return spec
     }
@@ -215,7 +240,7 @@ final class VisualEngine: ObservableObject {
                 try? await Task.sleep(for: .milliseconds(15))
                 continue
             }
-            let cue = LofiImageReveal.next(on: grid, after: max(now(), lastDownbeat + 0.01))
+            let cue = LofiImageReveal.next(on: grid, after: max(now(), lastDownbeat + 0.01)) { pickTransition(imageInterval: $0) }
             ArchiveFootageService.shared.expectNextImage(after: max(0, cue.downbeat - now()))
             // Give live generation most of the phrase, with six seconds left for
             // a local decode, crop, colour analysis and both platforms' GPU upload.

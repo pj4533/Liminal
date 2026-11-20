@@ -14,6 +14,11 @@ nonisolated enum MusicControl {
     /// Archive footage sound (docs/plans/archive-video.md 4): start a decoded segment, fade it out, or
     /// change its level ("Footage audio").
     case archiveBegin(ArchiveVoice.Cue), archiveEnd(fade: Double), archiveGain(Float)
+    /// A dialogue performance for a cue (plan 6.3): stored, then queued incrementally on the chop timeline.
+    case archiveChops(ArchiveVoice.ChopPlan)
+    /// The footage service abandoned cue `token` after its dialogue work started (the bed never began,
+    /// or footage stopped): its stored chops are dropped and later plans for it ignored.
+    case archiveChopsCancel(token: Int)
 }
 
 /// Owns time, randomness, harmony, scenes and layers (decisions D3-D6). Runs on its own serial queue in
@@ -174,6 +179,7 @@ nonisolated final class MusicConductor: @unchecked Sendable {
         queue.async { [self] in
             guard archiveOnly, began, !stopping else { return }
             archive?.setEchoTempo(beatDuration)
+            archive?.notePhrase(phrase, beatDuration: beatDuration, now: scheduler.now)
             mix.syncDelay(toBeatDuration: beatDuration, pattern: .choose(seed: seed, phrase: phrase), now: scheduler.now)
         }
     }
@@ -260,6 +266,8 @@ nonisolated final class MusicConductor: @unchecked Sendable {
                 mix.modulate(t: time, dt: dt)
                 for layer in layers { for strip in layer.allStrips { strip.tick(now: time) } }
             }
+            // Music and bed ducking under featured chops run on every step (plan 8.5).
+            archive?.updateDucks(at: time)
             return
         }
         if time - lastModulate >= 0.0999 { modulate(time) }
@@ -307,6 +315,8 @@ nonisolated final class MusicConductor: @unchecked Sendable {
         case .archiveBegin(let cue): if began && !stopping { archive?.begin(cue, now: scheduler.now) }
         case .archiveEnd(let fade): archive?.end(fade: fade, now: scheduler.now)
         case .archiveGain(let g): archive?.setGain(g)
+        case .archiveChops(let plan): if began && !stopping { archive?.perform(plan, now: scheduler.now) }
+        case .archiveChopsCancel(let token): archive?.cancelChops(token: token)
         }
     }
 

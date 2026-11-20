@@ -47,13 +47,15 @@ Automated test runs once exceeded the user's monthly Google budget. Any DEBUG la
 - `Liminal/LiminalApp.swift`, `ContentView.swift`, `*Section.swift`, `ControlComponents.swift`, `MusicModeControls.swift`: macOS entry point and shared control UI.
 - `Liminal/visionOS/`: visionOS app, control window, `ImmersiveDomeView` render loop, `OffscreenEffectsRenderer` (2048² mono render into a RealityKit `DrawableQueue`), `SourceTextureUploader`, shell mesh/materials, head pose.
 - `Liminal/Audio/`: `GenerativeEngine` facade (graph, start/stop, route recovery), `MusicConductor` (own queue), `SceneDirector`, `Layers/`, `MixBus`, `OfflineRender`, `ArchiveVoice`.
-- `Liminal/Audio/Lofi/`: `LofiScore` (32-bar forms, motifs), `LofiRenderer` (off-audio-thread phrase render), `LofiPlayback` (transport, phrase queue, late-phrase fallback, clock publishing), `LofiBus`/`LofiMasterBus`, `LofiDrumTake`/`LofiDrumLibrary`/`LofiBeatGrid`, `LofiDialogueSampler`/`LofiSpeechFocus`, effects and sidechains. `InstrumentSamples/` holds the CC0 samples credited in `docs/lofi-samples.md`.
+- `Liminal/Audio/Lofi/`: `LofiScore` (32-bar forms, motifs), `LofiRenderer` (off-audio-thread phrase render), `LofiPlayback` (transport, phrase queue, late-phrase fallback, clock publishing), `LofiBus`/`LofiMasterBus`, `LofiDrumTake`/`LofiDrumLibrary`/`LofiBeatGrid`, `LofiDialogueSampler`/`LofiSpeechFocus`, effects and sidechains. `InstrumentSamples/` holds the CC0 samples credited in `docs/lofi-samples.md`. Also `LofiStemChains` (per-bus chains), `LofiDrumLandmarks` and `LofiTimingField` (attack landmarks and the sparse shared timing), `LofiBassVoice` (three bass voices) and `LofiCaptureHooks` (offline capture taps, inert in the app).
+- `Liminal/Audio/Lofi/Dialogue/`: dialogue chopping. Analyzer, hierarchy, pad bank builder, motif and performer, reorder guard, chop renderer, cue coordinator and director, transcription provider and assets. See `docs/architecture.md#dialogue-chopping-pipeline`.
+- `Liminal/Audio/Lofi/DSP/`: biquad, dynamics, loudness, saturation, stereo, true peak, master kernel and finisher.
 - `Liminal/Visual/`: `GeminiClient`, `ModelRouter`, `ImageGenerationConfig`, `GenerationBudget`, `Prompt/`, `ImageQueue`/`ImageStore`/`AtomicImageBuffer`, `ImageFraming`, upscalers, `DepthMapGenerator` (Core ML depth), `DepthAnalyzer` (Vision saliency, an actor), `TimerDrivenCrossfade`, `EffectsMetalView` (macOS), `EffectsUniformsComputer`, `MusicReactor`/`MusicModulation`, `Spatial/`.
 - `Liminal/Shaders/`: `EffectsRenderer.metal` (single staged fragment shader), `ArchiveVideo.metal`, `DreamyEffects.metal`. `Liminal/EffectsUniforms.swift` is the CPU-side layout contract.
-- `Liminal/Archive/`: catalog/client/seed list (`archive-seeds.json`), `ArchiveClipStore` (3 GB cache, 10 pinned + 2 rotating), `VideoFrameSource`, `FootageWeaver`, `VideoComposite`, `ArchiveAudio` (decode and cue math).
+- `Liminal/Archive/`: catalog/client/seed list (`archive-seeds.json`), `ArchiveClipStore` (3 GB cache, 10 pinned + 2 rotating, launch sweep of unindexed and temp files), `VideoFrameSource`, `FootageWeaver`, `VideoComposite`, `ArchiveAudio` (decode and cue math).
 - `Liminal/Services/`: `SettingsService` (persistent settings), `EnvironmentService` (credentials).
 - `Liminal/Utils/DebugLaunchOptions.swift`: every debug launch flag, compiled out of Release. The flag table is in `docs/development.md`.
-- `LiminalTests/`, `LiminalUITests/`; `scripts/` (perf, shader bench, transition/footage clips, music renders and Lo-Fi analysis, archive curation); `tools/` (standalone Swift harnesses).
+- `LiminalTests/`, `LiminalUITests/`; `scripts/` (perf, shader bench, transition/footage clips, music renders and Lo-Fi analysis, archive curation; `mix-report.sh`, `mix-matrix.sh`, `mix-criteria.json` and `mixlib/` for mix verification); `tools/` (standalone Swift harnesses).
 - Docs: `docs/README.md` (index), `architecture.md`, `experience.md`, `development.md`, `decisions/` (rationale, with numbered items such as D34 and A30), `plans/` and `research/` (may describe unfinished or historical work). The older uppercase docs (`LIMINAL.md`, `PLATFORM_ARCHITECTURE.md`, `DUAL_PIPELINE_ARCHITECTURE.md`, …) predate current decisions. Check the source before relying on them.
 
 ## Contracts to preserve
@@ -68,6 +70,7 @@ Automated test runs once exceeded the user's monthly Google budget. Any DEBUG la
 - Route changes that stop `AVAudioEngine` re-arm music and the visual clock together through `GenerativeEngine.recoverStoppedGraph`. A user Stop cancels a pending recovery.
 - Drum takes keep their original sample grid and interior fills. Only the outer 1 ms attack and 4 ms release are tapered.
 - Keep fades, cache limits, and the separate soundtrack and dialogue paths in Lo-Fi.
+- Dialogue analysis never delays the film bed or the music. Plans carry the cue token and revision (`ArchiveVoice.perform` ignores stale tokens and lower revisions). The acoustic fallback is always retained when transcription is unavailable.
 
 **Rendering.**
 - Image row 0 is the top. Use the same 3:2 cover crop (`ImageFraming`) on both platforms, and register saliency and depth with the same normalized crop as the colour image.
@@ -81,7 +84,7 @@ Automated test runs once exceeded the user's monthly Google budget. Any DEBUG la
 - Settings live in `ImageGenerationConfig` and caps in `GenerationBudget`. The primary model is `gemini-nano-banana-2.1` and the fallback is `gemini-3.1-flash-lite-image`. Treat these as repo configuration, not verified provider availability.
 - Cache reuse is the fallback whenever generation is capped or unavailable.
 
-**Archive.** Retain each source's credit (`docs/experience.md` film table). Ten pinned films plus two rotating discoveries share a 3 GB cache.
+**Archive.** Retain each source's credit (`docs/experience.md` film table). Ten pinned films plus two rotating discoveries share a 3 GB cache. Do not add size caps or budgets that change what can play (user decision, 2026-11-19, A31); if more storage is needed, raise the storage. Launch cleanup only removes files the index does not list and stale temp files.
 
 ## Never commit
 
@@ -99,6 +102,7 @@ All flags are in `DebugLaunchOptions.swift` and documented in `docs/development.
 - `-LiminalTraceLofi YES` (exact take sample ranges), `-LiminalDelaySecondTake <s>` (forces the late-phrase fallback)
 - `scripts/perf-run.sh [--lofi]`: visionOS simulator perf with a JSON summary. `--lofi` fails on a ≥100 ms frame, missed drum or picture changes, a repeated phrase or timed rest, a master-tap clock gap, or a Core Audio overload.
 - `scripts/check-lofi.sh`: headless Lo-Fi capture with LUFS, true-peak and routing checks (needs FFmpeg and Python 3).
+- `scripts/mix-report.sh` (one capture) and `scripts/mix-matrix.sh` (five cases, `--strict` gates on fail-level criteria in `scripts/mix-criteria.json`): per-bus stems, spectrograms, masking, low end, loudness, true peak, limiter reduction, intelligibility and chop cadence. Interpretation is in `docs/mix-verification.md`. Run one capture at a time, and keep captures out of git.
 - `scripts/shader-bench.sh`, `tx-clip.sh`, `ffx-clip.sh`, `render-music.sh`, `av-coupling-check.sh`. Read a script's options before running it, because some fetch network fixtures.
 
 ## Documentation and commits

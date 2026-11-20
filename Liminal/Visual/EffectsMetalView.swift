@@ -438,9 +438,9 @@ final class EffectsMetalView: MTKView {
         if let beatReveal, previousTexture != nil {
             let now = ArchiveFootageService.uptime()
             let p = max(0.000001, Float(beatReveal.progress(at: now)))
-            if p >= 0.5, lastLoggedDownbeat != beatReveal.downbeat, previousTexture !== sourceTexture {
+            if beatReveal.spec.swap(p) >= 1, lastLoggedDownbeat != beatReveal.downbeat, previousTexture !== sourceTexture {
                 lastLoggedDownbeat = beatReveal.downbeat
-                LMLog.visual.info("Lo-Fi image crossed midpoint on draw \((now - beatReveal.downbeat) * 1000, format: .fixed(precision: 1)) ms after downbeat")
+                LMLog.visual.info("Lo-Fi image fully in on draw \((now - beatReveal.downbeat) * 1000, format: .fixed(precision: 1)) ms after downbeat")
             }
             uniformsCopy.transitionProgress = p
             uniformsCopy.txMix = beatReveal.spec.swap(p)

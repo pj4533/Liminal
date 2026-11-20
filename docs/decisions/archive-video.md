@@ -23,6 +23,25 @@ The sampler uses on-device speech classification to favor conversation over song
 
 *Horizons of Science: Thinking Machines* (1959) and *Hear Here* (1969) add early pattern recognition and voice-controlled robotics to the curated pool. The total grows to twelve so the two discovery slots keep turning over. Pins download during online playback and remain available in the disk cache. [Current pool and credits](../experience.md#pinned-films-and-rotating-discoveries)
 
+## A31 (2026-11-19) Launch cleanup of unindexed footage and stale download files
+
+The user saw about 31 GB in the app container on the Vision Pro: `du` reported 21 GB in `ArchiveFootage/` (VAM026.mp4 alone 10 GB) and 4.8, 1.9 and 0.3 GB `CFNetworkDownload_*.tmp` files in `tmp/`, next to old `liminal-rotation-check.*`, `liminal-tap-fixtures` and `liminal-billing-fixtures` folders.
+
+Measured on the CoreDevice mirror of that container on 2026-11-19, the logical sizes are about an eighth of those figures. The mirror reports `st_blocks` in 4 KiB units with a 1 MiB block size, and `du` counts 512-byte blocks, so it overstates by 8x (`du -sh` 21 G, `du -shA` 2.7 G). Use `du -A` or `ls -l` there. The index listed twelve clips totalling 2.78 GB, all present, so the cache was within its 3 GB budget: VAM026 1,380.5 MB (1920x1080, 1,908 s), Thinking Machines 347.6 MB, The World of LSD 281.4 MB, A Conversation on LSD 269.9 MB, Ergot 114.3 MB, The Mind-Benders 104.7 MB, The Flow of Zen 90.2 MB, Towers 74.5 MB, UFO Interview 74.4 MB, Hear Here 47.6 MB, Design for Dreaming 39.5 MB and Someone's in the Kitchen 35.1 MB. The real waste was the three stale downloads: 640.5, 256.6 and 38.9 MB (2026-11-15 and 2026-11-18).
+
+Root causes of the leak:
+- `URLSession.download` leaves `CFNetworkDownload_*.tmp` in `tmp/` when the process dies mid-transfer, which happens on every relaunch from Xcode. Nothing cleaned `tmp/`, and the fixtures that automation pushed there were never cleaned either.
+- `load()` dropped index entries whose files were gone, but never deleted files without entries. If an index failed to decode, or the app crashed between the move and the index write, the files stayed on disk forever, and a later `moveItem` to the same name failed on every retry.
+
+Changes (cleanup only; nothing that can play is affected):
+- At launch, off the main actor (a detached task when `ArchiveFootageService.shared` is created), the store's `load()` deletes every entry in `ArchiveFootage/` other than `index.json` and the indexed files. `ArchiveDiskSweep` removes `CFNetworkDownload_*.tmp` files untouched for 10 minutes and `liminal*` items untouched for an hour from the sandboxed `tmp/`. Logs report the count and logical megabytes.
+- `add` removes an unindexed file of the same name before moving the new clip in.
+- Tests: `ArchiveCacheSweepTests` (load-time sweep keeps every indexed clip of any size, same-name replacement, orphan listing, temp-file ages, logical byte counts).
+
+Rejected (user decision, 2026-11-19): a first version also capped each clip at 600 MB and made the budget evict pinned films. The user rejected any size limit that changes what can play: "if we need to increase storage, we need to increase storage. The most important thing is the experience of the user in the app." File choice, downloads, the 3 GB cap, pinned protection and discovery rotation are unchanged from A30.
+
+Expected effect on the headset after the next launch: about 0.94 GB of stale downloads and the fixture folders are deleted; all twelve cached films stay.
+
 ## Original implementation summary (A1–A25)
 
 - Queries (all `collection:prelinger`, 1950-1969, `mediatype:movies`, weighted): newsreel / news magazine /

@@ -105,7 +105,7 @@ nonisolated final class MixBus {
         shimmerReturn = Fader(shimmerVerb, gain: 0)
         master = Mixer(dryBus, reverbReturn, delayReturn, shimmerReturn, spaceMovement)
         highpass = HighPassButterworthFilter(master, cutoffFrequency: 28)
-        lowpass = LowPassButterworthFilter(highpass, cutoffFrequency: 5400)
+        lowpass = LowPassButterworthFilter(highpass, cutoffFrequency: Self.ambientLowpassHz)
         masterTrim = Fader(lowpass, gain: 0)
         limiter = PeakLimiter(masterTrim, attackTime: 0.01, decayTime: 0.06, preGain: 0)
         finalTrim = Fader(limiter, gain: dbToGain(-1.5))
@@ -327,4 +327,8 @@ nonisolated final class MixBus {
     func setMaster(_ gain: Float, over: Double) {
         ParamRamp.setGain(masterTrim, gain, over: over)
     }
+
+    /// Master low-pass for Ambient (the calm D92 voicing).
+    static let ambientLowpassHz: Float = 5400
+
 }

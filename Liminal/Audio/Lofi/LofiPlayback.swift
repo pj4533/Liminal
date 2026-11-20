@@ -10,6 +10,8 @@ import OSLog
 final class LofiPlayback {
     private let bus: LofiBus
     var output: Fader { bus.output }
+    /// The faders the archive voice ducks under featured chops; this transport never writes them.
+    var duckTargets: (lead: Fader, mids: Fader, space: Fader) { bus.duckTargets }
     nonisolated let stateBus = MusicStateBus()
     private let sampleRate: Double
     private let bank = LofiPhraseBank()
@@ -29,6 +31,8 @@ final class LofiPlayback {
     private var nextKickIndex = 0
     private var rng: MusicRNG
     private var seed: UInt64 = 0
+    /// Plan 6.4: start, stop and a queued take at another tempo invalidate dialogue plans.
+    private(set) var transportRevision: UInt32 = 0
     var options = LofiOptions()
     var onPhrase: ((Double, Int, UInt64) -> Void)?
 
@@ -70,6 +74,7 @@ final class LofiPlayback {
     func start(onReady: @escaping (LofiClock, UInt64) -> Void, onFailure: @escaping () -> Void) {
         stop(immediately: true)
         let token = epoch
+        transportRevision &+= 1
         seed = rng.next()
         loop = Task { [weak self] in
             guard let self else { return }
@@ -123,6 +128,8 @@ final class LofiPlayback {
         audibleStartSample = nil
         onset = (-1000, 0)
         nextKickIndex = 0
+        transportRevision &+= 1
+        stateBus.setTransport(nil)
         stateBus.setStartUptime(0)
         stateBus.publish(MusicState())
         ParamRamp.setGain(output, 0, over: immediately ? 0 : 0.16)
@@ -141,8 +148,28 @@ final class LofiPlayback {
                          repeated: Bool = false, wet: AVAudioPCMBuffer? = nil) {
         if request.drumPhraseIndex == 0 { bus.schedule(take.drums) }
         bus.schedule(phrase, wet: wet)
+        let current = rendered.first
         rendered.append(.init(request: request, breakAudio: take, music: phrase, repeated: repeated, start: queuedFrames))
         queuedFrames += AVAudioFramePosition(take.drums.clock.frameCount)
+        // The next take is committed: publish its tempo with the audible take (plan 6.4).
+        if request.drumPhraseIndex == 0, let current, current.request.drumBreakIndex < request.drumBreakIndex {
+            if take.drums.clock.beatDuration != current.breakAudio.drums.clock.beatDuration { transportRevision &+= 1 }
+            publishTransport(current)
+        }
+    }
+
+    /// The take that contains `current`, on the same origin as `lofiTakeGrid`, with the next
+    /// queued take's tempo. Main actor; the footage worker reads it through `stateBus.transport()`.
+    private func publishTransport(_ current: PlayingPhrase) {
+        let take = current.breakAudio.drums
+        let takeStart = current.start - Int64(current.request.drumPhraseIndex * take.clock.frameCount)
+        let nextTake = rendered.last.flatMap { $0.request.drumBreakIndex > current.request.drumBreakIndex ? $0.breakAudio : nil }
+        stateBus.setTransport(LofiTransportInfo(
+            revision: transportRevision, takeIndex: current.request.drumBreakIndex,
+            phraseAtTakeStart: current.request.drumBreakIndex * LofiDrumTake.phraseCount,
+            origin: transportOrigin + Double(takeStart) / sampleRate + outputLatency,
+            beatDuration: take.clock.beatDuration, nextBeatDuration: nextTake?.drums.clock.beatDuration,
+            seed: current.request.seed, options: current.request.options, timing: take.timing))
     }
 
     private func cancelPreparation() {
@@ -223,6 +250,7 @@ final class LofiPlayback {
             }
             LMLog.audio.info("Lo-Fi lead: \(current.music.score.preset.name, privacy: .public), sampled notes=\(current.music.leadSampleCount)")
             if current.request.drumPhraseIndex == 0 {
+                publishTransport(current)
                 nextKickIndex = 0
                 LMLog.audio.info("Lo-Fi started 16-bar drum take \(current.request.drumBreakIndex), recorded=\(current.breakAudio.drums.name != nil)")
                 #if DEBUG

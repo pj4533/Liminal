@@ -201,20 +201,22 @@ struct ArchiveVoiceRenderTests {
         let engine = GenerativeEngine(seed: 7)
         let format = engine.archiveFormat
         let rate = format.sampleRate
-        func tone(_ duration: Double, amplitude: Float) throws -> AVAudioPCMBuffer {
+        func tone(_ duration: Double, hz: Double, amplitude: Float) throws -> AVAudioPCMBuffer {
             let n = AVAudioFrameCount(duration * rate)
             let b = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: n))
             b.frameLength = n
             let pcm = try #require(b.floatChannelData)
             for i in 0..<Int(n) {
-                let value = amplitude * Float(sin(2 * .pi * 400 * Double(i) / rate))
+                let value = amplitude * Float(sin(2 * .pi * hz * Double(i) / rate))
                 pcm[0][i] = value
                 pcm[1][i] = value
             }
             return b
         }
-        let bed = try tone(4, amplitude: 0.1)
-        let chop = try tone(0.6, amplitude: 0.1)
+        // The bed and the cut use different tones so each layer is measured on its own.
+        let bedHz = 400.0, chopHz = 1000.0
+        let bed = try tone(4, hz: bedHz, amplitude: 0.1)
+        let chop = try tone(0.6, hz: chopHz, amplitude: 0.1)
         let cue = ArchiveVoice.Cue(buffer: bed, gain: 1, fadeIn: 0.1, label: "blend",
             chops: [1.4, 3.0].map { .init(articulation: .phrase, time: $0, source: 0..<Int(chop.frameLength), speed: 1, buffer: chop) })
         engine.engine.output = Mixer(engine.archive.strip.outputs.dry, engine.archive.chopOutput)
@@ -235,13 +237,32 @@ struct ArchiveVoiceRenderTests {
             let start = Int(seconds * rate)
             return (start..<start + Int(0.1 * rate)).reduce(Float.zero) { max($0, abs(pcm[$1])) }
         }
-        let before = peak(at: 1.0), during = peak(at: 1.7), after = peak(at: 2.5)
-        #expect(before > 0.0001 && after > 0.0001)
-        #expect(during > 0.055 && during < 0.096)
-        // A quiet dry film remains audible before the musical cut enters.
-        #expect(before > during * 0.10 && before < during * 0.25)
-        // The 0.6-second cut has stopped; the dotted-eighth repeat is still audible.
-        #expect(after > before * 2 && after < during)
+        /// Amplitude of one tone over 0.1 s (a whole number of cycles of both tones).
+        func level(at seconds: Double, hz: Double) -> Float {
+            let start = Int(seconds * rate), n = Int(0.1 * rate)
+            var re = 0.0, im = 0.0
+            for i in 0..<n {
+                let phase = 2 * Double.pi * hz * Double(i) / rate
+                re += Double(pcm[start + i]) * cos(phase)
+                im += Double(pcm[start + i]) * sin(phase)
+            }
+            return Float(2 * (re * re + im * im).squareRoot() / Double(n))
+        }
+        let bedBefore = level(at: 1.0, hz: bedHz), bedDuring = level(at: 1.7, hz: bedHz)
+        let cut = level(at: 1.7, hz: chopHz), echo = level(at: 2.5, hz: chopHz)
+        print("softened chops: bed before \(bedBefore) during \(bedDuring) cut \(cut) echo \(echo)")
+        // A quiet direct film remains audible before the musical cut enters, and stays audible under it.
+        // These are raw equal-level tones: the real chops are levelled far above their source, and the
+        // bed's place in the mix (at least 10 dB under the music in gaps) is C-B9 on captures. The tuck
+        // pass (19 November 2026) took the dry chop path from 0.72 to `ChopBus.dryGain`, so the raw cut
+        // now sits near the bed's direct sound.
+        #expect(bedBefore > cut * 0.3 && bedBefore < cut * 2.5, "bed before the cut \(bedBefore), cut \(cut)")
+        #expect(bedDuring > bedBefore * 0.25, "bed under the cut \(bedDuring)")
+        #expect(cut > 0.008 && cut < 0.04, "cut \(cut)")
+        // The 0.6-second cut has stopped; its repeats and the long room are still clearly audible (echo
+        // about 5 dB under the dry line with 0.55 feedback since the heavier-effects pass).
+        #expect(echo > cut * 0.15 && echo < cut * 3, "echo \(echo) against the cut \(cut)")
+        #expect(level(at: 1.0, hz: chopHz) < 0.0005)
         #expect(peak(at: 3.25) < 0.0001)
     }
 
@@ -294,6 +315,264 @@ struct ArchiveVoiceRenderTests {
         #expect(before < -100)
         #expect(during > -60 && during < -30)
         #expect(after < during - 25)                // the reverb tail is dying away
+    }
+
+    // MARK: Incremental chop scheduling (plan 6.3)
+
+    @MainActor private struct ChopProbe {
+        let engine: GenerativeEngine
+        let rate: Double
+        let impulse: AVAudioPCMBuffer
+
+        init(seed: UInt64) throws {
+            engine = GenerativeEngine(seed: seed)
+            let format = engine.archiveFormat
+            rate = format.sampleRate
+            impulse = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 64))
+            impulse.frameLength = 64
+            for c in 0..<Int(format.channelCount) {
+                for i in 0..<64 { impulse.floatChannelData![c][i] = i == 0 ? 1 : 0 }
+            }
+        }
+
+        func silence(_ seconds: Double) throws -> AVAudioPCMBuffer {
+            let n = AVAudioFrameCount(seconds * rate)
+            let b = try #require(AVAudioPCMBuffer(pcmFormat: engine.archiveFormat, frameCapacity: n))
+            b.frameLength = n
+            for c in 0..<Int(b.format.channelCount) { b.floatChannelData![c].update(repeating: 0, count: Int(n)) }
+            return b
+        }
+
+        func chop(at start: Double) -> DialogueChop {
+            let event = DialogueEvent(padID: 0, role: .stab, block: 0, slot: 0, accentTime: start, startTime: start,
+                                      duration: 64 / rate, gainDB: 0, protected: false, chokeAt: nil, text: nil,
+                                      transform: .native, padKey: 1, snareLanded: false)
+            return DialogueChop(event: event, buffer: impulse)
+        }
+
+        /// Renders the chop output (and the silent bed, so its player is attached) and returns channel 0.
+        func render(seconds: Double, beat: Double = 0.8, onStep: @escaping (Double) -> Void) throws -> [Float] {
+            engine.engine.output = Mixer(engine.archive.strip.outputs.dry, engine.archive.chopOutput)
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent("chop-probe-\(UUID().uuidString).wav")
+            defer {
+                try? FileManager.default.removeItem(at: url)
+                try? FileManager.default.removeItem(at: url.deletingPathExtension().appendingPathExtension("score.json"))
+            }
+            try engine.renderOffline(seconds: seconds, to: url, archiveBeatDuration: beat, onStep: onStep)
+            let file = try AVAudioFile(forReading: url)
+            let pcm = try #require(AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)))
+            try file.read(into: pcm)
+            return Array(UnsafeBufferPointer(start: pcm.floatChannelData![0], count: Int(pcm.frameLength)))
+        }
+
+        /// First sample above `threshold` within 50 ms of `time`.
+        /// Default threshold: three quarters of the dry chop path, above its echo and room returns.
+        func onset(_ x: [Float], near time: Double, threshold: Float = 0.75 * ArchiveVoice.ChopBus.dryGain) -> Int? {
+            let lo = max(0, Int((time - 0.05) * rate)), hi = min(x.count, Int((time + 0.05) * rate))
+            return (lo..<hi).first { abs(x[$0]) > threshold }
+        }
+    }
+
+    @Test func planChopsLandWithinOneSampleAndAReplacementKeepsEarlierQueuedChops() throws {
+        let probe = try ChopProbe(seed: 5)
+        let bed = try probe.silence(6)
+        let early = 1.234567, queued = 2.2, replaced = 3.5, replacement = 3.111, stale = 4.05
+        var begun = false, planned = false, replacing = false, stalePosted = false
+        let x = try probe.render(seconds: 4.6) { t in
+            let engine = probe.engine
+            if !begun, t >= 0.2 {
+                begun = true
+                engine.post(.archiveBegin(ArchiveVoice.Cue(buffer: bed, gain: 1, fadeIn: 0.1, label: "plan", token: 1)))
+            }
+            // Posted before the chop timeline has started.
+            if !planned, t >= 0.3 {
+                planned = true
+                engine.post(.archiveChops(.init(token: 1, revision: 0, chops: [early, queued, replaced].map(probe.chop))))
+            }
+            // Posted during playback, after the 2.2 s chop is queued and before 3.5 s is.
+            if !replacing, t >= 2.3 {
+                replacing = true
+                engine.post(.archiveChops(.init(token: 1, revision: 1, replaceFrom: 2.5, chops: [probe.chop(at: replacement)])))
+            }
+            if !stalePosted, t >= 2.4 {
+                stalePosted = true
+                engine.post(.archiveChops(.init(token: 1, revision: 1, chops: [probe.chop(at: stale)])))
+                engine.post(.archiveChops(.init(token: 0, revision: 5, chops: [probe.chop(at: stale)])))
+            }
+        }
+        for time in [early, queued, replacement] {
+            let found = try #require(probe.onset(x, near: time), "no chop near \(time) s")
+            let planned = Int((time * probe.rate).rounded())
+            #expect(abs(found - planned) <= 1, "chop at \(time) s landed \(found - planned) samples off")
+        }
+        #expect(probe.onset(x, near: replaced) == nil, "the replaced chop is gone")
+        #expect(probe.onset(x, near: stale) == nil, "stale revisions and tokens are ignored")
+    }
+
+    @Test func chopGainIsIndependentOfTheBedFadeIn() throws {
+        let probe = try ChopProbe(seed: 6)
+        let bed = try probe.silence(8)
+        var begun = false, planned = false
+        let x = try probe.render(seconds: 2) { t in
+            if !begun, t >= 0.2 {
+                begun = true
+                // A slow 5 s fade-in: the old fade-coupled gain was about 0.05 of nominal at 1 s.
+                probe.engine.post(.archiveBegin(ArchiveVoice.Cue(buffer: bed, gain: 1, fadeIn: 5, label: "fade", token: 3)))
+                planned = true
+                probe.engine.post(.archiveChops(.init(token: 3, revision: 0, chops: [probe.chop(at: 1.0)])))
+            }
+            _ = planned
+        }
+        let found = try #require(probe.onset(x, near: 1.0, threshold: 0.05))
+        // The dry chop path is `ChopBus.dryGain`; the fader is min(cueGain, 1.15) = 1 regardless of the bed fade.
+        let dry = ArchiveVoice.ChopBus.dryGain
+        #expect(abs(x[found]) > dry * 0.9 && abs(x[found]) < dry * 1.11, "chop peak \(x[found])")
+    }
+
+    // MARK: Cue ownership of chops (fix1-A)
+
+    /// A featured chop (at least 0.5 s): an impulse at sample 0, then silence.
+    private func featured(_ probe: ChopProbe, at start: Double, seconds: Double = 0.6) throws -> DialogueChop {
+        let n = AVAudioFrameCount(seconds * probe.rate)
+        let buffer = try #require(AVAudioPCMBuffer(pcmFormat: probe.engine.archiveFormat, frameCapacity: n))
+        buffer.frameLength = n
+        for c in 0..<Int(buffer.format.channelCount) {
+            buffer.floatChannelData![c].update(repeating: 0, count: Int(n))
+            buffer.floatChannelData![c][0] = 1
+        }
+        let event = DialogueEvent(padID: 0, role: .head, block: 0, slot: 0, accentTime: start, startTime: start,
+                                  duration: seconds, gainDB: 0, protected: false, chokeAt: nil, text: nil,
+                                  transform: .native, padKey: 2, snareLanded: false)
+        return DialogueChop(event: event, buffer: buffer)
+    }
+
+    @Test func aLaterCuesPlanIsInertUntilItsBedBeginsThenPlaysNormally() throws {
+        let probe = try ChopProbe(seed: 7)
+        let bed = try probe.silence(6)
+        let control = 0.7, early = 1.1, crossfade = 1.45, adopted = 2.4
+        let earlyChop = try featured(probe, at: early), adoptedChop = try featured(probe, at: adopted)
+        var steps = Set<String>()
+        func once(_ key: String, _ body: () -> Void) { if steps.insert(key).inserted { body() } }
+        var duckedBeforeAdoption = false, duckedAfterAdoption = false
+        var countsWhileInert: (stored: Int, queued: Int)?
+        let x = try probe.render(seconds: 3.2) { t in
+            let engine = probe.engine
+            if t >= 0.2 { once("bed1") { engine.post(.archiveBegin(ArchiveVoice.Cue(buffer: bed, gain: 1, fadeIn: 0.1, label: "one", token: 1))) } }
+            // Cue 2's analysis finished before its bed: the plan reaches the voice while cue 1 plays.
+            if t >= 0.3 { once("plan2") { engine.post(.archiveChops(.init(token: 2, revision: 0, chops: [earlyChop, probe.chop(at: crossfade), adoptedChop]))) } }
+            if t >= 0.35 { once("plan1") { engine.post(.archiveChops(.init(token: 1, revision: 0, chops: [probe.chop(at: control)]))) } }
+            if t >= 1.2 { once("counts") { countsWhileInert = engine.archive.chopCounts } }
+            // Bed 2 is posted at 1.3 s and adopts its stored plan at once; it sounds after bed 1's 0.27 s fade.
+            if t >= 1.3 { once("bed2") { engine.post(.archiveBegin(ArchiveVoice.Cue(buffer: bed, gain: 1, fadeIn: 0.1, label: "two", token: 2))) } }
+            if t > early + 0.03 && t < early + 0.45 && engine.archive.isMusicDucked { duckedBeforeAdoption = true }
+            if t > adopted + 0.05 && t < adopted + 0.5 && engine.archive.isMusicDucked { duckedAfterAdoption = true }
+        }
+        #expect(probe.onset(x, near: control) != nil, "cue 1's own chop plays")
+        #expect(probe.onset(x, near: early) == nil, "cue 2's chop before its bed began stays silent")
+        #expect(!duckedBeforeAdoption, "an inert chop opens no duck window")
+        let counts = try #require(countsWhileInert)
+        #expect(counts.stored == 3 && counts.queued == 1, "cue 2's chops wait stored, unqueued: \(counts)")
+        #expect(probe.onset(x, near: crossfade) != nil, "cue 2's chop inside the bed crossfade plays")
+        let found = try #require(probe.onset(x, near: adopted), "the adopted plan plays once bed 2 begins")
+        #expect(abs(found - Int((adopted * probe.rate).rounded())) <= 1)
+        #expect(duckedAfterAdoption, "the adopted featured chop ducks the music")
+    }
+
+    @Test func aCancelledCueIgnoresALatePlanAndQueuesNothing() throws {
+        let probe = try ChopProbe(seed: 8)
+        let bed = try probe.silence(6)
+        let control = 1.0, first = 1.6, late = 1.9
+        let firstChop = try featured(probe, at: first), lateChop = try featured(probe, at: late)
+        var steps = Set<String>()
+        func once(_ key: String, _ body: () -> Void) { if steps.insert(key).inserted { body() } }
+        var countsAfterLatePlan: (stored: Int, queued: Int)?
+        var ducked = false
+        let x = try probe.render(seconds: 2.8) { t in
+            let engine = probe.engine
+            if t >= 0.2 { once("bed1") { engine.post(.archiveBegin(ArchiveVoice.Cue(buffer: bed, gain: 1, fadeIn: 0.1, label: "one", token: 1))) } }
+            if t >= 0.25 { once("plan1") { engine.post(.archiveChops(.init(token: 1, revision: 0, chops: [probe.chop(at: control)]))) } }
+            if t >= 0.3 { once("plan2") { engine.post(.archiveChops(.init(token: 2, revision: 0, chops: [firstChop]))) } }
+            // The footage service abandons cue 2; its still-running analysis then posts a refinement.
+            if t >= 0.5 { once("cancel") { engine.post(.archiveChopsCancel(token: 2)) } }
+            if t >= 0.6 { once("late") { engine.post(.archiveChops(.init(token: 2, revision: 1, replaceFrom: 1.7, chops: [lateChop]))) } }
+            if t >= 0.8 { once("counts") { countsAfterLatePlan = engine.archive.chopCounts } }
+            // Even a bed with that token (which the footage service never posts) cannot revive the plan.
+            if t >= 1.2 { once("bed2") { engine.post(.archiveBegin(ArchiveVoice.Cue(buffer: bed, gain: 1, fadeIn: 0.1, label: "two", token: 2))) } }
+            if t > first && t < late + 0.55 && engine.archive.isMusicDucked { ducked = true }
+        }
+        let counts = try #require(countsAfterLatePlan)
+        #expect(counts.stored == 0, "the cancelled cue keeps no stored chops: \(counts)")
+        #expect(counts.queued == 1, "only cue 1's chop is on the player")
+        #expect(probe.onset(x, near: control) != nil)
+        #expect(probe.onset(x, near: first) == nil && probe.onset(x, near: late) == nil, "nothing of cue 2 sounds")
+        #expect(!ducked)
+    }
+
+    @Test func theThemeReturnDipsTheBedWithoutAnyDialoguePlan() throws {
+        let probe = try ChopProbe(seed: 9)
+        let rate = probe.rate
+        let n = AVAudioFrameCount(6 * rate)
+        let bed = try #require(AVAudioPCMBuffer(pcmFormat: probe.engine.archiveFormat, frameCapacity: n))
+        bed.frameLength = n
+        for c in 0..<Int(bed.format.channelCount) {
+            for i in 0..<Int(n) { bed.floatChannelData![c][i] = 0.3 * Float(sin(2 * Double.pi * 900 * Double(i) / rate)) }
+        }
+        // The take's return phrase (phrase 3, beat 48) starts at 4.0 s; the dip opens 3 beats early (1.6 s).
+        let beat = 0.8, returnStart = 4.0
+        let info = LofiTransportInfo(revision: 1, takeIndex: 0, phraseAtTakeStart: 0, origin: returnStart - 48 * beat,
+                                     beatDuration: beat, nextBeatDuration: nil, seed: 3, options: LofiOptions(), timing: nil)
+        var begun = false
+        let x = try probe.render(seconds: 3.4) { t in
+            if !begun, t >= 0.2 {
+                begun = true
+                probe.engine.post(.archiveBegin(ArchiveVoice.Cue(buffer: bed, gain: 1, fadeIn: 0.1, label: "no speech", token: 1,
+                                                                 transport: info)))
+            }
+        }
+        func rms(_ a: Double, _ b: Double) -> Double {
+            let slice = x[Int(a * rate)..<Int(b * rate)]
+            return 10 * log10(max(slice.reduce(0) { $0 + Double($1 * $1) } / Double(slice.count), 1e-20))
+        }
+        let before = rms(0.9, 1.4), during = rms(2.4, 3.3)
+        #expect(before > -60, "the bed is audible before the dip (\(before) dB)")
+        #expect(during < before - 8, "the bed dips under the return with no chops: \(before) -> \(during) dB")
+    }
+
+    /// The live fallback when a cue carries no transport and no chop is ever planned: the conductor's
+    /// phrase callback alone (`notePhrase`, polled from `LofiPlayback.onPhrase`) places the return.
+    @Test func thePhraseCallbackAloneDipsTheBedUnderTheReturnWithNoChops() throws {
+        let probe = try ChopProbe(seed: 10)
+        let rate = probe.rate
+        let n = AVAudioFrameCount(9 * rate)
+        let bed = try #require(AVAudioPCMBuffer(pcmFormat: probe.engine.archiveFormat, frameCapacity: n))
+        bed.frameLength = n
+        for c in 0..<Int(bed.format.channelCount) {
+            for i in 0..<Int(n) { bed.floatChannelData![c][i] = 0.3 * Float(sin(2 * Double.pi * 900 * Double(i) / rate)) }
+        }
+        // 150 BPM keeps the render short. Phrase 2 (the breakdown) becomes audible at 0.4 s, so the
+        // return's downbeat is one phrase (16 beats, 6.4 s) later, at 6.8 s; the dip opens 3 beats early.
+        let beat = 0.4, phraseAt = 0.4
+        var begun = false, noted = false
+        let x = try probe.render(seconds: 7.9, beat: beat) { t in
+            if !begun, t >= 0.2 {
+                begun = true
+                probe.engine.post(.archiveBegin(ArchiveVoice.Cue(buffer: bed, gain: 1, fadeIn: 0.1, label: "no speech", token: 1)))
+            }
+            if !noted, t >= phraseAt {
+                noted = true
+                probe.engine.archive.notePhrase(2, beatDuration: beat, now: t)
+            }
+        }
+        let counts = probe.engine.archive.chopCounts
+        #expect(counts.stored == 0 && counts.queued == 0, "no chop at all")
+        func rms(_ a: Double, _ b: Double) -> Double {
+            let slice = x[Int(a * rate)..<Int(b * rate)]
+            return 10 * log10(max(slice.reduce(0) { $0 + Double($1 * $1) } / Double(slice.count), 1e-20))
+        }
+        let returnAt = phraseAt + 16 * beat
+        let before = rms(3.0, 4.5), during = rms(returnAt - 0.6, returnAt + 0.6)
+        #expect(before > -60, "the bed is audible before the dip (\(before) dB)")
+        #expect(during < before - 8, "the phrase callback alone dips the bed: \(before) -> \(during) dB")
     }
 }
 

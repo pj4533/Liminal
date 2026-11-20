@@ -312,3 +312,27 @@ nonisolated enum ArchiveAudioDecoder {
         return samples
     }
 }
+
+/// The dialogue engine's source for a cue (plan 4.1): native rate, so chops are never pitch-dropped
+/// by the picture rate. Only the analysed span (at most 32 s) is decoded a second time.
+nonisolated enum ArchiveDialogueSource {
+    /// A cue at or above this rate reuses the bed buffer as the dialogue source.
+    static let reuseRate: Float = 0.97
+
+    /// Source seconds the dialogue engine analyses for a cue: `min(32 s, cue span)`.
+    static func analysedSeconds(_ cue: ArchiveAudioCuePlan) -> Double {
+        min(DialogueTuning.analysisSeconds, max(0, cue.endAt - cue.beginAt))
+    }
+
+    /// Reuses `bed` when `cue.rate >= 0.97`, otherwise decodes the same film range again at rate 1.
+    static func make(cue: ArchiveAudioCuePlan, bed: AVAudioPCMBuffer, url: URL, contentID: String, cueToken: Int,
+                     format: AVAudioFormat) async throws -> DialogueSource {
+        if cue.rate >= reuseRate {
+            return DialogueSource(contentID: contentID, cueToken: cueToken, buffer: bed, sourceStart: cue.sourceStart,
+                                  rate: Double(cue.rate))
+        }
+        let native = try await ArchiveAudioDecoder.decode(url: url, sourceStart: cue.sourceStart,
+                                                          sourceLength: analysedSeconds(cue), rate: 1, format: format)
+        return DialogueSource(contentID: contentID, cueToken: cueToken, buffer: native, sourceStart: cue.sourceStart, rate: 1)
+    }
+}

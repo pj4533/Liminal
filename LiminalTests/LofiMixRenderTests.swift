@@ -4,6 +4,7 @@ import AVFoundation
 import CryptoKit
 import Darwin
 import Foundation
+import Synchronization
 import Testing
 @testable import Liminal
 
@@ -32,12 +33,20 @@ struct LofiMixRenderTests {
         let block: Int
         let postrollBeats: Int?
         let limiter: String?
+        let checkout: String?
+        let hooks: [String: String]?
+        let sameFilm: Bool?
     }
 
     @MainActor @Test func captureCombinedMix() async throws {
         let path = URL(fileURLWithPath: "/private/tmp/liminal-lofi-audio-config-\(getuid()).json")
         guard FileManager.default.fileExists(atPath: path.path) else { return }
         let config = try JSONDecoder().decode(Config.self, from: Data(contentsOf: path))
+        // The config path is shared by every worktree; only the checkout that asked may capture.
+        if let checkout = config.checkout {
+            let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            guard root.standardizedFileURL.path == URL(fileURLWithPath: checkout).standardizedFileURL.path else { return }
+        }
         let base = try #require(URL(string: config.receiver))
         try #require(base.host == "127.0.0.1")
         let session = URLSession(configuration: .ephemeral)
@@ -66,6 +75,8 @@ struct LofiMixRenderTests {
 
     @MainActor private func capture(_ config: Config, receiver: URL, session: URLSession) async throws {
         try FileManager.default.createDirectory(at: config.out, withIntermediateDirectories: true)
+        LofiCaptureHooks.begin(options: config.hooks ?? ["masterProfile": "lofi"])
+        defer { LofiCaptureHooks.end() }
         let audio = AudioEngine()
         let format = AudioKit.Settings.audioFormat
         let options = LofiOptions(tempo: config.tempo, scale: config.scale)
@@ -73,6 +84,8 @@ struct LofiMixRenderTests {
         let clock = LofiClock(tempo: tempo, sampleRate: format.sampleRate)
         let archive = ArchiveVoice(format: format)
         let bus = LofiBus(gain: 1, dialogue: archive.chopOutput)
+        let duck = bus.duckTargets
+        archive.attachMusicDuck(lead: duck.lead, mids: duck.mids, space: duck.space)
         let mix = MixBus(layers: [archive.strip], delayTime: 1.7)
         let master = LofiMasterBus(archiveAndAmbient: mix.output, lofi: bus.output)
         var limiterID = "system-dynamics-and-peak-limiter"
@@ -108,7 +121,9 @@ struct LofiMixRenderTests {
             drums = try LofiDrumTake(recording: drumFixture(clock: clock), clock: clock)
         }
         var footageHash = config.noFootage ? "none" : "public-formant-fixture-v1"
-        var reel: [(buffer: AVAudioPCMBuffer, title: String, offset: Double)] = []
+        var reel: [(buffer: AVAudioPCMBuffer, title: String, offset: Double, id: String, decodeMs: Double)] = []
+        /// Wall time of the bed decode for a footage cue that is not part of a reel (explicit or cached file).
+        var cueDecodeMs = 0.0
         let cue: AVAudioPCMBuffer?
         if config.noFootage {
             cue = nil
@@ -118,9 +133,11 @@ struct LofiMixRenderTests {
             let source = config.out.appending(component: "input").appendingPathExtension(String(suffix.dropFirst()))
             try FileManager.default.moveItem(at: download, to: source)
             footageHash = SHA256.hash(data: try Data(contentsOf: source, options: .mappedIfSafe)).description
+            let decodeStarted = ContinuousClock.now
             cue = try await ArchiveAudioDecoder.decode(url: source, sourceStart: 0, sourceLength: 13, rate: 1,
                                                         format: format)
-        } else if config.filmReel == true {
+            cueDecodeMs = DialogueCueCoordinator.ms(ContinuousClock.now - decodeStarted)
+        } else if config.filmReel == true || config.sameFilm == true {
             let directory = ArchiveClipStore.defaultDirectory()
             struct Catalog: Decodable { let clips: [ArchiveClip] }
             let catalog = try JSONDecoder().decode(Catalog.self, from: Data(contentsOf: directory.appending(path: "index.json")))
@@ -132,11 +149,13 @@ struct LofiMixRenderTests {
                 guard seconds >= 5 else { continue }
                 let offset = max(0, clip.duration - seconds - 0.1) * rng.range(0.12...0.78)
                 let url = directory.appending(path: clip.fileName)
+                let decodeStarted = ContinuousClock.now
                 guard let buffer = try? await ArchiveAudioDecoder.decode(url: url, sourceStart: offset,
                     sourceLength: seconds, rate: 1, format: format) else { continue }
+                let decodeMs = DialogueCueCoordinator.ms(ContinuousClock.now - decodeStarted)
                 hashes.append(SHA256.hash(data: try Data(contentsOf: url, options: .mappedIfSafe)).description)
-                reel.append((buffer, clip.title, offset))
-                if reel.count >= (config.bars + 7) / 8 { break }
+                reel.append((buffer, clip.title, offset, clip.id, decodeMs))
+                if config.sameFilm == true || reel.count >= (config.bars + 7) / 8 { break }
             }
             cue = try #require(reel.first?.buffer, "No cached film reel with audio")
             footageHash = hashes.joined(separator: "/")
@@ -147,8 +166,10 @@ struct LofiMixRenderTests {
                 .sorted { $0.lastPathComponent < $1.lastPathComponent }
             var selected: AVAudioPCMBuffer?
             for url in sources.prefix(12) {
+                let decodeStarted = ContinuousClock.now
                 if let decoded = try? await ArchiveAudioDecoder.decode(url: url, sourceStart: 0, sourceLength: 13,
                                                                        rate: 1, format: format) {
+                    cueDecodeMs = DialogueCueCoordinator.ms(ContinuousClock.now - decodeStarted)
                     selected = decoded
                     footageHash = SHA256.hash(data: try Data(contentsOf: url, options: .mappedIfSafe)).description
                     break
@@ -170,6 +191,8 @@ struct LofiMixRenderTests {
         }
         let takeFrames = Int(drums.buffer.frameLength)
         var kicks: [[String: Any]] = []
+        /// The take scheduled at each take index, for the dialogue transport and the landmark report.
+        var takes: [Int: LofiDrumTake] = [:]
         for i in 0..<phrases {
             if i == LofiDrumTake.phraseCount, let name = config.nextDrumName {
                 let asset = try #require(LofiDrumLibrary.assets().first { $0.entry.name == name })
@@ -178,6 +201,9 @@ struct LofiMixRenderTests {
             }
             if i.isMultiple(of: LofiDrumTake.phraseCount) {
                 bus.schedule(drums)
+                takes[i / LofiDrumTake.phraseCount] = drums
+                LofiCaptureHooks.appendReport("landmarks", Self.landmarkReport(drums, take: i / LofiDrumTake.phraseCount,
+                                                                              offset: i * clock.frameCount, limit: scoreFrames))
                 kicks += drums.kicks.compactMap { hit in
                     let frame = i * clock.frameCount + hit.frame
                     return frame < scoreFrames ? ["frame": frame, "strength": hit.strength] : nil
@@ -223,7 +249,9 @@ struct LofiMixRenderTests {
             ("footage-room", mix.reverbReturn.avAudioNode), ("lofi", bus.output.avAudioNode),
             ("footage", mix.output.avAudioNode), ("pre-master", master.input.avAudioNode),
             ("glue", master.glue.avAudioNode),
-        ]
+        ] + LofiCaptureHooks.taps.map { ($0.name, $0.node) }
+        let tapNames = nodes.map(\.0)
+        try #require(Set(tapNames).count == tapNames.count, "Duplicate capture tap names: \(tapNames)")
         try audio.start()
         defer { audio.stop() }
         let capture = try nodes.map { name, node in
@@ -233,6 +261,8 @@ struct LofiMixRenderTests {
             node.installTap(onBus: 0, bufferSize: 1024, format: nil, block: sink.tap)
         }
         var tapsInstalled = true
+        let sinks = capture.map(\.1)
+        var tapWaits = 0
         defer { if tapsInstalled { for (node, _) in capture { node.removeTap(onBus: 0) } } }
         try FileManager.default.createDirectory(at: config.out, withIntermediateDirectories: true)
         let finalFile = try Self.file("master", format: format, directory: config.out)
@@ -247,6 +277,27 @@ struct LofiMixRenderTests {
         else { cueBeats = config.nextDrumName == nil ? [5] : [5] + stride(from: 26, to: config.bars * 4, by: 32).map(Double.init) }
         let cueFrames = cue == nil ? [] : cueBeats.map { clock.frame(at: $0) }.filter { $0 < scoreFrames }
         var chopEvents: [[String: Any]] = []
+        var dialogueTimings: [[String: Any]] = []
+        // `dialogue=engine` (default) plans each cue with the coordinator's core against a transport
+        // built from the capture clock; `dialogue=legacy` keeps the old sampler for A/B captures.
+        let dialogueMode = LofiCaptureHooks.option("dialogue") ?? "engine"
+        let director = DialogueDirector()
+        var memory = DialoguePerformanceMemory()
+        // `transcription=apple` (`check-lofi.sh --transcribe`): transcribe each cue's source with the
+        // installed on-device model when its cue comes up, timed, so the live-order simulation below
+        // charges the recognition to that cue. A source heard before reuses its transcript (the bank cache).
+        let transcribe = dialogueMode != "legacy" && cue != nil
+            && LofiCaptureHooks.option("transcription")?.lowercased() == "apple"
+        var transcripts: [String: CaptureTranscript] = [:]
+        var cueTranscripts: [[String: Any]] = []
+        let speechContext = transcribe ? await Self.transcriptionContext() : nil
+        // Live-order simulation of the scheduling lead (plan 6.1). The footage service calls
+        // `scheduleAudio` when the weaver prepares the next piece, `FootageWeaver.Timing.lead` before its
+        // crossfade, polled at 2 Hz (so up to `footagePollSeconds` later); the very first piece starts
+        // `FootageWeaver.firstLead` after it is prepared. The bed is decoded, then the dialogue task runs
+        // classify, analyze, bank, plan and render. The bed itself is due `FootageWeaver.soundDelay` after
+        // the piece starts; that margin is not credited here (conservative).
+        let pieceLead = FootageWeaver.Timing.speed(.fast).lead - Self.footagePollSeconds
         var cueIndex = 0
         var cursor = 0
         var noProgress = 0
@@ -256,15 +307,115 @@ struct LofiMixRenderTests {
         while cursor < frames {
             let time = Double(cursor) / format.sampleRate
             if cueIndex < cueFrames.count, cursor == cueFrames[cueIndex], let cue = reel.isEmpty ? cue : reel[cueIndex % reel.count].buffer {
-                let hits = LofiDialogueSampler.prepareFootage(cue, grid: .init(origin: 0, beatDuration: clock.beatDuration),
-                    cueStart: time, duration: Double(cue.frameLength) / format.sampleRate,
-                    seed: config.seed &+ UInt64(cueIndex))
-                chopEvents += hits.map { hit in
-                    ["frame": Int((hit.time * format.sampleRate).rounded()), "sourceStart": hit.source.lowerBound,
-                     "sourceEnd": hit.source.upperBound, "speed": hit.speed, "articulation": hit.articulation.rawValue, "cue": cueIndex, "reversed": hit.reversed]
+                if dialogueMode == "legacy" {
+                    let started = ContinuousClock.now
+                    let hits = LofiDialogueSampler.prepareFootage(cue, grid: .init(origin: 0, beatDuration: clock.beatDuration),
+                        cueStart: time, duration: Double(cue.frameLength) / format.sampleRate,
+                        seed: config.seed &+ UInt64(cueIndex))
+                    let elapsed = ContinuousClock.now - started
+                    let totalMs = Double(elapsed.components.seconds) * 1000 + Double(elapsed.components.attoseconds) / 1e15
+                    dialogueTimings.append(["cue": cueIndex, "totalMs": totalMs])
+                    chopEvents += hits.map { hit in
+                        ["frame": Int((hit.time * format.sampleRate).rounded()), "sourceStart": hit.source.lowerBound,
+                         "sourceEnd": hit.source.upperBound, "speed": hit.speed, "articulation": hit.articulation.rawValue, "cue": cueIndex, "reversed": hit.reversed,
+                         "durationFrames": Int(hit.buffer.frameLength)]
+                    }
+                    archive.begin(.init(buffer: cue, gain: 0.9, fadeIn: 0.5, label: "offline fixture",
+                                        activity: ArchiveAudioMath.activity(cue), chops: hits), now: time)
+                } else {
+                    let token = cueIndex + 1
+                    let film = reel.isEmpty ? nil : reel[cueIndex % reel.count]
+                    let source = DialogueSource(contentID: film?.id ?? "fixture", cueToken: token, buffer: cue,
+                                                sourceStart: film?.offset ?? 0, rate: 1)
+                    let seconds = Double(cue.frameLength) / format.sampleRate
+                    let reuse = director.cached(source)
+                    // The live order: the work starts the scheduling lead before the bed, after the bed decode.
+                    let liveLead = cueIndex == 0 ? FootageWeaver.firstLead : pieceLead
+                    let analysisStart = time - liveLead
+                    let decodeMs = film?.decodeMs ?? cueDecodeMs
+                    // Transcription runs beside classification; the capture's build waits for both.
+                    var transcribeMs = 0.0
+                    if let speechContext, transcripts[Self.transcriptKey(source)] == nil {
+                        let started = ContinuousClock.now
+                        transcripts[Self.transcriptKey(source)] = await Self.captureTranscript(source, context: speechContext)
+                        transcribeMs = DialogueCueCoordinator.ms(ContinuousClock.now - started)
+                    }
+                    var speech = reuse?.analysis.speech ?? []
+                    var classifyMs = 0.0
+                    if reuse == nil {
+                        let started = ContinuousClock.now
+                        speech = await LofiSpeechFocus.classify(cue, seconds: seconds, budget: DialogueCueCoordinator.classifyBudget)
+                        classifyMs = DialogueCueCoordinator.ms(ContinuousClock.now - started)
+                    }
+                    // As in `DialogueCueCoordinator.run`: the earliest start is "now" plus the commit margin
+                    // once classification is done; the plan is committed when the render finishes.
+                    let classified = analysisStart + (decodeMs + max(classifyMs, transcribeMs)) / 1000
+                    let take = Int((Double(cursor) / clock.framesPerBeat + 0.01) / 64)
+                    let info = LofiTransportInfo(revision: 1, takeIndex: take, phraseAtTakeStart: take * LofiDrumTake.phraseCount,
+                                                 origin: Double(take * takeFrames) / format.sampleRate,
+                                                 beatDuration: clock.beatDuration, nextBeatDuration: nil, seed: config.seed,
+                                                 options: options, timing: (takes[take] ?? drums).timing)
+                    let window = DialogueCueCoordinator.window(due: time, span: seconds, transport: info)
+                    let captured = transcribe ? transcripts[Self.transcriptKey(source)] : nil
+                    let earliest = classified + DialogueCueCoordinator.commitMargin
+                    let built = DialogueCueCoordinator.build(source: source, speech: speech, transcript: captured?.transcript,
+                                                             transport: info,
+                                                             window: window, earliestStart: earliest,
+                                                             memory: memory, seed: config.seed &+ UInt64(cueIndex),
+                                                             classifyMs: classifyMs, reuse: reuse)
+                    if reuse == nil { director.store(source, analysis: built.analysis, bank: built.bank) }
+                    memory = built.memory
+                    let stages = built.timings
+                    let wallMs = decodeMs + max(classifyMs, transcribeMs) + stages.analyzeMs + stages.bankMs
+                        + stages.planMs + stages.renderMs
+                    let committed = analysisStart + wallMs / 1000
+                    let committedFrame = Int((committed * format.sampleRate).rounded())
+                    DialogueCueCoordinator.report(built, cue: token, lead: built.firstStart.map { $0 - committed })
+                    var timing = stages.dictionary(cue: cueIndex)
+                    let tenth = { (v: Double) in (v * 10).rounded() / 10 }
+                    timing["decodeMs"] = tenth(decodeMs)
+                    timing["transcribeMs"] = tenth(transcribeMs)
+                    timing["wallMs"] = tenth(wallMs)
+                    timing["cueFrame"] = cursor
+                    timing["liveLeadSeconds"] = liveLead
+                    timing["analysisStartFrame"] = Int((analysisStart * format.sampleRate).rounded())
+                    timing["earliestStartFrame"] = Int((earliest * format.sampleRate).rounded())
+                    timing["committedFrame"] = committedFrame
+                    if let first = built.firstStart {
+                        timing["firstEventFrame"] = Int((first * format.sampleRate).rounded())
+                        timing["leadSeconds"] = ((first - committed) * 1000).rounded() / 1000
+                    }
+                    timing["eventsUnderCommitMargin"] = built.chops.filter {
+                        $0.event.startTime < committed + DialogueCueCoordinator.commitMargin
+                    }.count
+                    dialogueTimings.append(timing)
+                    if transcribe {
+                        cueTranscripts.append(Self.cueTranscriptReport(built, cue: cueIndex, source: source,
+                                                                       captured: captured, reused: reuse != nil))
+                    }
+                    let families = Dictionary(built.plan.blocks.map { ($0.phrase, $0.family.rawValue) }, uniquingKeysWith: { a, _ in a })
+                    let bankID = String(built.plan.bankID, radix: 16)
+                    chopEvents += built.chops.map { chop in
+                        let e = chop.event
+                        let pad = (built.played ?? built.bank)?.pad(e.padID)
+                        return ["frame": Int((e.startTime * format.sampleRate).rounded()),
+                                "sourceStart": pad?.frames.lowerBound ?? 0, "sourceEnd": pad?.frames.upperBound ?? 0,
+                                "speed": e.transform.playbackRate, "articulation": e.role.rawValue, "cue": cueIndex,
+                                "durationFrames": Int(chop.buffer.frameLength),
+                                "padID": e.padID, "role": e.role.rawValue, "family": families[e.block] ?? "",
+                                "block": e.block, "protected": e.protected,
+                                "accentFrame": Int((e.accentTime * format.sampleRate).rounded()),
+                                "transform": e.transform.name, "text": e.text.map { $0 as Any } ?? NSNull(),
+                                "committedFrame": committedFrame, "bankID": bankID, "slot": e.slot,
+                                "cell": e.cell?.rawValue ?? NSNull(), "piece": e.piece.map { $0 as Any } ?? NSNull(),
+                                "effect": e.effect.name, "reversed": e.effect == .reversed,
+                                "dryFrames": Int(chop.buffer.frameLength) - { if case .echoThrow(_, let tail) = e.effect {
+                                    return Int((tail * format.sampleRate).rounded()) } else { return 0 } }()] as [String: Any]
+                    }
+                    archive.begin(.init(buffer: cue, gain: 0.9, fadeIn: 0.5, label: "offline fixture",
+                                        activity: ArchiveAudioMath.activity(cue), token: token), now: time)
+                    archive.perform(.init(token: token, revision: 0, chops: built.chops), now: time)
                 }
-                archive.begin(.init(buffer: cue, gain: 0.9, fadeIn: 0.5, label: "offline fixture",
-                                    activity: ArchiveAudioMath.activity(cue), chops: hits), now: time)
                 cueIndex += 1
             }
             if cursor > 0 && cursor < scoreFrames && cursor.isMultiple(of: clock.frameCount) {
@@ -286,6 +437,7 @@ struct LofiMixRenderTests {
                     try finalFile.write(from: work)
                     cursor += written
                     noProgress = 0
+                    if Self.awaitTaps(sinks, cursor: cursor) { tapWaits += 1 }
                     continue
                 }
             }
@@ -299,9 +451,14 @@ struct LofiMixRenderTests {
         for (node, _) in capture { node.removeTap(onBus: 0) }
         tapsInstalled = false
         for (_, sink) in capture { try sink.finish(frames: frames) }
+        print("Capture taps: the render waited \(tapWaits) times for \(sinks.count) tap files")
         let wall = Date().timeIntervalSince(t0)
-        let manifest: [String: Any] = [
-            "schema": "liminal-lofi-capture-v1", "frames": frames, "sampleRate": format.sampleRate,
+        LofiCaptureHooks.runFinishers()
+        for (name, data) in LofiCaptureHooks.files {
+            try data.write(to: config.out.appending(path: name), options: .atomic)
+        }
+        var manifest: [String: Any] = [
+            "schema": "liminal-lofi-capture-v2", "frames": frames, "sampleRate": format.sampleRate,
             "block": config.block, "seed": String(config.seed), "bpm": tempo, "beatsPerBar": 4,
             "dialogueOnMusicBus": true, "masterCalibration": "fixed-nominal", "archiveMix": "conductor",
             "clockOriginFrame": 0, "postrollFrames": postroll, "scoredFrames": scoreFrames,
@@ -319,9 +476,131 @@ struct LofiMixRenderTests {
             "latencySamples": ["reportedGlue": master.glue.avAudioNode.latency * format.sampleRate,
                                "reportedLimiter": limiterNode.latency * format.sampleRate],
             "kickCandidates": kicks, "dialogueChops": chopEvents,
+            "sections": ["drums": ["drums"], "bass": ["bass"], "mids": ["texture"], "lead": ["dry"],
+                         "space": ["wet"], "dialogue": ["dialogue-chops"], "bed": ["footage"]],
+            "grid": ["beatFrames": clock.framesPerBeat, "barFrames": clock.framesPerBeat * 4,
+                     "phraseFrames": Double(clock.frameCount), "takeFrames": Double(takeFrames)],
+            "dialogueTimings": dialogueTimings,
+            "sameFilm": config.sameFilm == true,
+            "hooks": config.hooks ?? [:],
         ]
+        if transcribe { manifest["dialogueTranscripts"] = cueTranscripts }
+        manifest["diagnostics"] = LofiCaptureHooks.reports
         try Self.write(manifest, file: "manifest.json", in: config.out)
         try Self.write(score, file: "score.json", in: config.out)
+    }
+
+    /// One source's on-device transcript (nil on any failure) and its `dialogueTranscripts[]` fields.
+    nonisolated struct CaptureTranscript: Sendable {
+        let transcript: DialogueTranscript?
+        let status: String
+        let words: Int
+        let text: String?
+        let recognitionMs: Double?
+        let error: String?
+
+        var fields: [String: Any] {
+            var result: [String: Any] = ["status": status, "words": words]
+            if let text { result["recognizedText"] = text }
+            if let recognitionMs { result["recognitionMs"] = (recognitionMs * 10).rounded() / 10 }
+            if let error { result["error"] = error }
+            if let model = transcript?.modelVersion { result["modelVersion"] = model }
+            return result
+        }
+    }
+
+    private static func transcriptKey(_ source: DialogueSource) -> String {
+        "\(source.contentID)@\(Int((source.sourceStart * 1000).rounded()))/\(source.frameCount)"
+    }
+
+    /// The scheduling lead's poll: ArchiveFootageService's weave loop ticks at 2 Hz (a 500 ms
+    /// `Task.sleep`), so `scheduleAudio` can begin up to this long after `FootageWeaver.Timing.lead`.
+    static let footagePollSeconds = 0.5
+
+    /// The installed on-device model's status and, when it is ready, the provider. Installed model only:
+    /// never starts a download. Without it every cue maps to nil and the capture continues on the
+    /// acoustic plan.
+    nonisolated struct TranscriptionContext: @unchecked Sendable {
+        let status: String
+        let provider: AppleSpeechTranscriptProvider?
+        let reason: String?
+    }
+
+    @MainActor private static func transcriptionContext() async -> TranscriptionContext {
+        let status = await DialogueSpeechAssets.status(mode: DialogueTranscriptionMode.current, environment: .live)
+        let provider = status == .ready ? AppleSpeechTranscriptProvider.live() : nil
+        guard provider != nil else {
+            let reason = status == .ready ? "SpeechAnalyzer is unavailable in this OS" : status.title
+            print("Capture transcription: on-device \(DialogueTranscription.localeIdentifier) speech model status " +
+                  "\(status.name) (\(reason)); no download is started, every cue uses the acoustic plan")
+            return .init(status: status.name, provider: nil, reason: reason)
+        }
+        return .init(status: status.name, provider: provider, reason: nil)
+    }
+
+    /// Transcribes one source with the Apple provider's own analysis, without its live deadline (the
+    /// caller times it and charges it to the cue).
+    @MainActor private static func captureTranscript(_ source: DialogueSource, context: TranscriptionContext) async -> CaptureTranscript {
+        let status = context.status
+        guard let provider = context.provider else {
+            return .init(transcript: nil, status: status, words: 0, text: nil, recognitionMs: nil, error: context.reason)
+        }
+        let frames = AppleSpeechTranscriptProvider.fedFrames(source, maximumSeconds: provider.maximumSeconds)
+        let started = ContinuousClock.now
+        var entry = CaptureTranscript(transcript: nil, status: status, words: 0, text: nil, recognitionMs: nil,
+                                      error: "empty source")
+        if frames > 0 {
+            do {
+                let recognition = try await provider.analyze(source, frames, provider.locale)
+                let transcript = AppleSpeechTranscriptProvider.transcript(from: recognition, source: source,
+                                                                          fedFrames: frames, locale: provider.locale)
+                let words = transcript?.words ?? []
+                entry = .init(transcript: transcript, status: status, words: words.count,
+                              text: words.isEmpty ? nil : words.map(\.text).joined(separator: " "),
+                              recognitionMs: DialogueCueCoordinator.ms(ContinuousClock.now - started),
+                              error: transcript == nil ? "no words recognized" : nil)
+            } catch {
+                entry = .init(transcript: nil, status: status, words: 0, text: nil,
+                              recognitionMs: DialogueCueCoordinator.ms(ContinuousClock.now - started),
+                              error: String(describing: error))
+            }
+        }
+        print("Capture transcription: \(source.contentID) at \(source.sourceStart) s, \(entry.words) words" +
+              (entry.error.map { " (\($0))" } ?? ""))
+        return entry
+    }
+
+    /// `dialogueTranscripts[]`: whether the cue's plan used a transcript, and the recognized text
+    /// of its bank's lines with the anchor line marked.
+    private static func cueTranscriptReport(_ built: DialogueCueCoordinator.Built, cue: Int, source: DialogueSource,
+                                            captured: CaptureTranscript?, reused: Bool) -> [String: Any] {
+        var result = captured?.fields ?? ["status": "missing", "words": 0]
+        result["cue"] = cue
+        result["contentID"] = source.contentID
+        result["sourceSeconds"] = (source.sourceStart * 1000).rounded() / 1000
+        result["transcriptUsed"] = built.plan.usedTranscript
+        result["bankReused"] = reused
+        if let bank = built.played ?? built.bank {
+            if let text = bank.anchor.text { result["anchorText"] = text }
+            if let intended = bank.intendedText { result["intendedText"] = intended }
+            result["lines"] = bank.pads.compactMap { pad -> [String: Any]? in
+                guard let text = pad.text else { return nil }
+                return ["padID": pad.padID, "role": pad.role.rawValue, "level": pad.level.name, "text": text,
+                        "anchor": pad.padID == bank.anchorPadID]
+            }
+        }
+        return result
+    }
+
+    /// `diagnostics.landmarks[]` (plan 3.2): one take's kick and snare attacks in capture frames.
+    private static func landmarkReport(_ take: LofiDrumTake, take index: Int, offset: Int, limit: Int) -> [String: Any] {
+        func marks(_ kind: LofiDrumLandmark.Kind) -> [[String: Any]] {
+            take.landmarks.filter { $0.kind == kind && offset + $0.attackFrame < limit }.map {
+                ["frame": offset + $0.attackFrame, "peakFrame": offset + $0.peakFrame,
+                 "strength": Double($0.strength), "confidence": Double($0.confidence)]
+            }
+        }
+        return ["take": index, "name": take.name ?? "fixture", "kicks": marks(.kick), "snares": marks(.snare)]
     }
 
     private static func write(_ object: Any, file: String, in directory: URL) throws {
@@ -381,6 +660,20 @@ struct LofiMixRenderTests {
         return buffer
     }
 
+    /// AVAudioEngine hands tap audio over in 0.1 s blocks on its own queue. A manual render that runs
+    /// ahead of the file writes overruns a tap's buffer and a block is dropped (`skippedTapFrames`,
+    /// seen on a busy machine once the capture had twenty taps), so the render waits while any tap
+    /// has two complete blocks outstanding. The limit only bounds a stall; a real skip still fails.
+    @discardableResult
+    nonisolated private static func awaitTaps(_ sinks: [TapFile], cursor: Int) -> Bool {
+        guard sinks.contains(where: { $0.isBehind(cursor) }) else { return false }
+        let deadline = DispatchTime.now().uptimeNanoseconds + 2_000_000_000
+        while sinks.contains(where: { $0.isBehind(cursor) }), DispatchTime.now().uptimeNanoseconds < deadline {
+            usleep(200)
+        }
+        return true
+    }
+
     /// Offline-only taps. File writes run inside the tool's pull graph, never in app playback.
     nonisolated private final class TapFile: @unchecked Sendable {
         private let name: String
@@ -389,6 +682,9 @@ struct LofiMixRenderTests {
         private var firstSample: AVAudioFramePosition?
         private var frames = 0
         private var failure: Error?
+        /// Frames written so far, and the tap's block length, for `awaitTaps` on the render thread.
+        private let delivered = Atomic<Int>(0)
+        private let block = Atomic<Int>(4800)
         init(name: String, format: AVAudioFormat, directory: URL, frames: Int) throws {
             self.name = name
             required = frames
@@ -417,8 +713,19 @@ struct LofiMixRenderTests {
                         try file?.write(from: end)
                     }
                     frames += count
-                } catch { failure = error }
+                    block.store(max(1, Int(buffer.frameLength)), ordering: .relaxed)
+                    delivered.store(frames >= required ? .max : frames, ordering: .relaxed)
+                } catch {
+                    failure = error
+                    delivered.store(.max, ordering: .relaxed)
+                }
             }
+        }
+
+        /// Whether two or more complete tap blocks are still waiting to be written at `cursor`.
+        func isBehind(_ cursor: Int) -> Bool {
+            let done = delivered.load(ordering: .relaxed)
+            return done != .max && cursor - done >= 2 * block.load(ordering: .relaxed)
         }
 
         enum CaptureError: Error { case skippedTapFrames(String, Int, Int) }

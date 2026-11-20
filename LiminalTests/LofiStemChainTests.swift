@@ -1,0 +1,551 @@
+import Accelerate
+import AVFoundation
+import Foundation
+import Testing
+@testable import Liminal
+
+/// Offline per-section chains (plan 8.2 to 8.4): static responses, dynamics bounds, alignment,
+/// low-end ownership, the space duck and carried tail, robustness and preparation time.
+@Suite(.serialized)
+struct LofiStemChainTests {
+    static let rate = 48_000.0
+
+    // MARK: Fixtures and meters
+
+    static func sine(_ hz: Double, seconds: Double, amplitude: Float = 0.1, phase: Double = 0) -> [Float] {
+        (0..<Int(rate * seconds)).map { amplitude * Float(sin(2 * .pi * hz * Double($0) / rate + phase)) }
+    }
+
+    static func rms(_ x: ArraySlice<Float>) -> Double {
+        sqrt(x.reduce(0) { $0 + Double($1) * Double($1) } / Double(max(1, x.count)))
+    }
+
+    static func db(_ x: Double) -> Double { 20 * log10(max(x, 1e-12)) }
+
+    /// Gain of a steady sine through `process`, measured over the second half.
+    static func sweepGainDB(_ hz: Double, _ process: (inout [Float], inout [Float]) -> Void) -> Double {
+        let input = sine(hz, seconds: hz < 100 ? 1.0 : 0.4)
+        var left = input, right = input
+        process(&left, &right)
+        let half = input.count / 2
+        let out = 0.5 * (pow(rms(left[half...]), 2) + pow(rms(right[half...]), 2))
+        return 10 * log10(out) - db(rms(input[half...]))
+    }
+
+    static func analyticDB(_ kinds: [LofiBiquad.Kind], _ hz: Double) -> Double {
+        LofiFilterChain(kinds, sampleRate: rate).magnitudeDB(at: hz)
+    }
+
+    /// Mono power in a band (LR4 band split), dB.
+    static func bandDB(_ left: [Float], _ right: [Float], low: Double?, high: Double?) -> Double {
+        var l = left, r = right
+        var kinds: [LofiBiquad.Kind] = []
+        let q = 0.7071067811865476
+        if let low { kinds += [.highpass(hz: low, q: q), .highpass(hz: low, q: q)] }
+        if let high { kinds += [.lowpass(hz: high, q: q), .lowpass(hz: high, q: q)] }
+        var chain = LofiFilterChain(kinds, sampleRate: rate)
+        chain.process(left: &l, right: &r)
+        let mono = zip(l, r).map { 0.5 * ($0 + $1) }
+        return db(rms(mono[...]))
+    }
+
+    /// A synthetic boom-bap bar pattern: kick on 1 and the "and" of 3, snare on 2 and 4, hats on eighths.
+    static func drumFixture(seconds: Double, bpm: Double = 90, decorrelatedLow: Bool = false) -> (left: [Float], right: [Float], kicks: [Int]) {
+        let n = Int(rate * seconds)
+        var left = [Float](repeating: 0, count: n), right = left
+        var rng = MusicRNG(seed: 77)
+        let beat = 60 / bpm
+        var kicks: [Int] = []
+        var t = 0.0
+        var index = 0
+        while t < seconds - beat {
+            let start = Int(t * rate)
+            let position = index % 8
+            if position == 0 || position == 5 {
+                kicks.append(start)
+                for i in 0..<Int(0.35 * rate) where start + i < n {
+                    let s = Double(i) / rate
+                    let rise = min(1, s / 0.002)
+                    let body = 0.75 * rise * exp(-s / 0.11) * sin(2 * .pi * (52 + 40 * exp(-s / 0.02)) * s)
+                    let click = 0.25 * exp(-s / 0.002) * Double(rng.rangeF(-1...1))
+                    left[start + i] += Float(body + click)
+                    right[start + i] += Float((decorrelatedLow ? 0.75 * rise * exp(-s / 0.11) * cos(2 * .pi * 52 * s) : body) + click)
+                }
+            }
+            if position == 2 || position == 6 {
+                for i in 0..<Int(0.2 * rate) where start + i < n {
+                    let s = Double(i) / rate
+                    let noise = Float(0.45 * exp(-s / 0.05)) * rng.rangeF(-1...1)
+                    let tone = Float(0.3 * exp(-s / 0.04) * sin(2 * .pi * 190 * s))
+                    left[start + i] += noise + tone
+                    right[start + i] += 0.9 * noise + tone
+                }
+            }
+            for i in 0..<Int(0.05 * rate) where start + i < n {
+                let s = Double(i) / rate
+                let hat = Float(0.08 * exp(-s / 0.01)) * rng.rangeF(-1...1)
+                left[start + i] += hat
+                right[start + i] += 0.8 * hat
+            }
+            t += beat / 2
+            index += 1
+        }
+        return (left, right, kicks)
+    }
+
+    /// 10 to 90 percent rise of the 40 to 150 Hz band envelope (1 ms RMS) after each attack, seconds.
+    static func attackTimes(_ left: [Float], _ right: [Float], at onsets: [Int]) -> [Double] {
+        var l = left, r = right
+        let q = 0.7071067811865476
+        var band = LofiFilterChain([.highpass(hz: 40, q: q), .highpass(hz: 40, q: q),
+                                    .lowpass(hz: 150, q: q), .lowpass(hz: 150, q: q)], sampleRate: rate)
+        band.process(left: &l, right: &r)
+        let hop = Int(rate * 0.001)
+        return onsets.compactMap { onset in
+            let windows = stride(from: max(0, onset - 5 * hop), to: min(l.count - hop, onset + 80 * hop), by: hop).map {
+                sqrt(0.5 * (pow(rms(l[$0..<($0 + hop)]), 2) + pow(rms(r[$0..<($0 + hop)]), 2)))
+            }
+            guard let peak = windows.max(), peak > 0, let top = windows.firstIndex(of: peak) else { return nil }
+            let first = windows[...top].firstIndex { $0 >= 0.1 * peak } ?? 0
+            let ninety = windows[...top].firstIndex { $0 >= 0.9 * peak } ?? top
+            return Double(max(1, ninety - first)) * 0.001
+        }
+    }
+
+    static func drumTake(left: [Float], right: [Float], bpm: Double, chain: LofiStemChains.Drums? = .standard) throws -> LofiDrumTake {
+        let clock = LofiClock(tempo: bpm, sampleRate: rate)
+        let frames = clock.frameCount * LofiDrumTake.phraseCount
+        var l = [Float](repeating: 0, count: frames), r = l
+        for i in 0..<frames {
+            l[i] = left[i % left.count]
+            r[i] = right[i % right.count]
+        }
+        let entry = LofiDrumLibrary.Entry(name: "chain fixture", sha256: "", bpm: bpm, beats: 64, sampleRate: rate,
+                                          channels: 2, frameCount: frames, framesPerBeat: clock.framesPerBeat,
+                                          onsetPhaseMilliseconds: 0, beatSupport: 1)
+        return try LofiDrumTake(recording: .init(entry: entry, left: l, right: r, gain: 1), clock: clock, chain: chain)
+    }
+
+    static func channels(_ buffer: AVAudioPCMBuffer) -> (left: [Float], right: [Float]) {
+        let n = Int(buffer.frameLength)
+        guard let data = buffer.floatChannelData else { return ([], []) }
+        return (Array(UnsafeBufferPointer(start: data[0], count: n)), Array(UnsafeBufferPointer(start: data[1], count: n)))
+    }
+
+    // MARK: Static responses
+
+    @Test func staticResponsesMatchTheSpecification() {
+        var drums = LofiStemChains.Drums.standard
+        drums.dynamicsEnabled = false
+        var bass = LofiStemChains.Bass.standard
+        bass.dynamicsEnabled = false
+        var lead = LofiStemChains.Lead.standard
+        lead.dynamicsEnabled = false
+        let checks: [(name: String, kinds: [LofiBiquad.Kind], frequencies: [Double],
+                      process: (inout [Float], inout [Float]) -> Void)] = [
+            ("drums", drums.filters + drums.air, [32, 60, 320, 1_000, 11_000, 16_000], { l, r in
+                l.withUnsafeMutableBufferPointer { lp in r.withUnsafeMutableBufferPointer { rp in
+                    _ = LofiStemChains.applyDrums(left: lp.baseAddress!, right: rp.baseAddress!, count: lp.count,
+                                                  sampleRate: Self.rate, settings: drums) } }
+            }),
+            ("bass", bass.highpass + bass.filters, [30, 55, 110, 280, 1_000, 4_500], { l, r in
+                l.withUnsafeMutableBufferPointer { _ = LofiStemChains.applyBass($0.baseAddress!, count: $0.count,
+                                                                                 sampleRate: Self.rate, settings: bass) }
+                r = l   // the bass chain is mono
+            }),
+            ("lead", lead.filters, [120, 180, 350, 1_000, 2_800, 9_000], { l, r in
+                var none: (left: [Float], right: [Float])?
+                _ = LofiStemChains.applyLead(left: &l, right: &r, accent: &none, sampleRate: Self.rate, settings: lead)
+            }),
+            ("mids", LofiStemChains.Mids.standard.filters, [100, 160, 400, 1_600, 7_000], { l, r in
+                let silent = [Float](repeating: 0, count: l.count)
+                let out = LofiStemChains.applyMids(lower: (l, r), upper: (silent, silent), sampleRate: Self.rate)
+                l = out.left
+                r = out.right
+            }),
+            ("space", LofiStemChains.Space.standard.filters, [200, 350, 1_000, 2_500, 4_500, 8_000], { l, r in
+                LofiStemChains.applySpace(left: &l, right: &r, sampleRate: Self.rate)
+            }),
+        ]
+        for check in checks {
+            for hz in check.frequencies {
+                let measured = Self.sweepGainDB(hz, check.process)
+                let expected = Self.analyticDB(check.kinds, hz)
+                #expect(abs(measured - expected) <= 0.5, "\(check.name) at \(hz) Hz: \(measured) vs \(expected)")
+            }
+        }
+        // The named settings themselves, where no neighbouring stage contributes more than 0.3 dB.
+        #expect(abs(Self.analyticDB(drums.filters + drums.air, 320) + 2.5) <= 0.5)
+        #expect(abs(Self.analyticDB(drums.filters + drums.air, 32) + 3) <= 0.5)
+        #expect(abs(Self.analyticDB(bass.highpass + bass.filters, 30) + 3) <= 0.5)
+        #expect(abs(Self.analyticDB(bass.highpass + bass.filters, 280) + 2) <= 0.5)
+        #expect(abs(Self.analyticDB(bass.highpass + bass.filters, 4_500) + 3) <= 0.5)
+        #expect(abs(Self.analyticDB(lead.filters, 2_800) - 1.5) <= 0.5)
+        #expect(abs(Self.analyticDB(lead.filters, 9_000) + 3) <= 0.5)
+        #expect(abs(Self.analyticDB(LofiStemChains.Mids.standard.filters, 400) + 3) <= 0.5)
+        #expect(abs(Self.analyticDB(LofiStemChains.Mids.standard.filters, 1_600) - 1.5) <= 0.5)
+        #expect(abs(Self.analyticDB(LofiStemChains.Space.standard.filters, 350) + 3) <= 0.5)
+        #expect(abs(Self.analyticDB(LofiStemChains.Space.standard.filters, 4_500) + 3.5) <= 0.5)
+    }
+
+    // MARK: Drums
+
+    @Test func drumBusReductionIsBoundedAndThePeakIsTrimmed() {
+        var fixture = Self.drumFixture(seconds: 12)
+        let stats = fixture.left.withUnsafeMutableBufferPointer { l in
+            fixture.right.withUnsafeMutableBufferPointer { r in
+                LofiStemChains.applyDrums(left: l.baseAddress!, right: r.baseAddress!, count: l.count, sampleRate: Self.rate)
+            }
+        }
+        print(String(format: "CHAIN drums fixture in %.2f/%.2f out %.2f/%.2f dB, bus GR mean %.2f max %.2f, parallel mean %.2f max %.2f",
+                     stats.inPeakDb, stats.inRmsDb, stats.outPeakDb, stats.outRmsDb, stats.grMeanDb, stats.grMaxDb,
+                     stats.extra["parallelGrMeanDb"] ?? 0, stats.extra["parallelGrMaxDb"] ?? 0))
+        // Plan 8.2: peaks see 2 to 3 dB of bus reduction (the loudest a little more), the parallel
+        // path 6 to 10 dB on typical hits (a few dB more on the loudest).
+        #expect((2...5).contains(stats.grMaxDb), "bus reduction \(stats.grMaxDb) dB")
+        #expect((6...13).contains(stats.extra["parallelGrMaxDb"] ?? 0))
+        #expect(stats.outPeakDb <= -4 + 1e-3)
+        #expect(fixture.left.allSatisfy(\.isFinite) && fixture.right.allSatisfy(\.isFinite))
+    }
+
+    @Test func drumChainHasNoLatency() {
+        let n = Int(Self.rate * 2)
+        var left = [Float](repeating: 0, count: n), right = left
+        let spikes = [4_800, 30_000, 61_234]
+        for (i, frame) in spikes.enumerated() {
+            left[frame] = 0.8 - 0.2 * Float(i)
+            right[frame] = 0.8 - 0.2 * Float(i)
+        }
+        left.withUnsafeMutableBufferPointer { l in
+            right.withUnsafeMutableBufferPointer { r in
+                _ = LofiStemChains.applyDrums(left: l.baseAddress!, right: r.baseAddress!, count: n, sampleRate: Self.rate)
+            }
+        }
+        for frame in spikes {
+            let window = (frame - 2_000)..<(frame + 2_000)
+            let peak = window.max { abs(left[$0]) < abs(left[$1]) }
+            #expect(peak == frame, "impulse at \(frame) peaks at \(peak ?? -1)")
+        }
+    }
+
+    @Test func drumLowsAreMonoBelowOneHundredHertz() {
+        var fixture = Self.drumFixture(seconds: 6, decorrelatedLow: true)
+        func lowCorrelation(_ l: [Float], _ r: [Float]) -> Float {
+            var a = l, b = r
+            let q = 0.7071067811865476
+            var low = LofiFilterChain([.lowpass(hz: 80, q: q), .lowpass(hz: 80, q: q)], sampleRate: Self.rate)
+            low.process(left: &a, right: &b)
+            return LofiStereo.correlation(left: a, right: b)
+        }
+        let before = lowCorrelation(fixture.left, fixture.right)
+        fixture.left.withUnsafeMutableBufferPointer { l in
+            fixture.right.withUnsafeMutableBufferPointer { r in
+                _ = LofiStemChains.applyDrums(left: l.baseAddress!, right: r.baseAddress!, count: l.count, sampleRate: Self.rate)
+            }
+        }
+        let after = lowCorrelation(fixture.left, fixture.right)
+        print(String(format: "CHAIN drums low-band correlation %.3f -> %.3f", before, after))
+        #expect(before < 0.8)
+        #expect(after >= 0.98)
+    }
+
+    @Test func kickAttacksKeepTheirRise() {
+        let raw = Self.drumFixture(seconds: 10)
+        var processed = raw
+        processed.left.withUnsafeMutableBufferPointer { l in
+            processed.right.withUnsafeMutableBufferPointer { r in
+                _ = LofiStemChains.applyDrums(left: l.baseAddress!, right: r.baseAddress!, count: l.count, sampleRate: Self.rate)
+            }
+        }
+        let before = Self.attackTimes(raw.left, raw.right, at: raw.kicks)
+        let after = Self.attackTimes(processed.left, processed.right, at: raw.kicks)
+        let ratio = after.reduce(0, +) / max(1e-9, before.reduce(0, +))
+        print(String(format: "CHAIN kick attack %.2f ms -> %.2f ms (ratio %.3f)",
+                     1000 * before.reduce(0, +) / Double(before.count), 1000 * after.reduce(0, +) / Double(after.count), ratio))
+        #expect(before.count == raw.kicks.count && after.count == raw.kicks.count)
+        #expect(ratio <= 1.2)
+    }
+
+    @Test func drumTakeKeepsLandmarksOnTheProcessedFrames() throws {
+        let fixture = Self.drumFixture(seconds: 8)
+        let raw = try Self.drumTake(left: fixture.left, right: fixture.right, bpm: 90, chain: nil)
+        let take = try Self.drumTake(left: fixture.left, right: fixture.right, bpm: 90)
+        #expect(take.kicks == raw.kicks)
+        #expect(take.landmarks == raw.landmarks)
+        let processed = Self.channels(take.buffer)
+        // Every detected kick still has its processed attack within a few milliseconds of the landmark.
+        for kick in take.landmarks.filter({ $0.kind == .kick && $0.confidence >= 0.5 }) {
+            let window = max(0, kick.attackFrame - 480)..<min(processed.left.count, kick.attackFrame + 480)
+            let before = Self.rms(processed.left[max(0, kick.attackFrame - 960)..<max(1, kick.attackFrame - 480)])
+            let around = Self.rms(processed.left[window])
+            #expect(around > before)
+        }
+        let peak = processed.left.map(abs).max() ?? 0
+        #expect(20 * log10(peak) <= -4 + 1e-3)
+    }
+
+    @Test(.enabled(if: !LofiDrumLibrary.assets().isEmpty), .responsivePool)
+    func installedTakesLandInsideTheDrumBusTargets() throws {
+        var worst = 0.0
+        for asset in LofiDrumLibrary.assets() {
+            let recording = try LofiDrumLibrary.load(asset)
+            // A tempo 6 percent off the recording exercises the resampler, as the app does.
+            let clock = LofiClock(tempo: asset.entry.bpm * 0.94, sampleRate: Self.rate)
+            let raw = try LofiDrumTake(recording: recording, clock: clock, chain: nil)
+            // Load-corrected CPU time, so the parallel suite does not inflate it (see `ForegroundTiming`).
+            let (take, cost) = try ForegroundTiming.measure { try LofiDrumTake(recording: recording, clock: clock) }
+            let seconds = cost.seconds
+            worst = max(worst, seconds)
+            func crest(_ c: (left: [Float], right: [Float])) -> Double {
+                let all = c.left + c.right
+                return Self.db(Double(all.map(abs).max() ?? 0)) - Self.db(Self.rms(all[...]))
+            }
+            let before = Self.channels(raw.buffer), after = Self.channels(take.buffer)
+            let kicks = take.landmarks.filter { $0.kind == .kick && $0.confidence >= 0.5 }.map(\.attackFrame)
+            let rise = Self.attackTimes(after.left, after.right, at: kicks).reduce(0, +)
+                / max(1e-9, Self.attackTimes(before.left, before.right, at: kicks).reduce(0, +))
+            let peak = Self.db(Double((after.left + after.right).map(abs).max() ?? 0))
+            print(String(format: "PREP take %@ %.3f s; crest %.2f -> %.2f dB; peak %.2f dBFS; kick rise ratio %.3f",
+                         asset.entry.name, seconds, crest(before), crest(after), peak, rise))
+            #expect((10...14).contains(crest(after)), "\(asset.entry.name) crest \(crest(after))")
+            #expect(peak <= -4 + 1e-3)
+            #expect(rise <= 1.2)
+            #expect(take.kicks == raw.kicks && take.landmarks == raw.landmarks)
+        }
+        print(String(format: "PREP worst take preparation %.3f s", worst))
+        #expect(worst < 3.0)
+    }
+
+    // MARK: Phrases
+
+    static func phrase(seed: UInt64 = 1042, index: Int = 0, rate: Double = 48_000, tempo: Double = 70,
+                       drums: LofiDrumTake? = nil, carry: LofiRenderer.Tail? = nil,
+                       scale: ScaleType? = nil) throws -> LofiRenderer.Phrase {
+        let request = LofiPlayback.Request(seed: seed, index: index, options: .init(tempo: tempo, scale: scale))
+        return try LofiRenderer.render(seed: request.compositionSeed, section: request.section, options: request.options,
+                                       sampleRate: rate, drift: .init(seed: request.seed),
+                                       startBeat: Double(index) * LofiClock.beats, drums: drums,
+                                       drumStartBeat: request.drumStartBeat, carry: carry)
+    }
+
+    static func phraseDrums(tempo: Double = 70) throws -> LofiDrumTake {
+        let fixture = drumFixture(seconds: 6, bpm: tempo)
+        return try drumTake(left: fixture.left, right: fixture.right, bpm: tempo)
+    }
+
+    @Test func bassIsMonoCarriesHarmonicsAndCompresses() throws {
+        let drums = try Self.phraseDrums()
+        let phrase = try Self.phrase(drums: drums)
+        let bass = Self.channels(phrase.bass)
+        #expect(bass.left == bass.right)
+        #expect(bass.left.contains { abs($0) > 0.02 })
+
+        // A held roundSub note at MIDI 33: the 150 to 800 Hz harmonics rise against the fundamental.
+        let clock = LofiClock(tempo: 70, sampleRate: Self.rate)
+        var left = [Float](repeating: 0, count: clock.frameCount), right = left
+        let note = LofiScore.Note(part: .bass, midi: 33, beat: 0, length: 6, velocity: 0.8)
+        left.withUnsafeMutableBufferPointer { l in
+            right.withUnsafeMutableBufferPointer { r in LofiBassVoice.add(note, voice: .roundSub, clock: clock, left: l, right: r) }
+        }
+        let raw = left
+        let stats = left.withUnsafeMutableBufferPointer {
+            LofiStemChains.applyBass($0.baseAddress!, count: $0.count, sampleRate: Self.rate)
+        }
+        func harmonics(_ x: [Float]) -> Double {
+            Self.bandDB(x, x, low: 150, high: 800) - Self.bandDB(x, x, low: 40, high: 150)
+        }
+        print(String(format: "CHAIN bass harmonics %.2f -> %.2f dB, GR mean %.2f max %.2f",
+                     harmonics(raw), harmonics(left), stats.grMeanDb, stats.grMaxDb))
+        #expect(harmonics(left) >= harmonics(raw) + 3)
+        #expect((1.5...4.5).contains(stats.grMaxDb), "bass reduction \(stats.grMaxDb) dB")
+        let finite = left.allSatisfy { $0.isFinite }
+        #expect(finite)
+    }
+
+    /// At most `LofiKickDuck.depth` (4 dB since mix calibration; 3 dB before), 1.5 to 4.5 dB after each kick.
+    @Test func kickDuckIsBounded() {
+        let fixture = Self.drumFixture(seconds: 4)
+        var duck = LofiKickDuck(sampleRate: Self.rate)
+        let gains = zip(fixture.left, fixture.right).map { duck.gain(drumLeft: $0, drumRight: $1) }
+        for kick in fixture.kicks {
+            let window = kick..<min(gains.count, kick + Int(0.12 * Self.rate))
+            let depth = -Self.db(Double(gains[window].min() ?? 1))
+            #expect((1.5...4.5).contains(depth), "duck after kick \(kick): \(depth) dB")
+        }
+        #expect(gains.allSatisfy { $0 >= 1 - LofiKickDuck.depth - 1e-6 && $0 <= 1 })
+    }
+
+    @Test func leadMidsAndSpaceLeaveTheLowEndToDrumsAndBass() throws {
+        let drums = try Self.phraseDrums()
+        let take = Self.channels(drums.buffer)
+        for index in 0..<4 {
+            let phrase = try Self.phrase(index: index, drums: drums)
+            let n = phrase.clock.frameCount
+            let start = index * n
+            let kit = (left: Array(take.left[start..<(start + n)]), right: Array(take.right[start..<(start + n)]))
+            let bass = Self.channels(phrase.bass)
+            let reference = max(Self.bandDB(kit.left, kit.right, low: nil, high: 120),
+                                Self.bandDB(bass.left, bass.right, low: nil, high: 120))
+            for (name, buffer) in [("dry", phrase.dry), ("texture", phrase.texture), ("wet", phrase.wet)] {
+                let stem = Self.channels(buffer)
+                let low = Self.bandDB(stem.left, stem.right, low: nil, high: 120)
+                #expect(low <= reference - 12, "phrase \(index) \(name): \(low) dB vs \(reference) dB")
+            }
+        }
+    }
+
+    @Test func midShellVoicesSpreadAboveThreeHundredHertzOnly() {
+        let n = Int(Self.rate)
+        let low = Self.sine(110, seconds: 1, amplitude: 0.2), high = Self.sine(1_000, seconds: 1, amplitude: 0.2)
+        let mixed = zip(low, high).map { $0 + $1 }
+        let silent = [Float](repeating: 0, count: n)
+        let out = LofiStemChains.applyMids(lower: (mixed, mixed), upper: (silent, silent), sampleRate: Self.rate)
+        let lowBand = (Self.bandDB(out.left, out.left, low: nil, high: 200), Self.bandDB(out.right, out.right, low: nil, high: 200))
+        let highBand = (Self.bandDB(out.left, out.left, low: 600, high: nil), Self.bandDB(out.right, out.right, low: 600, high: nil))
+        #expect(abs(lowBand.0 - lowBand.1) < 0.3)
+        #expect(highBand.0 - highBand.1 > 1)
+        let upper = LofiStemChains.applyMids(lower: (silent, silent), upper: (mixed, mixed), sampleRate: Self.rate)
+        #expect(Self.bandDB(upper.right, upper.right, low: 600, high: nil)
+                - Self.bandDB(upper.left, upper.left, low: 600, high: nil) > 1)
+    }
+
+    @Test func spaceDucksUnderTheLeadAndItsCarriedTailIsFilteredOnce() throws {
+        let previous = try Self.phrase(index: 0)
+        let next = try Self.phrase(index: 1, carry: previous.tail)
+        let alone = try Self.phrase(index: 1)
+        let n = next.clock.frameCount
+        let dry = Self.channels(next.dry)
+        let duck = LofiRenderer.spaceDuck(lead: dry, gain: 1, frames: n, sampleRate: Self.rate)
+        let depth = -Self.db(Double(duck.gain.min() ?? 1))
+        print(String(format: "CHAIN space duck max %.2f dB, mean %.2f dB", depth, duck.meanDB))
+        #expect((3...5).contains(depth))
+        // Joined output minus the phrase alone is the carried tail exactly once, under the same duck.
+        // A second filter pass on the tail would leave a filtered residual here.
+        let joined = Self.channels(next.wet), own = Self.channels(alone.wet)
+        var worst: Float = 0, carried: Float = 0
+        for frame in stride(from: 200, to: min(n, previous.tail.left.count), by: 7) {
+            let carry = previous.tail.sample(frame, at: next.clock)
+            guard max(abs(joined.left[frame]), abs(joined.right[frame])) < 0.2 else { continue }
+            worst = max(worst, abs(joined.left[frame] - own.left[frame] - duck.gain[frame] * carry.left))
+            carried = max(carried, abs(carry.left))
+        }
+        #expect(carried > 1e-4)
+        #expect(worst < 2e-5 + 1e-3 * carried)
+
+        // The filters are linear and time-invariant: phrase plus tail, then the next phrase plus the
+        // carried tail, equals one long filtered render.
+        var rng = MusicRNG(seed: 5)
+        let length = 24_000, phraseLength = 16_000
+        let a = (0..<length).map { _ in rng.rangeF(-0.2...0.2) }
+        let b = (0..<length).map { _ in rng.rangeF(-0.2...0.2) }
+        var long = [Float](repeating: 0, count: phraseLength + length)
+        for i in 0..<length {
+            long[i] += a[i]
+            long[phraseLength + i] += b[i]
+        }
+        var longR = long
+        LofiStemChains.applySpace(left: &long, right: &longR, sampleRate: Self.rate)
+        var first = a, firstR = a, second = b, secondR = b
+        LofiStemChains.applySpace(left: &first, right: &firstR, sampleRate: Self.rate)
+        LofiStemChains.applySpace(left: &second, right: &secondR, sampleRate: Self.rate)
+        var error: Float = 0
+        for i in 0..<(length - phraseLength) {
+            error = max(error, abs(second[i] + first[phraseLength + i] - long[phraseLength + i]))
+        }
+        #expect(error < 1e-5)
+    }
+
+    @Test func spaceSitsUnderTheLeadInLeadActivePhrases() throws {
+        var margins: [Double] = []
+        for seed in [1042, 2025, 7] as [UInt64] {
+            var carry: LofiRenderer.Tail?
+            for index in 0..<4 {
+                let phrase = try Self.phrase(seed: seed, index: index, carry: carry)
+                carry = phrase.tail
+                let lead = Self.channels(phrase.dry), wet = Self.channels(phrase.wet)
+                let ranges = phrase.score.notes.filter { $0.part == .lead }.map {
+                    phrase.clock.frame(at: $0.beat)..<min(phrase.clock.frameCount, phrase.clock.frame(at: $0.beat + $0.length))
+                }
+                guard !ranges.isEmpty else { continue }
+                var l = 0.0, w = 0.0
+                for range in ranges {
+                    for i in range {
+                        l += Double(lead.left[i] * lead.left[i] + lead.right[i] * lead.right[i])
+                        w += Double(wet.left[i] * wet.left[i] + wet.right[i] * wet.right[i])
+                    }
+                }
+                margins.append(10 * log10(max(l, 1e-20) / max(w, 1e-20)))
+            }
+        }
+        let median = margins.sorted()[margins.count / 2]
+        print("CHAIN lead minus space per phrase " + margins.map { String(format: "%.1f", $0) }.joined(separator: " "))
+        #expect(median >= 3)
+    }
+
+    @Test func everySeedAndScaleRendersFiniteStems() throws {
+        func finite(_ phrase: LofiRenderer.Phrase) -> Bool {
+            [phrase.bass, phrase.dry, phrase.texture, phrase.wet, phrase.fallbackWet].allSatisfy { buffer in
+                let c = Self.channels(buffer)
+                return c.left.allSatisfy(\.isFinite) && c.right.allSatisfy(\.isFinite)
+            } && phrase.tail.left.allSatisfy(\.isFinite)
+        }
+        for seed in 1...20 as ClosedRange<UInt64> {
+            var carry: LofiRenderer.Tail?
+            for index in 0..<2 {
+                let phrase = try Self.phrase(seed: seed, index: index + Int(seed % 3) * 2, rate: 8_000,
+                                             tempo: 58 + Double(seed), carry: carry)
+                carry = phrase.tail
+                #expect(finite(phrase), "seed \(seed) phrase \(index)")
+            }
+        }
+        for scale in ScaleType.allCases {
+            let phrase = try Self.phrase(seed: 9, index: 1, rate: 8_000, scale: scale)
+            #expect(finite(phrase), "\(scale)")
+        }
+    }
+
+    @Test func chainsAreDeterministic() throws {
+        let drums = try Self.phraseDrums()
+        let again = try Self.phraseDrums()
+        #expect(Self.channels(drums.buffer) == Self.channels(again.buffer))
+        let a = try Self.phrase(index: 3, drums: drums), b = try Self.phrase(index: 3, drums: again)
+        for (x, y) in [(a.bass, b.bass), (a.dry, b.dry), (a.texture, b.texture), (a.wet, b.wet), (a.fallbackWet, b.fallbackWet)] {
+            #expect(Self.channels(x) == Self.channels(y))
+        }
+    }
+
+    @Test(.responsivePool) func preparationStaysInsideItsBudget() throws {
+        // A take at 48 kHz that needs resampling (recorded at 74 BPM, played at 70).
+        let fixture = Self.drumFixture(seconds: 10, bpm: 74)
+        let source = LofiClock(tempo: 74, sampleRate: Self.rate)
+        let frames = source.frameCount * LofiDrumTake.phraseCount
+        let left = (0..<frames).map { fixture.left[$0 % fixture.left.count] }
+        let right = (0..<frames).map { fixture.right[$0 % fixture.right.count] }
+        let entry = LofiDrumLibrary.Entry(name: "timing fixture", sha256: "", bpm: 74, beats: 64, sampleRate: Self.rate,
+                                          channels: 2, frameCount: frames, framesPerBeat: source.framesPerBeat,
+                                          onsetPhaseMilliseconds: 0, beatSupport: 1)
+        let clock = LofiClock(tempo: 70, sampleRate: Self.rate)
+        // Load-corrected CPU time, so the parallel suite does not inflate it (see `ForegroundTiming`).
+        let (take, takeCost) = try ForegroundTiming.measure {
+            try LofiDrumTake(recording: .init(entry: entry, left: left, right: right, gain: 1), clock: clock)
+        }
+        let takeSeconds = takeCost.seconds
+        var worstPhrase = 0.0
+        var carry: LofiRenderer.Tail?
+        for index in 0..<4 {
+            let previous = carry
+            // The render is deterministic, so a reading near the budget is taken again (best of three).
+            var best = ForegroundTiming.Cost.unmeasured
+            for _ in 0..<3 where best.seconds > 1.2 {
+                let (phrase, cost) = try ForegroundTiming.measure { try Self.phrase(index: index, drums: take, carry: previous) }
+                if cost.seconds < best.seconds { best = cost }
+                carry = phrase.tail
+            }
+            worstPhrase = max(worstPhrase, best.seconds)
+            print("PREP phrase \(index) \(best)")
+        }
+        print(String(format: "PREP synthetic take (resample, landmarks, chain) %.3f s; worst phrase %.3f s", takeSeconds, worstPhrase))
+        #expect(takeSeconds < 3.0)
+        #expect(worstPhrase < 1.5)
+    }
+}

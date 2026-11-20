@@ -18,7 +18,7 @@ nonisolated struct LofiMotion {
     private var tick = 0
     private var beat: Float
     private let step: Float
-    private let colors: [Float]
+    private let colors: (Float, Float, Float)
     private let gesture: (diffusion: Float, ringing: Float, folding: Float, texture: Float)
 
     init(clock: LofiClock, tonic: Int, scale: ScaleType, seed: UInt64, gesture: LofiEffects.Gesture) {
@@ -36,9 +36,11 @@ nonisolated struct LofiMotion {
         step = 1 / Float(clock.framesPerBeat)
         var rng = MusicRNG(seed: seed).fork(872)
         beat = rng.rangeF(0...20)
-        colors = (0..<3).map { _ in rng.rangeF(0.36...1) }
+        let picked = (0..<3).map { _ in rng.rangeF(0.36...1) }
+        colors = (picked[0], picked[1], picked[2])
     }
 
+    @_transparent
     mutating func process(lead: Stereo, texture: Stereo, grain: Stereo) -> Stereo {
         beat += step
         let drift = 0.5 + 0.5 * sinf(beat * 0.43)
@@ -58,14 +60,15 @@ nonisolated struct LofiMotion {
         tick = (tick + 1) % 5
         decimated.left += 0.13 * (held.left - decimated.left)
         decimated.right += 0.13 * (held.right - decimated.right)
-        let ring = gesture.ringing * colors[0] * (0.32 + 0.68 * drift)
-        let shape = gesture.folding * colors[1] * drift2 * (0.20 - min(0.09, abs(lead.left) + abs(lead.right)))
-        let blur = gesture.diffusion * colors[2] * (0.42 + 0.4 * (1 - drift))
+        let ring = gesture.ringing * colors.0 * (0.32 + 0.68 * drift)
+        let shape = gesture.folding * colors.1 * drift2 * (0.20 - min(0.09, abs(lead.left) + abs(lead.right)))
+        let blur = gesture.diffusion * colors.2 * (0.42 + 0.4 * (1 - drift))
         let textureLevel = 0.19 * gesture.texture * drift
         return (blur * diffusionL + ring * (0.34 * lo + 0.38 * hi) + shape * foldedL + textureLevel * decimated.left,
                 blur * diffusionR + ring * (0.36 * lo + 0.38 * shimmer) + shape * foldedR + textureLevel * decimated.right)
     }
 
+    @_transparent
     private func fold(_ sample: Float) -> Float {
         let limit: Float = 0.18
         let x = min(3 * limit, abs(sample))
@@ -73,20 +76,26 @@ nonisolated struct LofiMotion {
         return sample < 0 ? -y : y
     }
 
+    /// Preallocated line through a raw pointer, so the per-sample path stays fast in Debug builds.
     private struct Allpass {
-        var storage: [Float]
+        private let line: LofiEffects.Line
+        private let storage: UnsafeMutablePointer<Float>
+        private let length: Int
         var index = 0
 
         init(_ rate: Double, _ seconds: Double) {
-            storage = [Float](repeating: 0, count: max(1, Int(rate * seconds)))
+            line = LofiEffects.Line(count: max(1, Int(rate * seconds)))
+            storage = line.samples
+            length = line.count
         }
 
+        @_transparent
         mutating func process(_ x: Float) -> Float {
             let delayed = storage[index]
             let y = delayed - 0.58 * x
             storage[index] = x + 0.58 * y
             index += 1
-            if index == storage.count { index = 0 }
+            if index == length { index = 0 }
             return y
         }
     }
@@ -106,6 +115,7 @@ nonisolated struct LofiMotion {
             gain = Float(2 * (1 - r) * sin(omega))
         }
 
+        @_transparent
         mutating func process(_ x: Float) -> Float {
             let y = a * z1 - b * z2 + gain * x
             z2 = z1

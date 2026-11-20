@@ -159,7 +159,14 @@ struct LofiTests {
         let wet = try #require(next.wet.floatChannelData)[0]
         let dry = try #require(dryJoin.wet.floatChannelData)[0]
         let carry = previous.tail.sample(audible, at: next.clock)
-        #expect(abs(wet[audible] - dry[audible] - carry.left) < 0.00000002)
+        // Since the space chain (plan 8.4) the carried tail sits under the next phrase's lead duck,
+        // which the dry stem reproduces; the tail itself was filtered once, in its own phrase.
+        let lead = try #require(next.dry.floatChannelData)
+        let n = Int(next.dry.frameLength)
+        let duck = LofiRenderer.spaceDuck(lead: (Array(UnsafeBufferPointer(start: lead[0], count: n)),
+                                                 Array(UnsafeBufferPointer(start: lead[1], count: n))),
+                                          gain: 1, frames: n, sampleRate: next.clock.sampleRate)
+        #expect(abs(wet[audible] - dry[audible] - duck.gain[audible] * carry.left) < 0.0000001)
     }
 
     @Test func outgoingTailRetainsItsPitchWhenTheNextTakeChangesTempo() {
@@ -212,14 +219,24 @@ struct LofiTests {
             #expect(channel[0] == 0)
             #expect(channel[frames - 1] == 0)
         }
-        #expect(channels[0][1] > 0 && channels[0][1] < ramp[1] * 0.5)
-        #expect(channels[0][frames - 2] > 0 && channels[0][frames - 2] < ramp[frames - 2] * 0.5)
+        // The drum bus chain (plan 8.2) now processes the whole take before the splice taper. The
+        // intent is unchanged: the taper touches only the splice, so every interior frame equals the
+        // same chain run on the untapered recording, and the edge frames are that value tapered.
+        var reference = (left: ramp.map { $0 * 0.5 }, right: ramp.map { $0 * -0.5 })
+        reference.left.withUnsafeMutableBufferPointer { l in
+            reference.right.withUnsafeMutableBufferPointer { r in
+                _ = LofiStemChains.applyDrums(left: l.baseAddress!, right: r.baseAddress!, count: frames,
+                                              sampleRate: clock.sampleRate)
+            }
+        }
+        #expect(channels[0][1] == reference.left[1] * (Float(1) / Float(3)))
+        #expect(channels[0][frames - 2] == reference.left[frames - 2] * (Float(1) / Float(15)))
         for frame in [4, frames - 17] + (1...3).flatMap({
             let boundary = clock.frameCount * $0
             return [boundary - 1, boundary, boundary + 1]
         }) {
-            #expect(channels[0][frame] == ramp[frame] * 0.5)
-            #expect(channels[1][frame] == ramp[frame] * -0.5)
+            #expect(channels[0][frame] == reference.left[frame])
+            #expect(channels[1][frame] == reference.right[frame])
         }
     }
 
@@ -248,7 +265,20 @@ struct LofiTests {
         let phrase = try LofiRenderer.render(seed: 3, section: .answer, options: .init(tempo: 70),
                                              sampleRate: clock.sampleRate, drift: .init(seed: 3), startBeat: 16,
                                              drums: take, drumStartBeat: 16)
-        #expect(phrase.score.notes.first { $0.part == .bass }?.beat == played)
+        // A take with landmarks places the accent through its timing field: the voice's audible
+        // attack lands on the detected kick attack, and without a confident kick the note stays on 0.
+        // A take without landmarks keeps the original kick snap.
+        let bass = try #require(phrase.score.notes.first { $0.part == .bass })
+        let lead = phrase.score.bassVoice.attackLead / clock.beatDuration
+        if take.landmarks.isEmpty {
+            #expect(bass.beat == played)
+        } else if let kick = take.timing.kicks(phraseStartBeat: 16, minConfidence: LofiScore.bassAccentConfidence)
+            .first(where: { abs($0) <= LofiScore.bassAccentWindow }) {
+            #expect(abs(bass.beat - max(0, kick - lead)) < 1e-9)
+            #expect(abs(kick - played) < 0.03)
+        } else {
+            #expect(bass.beat == 0)
+        }
     }
 
     @Test func aTempoRequestWaitsForTheFollowingFullBreak() {
