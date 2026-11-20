@@ -1,6 +1,6 @@
 # Bass tone redo: a warm, continuous dub tone with a strike on the kick
 
-Date: 2026-11-20. Base: `main` at bab3fed. Status: built (see Outcome).
+Date: 2026-11-20. Base: `main` at bab3fed. Status: built (see Outcome). Superseded in one point: the shipped app rotates the three tones every 16 bars (D120) instead of playing `LofiBassTone.standard` alone (decision 5 and section 4).
 
 Inputs: the listening note on the D116 bass ("tinny", "too filtered but not completely", "weird high end", wants "continuous, warm bass tones, but with a really hard slap that lines up with where the drums hit"), the stage-by-stage diagnosis ([`bass-tone-diagnosis.md`](../research/bass-and-pads/bass-tone-diagnosis.md)) and the research audit ([`bass-tone-research-audit.md`](../research/bass-and-pads/bass-tone-research-audit.md)). Reference captures: `cap-fix-1` (current, seed 2077, 72 BPM, 32 bars) and `final-main` (the earlier approved pure-synth bass).
 

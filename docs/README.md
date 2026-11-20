@@ -18,6 +18,7 @@
 | [Lo-Fi instrument recordings](lofi-samples.md) | Sources for the twenty piano, plucked string and guitar programs |
 | [Instrument source survey](research/instrument-sources.md) | Redistributable piano, guitar and string recordings, licences, and the ones rejected |
 | [Bass and pad research](research/bass-and-pads/README.md) | Boom bap and dub bass, pad chords under a lead, CC0 bass samples, and the plan for the 2026-11-20 rework |
+| [Bass tone redo plan](plans/bass-tone-redo.md) | The warm sustained sub with a short strike on the kick, its gates and measurements (D119; rotation D120) |
 | [Architecture](architecture.md) | Audio and rendering pipelines, dependencies and attribution |
 | [Development reference](development.md) | Debug flags, automation scripts and contributing |
 | [Decision records](decisions/README.md) | Design rationale and review index |

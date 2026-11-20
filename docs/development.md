@@ -53,7 +53,7 @@ Two commands capture Lo-Fi audio offline and measure it. Both need FFmpeg, Pytho
 # One capture, then the full report (JSON, Markdown, PNGs, audition files)
 DD=$S/dd-name scripts/mix-report.sh --out DIR [--baseline DIR] [--strict] [--no-plots] [--case NAME] \
     [check-lofi.sh options: --private-drums --film-reel --bars 32 --seed 1042 --bpm 70 --hook k=v ...]
-    (--hook bassTone=round|upright|synth renders another bass tone; the app always plays LofiBassTone.standard)
+    (--hook bassTone=round|upright|synth pins one bass tone for the whole capture; without it the tone rotates every 16 bars, D120)
 
 # The five-case matrix (ref, long, fast, same, nofilm), run one after another
 DD=$S/dd-name scripts/mix-matrix.sh --out DIR [--baseline DIR] [--cases ref,long,fast,same,nofilm] [--strict] [--prune-wavs]
@@ -73,9 +73,13 @@ Only one capture runs at a time per machine. `check-lofi.sh` takes an exclusive 
 
 ## README preview
 
-The linked poster and MP4 live in `docs/media/`. The current clip is a live macOS recording of *Thinking Machines* over the Lo-Fi mix. To refresh it, use ScreenCaptureKit to capture only the Liminal app and its stereo output with the microphone disabled. A Debug launch with `-LiminalVideoFile` pointed at a credited film and `-LiminalAllowGeneration NO` makes the source identifiable and reuses cached imagery. Record across a drum fill, crop to the artwork, and export a short H.264 MP4 with AAC stereo and the MP4 index at the front for streaming.
+The linked poster and MP4 live in `docs/media/`. The clip is built offline from the app's own audio and shader, not recorded from a running window, so it needs no Gemini call and no Liminal launch:
 
-Check the picture change, audio level and both channels in the exported clip. Choose the poster from that export. Update the duration, size, source credit, license and revision in the README playback link, then check the published bytes against the local file. [Current preview](../README.md#see-it-in-motion)
+1. **Audio.** `scripts/check-lofi.sh --bars 32 --bpm 72 --seed 2077 --private-drums --film-reel` captures the Lo-Fi mix (private drums, film soundtrack and dialogue chops). The preview takes a 10 s window of `master.wav`, taken from the *UFO Interview* segment.
+2. **Picture.** `scripts/ffx-clip.sh --image IMG --footage FILM --footage-start S --len 10 --fps 30 --no-score --out DIR` runs a cached image and the film through the app's own shader and uniform code and writes `DIR/clip.mp4` (768x512, left eye).
+3. **Mux.** ffmpeg joins the two: 768x512 H.264 at about 1000 kb/s, AAC 160 kb/s stereo, a 0.3 s fade in and 0.6 s fade out on picture and sound, and `+faststart` so the MP4 index sits at the front for streaming. The poster is the frame at 4 s.
+
+Check the picture change, audio level and both channels in the exported clip. Update the duration, size, source credit, license and revision in the README playback link, then check the published bytes against the local file. Keep captures and intermediate frames out of git. [Current preview](../README.md#see-it-in-motion)
 
 ## Debug launch flags (DEBUG builds only, compiled out of Release)
 

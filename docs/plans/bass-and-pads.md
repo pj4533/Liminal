@@ -1,5 +1,7 @@
 # Lo-Fi bass and pad rework: implementation plan
 
+Status: built (D116 to D118). The bass voice and chain sections were superseded by [bass-tone-redo.md](bass-tone-redo.md) (D119), and the tone now rotates every 16 bars (D120).
+
 Repo `/Users/pj4533/Developer/Liminal`, base `main` at d5c6521. Approved baseline capture: `$S/final-main` (seed 2077, 72 BPM). Research inputs are in `docs/research/bass-and-pads/`.
 
 Numbers below marked "start" are starting values to be tuned against the capture; numbers marked "gate" are acceptance limits.
