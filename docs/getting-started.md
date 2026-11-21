@@ -32,7 +32,7 @@ Choose **Lo-Fi** in the Music section to set the BPM and optionally pin a scale.
 
 On a first run, play online to fill the film cache. It holds ten pinned titles and two rotating discoveries. Cached footage and its sampled speech can play offline on Mac and Vision Pro. [Pinned films and sources](experience.md#pinned-films-and-rotating-discoveries)
 
-For a private build with your own Slow Burn Vol. 3 recordings, follow the [optional drum setup](experience.md#lo-fi) before building.
+For a private build with your own Slow Burn recordings (Vol. 1–4), follow the [optional drum setup](experience.md#lo-fi) before building.
 
 
 ## Build from the command line
