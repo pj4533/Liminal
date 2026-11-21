@@ -283,4 +283,25 @@ struct DropTransitionTests {
         #expect(!busy.turnaroundDetected && !busy.halfwayDetected)
         #expect(LofiFillDetector.detect(landmarks: [], framesPerBeat: 40_000) == .defaults)
     }
+
+    /// The cut is drawn a display lead before the downbeat, i.e. before the held zoom's `start`: the new
+    /// picture must start at its own framing (age 0) there, not inherit the old picture's push for a few frames.
+    @Test func cutFrameStartsTheNewPicturesFramingBeforeTheDownbeat() {
+        var zoom = ImageZoomTiming()
+        zoom.imageChanged(at: 100, replacing: false)
+        // Image shown at 130 (pre-roll), cut (downbeat) at 133 on the effect clock.
+        zoom.imageChanged(at: 130, replacing: true, holdUntil: 133)
+        let lead: Float = 0.028
+        // During the build the old framing keeps moving.
+        #expect(zoom.age(at: 132) == 32)
+        #expect(zoom.age(at: 133 - lead) > 32)
+        // The cut frame (drawn before the downbeat) and the frames after it: the new picture's push from 0.
+        #expect(zoom.age(at: 133 - lead, cut: true) == 0)
+        #expect(zoom.age(at: 133, cut: true) == 0)
+        #expect(abs(zoom.age(at: 133.5, cut: true) - 0.5) < 1e-4)
+        #expect(abs(zoom.age(at: 133.5) - 0.5) < 1e-4)
+        let atCut = EffectsUniformsComputer.imageZoomScale(age: zoom.age(at: 133 - lead, cut: true))
+        let after = EffectsUniformsComputer.imageZoomScale(age: zoom.age(at: 133 + 1.0 / 90, cut: true))
+        #expect(abs(after - atCut) < 0.001)
+    }
 }

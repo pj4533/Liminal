@@ -343,7 +343,7 @@ struct VisualDisplayView: View {
             vibrance: dropReveal != nil ? previousVibrance() ?? vibrance : vibrance,
             music: modulation,
             look: look,
-            zoomAge: sync.zoom.age(at: effectTime),
+            zoomAge: sync.zoom.age(at: effectTime, cut: dropReveal == nil),
             outgoingZoomScale: transitionManager.previousFrame == nil ? 0 : sync.zoom.outgoingScale,
             transition: sync.transition,
             video: footage.state,
@@ -353,7 +353,7 @@ struct VisualDisplayView: View {
         if dropReveal != nil {
             cut = EffectsUniformsComputer.compute(
                 time: effectTime, hasSaliencyMap: transitionManager.currentSaliencyMap != nil, vibrance: vibrance,
-                music: modulation, look: look, zoomAge: sync.zoom.age(at: effectTime), video: footage.state)
+                music: modulation, look: look, zoomAge: sync.zoom.age(at: effectTime, cut: true), video: footage.state)
         }
         // Debug toggle controls the effect currently being tested
         if !settings.debugEffectEnabled {

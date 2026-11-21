@@ -15,8 +15,10 @@ struct ImageZoomTiming {
     private var heldStart: Float?
     private(set) var outgoingScale: Float = 0
 
-    func age(at time: Float) -> Float {
-        if let h = heldStart, time < start { return max(0, time - h) }
+    /// - Parameter cut: the frame shows the new picture (a drop's cut is drawn a display lead before the
+    ///   downbeat, so before `start` on this clock): its push starts at 0 instead of the old framing.
+    func age(at time: Float, cut: Bool = false) -> Float {
+        if !cut, let h = heldStart, time < start { return max(0, time - h) }
         return max(0, time - start)
     }
 

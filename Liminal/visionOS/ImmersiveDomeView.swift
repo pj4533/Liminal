@@ -693,7 +693,7 @@ struct ImmersiveDomeView: View {
                     vibrance: vibrance,
                     music: modulation,
                     look: look,
-                    zoomAge: zoom.age(at: effectTime),
+                    zoomAge: zoom.age(at: effectTime, cut: !inDrop),
                     outgoingZoomScale: transitionState.isTransitioning ? zoom.outgoingScale : 0,
                     transition: transitionState.spec,
                     video: footageFrame.state,

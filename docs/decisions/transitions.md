@@ -558,6 +558,10 @@ transition. Boom, new drum loop"; many different kinds of transition out. Plan:
   (`ImageZoomTiming.imageChanged(holdUntil:)`; drops need no outgoing crop). The plan had the new push
   running unseen from the fill start; in the first clips that changed the warp pattern abruptly on the first
   build frame (the turbulence follows the crop), seam_in 11-27.
+  The cut is drawn one display lead (25-28 ms) before the downbeat, which on the effect clock is still before
+  the held push's start, so frames that show the new picture pass `age(at:cut: true)` and start its push at
+  0 (review, 20 November 2026: without it the first 1-3 clean frames showed the new picture at the old
+  picture's zoom, up to 1.32, then snapped to 1.035).
 - Fresh-image hold: the base effects calm over the last quarter of a second of the build (at most a quarter of it) (`EffectLook.freshFadeEnd`),
   under its peak. Fading over the whole build made the old picture clearer while it was meant to break up
   (vis_a rose from 0.30 to 0.50 by mid-build).
