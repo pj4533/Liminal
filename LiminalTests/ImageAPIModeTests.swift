@@ -124,9 +124,12 @@ struct ImageCollectionsTests {
         #expect(c.defaults.storeBudgetBytes == 3_000_000_000)
     }
 
+    /// Library of Congress sources allowed to be monochrome (added with D45).
+    static let locMonochrome: Set<String> = []
+
     @Test func enabledSourcesAreComplete() {
         let c = ImageCollections.bundled
-        let keyless: Set<String> = ["loc", "nasa", "wikimedia", "cma", "met"]
+        let keyless: Set<String> = ["loc", "nasa", "wikimedia", "cma", "met", "dc", "aic"]
         for s in c.sources where s.enabled {
             #expect(keyless.contains(s.provider), "\(s.id) uses a keyless provider")
             #expect(c.providers[s.provider] != nil, "\(s.id) has a provider block")
@@ -136,8 +139,11 @@ struct ImageCollectionsTests {
             #expect(!s.allQueries.isEmpty || !s.pinnedIDs.isEmpty, "\(s.id) has something to fetch")
             #expect(s.requiresKey == nil, "\(s.id) needs no key")
         }
-        // Only the early photographs may be monochrome (plan section 13.4).
-        #expect(c.sources.filter { $0.allowMonochrome == true }.map(\.id) == ["cma-early-photographs"])
+        // Monochrome only where it is the subject (early photographs, the lunar surface, 1960s aerials);
+        // display still caps it at one picture in `monochromeEvery` (plan section 13.4, D45).
+        let monochrome: Set<String> = ["cma-early-photographs", "apollo-archive", "nasa-lunar-orbit",
+                                       "nasa-cape-kennedy-aerials", "met-early-photographs"]
+        #expect(Set(c.sources.filter { $0.allowMonochrome == true }.map(\.id)).isSubset(of: monochrome.union(Self.locMonochrome)))
     }
 
     @Test func everyProviderURLIsHTTPS() throws {
@@ -206,6 +212,32 @@ struct ImageProviderParsingTests {
         #expect(ok.rights == "No known restrictions on publication.")
         #expect(ok.creator == "Highsmith, Carol M.")
         #expect(ok.pageURL == "https://www.loc.gov/item/2015632003/")
+    }
+
+    @Test func digitalCommonwealthKeepsTheIIIFImageAndTheReuseVerdict() throws {
+        let result = try DigitalCommonwealthProvider.parseSearch(try ImageAPIFixtures.data("dc-search.json"))
+        #expect(result.hasNext)
+        let c = try #require(result.candidates.first)
+        #expect(c.itemID == "commonwealth:xs55mj59t")
+        #expect(c.hint == "commonwealth:xs55mj60k")
+        #expect(c.title == "Frontier Motel, Omaha's finest motel")
+        #expect(c.creator == "Tichnor Bros., Inc.")
+        #expect(c.date == "ca. 1930–1945")
+        #expect(c.rights == "no restrictions")
+        #expect(ImageRights.canonical(c.rights!) == "No restrictions")
+        #expect(c.pageURL == "https://ark.digitalcommonwealth.org/ark:/50959/xs55mj59t")
+    }
+
+    @Test func articTakesTheNativeSizeAndPublicDomainFlag() throws {
+        let result = try ArticProvider.parseSearch(try ImageAPIFixtures.data("aic-search.json"))
+        #expect(result.totalPages == 10)
+        let c = try #require(result.candidates.first { $0.itemID == "15086" })
+        #expect(c.hint == "7a63b68a-a84f-87b0-80a4-2848404f1ad6")
+        #expect(c.width == 2933 && c.height == 2259)
+        #expect(c.rights == "CC0")
+        #expect(c.pageURL == "https://www.artic.edu/artworks/15086")
+        #expect(ArticProvider.candidate(["id": 1, "image_id": "x", "is_public_domain": false, "title": "t"])?.rights
+                    .flatMap(ImageRights.canonical) == nil)
     }
 
     @Test func locMastersStandInForTheMissingIIIFDerivative() throws {

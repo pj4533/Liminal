@@ -1,0 +1,59 @@
+{
+ "pagination": {
+  "total": 29,
+  "limit": 3,
+  "offset": 0,
+  "total_pages": 10,
+  "current_page": 1
+ },
+ "data": [
+  {
+   "_score": 37.292763,
+   "id": 17251,
+   "title": "Self-Portrait in Moonlight",
+   "thumbnail": {
+    "lqip": "data:image/gif;base64,R0lGODlhBAAFAPQAAGBrb2JvdG+Dk3WFknSImH2Pno+boYyZoo6ao56qsqqxta+1uK21urG1s8HCvbq/wMTIx8fKx8nKxwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACH5BAAAAAAALAAAAAAEAAUAAAURoIMcjVQQSzQACiQEjJQYTwgAOw==",
+    "width": 1635,
+    "height": 2250,
+    "alt_text": "A work made of woodcut printed from one block in blue and black ink on cream wove paper."
+   },
+   "date_display": "1904\u201306",
+   "is_public_domain": true,
+   "artwork_type_title": "Print",
+   "artist_title": "Edvard Munch",
+   "image_id": "0e3d4d25-88ac-f091-5ea0-0196a905b84a"
+  },
+  {
+   "_score": 36.805984,
+   "id": 17335,
+   "title": "Moonlight. Night in St Cloud",
+   "thumbnail": {
+    "lqip": "data:image/gif;base64,R0lGODlhAwAFAPMAAJmXfqekjKelkKmnkq2rmLOxnLe0n7+8pcTBrOfk0+jl1Ozp1+3r2e/t2vHu3AAAACH5BAAAAAAALAAAAAADAAUAAAQLcKl0QhlAEIOaYxEAOw==",
+    "width": 2336,
+    "height": 3504,
+    "alt_text": "A work made of drypoint, with open bite and burnishing, on cream wove paper."
+   },
+   "date_display": "1895",
+   "is_public_domain": true,
+   "artwork_type_title": "Print",
+   "artist_title": "Edvard Munch",
+   "image_id": "53109c2c-7a19-2232-10b2-c05af5986c84"
+  },
+  {
+   "_score": 33.811256,
+   "id": 15086,
+   "title": "Moonlight Scene",
+   "thumbnail": {
+    "lqip": "data:image/gif;base64,R0lGODlhBgAFAPQAACEfHCckHykmITcxKTs3Lz44L0A6MUZAN0ZCO0tEOkhEPU1IPlVNQ1hQQlxSRFxUSVxVSl5XTF1YTmdeT2NdU2NeU2ReUmZgVWZiWWpkWHRpV3pxYY2FdgAAAAAAAAAAACH5BAAAAAAALAAAAAAGAAUAAAUYIMVAy3E9TmMM0KZNiYBEBREACmdJWYWFADs=",
+    "width": 2933,
+    "height": 2259,
+    "alt_text": "A work made of charcoal on paper."
+   },
+   "date_display": "19th century",
+   "is_public_domain": true,
+   "artwork_type_title": "Drawing and Watercolor",
+   "artist_title": "Unknown artist",
+   "image_id": "7a63b68a-a84f-87b0-80a4-2848404f1ad6"
+  }
+ ]
+}

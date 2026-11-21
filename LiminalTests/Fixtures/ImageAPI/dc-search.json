@@ -1,0 +1,53 @@
+{
+ "data": [
+  {
+   "id": "commonwealth:xs55mj59t",
+   "type": "DigitalObject",
+   "attributes": {
+    "title_info_primary_tsi": "Frontier Motel, Omaha's finest motel",
+    "date_tsim": [
+     "[ca. 1930\u20131945]"
+    ],
+    "identifier_uri_ss": "https://ark.digitalcommonwealth.org/ark:/50959/xs55mj59t",
+    "license_ss": "No known restrictions on use.",
+    "reuse_allowed_ssi": "no restrictions",
+    "publisher_tsi": "\"Tichnor Quality Views,\" Reg. U. S. Pat. Off. Made Only by Tichnor Bros., Inc., Boston, Mass.",
+    "exemplary_image_ssi": "commonwealth:xs55mj60k"
+   },
+   "links": {
+    "self": "https://www.digitalcommonwealth.org/search/commonwealth:xs55mj59t"
+   }
+  },
+  {
+   "id": "commonwealth:6d570p582",
+   "type": "DigitalObject",
+   "attributes": {
+    "title_info_primary_tsi": "Skyline Motel",
+    "date_tsim": [
+     "[ca. 1960\u20131979]"
+    ],
+    "identifier_uri_ss": "https://ark.digitalcommonwealth.org/ark:/50959/6d570p582",
+    "license_ss": "No known restrictions on use.",
+    "reuse_allowed_ssi": "no restrictions",
+    "publisher_tsi": "Made only by Tichnor Bros., Inc.",
+    "exemplary_image_ssi": "commonwealth:pz50hm71d"
+   },
+   "links": {
+    "self": "https://www.digitalcommonwealth.org/search/commonwealth:6d570p582"
+   }
+  }
+ ],
+ "meta": {
+  "pages": {
+   "current_page": 1,
+   "next_page": 2,
+   "prev_page": null,
+   "total_pages": 1342,
+   "limit_value": 2,
+   "offset_value": 0,
+   "total_count": 2684,
+   "first_page?": true,
+   "last_page?": false
+  }
+ }
+}

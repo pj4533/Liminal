@@ -22,7 +22,9 @@
   "candidateRefreshDays": 7,
   "hostGaps": {
    "collectionapi.metmuseum.org": 5,
-   "images.metmuseum.org": 5
+   "images.metmuseum.org": 5,
+   "api.artic.edu": 2,
+   "www.artic.edu": 2
   },
   "defaultHostGap": 1,
   "openness": {
@@ -93,6 +95,24 @@
    "notes": "Optional. Skip the provider when no key is configured. Many rows have online_media null even with the media filter.",
    "license": "CC0 (metadata_usage.access)",
    "institution": "Smithsonian Institution"
+  },
+  "dc": {
+   "name": "Digital Commonwealth (Boston Public Library)",
+   "auth": "none",
+   "search": "https://www.digitalcommonwealth.org/search.json?q={query}&per_page={count}&page={page}&f[related_item_host_ssim][]={collection}",
+   "image": "https://iiif.digitalcommonwealth.org/iiif/2/{exemplary_image_ssi}/full/!{target},{target}/0/default.jpg",
+   "notes": "Keep only reuse_allowed_ssi == 'no restrictions'. Tichnor postcards are about 3300x2100.",
+   "license": "No restrictions (reuse_allowed_ssi)",
+   "institution": "Boston Public Library"
+  },
+  "aic": {
+   "name": "Art Institute of Chicago API",
+   "auth": "none",
+   "search": "https://api.artic.edu/api/v1/artworks/search?query[bool][must][0][match][title]={query}&query[bool][must][1][term][is_public_domain]=true&fields=...&limit={count}&page={page}",
+   "image": "https://www.artic.edu/iiif/2/{image_id}/full/3000,/0/default.jpg",
+   "notes": "Only fixed widths are served (843, 1686, 3000 and info.json sizes); 2528, full, max and !w,h return 403. Native size is thumbnail.width/height. About 60 requests a minute across api. and www.",
+   "license": "CC0 (is_public_domain)",
+   "institution": "Art Institute of Chicago"
   }
  },
  "licenseAllowlist": [
@@ -759,6 +779,964 @@
     "subjectCategory": "landscape",
     "energy": 0.25,
     "warmth": 0.1
+   },
+   "allowMonochrome": false
+  },
+  {
+   "id": "documerica-western-landscapes",
+   "provider": "wikimedia",
+   "enabled": true,
+   "weight": 2,
+   "themes": [
+    "1970s",
+    "Kodachrome",
+    "canyons",
+    "deserts",
+    "Big Sur",
+    "redwoods",
+    "rivers",
+    "Everglades sunsets",
+    "aerial views"
+   ],
+   "categories": [
+    "DOCUMERICA photographs by David Hiser",
+    "DOCUMERICA photographs by Dick Rowan",
+    "DOCUMERICA photographs by Charles Steinhacker",
+    "DOCUMERICA photographs by Bruce McAllister",
+    "DOCUMERICA photographs by Fred Ward"
+   ],
+   "searches": [
+    "DOCUMERICA canyon",
+    "DOCUMERICA lake",
+    "DOCUMERICA mountains",
+    "DOCUMERICA beach",
+    "DOCUMERICA fog",
+    "DOCUMERICA storm",
+    "DOCUMERICA forest"
+   ],
+   "requireTitleContains": "NARA",
+   "rejectTitleWords": [
+    "laboratory",
+    "sign",
+    "signs",
+    "trash",
+    "garbage",
+    "dump",
+    "landfill",
+    "sewage",
+    "Mrs",
+    "Mr",
+    "trout",
+    "housekeeper",
+    "worker",
+    "workers",
+    "testing",
+    "classroom",
+    "school"
+   ],
+   "license": "Public domain (EPA DOCUMERICA 1971-77, US Government work, via NARA)",
+   "pinned": [
+    "File:ANGEL ARCH, FAMOUS ROCK FORMATION - NARA - 545566.jpg",
+    "File:ANGEL ARCH, FAMOUS ROCK FORMATION IN CANYONLANDS NATIONAL PARK - NARA - 545551.jpg",
+    "File:AERIAL VIEW OF UPHEAVAL DOME, PERHAPS THE MOST GEOLOGICALLY INTERESTING FEATURE OF THE CANYONLANDS. IT IS A VAST... - NARA - 545796.jpg",
+    "File:California - Between Monterey And Big Sur - NARA - 543403.jpg",
+    "File:Back - Packers Chat At Sunset. This Area Has Been Ear - Marked For Heavy Recreational Development - NARA - 543417.jpg",
+    "File:California - Big Basin Redwood State Park - NARA - 543442.jpg",
+    "File:BIRDS AND DUNES - NARA - 543263.jpg",
+    "File:ANDROSCOGGIN RIVER IN THE \"13-MILE WOODS\" AREA NEAR ERROL NOT FAR FROM THE HEADWATERS OF THE RIVER - NARA - 550656.jpg",
+    "File:ANDROSCOGGIN RIVER JUST NORTH OF THE BERLIN TOWN LINE - NARA - 550691.jpg",
+    "File:CHOKOLOSKEE ROOKERY IN EVERGLADES NATIONAL PARK - NARA - 544601.jpg",
+    "File:CHOKOLOSKEE ROOKERY IN EVERGLADES NATIONAL PARK - NARA - 544609.jpg",
+    "File:CHOKOLOSKEE ROOKERY IN EVERGLADES NATIONAL PARK - NARA - 544493.jpg",
+    "File:ESCALANTE RIVER AND CANYON - NARA - 544929.jpg",
+    "File:VIEW OF GLEN CANYON, UTAH, FROM THE ARIZONA SHORE OF LAKE POWELL - NARA - 544170.jpg",
+    "File:AERIAL VIEW OF THE POND WHEN CLEANUP OPERATIONS WERE HALF FINISHED. THE WHITE AREAS ARE ALKALINE. IN THE BACKGROUND... - NARA - 555863.jpg"
+   ],
+   "mood": {
+    "moods": [
+     "melancholy",
+     "majestic"
+    ],
+    "subjectCategory": "landscape",
+    "energy": 0.35,
+    "warmth": 0.55
+   },
+   "allowMonochrome": false
+  },
+  {
+   "id": "documerica-smog-and-neon",
+   "provider": "wikimedia",
+   "enabled": true,
+   "weight": 2,
+   "themes": [
+    "1970s",
+    "smog sunsets",
+    "Las Vegas neon",
+    "light streaks",
+    "freeways",
+    "psychedelic"
+   ],
+   "searches": [
+    "DOCUMERICA smog",
+    "DOCUMERICA neon",
+    "DOCUMERICA freeway",
+    "DOCUMERICA dusk"
+   ],
+   "requireTitleContains": "NARA",
+   "rejectTitleWords": [
+    "testing",
+    "laboratory",
+    "gas",
+    "station",
+    "sign",
+    "signs",
+    "Mrs",
+    "Mr",
+    "worker",
+    "workers",
+    "classroom",
+    "housekeeper"
+   ],
+   "license": "Public domain (EPA DOCUMERICA 1971-77, US Government work, via NARA)",
+   "pinned": [
+    "File:SUNSET SEEN THROUGH HEAVY SMOG - NARA - 542678.jpg",
+    "File:SUNSET SEEN THROUGH HEAVY SMOG - NARA - 542679.jpg",
+    "File:SUNSET SEEN THROUGH SMOG - NARA - 542680.jpg",
+    "File:SUNSET SEEN THROUGH SMOG - NARA - 542681.jpg",
+    "File:LOW-HANGING SMOG - NARA - 542683.jpg",
+    "File:SETTING SUN, SMOG AND DERRICKS - NARA - 544707.jpg",
+    "File:NIGHT LIGHTS - NARA - 549009.jpg",
+    "File:NIGHT LIGHTS - NARA - 549015.jpg",
+    "File:NIGHT LIGHTS - NARA - 549026.jpg",
+    "File:LIGHT PATTERNS CREATED BY MULTICOLORED CASINO DISPLAYS IN DOWNTOWN LAS VEGAS - NARA - 549111.jpg",
+    "File:THE BRENDA CUTOFF, INTERSTATE 10. A NEW FREEWAY TO LOS ANGELES, CALIFORNIA - NARA - 544043.jpg",
+    "File:FREEWAY INTERCHANGE NORTH OF MIAMI - NARA - 544642.jpg"
+   ],
+   "mood": {
+    "moods": [
+     "electric",
+     "eerie"
+    ],
+    "subjectCategory": "landscape",
+    "energy": 0.55,
+    "warmth": 0.7
+   },
+   "allowMonochrome": false
+  },
+  {
+   "id": "aurora-and-milky-way",
+   "provider": "wikimedia",
+   "enabled": true,
+   "weight": 1,
+   "themes": [
+    "aurora",
+    "Milky Way",
+    "night sky",
+    "psychedelic colour"
+   ],
+   "categories": [
+    "Featured pictures of aurora",
+    "Featured pictures of the Milky Way"
+   ],
+   "rejectTitleWords": [
+    "chart",
+    "map",
+    "constellation",
+    "constellations",
+    "diagram",
+    "annotated",
+    "labeled",
+    "labelled",
+    "panorama"
+   ],
+   "license": "Per file: CC BY-SA / CC BY / CC0 / PD (attribution kept)",
+   "pinned": [
+    "File:Aurora borealis over Eielson Air Force Base, Alaska.jpg",
+    "File:Lofoten, Norway (Unsplash).jpg",
+    "File:G5 aurora over Tuntorp, Lysekil Municipality 15.jpg",
+    "File:Multicolored aurora borealis pillar over Brastad.jpg",
+    "File:Milky Way IR Spitzer.jpg",
+    "File:Guisard - Milky Way.jpg",
+    "File:Center of the Milky Way Galaxy IV – Composite.jpg",
+    "File:Pedra Azul Milky Way.jpg"
+   ],
+   "mood": {
+    "moods": [
+     "euphoric",
+     "eerie"
+    ],
+    "subjectCategory": "celestial",
+    "energy": 0.45,
+    "warmth": -0.2
+   },
+   "allowMonochrome": false
+  },
+  {
+   "id": "galaxies-hubble-webb",
+   "provider": "wikimedia",
+   "enabled": true,
+   "weight": 1,
+   "themes": [
+    "galaxies",
+    "Hubble",
+    "Webb",
+    "psychedelic colour",
+    "deep space"
+   ],
+   "categories": [
+    "Featured pictures of galaxies"
+   ],
+   "rejectTitleWords": [
+    "chart",
+    "diagram",
+    "comparison",
+    "spectrum",
+    "annotated",
+    "labeled",
+    "labelled",
+    "compass",
+    "scale",
+    "curve",
+    "calendar"
+   ],
+   "license": "Per file: PD (NASA/ESA) / CC BY 4.0 (ESA/Webb) / CC BY 2.0 (attribution kept)",
+   "pinned": [
+    "File:Hubble2005-01-barred-spiral-galaxy-NGC1300.jpg",
+    "File:Antennae galaxies xl.jpg",
+    "File:M82 Chandra HST Spitzer.jpg",
+    "File:Messier51 sRGB.jpg",
+    "File:UGC 1810 and UGC 1813 in Arp 273 (captured by the Hubble Space Telescope).jpg",
+    "File:Infrared false color view of M66 from the Jamess Webb Telescope.jpg",
+    "File:Crab Nebula imaged using James Webb Space Telescope.png"
+   ],
+   "mood": {
+    "moods": [
+     "euphoric",
+     "majestic"
+    ],
+    "subjectCategory": "celestial",
+    "energy": 0.5,
+    "warmth": 0.0
+   },
+   "allowMonochrome": false
+  },
+  {
+   "id": "forests-featured",
+   "provider": "wikimedia",
+   "enabled": true,
+   "weight": 1,
+   "themes": [
+    "forests",
+    "trees",
+    "fog",
+    "autumn",
+    "light shafts"
+   ],
+   "categories": [
+    "Featured pictures of forests",
+    "Quality images of forests"
+   ],
+   "rejectTitleWords": [
+    "panorama",
+    "map"
+   ],
+   "license": "Per file: mostly CC BY-SA 4.0 / CC BY 4.0, some PD and CC0 (attribution kept)",
+   "pinned": [
+    "File:Dülmen, Umland -- 2014 -- 7056.jpg",
+    "File:2014 Park w Kłodzku.jpg",
+    "File:Bruderwald-Herbst-026375.jpg",
+    "File:Bruderwald Nebel 286411.jpg"
+   ],
+   "mood": {
+    "moods": [
+     "lush",
+     "serene"
+    ],
+    "subjectCategory": "plant",
+    "energy": 0.3,
+    "warmth": 0.2
+   },
+   "allowMonochrome": false
+  },
+  {
+   "id": "apollo-archive",
+   "provider": "wikimedia",
+   "enabled": true,
+   "weight": 1,
+   "themes": [
+    "Apollo",
+    "lunar surface",
+    "Saturn V",
+    "space age",
+    "1968-1972"
+   ],
+   "categories": [
+    "Files from Project Apollo Archive Flickr Stream"
+   ],
+   "rejectTitleWords": [
+    "About",
+    "portrait",
+    "training",
+    "suit",
+    "suiting",
+    "insignia",
+    "emblem",
+    "patch",
+    "press",
+    "conference",
+    "breakfast",
+    "crew",
+    "simulator",
+    "quarantine",
+    "recovery"
+   ],
+   "license": "Public domain (NASA, via the Project Apollo Archive Flickr stream)",
+   "pinned": [
+    "File:Apollo 11 liftoff (48334428021).jpg",
+    "File:Apollo 11 CSM from LM after undocking (48334388826).jpg",
+    "File:Apollo 11 liftoff - July 16, 1969 9 32 AM EDT (48299052517).jpg"
+   ],
+   "mood": {
+    "moods": [
+     "majestic",
+     "eerie"
+    ],
+    "subjectCategory": "celestial",
+    "energy": 0.45,
+    "warmth": -0.2
+   },
+   "allowMonochrome": true
+  },
+  {
+   "id": "american-west-painters",
+   "provider": "wikimedia",
+   "enabled": true,
+   "weight": 1,
+   "themes": [
+    "Hudson River School",
+    "Rocky Mountain School",
+    "Yosemite",
+    "Grand Canyon",
+    "storm light"
+   ],
+   "categories": [
+    "Google Art Project works by Albert Bierstadt",
+    "Google Art Project works by Thomas Moran"
+   ],
+   "rejectTitleWords": [
+    "portrait",
+    "interior",
+    "study"
+   ],
+   "license": "Public domain (19th-century paintings, Google Art Project scans)",
+   "pinned": [
+    "File:Albert Bierstadt 001.jpg",
+    "File:Albert Bierstadt - Rocky Mountain Landscape - Google Art Project.jpg",
+    "File:Albert Bierstadt - A Storm in the Rocky Mountains, Mt. Rosalie - Google Art Project.jpg",
+    "File:Albert Bierstadt - California Spring - Google Art Project.jpg",
+    "File:Albert Bierstadt - Bridal Veil Falls, Yosemite Valley, California - Google Art Project.jpg",
+    "File:Thomas Moran, American (born England) - Grand Canyon of the Colorado River - Google Art Project.jpg",
+    "File:Thomas Moran - Grand Canyon in Stormy Weather, Arizona - Google Art Project.jpg"
+   ],
+   "mood": {
+    "moods": [
+     "majestic",
+     "serene"
+    ],
+    "subjectCategory": "landscape",
+    "energy": 0.35,
+    "warmth": 0.3
+   },
+   "allowMonochrome": false
+  },
+  {
+   "id": "shin-hanga-pinned",
+   "provider": "wikimedia",
+   "enabled": true,
+   "weight": 1,
+   "themes": [
+    "shin-hanga",
+    "woodblock prints",
+    "snow",
+    "mist",
+    "cherry blossom",
+    "1910-1930"
+   ],
+   "license": "Public domain: pinned prints published 1930 or earlier only (US PD by publication date; Japan PD since 2001/2008)",
+   "pinned": [
+    "File:Hikawa park in Omiya Omiya Hikawa no koen (titel op object), RP-P-1994-49.jpg",
+    "File:Kawase Hasui (1930s) Evening of Ushibori.jpg",
+    "File:Kiyomizu Hall, Ueno in de sneeuw, objectno PK.MP.26578.jpg",
+    "File:Hiroshi Yoshida - Kumoi-Zakura (Kumoi Cherry Trees) - Google Art Project.jpg",
+    "File:Hodakayama, from the series Twelve Scenes in the Japan Alps, Hiroshi Yoshida.jpg",
+    "File:Hiroshi Landschaft.jpg"
+   ],
+   "mood": {
+    "moods": [
+     "serene",
+     "melancholy"
+    ],
+    "subjectCategory": "landscape",
+    "energy": 0.25,
+    "warmth": -0.1
+   },
+   "allowMonochrome": false
+  },
+  {
+   "id": "nasa-orbital-earth-1960s",
+   "provider": "nasa",
+   "enabled": true,
+   "weight": 2,
+   "themes": [
+    "space age",
+    "Earth from orbit",
+    "Mercury",
+    "Gemini",
+    "Apollo 7 and 9",
+    "Skylab",
+    "false-colour infrared",
+    "1961-1974"
+   ],
+   "queries": [
+    {
+     "q": "mercury earth",
+     "yearStart": 1961,
+     "yearEnd": 1963
+    },
+    {
+     "q": "earth sky",
+     "yearStart": 1965,
+     "yearEnd": 1966
+    },
+    {
+     "q": "apollo 7 earth",
+     "yearStart": 1968,
+     "yearEnd": 1968
+    },
+    {
+     "q": "apollo 9 mission image",
+     "yearStart": 1969,
+     "yearEnd": 1969
+    },
+    {
+     "q": "skylab earth observation",
+     "yearStart": 1973,
+     "yearEnd": 1974
+    }
+   ],
+   "rejectTitleWords": [
+    "insignia",
+    "emblem",
+    "patch",
+    "prelaunch",
+    "insertion",
+    "project",
+    "crew",
+    "portrait",
+    "diagram",
+    "chart",
+    "astronaut",
+    "suit",
+    "training",
+    "chimpanzee",
+    "recovery",
+    "liftoff"
+   ],
+   "license": "nasa",
+   "pinned": [
+    "s62-06604",
+    "s62-06607",
+    "s62-06612",
+    "s62-03270",
+    "S61-01918",
+    "s65-63256",
+    "s65-63780",
+    "s65-63829",
+    "s66-63485",
+    "as09-23-3617",
+    "as09-26a-3748a",
+    "as09-23-3592",
+    "as09-26a-3728a",
+    "as09-20-3177",
+    "SL3-87-0299",
+    "SL3-33-156",
+    "SL3-22-322",
+    "SL4-93-167",
+    "SL3-33-167",
+    "SL3-45-020"
+   ],
+   "mood": {
+    "moods": [
+     "majestic",
+     "serene"
+    ],
+    "subjectCategory": "celestial",
+    "energy": 0.4,
+    "warmth": -0.2
+   },
+   "allowMonochrome": false
+  },
+  {
+   "id": "nasa-lunar-orbit",
+   "provider": "nasa",
+   "enabled": true,
+   "weight": 1,
+   "themes": [
+    "Moon",
+    "earthrise",
+    "lunar orbit",
+    "Apollo 8-17"
+   ],
+   "queries": [
+    {
+     "q": "lunar orbit",
+     "yearStart": 1968,
+     "yearEnd": 1972
+    },
+    {
+     "q": "lunar farside",
+     "yearStart": 1968,
+     "yearEnd": 1972
+    }
+   ],
+   "rejectTitleWords": [
+    "traverse",
+    "overlaid",
+    "launch",
+    "map",
+    "diagram",
+    "chart",
+    "crew",
+    "portrait",
+    "insignia"
+   ],
+   "license": "nasa",
+   "pinned": [
+    "as12-47-6891",
+    "as17-145-22287",
+    "as8-14-2392",
+    "as17-152-23274"
+   ],
+   "mood": {
+    "moods": [
+     "eerie",
+     "majestic"
+    ],
+    "subjectCategory": "celestial",
+    "energy": 0.3,
+    "warmth": -0.4
+   },
+   "allowMonochrome": true
+  },
+  {
+   "id": "nasa-aurora-from-orbit",
+   "provider": "nasa",
+   "enabled": true,
+   "weight": 1,
+   "themes": [
+    "aurora",
+    "Earth at night",
+    "psychedelic green and red",
+    "ISS"
+   ],
+   "queries": [
+    {
+     "q": "aurora international space station",
+     "yearStart": 2010,
+     "yearEnd": 2026
+    }
+   ],
+   "rejectTitleWords": [
+    "insignia",
+    "emblem",
+    "patch",
+    "crew",
+    "portrait",
+    "astronaut",
+    "spacewalk"
+   ],
+   "license": "nasa",
+   "pinned": [
+    "iss072e159172",
+    "iss052e007904",
+    "iss040e064832",
+    "iss071e570863",
+    "iss040e113977"
+   ],
+   "mood": {
+    "moods": [
+     "eerie",
+     "euphoric"
+    ],
+    "subjectCategory": "celestial",
+    "energy": 0.45,
+    "warmth": -0.3
+   },
+   "allowMonochrome": false
+  },
+  {
+   "id": "nasa-cape-kennedy-aerials",
+   "provider": "nasa",
+   "enabled": true,
+   "weight": 1,
+   "themes": [
+    "space age",
+    "Cape Kennedy",
+    "launch pads",
+    "1960s aerials"
+   ],
+   "queries": [
+    {
+     "q": "aerial view",
+     "yearStart": 1960,
+     "yearEnd": 1975
+    }
+   ],
+   "rejectTitleWords": [
+    "wind",
+    "tunnel",
+    "construction",
+    "recovery",
+    "diagram",
+    "chart",
+    "crew",
+    "portrait"
+   ],
+   "license": "nasa",
+   "pinned": [
+    "S64-22412",
+    "S69-27916",
+    "KSC-64PC-0082"
+   ],
+   "mood": {
+    "moods": [
+     "majestic",
+     "playful"
+    ],
+    "subjectCategory": "architecture",
+    "energy": 0.4,
+    "warmth": 0.2
+   },
+   "allowMonochrome": true
+  },
+  {
+   "id": "cma-american-landscapes",
+   "provider": "cma",
+   "enabled": true,
+   "weight": 1,
+   "themes": [
+    "Hudson River School",
+    "luminism",
+    "twilight",
+    "storm clouds",
+    "1840-1900"
+   ],
+   "queries": [
+    {
+     "q": "American landscape",
+     "type": "Painting"
+    }
+   ],
+   "license": "CC0",
+   "pinned": [
+    141639,
+    144732,
+    172815,
+    127224,
+    150968,
+    144968,
+    169614,
+    134072,
+    109239,
+    109249,
+    144967,
+    173688,
+    143477,
+    124771,
+    163456
+   ],
+   "mood": {
+    "moods": [
+     "majestic",
+     "serene"
+    ],
+    "subjectCategory": "landscape",
+    "energy": 0.3,
+    "warmth": 0.3
+   },
+   "allowMonochrome": false
+  },
+  {
+   "id": "cma-weather-prints",
+   "provider": "cma",
+   "enabled": true,
+   "weight": 1,
+   "themes": [
+    "night rain",
+    "snow",
+    "moonrise",
+    "woodblock prints",
+    "Arthur Wesley Dow"
+   ],
+   "queries": [
+    {
+     "q": "rain",
+     "type": "Print"
+    },
+    {
+     "q": "Hiroshige snow",
+     "type": "Print"
+    },
+    {
+     "q": "Hiroshige moon",
+     "type": "Print"
+    }
+   ],
+   "license": "CC0",
+   "pinned": [
+    152490,
+    121618,
+    120227,
+    161230,
+    86501,
+    112467
+   ],
+   "mood": {
+    "moods": [
+     "melancholy",
+     "serene"
+    ],
+    "subjectCategory": "landscape",
+    "energy": 0.25,
+    "warmth": -0.2
+   },
+   "allowMonochrome": false
+  },
+  {
+   "id": "met-american-tonalists",
+   "provider": "met",
+   "enabled": true,
+   "weight": 1,
+   "themes": [
+    "moonlight",
+    "Tonalism",
+    "Blakelock",
+    "Ryder",
+    "night landscapes"
+   ],
+   "queries": [
+    {
+     "q": "moonlight",
+     "departmentId": 1
+    }
+   ],
+   "allowClassification": [
+    "Paintings",
+    ""
+   ],
+   "license": "CC0 when isPublicDomain",
+   "pinned": [
+    11979,
+    12833,
+    10183,
+    16577,
+    10181
+   ],
+   "mood": {
+    "moods": [
+     "eerie",
+     "melancholy"
+    ],
+    "subjectCategory": "landscape",
+    "energy": 0.2,
+    "warmth": 0.1
+   },
+   "allowMonochrome": false
+  },
+  {
+   "id": "met-early-photographs",
+   "provider": "met",
+   "enabled": true,
+   "weight": 1,
+   "themes": [
+    "1850s salt and albumen prints",
+    "Le Gray",
+    "Fontainebleau",
+    "Yosemite",
+    "waterfalls"
+   ],
+   "queries": [
+    {
+     "q": "Le Gray",
+     "departmentId": 19
+    },
+    {
+     "q": "Yosemite",
+     "departmentId": 19
+    },
+    {
+     "q": "waterfall",
+     "departmentId": 19
+    }
+   ],
+   "allowClassification": [
+    "Photographs"
+   ],
+   "license": "CC0 when isPublicDomain",
+   "pinned": [
+    285461,
+    265065,
+    283122,
+    264904,
+    732756,
+    285438,
+    728329,
+    282040
+   ],
+   "mood": {
+    "moods": [
+     "melancholy",
+     "serene"
+    ],
+    "subjectCategory": "landscape",
+    "energy": 0.2,
+    "warmth": 0.3
+   },
+   "allowMonochrome": true
+  },
+  {
+   "id": "met-hiroshige-night",
+   "provider": "met",
+   "enabled": true,
+   "weight": 1,
+   "themes": [
+    "Hiroshige",
+    "night",
+    "moonlight",
+    "rain"
+   ],
+   "queries": [
+    {
+     "q": "Hiroshige night",
+     "departmentId": 6
+    }
+   ],
+   "allowClassification": [
+    "Prints"
+   ],
+   "license": "CC0 when isPublicDomain",
+   "pinned": [
+    36957,
+    36531,
+    56677,
+    55712
+   ],
+   "mood": {
+    "moods": [
+     "serene",
+     "melancholy"
+    ],
+    "subjectCategory": "landscape",
+    "energy": 0.25,
+    "warmth": -0.1
+   },
+   "allowMonochrome": false
+  },
+  {
+   "id": "dc-tichnor-postcards",
+   "provider": "dc",
+   "enabled": true,
+   "weight": 3,
+   "themes": [
+    "1930-45 linen postcards",
+    "motels",
+    "highways",
+    "moonlit main streets",
+    "roadside"
+   ],
+   "collection": "The Tichnor Brothers Collection",
+   "queries": [
+    "motel",
+    "highway",
+    "night",
+    "skyline",
+    "desert",
+    "route 66",
+    "diner",
+    "bridge",
+    "sunset",
+    "lake",
+    "moonlight",
+    "gas station"
+   ],
+   "rejectTitleWords": [
+    "Greetings",
+    "views"
+   ],
+   "license": "Boston Public Library, reuse_allowed_ssi no restrictions",
+   "pinned": [],
+   "mood": {
+    "moods": [
+     "playful",
+     "melancholy"
+    ],
+    "subjectCategory": "architecture",
+    "energy": 0.45,
+    "warmth": 0.6
+   },
+   "allowMonochrome": false
+  },
+  {
+   "id": "aic-landscapes",
+   "provider": "aic",
+   "enabled": true,
+   "weight": 1,
+   "themes": [
+    "19th-century landscape painting and prints",
+    "moonlight",
+    "forests",
+    "rivers",
+    "mountains"
+   ],
+   "queries": [
+    {
+     "q": "moonlight"
+    },
+    {
+     "q": "night"
+    },
+    {
+     "q": "forest"
+    },
+    {
+     "q": "river",
+     "type": "Painting"
+    },
+    {
+     "q": "mountain",
+     "type": "Painting"
+    },
+    {
+     "q": "sunset"
+    },
+    {
+     "q": "waterfall"
+    },
+    {
+     "q": "landscape",
+     "type": "Photograph"
+    }
+   ],
+   "license": "CC0 (AIC is_public_domain)",
+   "pinned": [],
+   "mood": {
+    "moods": [
+     "serene",
+     "majestic"
+    ],
+    "subjectCategory": "landscape",
+    "energy": 0.25,
+    "warmth": 0.2
    },
    "allowMonochrome": false
   }

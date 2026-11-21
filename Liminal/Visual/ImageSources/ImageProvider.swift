@@ -69,7 +69,7 @@ nonisolated enum ImageProviders {
     /// Every keyless provider, plus Smithsonian when SMITHSONIAN_API_KEY is in the environment.
     static func all(environment: [String: String] = ProcessInfo.processInfo.environment) -> [String: any ImageProvider] {
         var list: [any ImageProvider] = [LOCProvider(), NASAProvider(), WikimediaProvider(), ClevelandProvider(),
-                                         MetProvider()]
+                                         MetProvider(), DigitalCommonwealthProvider(), ArticProvider()]
         if let key = environment["SMITHSONIAN_API_KEY"], !key.isEmpty {
             list.append(SmithsonianProvider(apiKey: key))
         }
