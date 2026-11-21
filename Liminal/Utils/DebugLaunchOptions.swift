@@ -114,6 +114,18 @@ nonisolated enum DebugLaunchOptions {
         return defaults.integer(forKey: "LiminalTransitionSeed")
     }()
 
+    /// Drop transitions (docs/plans/drop-transitions.md 4.5). -LiminalDropColour <name> and
+    /// -LiminalDropFinisher <name> pin a drop's colour layer and finisher (DropColour / DropFinisher names;
+    /// -LiminalTransitionStyle accepts the drop styles), -LiminalDropLead <ms> overrides the display lead,
+    /// -LiminalDropOff YES brings back the bell reveal of T43 for an A/B. Automation flags (no generation).
+    static let dropColour: String? = defaults.string(forKey: "LiminalDropColour")
+    static let dropFinisher: String? = defaults.string(forKey: "LiminalDropFinisher")
+    static let dropLead: Double? = {
+        guard defaults.object(forKey: "LiminalDropLead") != nil else { return nil }
+        return defaults.double(forKey: "LiminalDropLead") / 1000
+    }()
+    static let dropOff: Bool = defaults.bool(forKey: "LiminalDropOff")
+
     /// -LiminalAllowGeneration YES: let an automated/debug launch call Gemini. Without it, any launch
     /// that uses the automation flags above (perf runs, screenshots, sim checks) never generates new
     /// images: it shows cached images, or the test card when the cache is empty. Testing must not
@@ -248,6 +260,7 @@ nonisolated enum DebugLaunchOptions {
             || videoForce || videoLook != nil || videoMode != nil || videoFile != nil || videoMix != nil || videoSeed != nil
             || videoOffline || videoOff || controlsScroll != nil || controlsWidth != nil || videoOffAt != nil
             || dialogueTranscription != nil
+            || dropColour != nil || dropFinisher != nil || dropLead != nil || dropOff
     }
 #else
     static let allowGeneration = false
@@ -270,6 +283,10 @@ nonisolated enum DebugLaunchOptions {
     static let effectIntensity: Float? = nil
     static let transitionStyle: String? = nil
     static let transitionSeed: Int? = nil
+    static let dropColour: String? = nil
+    static let dropFinisher: String? = nil
+    static let dropLead: Double? = nil
+    static let dropOff = false
     static let shellYaw: Float = 0
     static let shellPitch: Float = 0
     static let shellHeadOffset: SIMD3<Float> = .zero
@@ -320,6 +337,10 @@ nonisolated enum DebugLaunchOptions {
         if let i = effectIntensity { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalEffectIntensity=\(i, format: .fixed(precision: 2)) (overrides the Effect intensity setting)") }
         if let s = transitionStyle { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalTransitionStyle=\(s, privacy: .public)") }
         if let n = transitionSeed { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalTransitionSeed=\(n)") }
+        if let c = dropColour { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalDropColour=\(c, privacy: .public)") }
+        if let f = dropFinisher { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalDropFinisher=\(f, privacy: .public)") }
+        if let l = dropLead { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalDropLead=\(l * 1000, format: .fixed(precision: 1)) ms") }
+        if dropOff { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalDropOff (bell reveals in Lo-Fi)") }
         if shellYaw != 0 || shellPitch != 0 {
             LMLog.general.info("🧪 DEBUG FLAG applied: LiminalShellYaw=\(shellYaw, format: .fixed(precision: 1)) LiminalShellPitch=\(shellPitch, format: .fixed(precision: 1)) (scene rotated)")
         }

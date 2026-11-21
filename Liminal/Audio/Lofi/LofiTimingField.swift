@@ -14,12 +14,15 @@ nonisolated struct LofiTimingField: Sendable {
     let landmarks: [LofiDrumLandmark]
     let framesPerBeat: Double
     let phraseFrames: Int
+    /// Where the take's halfway and turnaround fills start (the drop transitions' build).
+    let fills: LofiTakeFills
     private let anchors: [(beat: Double, offset: Double)]
 
     init(landmarks: [LofiDrumLandmark], clock: LofiClock) {
         self.landmarks = landmarks.sorted { $0.attackFrame < $1.attackFrame }
         framesPerBeat = clock.framesPerBeat
         phraseFrames = clock.frameCount
+        fills = LofiFillDetector.detect(landmarks: self.landmarks, framesPerBeat: clock.framesPerBeat)
         let fpb = clock.framesPerBeat
         anchors = self.landmarks.compactMap { landmark in
             guard landmark.kind == .kick || landmark.kind == .snare,

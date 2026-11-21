@@ -111,7 +111,11 @@ Pass as launch arguments, for example `-LiminalAutoPlay YES`. Defined in `Limina
 | `-LiminalSyncLog YES` | One SYNC log line per second (coupling state) |
 | `-LiminalSyncStrength <x>` | Exaggerate the music-to-visuals coupling for tuning |
 | `-LiminalEffectIntensity <0-1>` | Override the Effect intensity setting for this launch without changing it |
-| `-LiminalTransitionStyle <name>` | Use this transition style for every image change (tide, facets, prism, rainbow, kaleidoscope, whirlpool, dive, afterimage, ripple, solarize, melt, shatter, classic) |
+| `-LiminalTransitionStyle <name>` | Use this transition style for every image change (tide, facets, prism, rainbow, kaleidoscope, whirlpool, dive, afterimage, ripple, solarize, melt, shatter, classic; in a Lo-Fi drop also tear, blocks, mosh, crush, vhs, sort, punch, slitscan, jumpcut, fracture, shutter, static, bleed, scramble, and the outs whirlpool, kaleidoscope, dive, melt, shatter, facets) |
+| `-LiminalDropColour <name>` | Pin a drop's colour layer (none, split, posterize, falsecolour, grain, scanlines). Automation flag. |
+| `-LiminalDropFinisher <name>` | Pin a drop's finisher (none, whiteout, blackout, invert, collapse). Automation flag. |
+| `-LiminalDropLead <ms>` | Override the display lead a drop is evaluated with (macOS: measured draw-to-present plus half a frame, 25 ms until measured; visionOS 28 ms). Automation flag. |
+| `-LiminalDropOff YES` | Lo-Fi uses the bell reveal of T43 instead of drops (A/B). Automation flag. |
 | `-LiminalTransitionSeed <n>` | Pin the transition seed too (same spec as `scripts/tx-clip.sh --style/--seed`) |
 | `-LiminalVideoForce YES` | Archive footage pieces at the Fast change speed whatever the setting |
 | `-LiminalVideoLook <name>`, `-LiminalVideoSeed <n>` | Every piece in this look (phantom, imprint, window, emerge) / pin the footage weaver's seed |

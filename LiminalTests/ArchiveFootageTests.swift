@@ -354,7 +354,8 @@ struct FootageWeaverTests {
             let action = w.tick(elapsed: t, conditions: conditions, hasClip: true, grid: grid) { _ in true }
             if case .prepare(let r) = action {
                 if let fill = r.fill {
-                    let center = r.start + r.fadeIn / 2
+                    // The piece change completes on the downbeat, with the picture's drop cut.
+                    let center = r.start + r.fadeIn
                     cuts.append(center)
                     if abs(center - turn) < 1e-8 {
                         #expect(abs(r.start + r.length - (turn + 32 * second.beatDuration)) < 1e-8)
@@ -715,8 +716,10 @@ struct VideoCompositeTests {
     @Test func uniformStrideMatchesTheShaderStruct() {
         // 25 original + 2 vibrance + 6 transition + 11 footage + 7 footage layer B + 8 interaction floats,
         // no padding (EffectsRenderer.metal).
-        #expect(MemoryLayout<EffectsUniforms>.size == 61 * 4)
-        #expect(MemoryLayout<EffectsUniforms>.stride == 61 * 4)
+        #expect(MemoryLayout<EffectsUniforms>.size == 65 * 4)
+        #expect(MemoryLayout<EffectsUniforms>.stride == 65 * 4)
+        #expect(MemoryLayout<EffectsUniforms>.offset(of: \.txStep) == 61 * 4)
+        #expect(MemoryLayout<EffectsUniforms>.offset(of: \.txFinish) == 64 * 4)
         #expect(MemoryLayout<EffectsUniforms>.offset(of: \.videoDrive) == 51 * 4)
         #expect(MemoryLayout<EffectsUniforms>.offset(of: \.videoKeyAmtB) == 58 * 4)
         #expect(MemoryLayout<EffectsUniforms>.offset(of: \.tunnelStrength) == 59 * 4)

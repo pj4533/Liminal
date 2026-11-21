@@ -144,6 +144,16 @@ nonisolated enum ShellLayout {
         return min(max(depth, 0), 1) * (1 - reliefDriveMelt * d) * (1 - reliefTransitionDip * sin(.pi * t))
     }
 
+    /// How far the relief flattens at the peak of a drop's build (docs/plans/drop-transitions.md 3.5): the
+    /// geometry step at the cut is then small.
+    static let reliefDropFlatten: Float = 0.6
+
+    /// Relief strength during a drop's build: flattens with the build's envelope, back to full at the cut.
+    static func reliefStrength(depth: Float, drive: Float, dropEnvelope e: Float) -> Float {
+        let d = min(max(drive, 0), 1)
+        return min(max(depth, 0), 1) * (1 - reliefDriveMelt * d) * (1 - reliefDropFlatten * min(max(e, 0), 1))
+    }
+
     /// Vertical fade (brightness) at band coordinate b. Mirrors the material graph.
     static func verticalFade(band b: Float) -> Float {
         1 - smoothstep(bandFadeStart, 1, b)

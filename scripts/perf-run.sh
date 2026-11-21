@@ -21,7 +21,8 @@
 #     --seconds  collection window in seconds after warm-up (default 30)
 #     --warmup   seconds to ignore after the first PERF line (default 15)
 #     --freeze   pin effect time to T seconds (deterministic screenshots)
-#     --lofi     run with Lo-Fi, archive footage and cached images; check transport continuity and
+#     --lofi     run with Lo-Fi, archive footage and cached images; check transport continuity, drop cuts
+#                no later than 1.5 frames after the downbeat minus the display lead, and
 #                that every live dialogue plan's first event is at least 0.30 s ahead of its commit
 #                (lofi.minDialogueLeadSeconds, lofi.dialogueLeadsUnderCommitMargin)
 #     --split    also pass -LiminalPerfSplitPasses YES (no-op since direct-drawable render)
@@ -217,6 +218,11 @@ if int(sys.argv[8]):
         beats = max(0, int(sys.argv[9]) - 0.5) * float(tempo[1]) / 60
         if turns < int(beats / 64): failures.append("missing 16-bar audio handoffs")
         if out["lofi"]["imageReveals"] < int(beats / 32): failures.append("missing 8-bar image changes")
+    # Drop cuts (docs/plans/drop-transitions.md 8.4): the first clean frame starts no later than 1.5 frames
+    # (90 Hz) after the downbeat minus the display lead.
+    cuts = [float(v) for v in re.findall(r"Lo-Fi drop cut frame starts (-?[0-9.]+) ms", window)]
+    out["lofi"].update(dropCuts=len(cuts), dropCutMaxMs=max(cuts, default=None), dropCutMinMs=min(cuts, default=None))
+    if any(c > 1.5 * 1000 / 90 for c in cuts): failures.append("a drop cut frame started late")
     if not col("ivl_max"): failures.append("missing frame interval measurements")
     elif out["frame_interval_max_ms"] >= 100: failures.append("visual stall of at least 100 ms")
     if overloads: failures.append("Core Audio skipped an output cycle during playback")

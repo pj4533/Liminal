@@ -497,3 +497,159 @@ Tests:
 - `ImageStoreTests.lofiRevealsVaryTheirTransitionStyle` runs 24 reveals and expects no `.classic`, at least 8 styles, and no back-to-back repeat.
 
 The footage dissolve keeps its own timing (centred on the downbeat, `FootageWeaver`).
+
+### T44. Lo-Fi image changes are drops (20 November 2026)
+
+The user: the transitions sit on the drum boundaries, but after the new take's big "one" the picture still
+eases back to normal, so it is not a hit. Wanted: the transition starts when the outgoing take's fill starts
+and is completely done at the first hit of the new loop; "fade out, but no fade in"; "some sort of glitchy
+transition. Boom, new drum loop"; many different kinds of transition out. Plan:
+`docs/plans/drop-transitions.md`.
+
+- Every Lo-Fi drum-timed change is a drop: `TransitionSpec.drop` (`DropPlan`: colour layer, finisher, curve,
+  strength). Progress runs from the fill start to the audible downbeat. Before it only the outgoing picture
+  is on screen (Bleed leaks blocks of the new one, at most 0.35); from progress 1 the frame is exactly a
+  frame without a transition (`EffectsUniformsComputer.compute(drop:)`, byte-for-byte in
+  `DropTransitionTests`).
+- Ambient changes, manual and timer advances keep the bell family and the director's bell sequence (the
+  first 64 picks for seeds 0-3 are identical to main's).
+- Both drum boundaries are drops. The turnaround (beat 64, a new take) runs at strength 1; the halfway
+  change (beat 32, same take) at 0.7 and never draws the whiteout or the invert. One constant
+  (`DropPlan.halfwayStrength`) and `-LiminalDropOff` bring back the bell for an A/B. Lo-Fi without drum
+  takes also runs at 0.7, with the default build and no hits.
+- No impact frame after the cut: the finisher is the end of the build.
+
+### T45. Timing
+
+- Fill start: `LofiFillDetector` over the take's landmarks (activity per beat, the groove removed with a
+  per-position-in-the-bar median of beats 0-23 and 32-55, the best-scoring suffix of 1-8 beats ending on
+  the boundary). Not detected or no landmarks: 2 beats before beat 32 and 4 before beat 64, the audio fill
+  accent's build. Clamped to 1-8 beats and 6 s. It runs where the timing field is built (off the audio
+  thread) and is published as `LofiTimingField.fills`; `VisualEngine.scheduleFills` uses it when the side
+  channel's origin matches the grid within 1 ms. Synthetic fills of 1, 2, 4 and 8 beats are found within
+  half a beat; a fill-free take and a busy backbeat are not detected. Calibration against the private takes
+  was not run (open).
+- Cut: each renderer evaluates the drop at the frame's presentation time. macOS uses the measured
+  draw-to-present latency (exponential mean from `addPresentedHandler`) plus half a 60 Hz frame, 25 ms until
+  measured; visionOS uses 28 ms, an estimate that only a device can check. `-LiminalDropLead` overrides
+  both. With an exact lead the first clean frame is presented within half a frame of the downbeat (unit
+  test on 60 and 90 Hz grids at 16 phases).
+- Planning closer than 0.6 s to the downbeat skips that boundary (the picture stays); closer than the
+  build moves the fill start to now + 0.15 s. A cue whose grid moved by more than 1 ms when it fires (route
+  recovery) is re-planned.
+- A 0.15 s pre-roll before the build picks the image up and uploads it before the first visible change.
+- Intensity a(p) = (e^(kp) - 1) / (e^k - 1), k = 2.5 for builds of 1.2 s or more and 1.5 for shorter ones.
+  The plan's k = 4 left the first 60 % of the build almost unchanged (a(0.6) = 0.09) in the first clips, so
+  the drop did not visibly start with the fill.
+- The fill's hits (strongest 32) give `txKick`, a 70 ms transient; `txStep` counts hits plus a clock that
+  runs from 4 to 24 Hz, and re-hashes the glitches.
+
+### T46. At the cut
+
+- macOS: the 30 Hz uniforms carry the build; the draw recomputes progress, envelope, swap, step, kick and
+  finisher at presentation time and, on the first frame past the downbeat, switches to `cutUniforms` (the
+  same inputs without a transition, the new picture's vibrance) and binds the source as the previous
+  texture without waiting for the timer to clear it. visionOS computes every frame at presentation time.
+- Feedback is 0 on the cut frame on both platforms: the trails hold the wrecked old picture, and at the base
+  mix of 0.10-0.34 they ghosted for 3-4 frames.
+- Vibrance steps from the old picture's factors to the new one's; the visionOS relief keeps the old field
+  during the build, flattens by up to 60 % with the build, and steps to the new field at the cut.
+- Ken Burns: the old picture's push keeps running through the build and the new picture's starts on the cut
+  (`ImageZoomTiming.imageChanged(holdUntil:)`; drops need no outgoing crop). The plan had the new push
+  running unseen from the fill start; in the first clips that changed the warp pattern abruptly on the first
+  build frame (the turbulence follows the crop), seam_in 11-27.
+  The cut is drawn one display lead (25-28 ms) before the downbeat, which on the effect clock is still before
+  the held push's start, so frames that show the new picture pass `age(at:cut: true)` and start its push at
+  0 (review, 20 November 2026: without it the first 1-3 clean frames showed the new picture at the old
+  picture's zoom, up to 1.32, then snapped to 1.035).
+- Fresh-image hold: the base effects calm over the last quarter of a second of the build (at most a quarter of it) (`EffectLook.freshFadeEnd`),
+  under its peak. Fading over the whole build made the old picture clearer while it was meant to break up
+  (vis_a rose from 0.30 to 0.50 by mid-build).
+- Footage piece changes end on the downbeat (they were centred on it); the visual fill accent no longer
+  releases after the downbeat (`LofiTakeGrid.visualAccent`; the audio keeps its release).
+
+### T47. The drop library
+
+- 14 glitch styles (`TransitionStyle` 13-26): tear (strips slide, more and thinner toward the cut), blocks
+  (gated macroblocks sample from an offset and go chunky), mosh (blocks drift for two steps while feedback
+  is pulled to 0.72: a datamosh smear), crush (resolution falls in even steps to 14-40 cells), vhs (a
+  rolling tracking band with a sine tear, per-line jitter and a vertical roll), sort (bright pixels take the
+  brightest of four taps along one axis), punch (zoom about a seeded centre, kicked by the hits, with a
+  four-tap radial streak), slitscan (rows sheared by a stepped travelling wave), jumpcut (each step jumps to
+  a crop whose offset and zoom grow with the build, sometimes mirrored), fracture (a fold whose wedge count
+  steps 2-4-6-8 and turns a notch every third step), shutter (venetian bars close; shut at the cut), static
+  (blocky coloured noise takes cells over), bleed (blocks of the next picture leak through, displaced) and
+  scramble (4-8 tiles on a side trade places).
+- Five bell styles run as outs (the surge without the settle, their boosts 40 % harder): whirlpool,
+  kaleidoscope, melt, shatter and facets. Dive is not one: without its radial swap the picture was still
+  readable at the cut (peak_at_cut 0.31 / 0.40 against 0.25).
+- Five colour layers (none, split, posterize, falsecolour, grain, scanlines) and five finishers (none,
+  whiteout, blackout, invert, collapse) drawn per drop; crush is always posterized; no finisher twice
+  running; below intensity 0.25 only the gentle styles with a blackout or collapse.
+- Changes from the first clips: crush and posterize ramp with a rather than a² (both were invisible until
+  the last tenth); punch zooms with a; the mosh, slitscan and outs push harder; scramble's tiles are fixed
+  per drop (2x2 tiles swapped a quarter of the frame at once: 4-6 luma reversals per second); fracture
+  turns every third step (4 reversals per second); jumpcut never lands back on the plain frame; sort's reach
+  is 0.6 x the amount per tap; mosh has no colour layer and bleed a split (both had read as blocks).
+
+### T48. GPU (Apple M4, 2048^2 MRT stereo, interleaved A/B against main)
+
+- Non-transition frames (t = 47, 113, 600, 2000): 1.0013 (7 trials, 1.0012-1.0015). Gate 1.01. With the
+  stage B drop code in every pipeline they were 1.0375: its registers count against every frame (T19, T21).
+- So the stage B drop code (the Sort and Punch taps, the split, the colour layers, Shutter, Static and the
+  finishers) is behind function constants (`kDropTx`, `kDropColour`, `kDropFinisher`, `kDropStyle`).
+  `DropPipelines` compiles each drop's specialization in the background when the drop is planned
+  (`VisualEngine` announces it at least 6 s ahead), for the pipelines bound since the last drop (a pipeline
+  first bound during the drop is compiled then), and keeps the last six drops. Until a twin is ready the
+  plain pipeline is used (the drop then shows only its stage A glitch). Two mistakes found in the live runs:
+  specializing on the main thread stalled the macOS render 350-410 ms per drop, and specializing all 18
+  visionOS pipelines at once coincided with 3 and 8 Core Audio overloads in two Simulator runs (0 in two
+  baseline runs and 0 after the change). A third case remained: the first drop is announced right after
+  Play, before the renderer has bound anything, and then all 18 were still compiled at once (one overload
+  93 ms after the announcement in a verification run). Since 20 November nothing is compiled for an
+  announcement made before the first bind; each pipeline gets that drop's twin when it is first bound
+  (verification runs afterwards: 1 overload at the render loop's start, then 0). Unspecialized twins
+  cost 1.13-1.24 x the classic transition frame.
+- Drop frames at p = 0.98 with the style's own layer and finisher, against the classic transition frame
+  (`trans113`, 3.99 ms): mean 1.056, range 1.031 (shatter, shutter) to 1.111 (bleed); sort 1.098, punch
+  1.087, static 1.086, blocks 1.074. The plan's gates (each 1.05, mean 1.02) are not met; today's bell
+  styles measure 1.02-1.09 (T26). Device cost is unmeasured.
+- The bell styles render identically to main (tide, kaleidoscope, afterimage sequences: max difference 0).
+- Stage A drop styles cost nothing outside a drop (removing them changed non-transition frames by 0).
+
+### T49. Verification (20 November 2026)
+
+- Unit tests (macOS): 142 passed in DropTransitionTests, ImageTransitionTests, ImageStoreTests,
+  EffectLookTests, the archive footage suites, AVCouplingTests, LofiTests, LofiRhythmTests and
+  LofiArrangementTests. macOS and visionOS Simulator builds succeed.
+- Offline clips (`tx-clip.sh --drop`, 60 fps): 19 styles on two pairs (Lightning to Mushrooms at intensity
+  1, a 2.5 s build, strength 1 and 11 hits; the reverse at intensity 0.5, a 1.0 s build, strength 0.7 and 6
+  hits), each with its own colour layer and finisher (all five finishers and all six layers used). All 38
+  pass cut_frame (the first frame of the new picture is the downbeat frame), clean_from_cut, tail,
+  old_residue, peak_at_cut, build_monotonic, pre_leak, seam_in and flash_rate. Gate changes: tail is
+  measured from d + 3 (the trails re-converge on the clean frame in 2 frames, a step of 3-7 x the settled
+  step at d + 1), and build_monotonic uses a 9-frame median and 0.10 (the glitches re-hash per step, so
+  single frames flicker). Distinctness at p = 0.9: worst SSIM 0.57 / 0.64 (limit 0.85).
+- macOS live (`-LiminalAutoPlay -audio.musicMode lofi -archive.enabled NO -LiminalMusicSeed 7`, cached
+  images): 16 drops in two runs; the cut was drawn 3.7-21.9 ms before the downbeat with the 25 ms lead.
+  `addPresentedHandler` reported no presented times, so the measured lead never replaced the default and the
+  presentation time of the cut is not measured. No slow frame near a cut after the fix in T48.
+- visionOS Simulator (`perf-run.sh --lofi --seconds 100`): passes; 4 drops, cut frames start 4.6-12.5 ms
+  after the downbeat minus the 28 ms lead (limit 16.7), no stall, no Core Audio overload, fps 79, GPU eye
+  pass 0.142 ms mean (baseline runs 0.139-0.148).
+- Bell styles render identically to main; non-transition GPU cost 1.0013 x main.
+
+### T50. Open
+
+- Fill detection was not calibrated against the 25 private takes (synthetic fixtures only); `tau` and the
+  weights are the plan's starting values.
+- Drop frames cost 1.03-1.11 x the classic transition frame (T48), over the plan's 1.05 / mean 1.02.
+- The display leads are unmeasured: macOS presented times were not reported, and the visionOS 28 ms is an
+  estimate that only a device can check (`-LiminalDropLead`).
+- `scripts/drop-sync.py` (audio onset against the cut in a muxed clip) was not written. A one-off check
+  (64 bars, 72 BPM, seed 2077, Boison Berry repeated) put the first clean frame 1-2 ms after the drum
+  onset at the three new takes, and 44-46 ms after it at the halfway changes: that take plays its beat 32
+  about 43 ms ahead of the grid, and the cut follows the grid, not the attack.
+- Fill detection on the 25 takes at their own tempo: the halfway fill is detected in 13, the turnaround in
+  19; the rest use the default builds (2 and 4 beats).
+- The halfway drop (strength 0.7, beat 32) is a design choice to review with the user (plan 4.6).

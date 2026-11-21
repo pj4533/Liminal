@@ -292,7 +292,8 @@ final class MusicSyncBox {
         let i = DebugLaunchOptions.freezeTime != nil ? target : intensity.next(target: target, time: effectTime)
         let age = transitionStart.map { effectTime - $0 }.flatMap { $0 >= 0 ? $0 : nil }
         return EffectLook(intensity: i, imageAge: age, imageInterval: Float(imageInterval),
-                          transitionDuration: transition.duration)
+                          transitionDuration: transition.duration,
+                          freshFadeEnd: transition.drop != nil ? transition.duration : nil)
     }
 }
 
@@ -312,7 +313,7 @@ struct VisualDisplayView: View {
 
     /// Uniforms plus the music modulation they were built from (the renderer also needs its burst serial).
     /// Called at least twice per tick (body and the log `onChange`); the reactor caches repeated times.
-    private func frameParams() -> (uniforms: EffectsUniforms, modulation: MusicModulation) {
+    private func frameParams() -> (uniforms: EffectsUniforms, modulation: MusicModulation, cut: EffectsUniforms?) {
         let effectTime = DebugLaunchOptions.effectTime(Float(effectController.time))
         let vibrance = currentVibrance()
         // Music -> visuals. macOS keeps its 0.03 turns/s hue drift when un-synced. Frozen time bypasses
@@ -330,23 +331,42 @@ struct VisualDisplayView: View {
         let footage = ArchiveFootageService.shared.frame(key: frame) {
             frame?.cgImageRepresentation.map { ImageFraming.coverCrop($0) }
         }
+        // A drop (docs/plans/drop-transitions.md 3.5) is evaluated at the frame's presentation time; the
+        // draw switches to `cut` (an ordinary frame of the new picture) on the first frame past the downbeat.
+        let reveal = transitionManager.isMorphing ? transitionManager.beatReveal : nil
+        let dropReveal = reveal?.isDrop == true ? reveal : nil
+        let look = currentLook(effectTime: effectTime)
         var uniforms = EffectsUniformsComputer.compute(
             time: effectTime,
             transitionProgress: Float(transitionManager.transitionProgress),
             hasSaliencyMap: transitionManager.currentSaliencyMap != nil,
-            vibrance: vibrance,
+            vibrance: dropReveal != nil ? previousVibrance() ?? vibrance : vibrance,
             music: modulation,
-            look: currentLook(effectTime: effectTime),
-            zoomAge: sync.zoom.age(at: effectTime),
+            look: look,
+            zoomAge: sync.zoom.age(at: effectTime, cut: dropReveal == nil),
             outgoingZoomScale: transitionManager.previousFrame == nil ? 0 : sync.zoom.outgoingScale,
             transition: sync.transition,
-            video: footage.state
+            video: footage.state,
+            drop: dropReveal?.frame(presentedAt: ArchiveFootageService.uptime() + EffectsMetalView.dropLead)
         )
+        var cut: EffectsUniforms?
+        if dropReveal != nil {
+            cut = EffectsUniformsComputer.compute(
+                time: effectTime, hasSaliencyMap: transitionManager.currentSaliencyMap != nil, vibrance: vibrance,
+                music: modulation, look: look, zoomAge: sync.zoom.age(at: effectTime, cut: true), video: footage.state)
+        }
         // Debug toggle controls the effect currently being tested
         if !settings.debugEffectEnabled {
             uniforms.bloomAmount = 0
+            cut?.bloomAmount = 0
         }
-        return (uniforms, modulation)
+        return (uniforms, modulation, cut)
+    }
+
+    /// The outgoing picture's vibrance factors (a drop keeps them until the cut).
+    private func previousVibrance() -> VibranceFactors? {
+        guard let prev = transitionManager.previousFrame else { return nil }
+        return ImageColorStats.cachedFactors(key: prev) { prev.cgImageRepresentation.map { ImageFraming.coverCrop($0) } }
     }
 
     private func currentLook(effectTime: Float) -> EffectLook {
@@ -415,6 +435,7 @@ struct VisualDisplayView: View {
                         previousImage: transitionManager.previousFrame,  // GPU crossfade blending
                         saliencyMap: transitionManager.currentSaliencyMap,
                         uniforms: params.uniforms,
+                        cutUniforms: params.cut,
                         ghostBurstSerial: params.modulation.ghostBurstSerial
                     )
                     // Keep the image at its 3:2 display aspect even if the window is not exactly
@@ -479,7 +500,10 @@ struct VisualDisplayView: View {
                     let time = DebugLaunchOptions.effectTime(Float(effectController.time))
                     if started { sync.transitionStart = time }
                     let zoomStart = !hadFrame && DebugLaunchOptions.freezeTime != nil ? 0 : time
-                    sync.zoom.imageChanged(at: zoomStart, replacing: started)
+                    // A drop: the new picture's push starts on the cut, not under the build.
+                    let cut = started ? visualEngine.reveal.flatMap { r in
+                        r.isDrop ? zoomStart + Float(r.downbeat - ArchiveFootageService.uptime()) : nil } : nil
+                    sync.zoom.imageChanged(at: zoomStart, replacing: started, holdUntil: cut)
                     postMood(for: image, imageChanged: started)
                 }
             } else {

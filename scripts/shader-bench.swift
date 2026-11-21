@@ -130,6 +130,13 @@
 //                      TransitionSpec.pinned(style, seed: N), as the app's debug flags give it; without
 //                      --seq-duration the style's mid duration is used. Applies to --sequence and to
 //                      every scenario; a --scenarios entry may set its own "tx_style" / "tx_seed".
+//   --drop             with --sequence: a drop (docs/plans/drop-transitions.md): A breaks up over --fill
+//                      seconds (default 2.5) and B is cut in at the downbeat (no transition after it; the
+//                      first frame after the cut has no feedback). --hits a,b,c = fill hits in seconds from
+//                      the fill start; --tx-colour NAME / --tx-finisher NAME (DropColour / DropFinisher;
+//                      default the style's own), --tx-strength X (1; 0.7 = the halfway change).
+//                      sequence.json records "drop", "build" and "downbeat_frame". A --scenarios entry
+//                      may set "tx_drop": true with "tx_colour" / "tx_finisher" (its "tp" is the build).
 //   --gen-depth IMAGE OUT.png   run the app's DepthMapGenerator (DepthAnythingV2SmallF16.mlmodelc
 //                      must sit next to the binary; the wrapper arranges it) and save the map
 //
@@ -386,7 +393,20 @@ guard let txStyleValue = TransitionStyle(name: txStyle) else {
 }
 /// The transition of --sequence (and of scenarios without their own "tx_style"): same mapping as the
 /// app's -LiminalTransitionStyle / -LiminalTransitionSeed. Duration: --seq-duration, else the style's mid range.
-let txSpec: TransitionSpec = txStyleValue == .classic
+let dropMode = takeFlag("--drop")
+let dropFill = takeValue("--fill").map { v -> Float in guard let f = Float(v), f > 0 else { fail("bad --fill") }; return f }
+let dropHits: [Double] = (takeValue("--hits") ?? "").split(separator: ",").compactMap { Double($0) }.sorted()
+let dropColourArg = takeValue("--tx-colour").map { v -> DropColour in guard let c = DropColour(name: v) else {
+    fail("--tx-colour \(v): one of \(DropColour.allCases.map(\.name).joined(separator: ", "))") }; return c }
+let dropFinisherArg = takeValue("--tx-finisher").map { v -> DropFinisher in guard let f = DropFinisher(name: v) else {
+    fail("--tx-finisher \(v): one of \(DropFinisher.allCases.map(\.name).joined(separator: ", "))") }; return f }
+let dropStrength = floatOpt("--tx-strength", 1)
+/// A drop's build snapped to whole simulated frames, so the downbeat is a frame boundary.
+func snappedBuild(_ s: Float) -> Float { max(1, (s * Float(seqSimFps)).rounded()) / Float(seqSimFps) }
+let txSpec: TransitionSpec = dropMode
+    ? TransitionSpec.pinnedDrop(txStyleValue, seed: txSeed, duration: snappedBuild(dropFill ?? seqDurationArg ?? 2.5),
+                                colour: dropColourArg, finisher: dropFinisherArg, strength: dropStrength)
+    : txStyleValue == .classic
     ? TransitionSpec(style: .classic, seed: 0, duration: seqDurationArg ?? 1.5, flip: false)
     : TransitionSpec.pinned(txStyleValue, seed: txSeed, duration: seqDurationArg)
 let seqDuration = txSpec.duration
@@ -426,14 +446,22 @@ func loadLibrary(_ path: String) -> MTLLibrary {
     catch { fail("cannot load metallib \(path): \(error)") }
 }
 
+/// Drop twins per library (DropPipelines), filled by makePipeline.
+var dropTwins: [ObjectIdentifier: DropPipelines] = [:]
 func makePipeline(_ library: MTLLibrary, _ fragment: String, attachments: Int) -> MTLRenderPipelineState {
     guard let vfn = library.makeFunction(name: "effectsVertex"),
-          let ffn = library.makeFunction(name: fragment) else { fail("missing shader function \(fragment)") }
+          let ffn = DropPipelines.function(library, name: fragment) else { fail("missing shader function \(fragment)") }
     let pd = MTLRenderPipelineDescriptor()
     pd.vertexFunction = vfn
     pd.fragmentFunction = ffn
+    pd.label = fragment
     for a in 0..<attachments { pd.colorAttachments[a].pixelFormat = renderFormat }
-    do { return try device.makeRenderPipelineState(descriptor: pd) } catch { fail("pipeline \(fragment): \(error)") }
+    do {
+        let state = try device.makeRenderPipelineState(descriptor: pd)
+        // The drop twin (kDropTx on), bound for frames of a drop as the renderers do.
+        dropTwins[ObjectIdentifier(library)]?.register(device: device, library: library, descriptor: pd, name: fragment)
+        return state
+    } catch { fail("pipeline \(fragment): \(error)") }
 }
 /// Variant 0 = --metallib (A), variant 1 = --metallib-b (B, interleaved A/B mode).
 struct Variant {
@@ -446,10 +474,12 @@ struct Variant {
     /// renderers do.
     let stereoFX: [Int: MTLRenderPipelineState]
     let monoFX: [Int: MTLRenderPipelineState]
+    let drops: DropPipelines
     func pipeline(mono m: Bool, _ u: EffectsUniforms) -> MTLRenderPipelineState {
         let v = VideoComposite.footageVariant(u)
-        if m { return monoFX[v] ?? mono }
-        return stereoFX[v] ?? stereo!
+        if u.needsDropPipeline { drops.prepare(DropPipelines.Key(u), wait: true) }
+        if m { return drops.pipeline(for: monoFX[v] ?? mono, uniforms: u) }
+        return drops.pipeline(for: stereoFX[v] ?? stereo!, uniforms: u)
     }
 }
 let variantPaths: [(String, String)] = [("A", metallibPath)] + (metallibPathB.map { [("B", $0)] } ?? [])
@@ -461,6 +491,8 @@ func fragmentName(_ lib: MTLLibrary, _ base: String) -> String {
 }
 let variants: [Variant] = variantPaths.map { name, path in
         let lib = loadLibrary(path)
+        let drops = DropPipelines()
+        dropTwins[ObjectIdentifier(lib)] = drops
         let fx = (videoPath != nil || footagePath != nil) && lib.functionNames.contains("effectsFragmentVideoFX")
         var sfx: [Int: MTLRenderPipelineState] = [:], mfx: [Int: MTLRenderPipelineState] = [:]
         if fx {
@@ -473,7 +505,7 @@ let variants: [Variant] = variantPaths.map { name, path in
         return Variant(name: name, path: path,
                        stereo: mono ? nil : makePipeline(lib, fragmentName(lib, "effectsFragmentStereo"), attachments: 2),
                        mono: makePipeline(lib, fragmentName(lib, "effectsFragment"), attachments: 1),
-                       stereoFX: sfx, monoFX: mfx)
+                       stereoFX: sfx, monoFX: mfx, drops: drops)
     }
 
 let sampler: MTLSamplerState = {
@@ -711,6 +743,11 @@ if let scenariosPath = scenariosPath {
         if let st = item["tx_style"] as? String {
             guard let style = TransitionStyle(name: st) else { fail("scenario \(name): unknown tx_style \(st)") }
             spec = style == .classic ? .classic : TransitionSpec.pinned(style, seed: (item["tx_seed"] as? NSNumber)?.intValue ?? 0)
+            if (item["tx_drop"] as? Bool) == true {
+                spec = TransitionSpec.pinnedDrop(style, seed: (item["tx_seed"] as? NSNumber)?.intValue ?? 0, duration: 2.5,
+                                                 colour: (item["tx_colour"] as? String).flatMap { DropColour(name: $0) },
+                                                 finisher: (item["tx_finisher"] as? String).flatMap { DropFinisher(name: $0) })
+            }
         }
         return makeScenario(name, t: t, tp: tp, over: over,
                             intensity: (item["intensity"] as? NSNumber)?.floatValue ?? intensityArg,
@@ -1107,13 +1144,22 @@ if sequenceMode, let outDir = outDir, let prevImagePath = prevImagePath {
     let st = FrameState(makeEyes(storage: .shared))
     var frameList: [[String: Any]] = []
 
+    // Phases on whole simulated frames (a drop's downbeat is exactly frame kDown).
+    let kStart = Int((seqPre * Float(seqSimFps)).rounded())
+    let kDown = kStart + Int((seqDuration * Float(seqSimFps)).rounded())
     func scenario(at k: Int) -> (Scenario, [String: Any]) {
-        let rel = Float(k) / Float(seqSimFps) - seqPre          // seconds since the crossfade started
+        let rel = Float(k - kStart) / Float(seqSimFps)          // seconds since the crossfade started
         let t = seqStart + rel
-        let phase = rel < 0 ? "pre" : (rel < seqDuration ? "transition" : "post")
+        let phase = k < kStart ? "pre" : (k < kDown ? "transition" : "post")
         let tp: Float = phase == "transition" ? rel / seqDuration : 0
         let age: Float = rel < 0 ? imageInterval + rel : rel     // image A has been up for one interval
-        let vib = phase == "pre" ? vibA : (phase == "post" ? vibB : VibranceFactors.lerp(vibA, vibB, tp))
+        // A drop shows only A (and its vibrance) until the cut.
+        let vib = phase == "pre" ? vibA : (phase == "post" ? vibB : (dropMode ? vibA : VibranceFactors.lerp(vibA, vibB, tp)))
+        let dropFrame: DropFrame? = dropMode && phase == "transition"
+            ? DropFrame.make(at: Double(rel), build: Double(seqDuration), hits: dropHits) : nil
+        let fadeCap: Float? = dropMode ? seqDuration : nil
+        // A drop keeps A's framing running until the cut; B's push starts on the cut (ImageZoomTiming holdUntil).
+        let dropZoomAge: Float? = dropMode ? (phase == "post" ? rel - seqDuration : imageInterval + rel) : nil
         var u: EffectsUniforms
         var source = phase == "pre" ? texA : texB
         var previous = phase == "transition" ? texA : source
@@ -1122,13 +1168,17 @@ if sequenceMode, let outDir = outDir, let prevImagePath = prevImagePath {
             previous = source
             u = EffectsUniformsComputer.compute(time: t, transitionProgress: 0, hasSaliencyMap: false,
                 vibrance: ref == "a" ? vibA : vibB, look: EffectLook(intensity: intensity, imageAge: age, imageInterval: imageInterval,
-                                                                     transitionDuration: txSpec.duration))
+                                                                     transitionDuration: txSpec.duration, freshFadeEnd: fadeCap),
+                zoomAge: dropZoomAge)
             applyOverrides(&u, refOff)
         } else {
             u = EffectsUniformsComputer.compute(time: t, transitionProgress: tp, hasSaliencyMap: false, vibrance: vib,
                 look: EffectLook(intensity: intensity, imageAge: age, imageInterval: imageInterval,
-                                 transitionDuration: txSpec.duration),
-                transition: txSpec)
+                                 transitionDuration: txSpec.duration, freshFadeEnd: fadeCap),
+                zoomAge: dropZoomAge,
+                transition: txSpec, drop: dropFrame)
+            // The cut: the trails hold the wrecked old picture, so the first clean frame has none of it.
+            if dropMode && k == kDown { u.feedbackMix = 0 }
             let offset = 0.003 + 0.007 * SmoothOscillator.value(at: t)
             u.stereoOffset = depthPath != nil ? abs(offset) : 0
             applyOverrides(&u, globalOverrides)
@@ -1149,8 +1199,10 @@ if sequenceMode, let outDir = outDir, let prevImagePath = prevImagePath {
         cb.waitUntilCompleted()
     }
     var written = 0
+    var downbeatFrame = -1
     for k in 0...total {
         if seqRef != nil && k % stride != 0 { continue }   // references carry no state between frames
+        if k == kDown && k % stride == 0 { downbeatFrame = written }
         let (sc, info) = scenario(at: k)
         let cb = queue.makeCommandBuffer()!
         let out = encodeFrame(cb, sc, st)
@@ -1174,9 +1226,12 @@ if sequenceMode, let outDir = outDir, let prevImagePath = prevImagePath {
         "ref": seqRef ?? "", "intensity": Double(intensity),
         "start": Double(seqStart), "duration": Double(seqDuration), "pre": Double(seqPre), "post": Double(seqPost),
         "fps": seqFps, "sim_fps": seqSimFps, "frames": frameList,
+        "drop": dropMode, "build": Double(seqDuration), "downbeat_frame": downbeatFrame,
+        "tx_colour": txSpec.drop?.colour.name ?? "", "tx_finisher": txSpec.drop?.finisher.name ?? "",
+        "tx_strength": Double(txSpec.drop?.strength ?? 0), "hits": dropHits,
     ] as [String: Any])
     try? text.write(toFile: jsonPath ?? "\(outDir)/sequence.json", atomically: true, encoding: .utf8)
-    print(jsonString(["out": outDir, "frames": written, "tx_style": txStyle, "ref": seqRef ?? ""] as [String: Any]))
+    print(jsonString(["out": outDir, "frames": written, "tx_style": txStyle, "ref": seqRef ?? "", "downbeat_frame": downbeatFrame] as [String: Any]))
     exit(0)
 }
 

@@ -169,6 +169,88 @@ def summarize(seq, rows):
     }
 
 
+# Drop gates (docs/plans/drop-transitions.md 8.2). d = the downbeat frame (sequence.json "downbeat_frame");
+# the clip needs 60 fps and at least 1.5 s after the cut.
+DROP_GATES = {
+    "cut_frame": ("==", 0),            # the first frame showing the new picture is d exactly
+    "clean_from_cut": (">=", 0.95),    # vis_b[d] against its settled median (d+30 ... d+90)
+    "tail": ("<=", 1.5),               # largest step in d+3 ... d+12 against the settled median step
+                                       # (d+1, d+2: the trails re-converge on the clean frame, 33 ms)
+    "old_residue": ("<=", 0.05),       # vis_a[d] above its settled median
+    "peak_at_cut": ("<=", 0.25),       # A barely readable over the last 3 build frames
+    "build_monotonic": ("<=", 0.10),   # A's 9-frame median never comes back from 40 % of the build on
+                                       # (glitch states re-hash per step: single frames flicker)
+    "pre_leak": ("<=", 0.20),          # B before the cut (Bleed 0.40)
+    "seam_in": ("<=", 2.5),            # the build grows out of the live effects
+    "flash_rate": ("<=", 3),           # full-field mean-luma reversals of 0.10 or more in any 1 s (WCAG 2.3.1)
+}
+DROP_SUBTLE = {"peak_at_cut": ("<=", 0.45)}
+
+
+def summarize_drop(seq, rows):
+    fps = seq["fps"]
+    d = int(seq["downbeat_frame"])
+    n = len(rows)
+    va, vb = np.array([r["vis_a"] for r in rows]), np.array([r["vis_b"] for r in rows])
+    step = np.array([r["step"] for r in rows])
+    luma = np.array([r["mean_luma"] for r in rows])
+    settle = slice(min(d + int(0.5 * fps), n - 1), min(d + int(1.5 * fps), n))
+    vb_set, va_set = float(np.median(vb[settle])), float(np.median(va[settle]))
+    step_set = float(np.median(step[settle])) + 1e-4
+    showing = [i for i in range(n) if vb[i] > 0.5 * vb_set and vb[i] > va[i]]
+    first_new = next((i for i in showing if all(vb[j] > va[j] for j in range(i, min(n, i + 10)))), n - 1)
+    build0 = next((i for i, r in enumerate(rows) if r["phase"] == "transition"), 0)
+    lo = build0 + int(0.4 * (d - build0))
+    med = np.array([np.median(va[max(lo, i - 4):min(i + 5, d)]) for i in range(lo, d)]) if d > lo else np.array([0.0])
+    run_min, rise = np.inf, 0.0
+    for v in med:
+        run_min = min(run_min, v)
+        rise = max(rise, v - run_min)
+    win = max(2, int(round(0.25 * fps)))
+    pre = step[max(1, build0 - win):build0]
+    seam_in = float(step[build0] / (float(np.median(pre)) + 1e-4)) if build0 > 1 and len(pre) else 0.0
+    # Mean-luma reversals of 0.10 or more (extrema of the luma curve with that swing).
+    rev_t, ext, direction = [], luma[0], 0
+    for i in range(1, n):
+        delta = luma[i] - ext
+        if abs(delta) >= 0.10:
+            dd = 1 if delta > 0 else -1
+            if direction and dd != direction:
+                rev_t.append(rows[i]["rel"])
+            direction, ext = dd, luma[i]
+        elif direction and (luma[i] - ext) * direction > 0:
+            ext = luma[i]
+    flash = max((sum(1 for u in rev_t if t <= u < t + 1) for t in rev_t), default=0)
+    return {
+        "downbeat_frame": d, "first_new_frame": first_new, "cut_frame": first_new - d,
+        "clean_from_cut": float(vb[d] / max(vb_set, 1e-4)),
+        "tail": float(step[d + 3:d + 13].max() / step_set) if d + 3 < n else 0.0,
+        "tail_d1": float(step[d + 1] / step_set) if d + 1 < n else 0.0,
+        "old_residue": float(va[d] - va_set),
+        "peak_at_cut": float(va[max(build0, d - 3):d].min()) if d > build0 else 1.0,
+        "build_monotonic": float(rise),
+        "pre_leak": float(vb[build0:d].max()) if d > build0 else 0.0,
+        "seam_in": seam_in,
+        "flash_rate": float(flash),
+        "vis_b_cut": float(vb[d]), "vis_b_settled": vb_set, "vis_a_settled": va_set,
+        "cut_step": float(step[d]), "step_settled": step_set,
+    }
+
+
+def gate_drop(summary, seq):
+    gates = dict(DROP_GATES)
+    if seq.get("intensity") is not None and seq["intensity"] < SUBTLE_BELOW:
+        gates.update(DROP_SUBTLE)
+    if seq.get("tx_style") == "bleed":
+        gates["pre_leak"] = ("<=", 0.40)
+    out = {}
+    for k, (op, thr) in gates.items():
+        v = summary[k]
+        ok = v == thr if op == "==" else (v <= thr if op == "<=" else v >= thr)
+        out[k] = {"value": round(v, 4) if isinstance(v, float) else v, "limit": f"{op} {thr}", "pass": bool(ok)}
+    return out
+
+
 def gate(summary, intensity=0.5):
     out = {}
     gates = dict(GATES)
@@ -182,9 +264,14 @@ def gate(summary, intensity=0.5):
 
 def cmd_score(a):
     seq, rows = measure(a.dir)
-    s = summarize(seq, rows)
-    g = gate(s, seq.get("intensity"))
+    if a.drop or seq.get("drop"):
+        s = summarize_drop(seq, rows)
+        g = gate_drop(s, seq)
+    else:
+        s = summarize(seq, rows)
+        g = gate(s, seq.get("intensity"))
     result = {"dir": a.dir, "tx_style": seq.get("tx_style"), "tx_seed": seq.get("tx_seed"),
+              "tx_colour": seq.get("tx_colour"), "tx_finisher": seq.get("tx_finisher"),
               "intensity": seq.get("intensity"), "duration": seq["duration"],
               "summary": {k: (round(v, 4) if isinstance(v, float) else v) for k, v in s.items()},
               "gates": g, "pass": all(x["pass"] for x in g.values())}
@@ -223,6 +310,38 @@ def cmd_sheet(a):
     print(a.out)
 
 
+def _ssim(x, y, k=8):
+    """Mean SSIM over k x k blocks of two luma images (0...1 floats)."""
+    h, w = (x.shape[0] // k) * k, (x.shape[1] // k) * k
+    bx = x[:h, :w].reshape(h // k, k, w // k, k)
+    by = y[:h, :w].reshape(h // k, k, w // k, k)
+    mx, my = bx.mean(axis=(1, 3)), by.mean(axis=(1, 3))
+    vx, vy = bx.var(axis=(1, 3)), by.var(axis=(1, 3))
+    cxy = ((bx - mx[:, None, :, None]) * (by - my[:, None, :, None])).mean(axis=(1, 3))
+    c1, c2 = 0.01 ** 2, 0.03 ** 2
+    return float((((2 * mx * my + c1) * (2 * cxy + c2)) / ((mx ** 2 + my ** 2 + c1) * (vx + vy + c2))).mean())
+
+
+def cmd_distinct(a):
+    frames = {}
+    for d in a.dirs:
+        seq, fr = frames_of(d)
+        build = [f for f in fr if f["phase"] == "transition"]
+        f = min(build, key=lambda f: abs(f["tp"] - a.at))
+        frames[seq.get("tx_style") or d] = load(os.path.join(d, "frames", f["frame"] + "-L.png"))[1]
+    names = sorted(frames)
+    pairs, worst = [], (None, -1.0)
+    for i, p in enumerate(names):
+        for q in names[i + 1:]:
+            v = _ssim(frames[p], frames[q])
+            pairs.append({"a": p, "b": q, "ssim": round(v, 4)})
+            if v > worst[1]:
+                worst = ((p, q), v)
+    result = {"at": a.at, "limit": a.limit, "worst": {"pair": worst[0], "ssim": round(worst[1], 4)},
+              "fail": [x for x in pairs if x["ssim"] > a.limit], "pass": worst[1] <= a.limit, "count": len(names)}
+    print(json.dumps(result, indent=1))
+
+
 def cmd_plot(a):
     """Small dependency-free chart: vis_a (orange), vis_b (blue), step x10 (white) over time."""
     seq, rows = measure(a.dir)
@@ -252,7 +371,13 @@ def main():
     s.add_argument("--json")
     s.add_argument("--csv")
     s.add_argument("--gate", action="store_true", help="exit 1 when a gate fails")
+    s.add_argument("--drop", action="store_true", help="drop gates (also chosen by sequence.json \"drop\")")
     s.set_defaults(fn=cmd_score)
+    s = sub.add_parser("distinct", help="drop styles must look different: SSIM at p = 0.9 between clip dirs")
+    s.add_argument("dirs", nargs="+")
+    s.add_argument("--at", type=float, default=0.9)
+    s.add_argument("--limit", type=float, default=0.85)
+    s.set_defaults(fn=cmd_distinct)
     s = sub.add_parser("sheet")
     s.add_argument("dir")
     s.add_argument("out")

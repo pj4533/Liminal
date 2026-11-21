@@ -179,48 +179,71 @@ struct ImageStoreTests {
         return (ImageStore(root: root, defaults: defaults), root, defaults)
     }
 
-    @Test func lofiImageIsFullyInOnTheFillDownbeat() {
+    /// docs/plans/drop-transitions.md 8.1: the drop builds from the fill and is done on the downbeat.
+    @Test func lofiImageIsCleanOnTheFillDownbeat() throws {
         for tempo in [58.0, 69, 82] {
             let beat = LofiClock(tempo: tempo, sampleRate: 48_000).beatDuration
             let grid = LofiTakeGrid(origin: 91.37, beatDuration: beat)
             for count in [32, 64] {
-                for style in TransitionStyle.family {
+                for style in TransitionStyle.dropFamily {
                     let downbeat = grid.origin + Double(count) * beat
-                    let cue = LofiImageReveal.next(on: grid, after: downbeat - 6) { _ in .pinned(style, seed: count) }
-                    let film = grid.nextBoundary(after: downbeat - 6)
+                    let planned = LofiImageReveal.next(
+                        on: grid, after: downbeat - 8, now: downbeat - 8, fills: nil, hasDrums: true,
+                        pickDrop: { build, _, strength in .pinnedDrop(style, seed: count, duration: Float(build), strength: strength) },
+                        pickBell: { _ in .classic })
+                    let cue = try #require(planned.reveal)
                     #expect(cue.spec.style == style)
-                    #expect(abs(cue.downbeat - film.time) < 1e-9)
-                    // The warp carries the exchange through the fill; the new picture is fully in on the downbeat.
-                    #expect(cue.spec.swap(Float(cue.progress(at: downbeat))) > 0.9999)
-                    #expect(cue.spec.swap(Float(cue.progress(at: downbeat - 0.25 * beat))) < 1)
-                    #expect(cue.spec.envelope(Float(cue.progress(at: downbeat - beat))) > 0.5)
-                    // The surge starts on a whole beat of the fill, at least two beats out.
-                    let leadBeats = (downbeat - cue.start) / beat
-                    #expect(leadBeats >= 2 - 1e-6 && abs(leadBeats - leadBeats.rounded()) < 1e-6)
-                    #expect(cue.progress(at: cue.start - 0.01) == 0)
-                    #expect(cue.progress(at: cue.start + cue.duration + 0.01) == 1)
+                    #expect(abs(cue.downbeat - grid.nextBoundary(after: downbeat - 8).time) < 1e-9)
+                    // Default builds: 2 beats before the halfway change, 4 before the turnaround.
+                    #expect(abs((downbeat - cue.fillStart) / beat - (count == 32 ? 2 : 4)) < 1e-6)
+                    #expect(cue.frame(presentedAt: downbeat).done)
+                    #expect(!cue.frame(presentedAt: downbeat - 1.0 / 60).done)
+                    #expect(cue.spec.envelope(cue.frame(presentedAt: downbeat - 1.0 / 60).progress) >= 0.9 * cue.spec.drop!.strength)
+                    #expect(cue.progress(at: cue.start) == 0)
+                    #expect(cue.spec.drop!.strength == (count == 64 ? 1 : DropPlan.halfwayStrength))
                 }
             }
         }
     }
 
-    /// Regression (6dc0999 pinned every Lo-Fi reveal to `.classic`): drum-timed reveals use the whole family.
-    @Test func lofiRevealsVaryTheirTransitionStyle() {
+    @Test func lofiRevealsVaryTheirTransitionStyle() throws {
         let beat = LofiClock(tempo: 72, sampleRate: 48_000).beatDuration
         let grid = LofiTakeGrid(origin: 10, beatDuration: beat)
         var director = TransitionDirector(seed: 7)
         var styles: [TransitionStyle] = []
         var after = grid.origin
         for _ in 0..<24 {
-            let cue = LofiImageReveal.next(on: grid, after: after) {
-                director.next(time: 0, intensity: 0.6, energy: 0.5, hasDepth: false, imageInterval: Float($0))
-            }
+            let planned = LofiImageReveal.next(
+                on: grid, after: after, now: after, fills: nil, hasDrums: true,
+                pickDrop: { build, fill, strength in
+                    director.nextDrop(time: 0, intensity: 0.6, build: Float(build), halfway: fill == .halfway, strength: strength)
+                },
+                pickBell: { _ in .classic })
+            let cue = try #require(planned.reveal)
             styles.append(cue.spec.style)
             after = cue.downbeat + 0.01
         }
         #expect(!styles.contains(.classic))
         #expect(Set(styles).count >= 8)
+        #expect(styles.allSatisfy { TransitionStyle.dropFamily.contains($0) })
         for (a, b) in zip(styles, styles.dropFirst()) { #expect(a != b) }
+    }
+
+    /// -LiminalDropOff: the bell reveal of T43 (the swap ends on the downbeat, on whole beats of the fill).
+    @Test func lofiBellRevealStillEndsItsSwapOnTheDownbeat() throws {
+        let beat = LofiClock(tempo: 69, sampleRate: 48_000).beatDuration
+        let grid = LofiTakeGrid(origin: 91.37, beatDuration: beat)
+        for style in TransitionStyle.family {
+            let downbeat = grid.origin + 64 * beat
+            let planned = LofiImageReveal.next(on: grid, after: downbeat - 6, now: downbeat - 6, fills: nil, hasDrums: true,
+                                               drop: false, pickDrop: { _, _, _ in .classic },
+                                               pickBell: { _ in .pinned(style, seed: 3) })
+            let cue = try #require(planned.reveal)
+            #expect(!cue.isDrop)
+            #expect(cue.spec.swap(Float(cue.progress(at: downbeat))) > 0.9999)
+            let leadBeats = (downbeat - cue.start) / beat
+            #expect(leadBeats >= 2 - 1e-6 && abs(leadBeats - leadBeats.rounded()) < 1e-6)
+        }
     }
 
     @Test func emptyImageStoreHasTwoDistinctBundledPicturesForFills() async throws {

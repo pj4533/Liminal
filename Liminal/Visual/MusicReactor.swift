@@ -168,7 +168,7 @@ nonisolated struct MusicReactor {
             amount: a,
             energy: energy,
             pulseColor: pulseColor,
-            fillAccent: state.lofiTakeGrid?.accent(at: Double(state.startUptime) / 1e9 + now) ?? 0,
+            fillAccent: state.lofiTakeGrid?.visualAccent(at: Double(state.startUptime) / 1e9 + now) ?? 0,
             pulseMotion: pulseMotion,
             shimmer: shimmer,
             air: air,

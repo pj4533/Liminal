@@ -4,6 +4,7 @@ import MetalKit
 import AppKit
 import SwiftUI
 import OSLog
+import Synchronization
 
 // MARK: - Effects Metal View
 
@@ -20,11 +21,27 @@ final class EffectsMetalView: MTKView {
     /// Footage interaction-mode variants (effectsFragmentVideo{Keys,Drives,FX}) by variant id, bound only
     /// while a layer needs them (VideoComposite.footageVariant; docs/decisions/footage-fx.md F11).
     private var videoFXPipelineStates: [Int: MTLRenderPipelineState] = [:]
+    /// Drop twins of the pipelines above (DropPipelines), bound while a drop runs.
+    private let dropPipelines = DropPipelines()
 
     // Source texture (from morphPlayer - current/target image)
     private var sourceTexture: MTLTexture?
     var beatReveal: LofiImageReveal?
     private var lastLoggedDownbeat: Double?
+    /// During a drop: the uniforms of an ordinary frame of the new picture, used from the cut on.
+    var cutUniforms: EffectsUniforms?
+    /// Downbeat of the drop whose cut frame has been drawn (its feedback was flushed).
+    private var cutDownbeat: Double?
+
+    /// Draw-to-present latency (exponential mean over presented frames), shared by every view.
+    nonisolated private static let presentLatency = Mutex<Double?>(nil)
+
+    /// Seconds from a draw to its presentation plus half a 60 Hz frame, so the cut errs early
+    /// (docs/plans/drop-transitions.md 3.2). 25 ms until frames have been presented; `-LiminalDropLead`.
+    static var dropLead: Double {
+        if let l = DebugLaunchOptions.dropLead { return l }
+        return presentLatency.withLock { $0 }.map { min(max($0, 0), 0.1) + 0.5 / 60 } ?? LofiImageReveal.displayLead
+    }
     private var stagingID: ObjectIdentifier?
     private var stagedTexture: (image: NSImage, texture: MTLTexture, crop: CGRect)?
     private var textureLoader: MTKTextureLoader?
@@ -153,7 +170,7 @@ final class EffectsMetalView: MTKView {
 
         // DEBUG -LiminalNoEffects: bare image via passthroughFragment (orientation/colour checks).
         let fragmentName = DebugLaunchOptions.noEffects ? "passthroughFragment" : "effectsFragment"
-        guard let fragmentFunction = library.makeFunction(name: fragmentName) else {
+        guard let fragmentFunction = DropPipelines.function(library, name: fragmentName) else {
             LMLog.visual.error("❌ Failed to load effectsFragment function")
             return
         }
@@ -165,21 +182,30 @@ final class EffectsMetalView: MTKView {
         pipelineDescriptor.vertexFunction = vertexFunction
         pipelineDescriptor.fragmentFunction = fragmentFunction
         pipelineDescriptor.colorAttachments[0].pixelFormat = self.colorPixelFormat
+        pipelineDescriptor.label = fragmentName
 
         do {
             pipelineState = try device.makeRenderPipelineState(descriptor: pipelineDescriptor)
+            if !DebugLaunchOptions.noEffects {
+                dropPipelines.register(device: device, library: library, descriptor: pipelineDescriptor, name: fragmentName)
+            }
             LMLog.visual.info("✅ Metal pipeline created successfully")
         } catch {
             LMLog.visual.error("❌ Failed to create pipeline: \(error.localizedDescription)")
         }
-        if !DebugLaunchOptions.noEffects, let f = library.makeFunction(name: "effectsFragmentVideo") {
+        if !DebugLaunchOptions.noEffects, let f = DropPipelines.function(library, name: "effectsFragmentVideo") {
             pipelineDescriptor.fragmentFunction = f
+            pipelineDescriptor.label = "effectsFragmentVideo"
             videoPipelineState = try? device.makeRenderPipelineState(descriptor: pipelineDescriptor)
+            dropPipelines.register(device: device, library: library, descriptor: pipelineDescriptor, name: "effectsFragmentVideo")
         }
         for v in FootageRecipe.fxVariants where !DebugLaunchOptions.noEffects {
-            guard let f = library.makeFunction(name: "effectsFragment" + VideoComposite.variantSuffix(v)) else { continue }
+            let name = "effectsFragment" + VideoComposite.variantSuffix(v)
+            guard let f = DropPipelines.function(library, name: name) else { continue }
             pipelineDescriptor.fragmentFunction = f
+            pipelineDescriptor.label = name
             videoFXPipelineStates[v] = try? device.makeRenderPipelineState(descriptor: pipelineDescriptor)
+            dropPipelines.register(device: device, library: library, descriptor: pipelineDescriptor, name: name)
         }
 
 
@@ -435,7 +461,39 @@ final class EffectsMetalView: MTKView {
 
         let ghostTapResult = ghostTapManager.updateWithCount(currentTime: uniforms.time)
         var uniformsCopy = uniforms
-        if let beatReveal, previousTexture != nil {
+        var boundPrevious = previousTexture ?? sourceTexture
+        var presentedCut: Double?
+        if let beatReveal, beatReveal.isDrop, previousTexture != nil {
+            // A drop at the frame's presentation time: the build, or from the downbeat on a clean frame.
+            let now = ArchiveFootageService.uptime()
+            let frame = beatReveal.frame(presentedAt: now + Self.dropLead)
+            if frame.done {
+                uniformsCopy = cutUniforms ?? uniformsCopy
+                if cutUniforms == nil {
+                    uniformsCopy.transitionProgress = 0
+                    uniformsCopy.txStyle = 0; uniformsCopy.txMix = 0; uniformsCopy.txEnv = 0; uniformsCopy.txAmount = 0
+                    uniformsCopy.txStep = 0; uniformsCopy.txKick = 0; uniformsCopy.txLayers = 0; uniformsCopy.txFinish = 0
+                    uniformsCopy.outgoingZoomScale = 0
+                }
+                boundPrevious = sourceTexture
+                if cutDownbeat != beatReveal.downbeat {
+                    // The trails hold the wrecked old picture: none of it on the first clean frame.
+                    cutDownbeat = beatReveal.downbeat
+                    uniformsCopy.feedbackMix = 0
+                    presentedCut = beatReveal.downbeat
+                    LMLog.visual.info("Lo-Fi drop cut drawn \((now - beatReveal.downbeat) * 1000, format: .fixed(precision: 1)) ms from downbeat (lead \(Self.dropLead * 1000, format: .fixed(precision: 1)) ms)")
+                }
+            } else {
+                let p = max(0.000001, frame.progress)
+                let spec = beatReveal.spec
+                uniformsCopy.transitionProgress = p
+                uniformsCopy.txMix = spec.swap(p)
+                uniformsCopy.txEnv = spec.envelope(p)
+                uniformsCopy.txStep = frame.step
+                uniformsCopy.txKick = frame.kick
+                uniformsCopy.txFinish = spec.finish(p)
+            }
+        } else if let beatReveal, previousTexture != nil {
             let now = ArchiveFootageService.uptime()
             let p = max(0.000001, Float(beatReveal.progress(at: now)))
             if beatReveal.spec.swap(p) >= 1, lastLoggedDownbeat != beatReveal.downbeat, previousTexture !== sourceTexture {
@@ -474,13 +532,14 @@ final class EffectsMetalView: MTKView {
 
         if let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) {
             let videoState = videoFXPipelineStates[VideoComposite.footageVariant(uniformsCopy)] ?? videoPipelineState
-            encoder.setRenderPipelineState(footage ? videoState ?? pipelineState : pipelineState)
+            encoder.setRenderPipelineState(dropPipelines.pipeline(for: footage ? videoState ?? pipelineState : pipelineState,
+                                                                  uniforms: uniformsCopy))
             encoder.setFragmentTexture(sourceTexture, index: 0)
             if let saliencyTex = saliencyTexture {
                 encoder.setFragmentTexture(saliencyTex, index: 2)
             }
             // Previous texture for GPU crossfade (falls back to source if no transition)
-            encoder.setFragmentTexture(previousTexture ?? sourceTexture, index: 3)
+            encoder.setFragmentTexture(boundPrevious, index: 3)
             // Feedback texture for recursive warping (previous frame's output)
             if let fbTex = feedbackTexture {
                 encoder.setFragmentTexture(fbTex, index: 4)
@@ -510,6 +569,20 @@ final class EffectsMetalView: MTKView {
 
         gpuStats.beginFrame()
         gpuStats.track(commandBuffer, pass: "fx")
+        let drawUptime = ArchiveFootageService.uptime()
+        let mediaAtDraw = CACurrentMediaTime()
+        let cutForLog = presentedCut
+        drawable.addPresentedHandler { d in
+            guard d.presentedTime > 0 else { return }
+            let latency = d.presentedTime - mediaAtDraw
+            guard latency > 0, latency < 0.2 else { return }
+            Self.presentLatency.withLock { $0 = $0.map { $0 + 0.05 * (latency - $0) } ?? latency }
+            if let downbeat = cutForLog {
+                // presentedTime and uptime share the host clock: this is when the cut reached the display.
+                let presented = drawUptime + latency
+                LMLog.visual.info("Lo-Fi drop cut presented \((presented - downbeat) * 1000, format: .fixed(precision: 1)) ms from downbeat")
+            }
+        }
         commandBuffer.present(drawable)
         commandBuffer.commit()
 
@@ -569,6 +642,8 @@ struct EffectsMetalViewRepresentable: NSViewRepresentable {
     let previousImage: NSImage?  // For GPU crossfade blending
     let saliencyMap: CGImage?
     let uniforms: EffectsUniforms  // Single struct - matches visionOS pattern
+    /// During a drop: the frame without a transition the draw switches to at the cut.
+    var cutUniforms: EffectsUniforms? = nil
     var ghostBurstSerial: UInt32 = 0  // MusicModulation.ghostBurstSerial (scene-change trail burst)
 
     func makeNSView(context: Context) -> EffectsMetalView {
@@ -591,6 +666,7 @@ struct EffectsMetalViewRepresentable: NSViewRepresentable {
 
         // Pass uniforms
         nsView.uniforms = uniforms
+        nsView.cutUniforms = cutUniforms
         nsView.requestGhostBurst(serial: ghostBurstSerial)
     }
 }
