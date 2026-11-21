@@ -22,10 +22,18 @@
 | [Bass tone redo plan](plans/bass-tone-redo.md) | The warm sustained sub with a short strike on the kick, its gates and measurements (D119; rotation D120) |
 | [Drop transitions research](research/drop-transitions.md) | Glitch and datamosh craft, drop-edit timing and audiovisual sync tolerances behind T44-T50 |
 | [Drop transitions plan](plans/drop-transitions.md) | Lo-Fi image changes that build over the drum fill and cut clean on the downbeat (T44-T50) |
+| [Image sources (AI and API)](image-sources/README.md) | Overview of API image mode, what the user sees, no Gemini spend, and the flow |
+| [API image pipeline](image-sources/pipeline.md) | End to end: rotation, search paging and ledger, download, trimming, gates and thresholds, pool, display, Lo-Fi timing, credits, logs, flags |
+| [API image sources](image-sources/sources.md) | Every source in `image-collections.json`: searches, measured sizes, high-resolution routes, rights, weights, pins and credits |
+| [API image providers](image-sources/providers.md) | LoC, NASA, Commons, Cleveland, the Met, Digital Commonwealth, AIC and Smithsonian: endpoints, paging, fields, high-resolution tricks and pitfalls |
+| [Adding an API image source](image-sources/adding-a-source.md) | Researching a collection, the JSON fields, writing a provider with fixtures and tests, and live verification |
+| [API image research history](image-sources/research-history.md) | From OpenPics to the 2026-11-21 research passes, and every rejected source with its reason |
 | [Image API survey](research/image-apis/survey.md) | Which public image APIs work in 2026, their keys, resolution and rights |
 | [Image collections](research/image-apis/collections.md) | The curated collections API mode rotates through, measured sizes, rejections and live ingest results |
+| [More image institutions](research/image-apis/other-institutions.md) | Second research pass outside the Library of Congress: Commons, NASA, Cleveland and Met sources |
+| [Image providers to add](research/image-apis/new-providers.md) | Institutions that need a new provider, ranked; Digital Commonwealth and AIC were implemented |
 | [OpenPics notes](research/image-apis/openpics.md) | Endpoints and lessons from the earlier OpenPics app |
-| [API image mode plan](plans/image-api-mode.md) | The AI vs API source toggle, provider layer, pool, gates and outcome (D36-D43) |
+| [API image mode plan](plans/image-api-mode.md) | The AI vs API source toggle, provider layer, pool, gates and outcome (D36-D44) |
 | [Architecture](architecture.md) | Audio and rendering pipelines, dependencies and attribution |
 | [Development reference](development.md) | Debug flags, automation scripts and contributing |
 | [Decision records](decisions/README.md) | Design rationale and review index |

@@ -164,6 +164,8 @@ nonisolated enum DebugLaunchOptions {
     /// the left eye. Default is one mono effects render shown to both eyes (decision S4).
     static let shellTextureStereo: Bool = defaults.bool(forKey: "LiminalShellTextureStereo")
 
+    /// -LiminalHideControls YES (macOS): the window shows only the picture, no control panel or status badge,
+    /// for content-only screen recordings.
     /// -LiminalHideControls YES (visionOS): close the controls window once the immersive space is open,
     /// so simulator screenshots show the scene unobstructed.
     static let hideControls: Bool = defaults.bool(forKey: "LiminalHideControls")

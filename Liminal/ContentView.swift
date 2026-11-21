@@ -17,7 +17,8 @@ import AppKit
 /// (width = height * visualAspect + controlPanelWidth). Images are 3:2 since
 /// the Gemini 3.1 switch (docs/decisions/images.md D4).
 final class SquareVisualWindowDelegate: NSObject, NSWindowDelegate {
-    static let controlPanelWidth: CGFloat = ContentView.panelWidth + 1  // panel + 1 divider
+    /// Panel + 1 divider; 0 when -LiminalHideControls YES shows the picture alone (content-only recordings).
+    static let controlPanelWidth: CGFloat = DebugLaunchOptions.hideControls ? 0 : ContentView.panelWidth + 1
     static let visualAspect: CGFloat = ImageFraming.displayAspect  // 3:2, matches generated images
 
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
@@ -86,13 +87,15 @@ struct ContentView: View {
                               music: audioEngine)
                 .frame(minWidth: 400, minHeight: 400)
 
-            Divider()
+            if !DebugLaunchOptions.hideControls {
+                Divider()
 
-            // Control panel
-            controlPanel
-                .frame(width: Self.panelWidth)
+                // Control panel
+                controlPanel
+                    .frame(width: Self.panelWidth)
+            }
         }
-        .frame(minWidth: 400 + Self.panelWidth, minHeight: 560)
+        .frame(minWidth: 400 + SquareVisualWindowDelegate.controlPanelWidth, minHeight: 560)
         .background(WindowAccessor())
         .onAppear {
             // Apply saved settings to audio engine on launch
@@ -465,8 +468,8 @@ struct VisualDisplayView: View {
                     .aspectRatio(ImageFraming.displayAspect, contentMode: .fit)
                     .frame(width: geometry.size.width, height: geometry.size.height)
 
-                    // Status overlay (top corners)
-                    VStack {
+                    // Status overlay (top corners), hidden with the controls (-LiminalHideControls).
+                    if !DebugLaunchOptions.hideControls { VStack {
                         HStack {
                             // Total cached images count
                             HStack(spacing: 4) {
@@ -484,7 +487,7 @@ struct VisualDisplayView: View {
                             Spacer()
                         }
                         Spacer()
-                    }
+                    } }
                 } else {
                     // Placeholder
                     VStack(spacing: 12) {
