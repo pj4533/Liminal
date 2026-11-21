@@ -247,6 +247,10 @@ nonisolated enum DialogueCueCoordinator {
         let t = built.timings
         let leadText = lead.map { String(format: "%.2f", $0) } ?? "-"
         LMLog.audio.info("Lo-Fi dialogue plan cue=\(cue) rev=\(built.plan.revision) bank=\(String(built.plan.bankID, radix: 16), privacy: .public) families=\(families, privacy: .public) events=\(built.chops.count) classify=\(t.classifyMs, format: .fixed(precision: 0))ms analyze=\(t.analyzeMs, format: .fixed(precision: 0))ms bank=\(t.bankMs, format: .fixed(precision: 0))ms plan=\(t.planMs, format: .fixed(precision: 0))ms render=\(t.renderMs, format: .fixed(precision: 0))ms lead=\(leadText, privacy: .public)s thermal=\(t.cost.thermalState, privacy: .public) resident=\(t.cost.residentMB, format: .fixed(precision: 0))MB cache=\(t.cost.cacheEntries)/\(t.cost.cacheBytes / 1024)KB")
+        if let motif = built.motif {
+            let line = motif.line.frames
+            LMLog.audio.info("Lo-Fi dialogue motif cue=\(cue) loop=\(motif.loop) line=\(String(motif.lineKey, radix: 16), privacy: .public) film=\(motif.source.contentID, privacy: .public) at=\(motif.source.sourceSeconds(frame: line.lowerBound), format: .fixed(precision: 1))s carried=\(motif.carried) transcript=\(motif.usedTranscript) window=\(built.window.lowerBound, format: .fixed(precision: 1))..<\(built.window.upperBound, format: .fixed(precision: 1))")
+        }
         if LofiCaptureHooks.isEnabled {
             var log = built.log
             log["timings"] = t.dictionary(cue: cue)
