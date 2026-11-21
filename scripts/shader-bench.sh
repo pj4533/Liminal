@@ -31,6 +31,7 @@ APP_SRCS=(
   "$ROOT/Liminal/Visual/EffectsUniformsComputer.swift"
   "$ROOT/Liminal/Visual/EffectLook.swift"
   "$ROOT/Liminal/Visual/ImageTransition.swift"
+  "$ROOT/Liminal/Visual/DropPipelines.swift"
   "$ROOT/Liminal/Visual/MusicModulation.swift"
   "$ROOT/Liminal/Visual/SmoothOscillator.swift"
   "$ROOT/Liminal/Visual/GhostTapManager.swift"

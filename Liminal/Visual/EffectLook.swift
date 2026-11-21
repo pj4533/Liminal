@@ -23,7 +23,7 @@ nonisolated struct EffectLook: Sendable, Equatable {
     /// to its end, so a long transition still gets the same clear time after it. 1.5 = the classic timing.
     var transitionDuration: Float = 1.5
     /// A drop (docs/plans/drop-transitions.md 3.5): the image age by which the fresh fade is done (the
-    /// build's length). The base effects calm in the last half second of the build, under its peak, so the
+    /// build's length). The base effects calm in the last quarter second of the build, under its peak, so the
     /// old picture does not clear up while it breaks up, and the new picture's first frame is calm.
     /// nil = the bell timing.
     var freshFadeEnd: Float? = nil
@@ -113,7 +113,7 @@ nonisolated struct EffectLook: Sendable, Equatable {
         var fadeStart: Float = 0, fadeEnd = fade
         if let end = freshFadeEnd {
             fadeEnd = max(end, 0.05)
-            fadeStart = fadeEnd - min(0.5, 0.5 * fadeEnd)
+            fadeStart = fadeEnd - min(0.25, 0.25 * fadeEnd)
         }
         let holdEnd = max((Tuning.freshHoldEnd + extra) * k, transitionDuration)
         let end = max((Tuning.freshEnd + extra) * k, holdEnd + 1)

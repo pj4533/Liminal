@@ -38,7 +38,8 @@ nonisolated enum TransitionStyle: Int, CaseIterable, Sendable {
                                               .jumpcut, .fracture, .shutter, .static, .bleed, .scramble]
     /// Bell styles that also run as an "out" in a drop (the surge without the settle). Rainbow, afterimage,
     /// tide, ripple, prism and solarize are left out: their identity is the gradual exchange or the settle.
-    static let outs: [TransitionStyle] = [.whirlpool, .kaleidoscope, .dive, .melt, .shatter, .facets]
+    /// Dive is not one: without its radial swap it stays readable at the cut (T47).
+    static let outs: [TransitionStyle] = [.whirlpool, .kaleidoscope, .melt, .shatter, .facets]
     /// The styles the director picks from for a drop.
     static let dropFamily: [TransitionStyle] = glitches + outs
 

@@ -357,11 +357,38 @@ constant int DF_BLACKOUT = 2;
 constant int DF_INVERT = 3;
 constant int DF_COLLAPSE = 4;
 
+// Drop pipelines (docs/decisions/transitions.md T48): the stage B drop code (Sort and Punch taps, the split
+// layer, the colour layers and finishers) is compiled only into drop twins of each pipeline, specialized
+// for one drop's colour layer, finisher and stage B style, built when the drop is planned and bound while
+// it runs. Unspecialized, its registers cost every other frame 3.7 % and every drop frame 10-20 % (T19,
+// T21). Stage A's drop styles cost nothing outside a drop and stay in every variant.
+constant bool kDropTxIn [[function_constant(0)]];
+constant int kDropColourIn [[function_constant(1)]];
+constant int kDropFinisherIn [[function_constant(2)]];
+constant int kDropStyleIn [[function_constant(3)]];   // TX_SORT, TX_PUNCH, TX_SHUTTER, TX_STATIC or 0
+constant bool kDropTx = is_function_constant_defined(kDropTxIn) && kDropTxIn;
+constant int kDropColour = kDropTx && is_function_constant_defined(kDropColourIn) ? kDropColourIn : 0;
+constant int kDropFinisher = kDropTx && is_function_constant_defined(kDropFinisherIn) ? kDropFinisherIn : 0;
+constant int kDropStyle = kDropTx && is_function_constant_defined(kDropStyleIn) ? kDropStyleIn : 0;
+constant bool kDropLayers = kDropColour > 1 || kDropFinisher > 0 || kDropStyle == 23 || kDropStyle == 24;
+
 // Small hashes for the drop glitches (float: half sin precision bands).
 static inline float txHash(float2 p) { return fract(sin(dot(p, float2(127.1, 311.7))) * 43758.5453); }
 static inline float2 txHash2(float2 p) {
     return fract(sin(float2(dot(p, float2(127.1, 311.7)), dot(p, float2(269.5, 183.3)))) * 43758.5453);
 }
+// Integer hash of a cell and a step (cheap in registers and ALU; the drop layers run per eye).
+static inline uint txIHash(int2 cell, int k) {
+    uint h = uint(cell.x) * 0x8DA6B343u ^ uint(cell.y) * 0xD8163841u ^ uint(k) * 0xCB1AB31Fu;
+    h ^= h >> 15; h *= 0x2C1B3C6Du; h ^= h >> 12; h *= 0x297A2D39u; h ^= h >> 15;
+    return h;
+}
+// In float: 1/65535 is subnormal in half and 65535 overflows it.
+static inline half txIUnit(uint h) { return half(float(h >> 8) * (1.0 / 16777215.0)); }
+static inline half3 txIUnit3(uint h) {
+    return half3(half(h & 0x3FFu), half((h >> 10) & 0x3FFu), half((h >> 20) & 0x3FFu)) * (1.0h / 1023.0h);
+}
+
 // Mirror-repeat into 0...1 (displaced samples fold back at the frame edge instead of smearing it).
 static inline float2 txMirror(float2 x) { return 1.0 - abs(fract(x * 0.5) * 2.0 - 1.0); }
 
@@ -579,7 +606,9 @@ static inline WarpOut distortedUV(float2 texCoord, constant EffectsUniforms &uni
                 float bh = 0.08 + 0.15 * a;
                 float by = fract(sd + uniforms.time * 0.45 + n * 0.031);
                 float inBand = 1.0 - smoothstep(0.0, bh, abs(texCoord.y - by));
-                uv.x += inBand * sin(texCoord.y * 90.0 + uniforms.time * 23.0) * 0.03 * a + inBand * 0.02 * kick;
+                uv.x += inBand * sin(texCoord.y * 90.0 + uniforms.time * 23.0) * 0.08 * a + inBand * 0.03 * kick;
+                // Line jitter everywhere, re-drawn per step (a worn tape's time-base error).
+                uv.x += (txHash(float2(floor(texCoord.y * 140.0), n)) - 0.5) * 0.03 * a * a;
                 uv.y = fract(uv.y + a * a * a * 0.5 * amt * txHash(float2(n, sd)));
             } else if (style == TX_PUNCH) {
                 // Zoom punch about a seeded centre, kicked by the hits.
@@ -589,23 +618,25 @@ static inline WarpOut distortedUV(float2 texCoord, constant EffectsUniforms &uni
             } else if (style == TX_SLITSCAN) {
                 // Rows sheared by a travelling wave, strongest at one edge; the wave number steps.
                 float edge = fract(sd * 3.0) < 0.5 ? texCoord.y : 1.0 - texCoord.y;
-                float k = 9.0 + 3.0 * fmod(n, 5.0);
+                float k = 9.0 + 3.0 * fmod(floor(n * 0.5), 5.0);   // re-stepped every second step
                 uv.x += sin(texCoord.y * k + uniforms.time * 5.0) * amt * a * edge * (1.0 + kick);
                 uv = txMirror(uv);
             } else if (style == TX_JUMPCUT) {
                 // Stutter edit: each step jumps to a seeded crop (offset, zoom, sometimes mirrored).
-                float2 h2 = txHash2(float2(n, sd * 17.0));
-                float z = 1.0 + 0.6 * txHash(float2(n + 3.0, sd)) * a;
+                // The jump never lands back on the plain frame: its size grows with a, only its direction is drawn.
+                float ang = txHash(float2(n, sd * 17.0)) * 6.2831853;
+                float mag = amt * a * (0.6 + 0.4 * txHash(float2(n + 5.0, sd)));
+                float z = 1.0 + 0.6 * a * (0.5 + 0.5 * txHash(float2(n + 3.0, sd)));
                 float2 c = uv - 0.5;
                 if (txHash(float2(n + 7.0, sd)) < 0.3 * a) c.x = -c.x;
-                uv = txMirror(0.5 + c / z + (h2 - 0.5) * 2.0 * amt * a);
+                uv = txMirror(0.5 + c / z + mag * float2(cos(ang), sin(ang)));
             } else if (style == TX_FRACTURE) {
                 // The kaleidoscope fold with the wedge count stepping 2, 4, 6, 8 and the axis turning per step.
                 float wedges = 2.0 * (1.0 + floor(min(a, 0.999) * 4.0));
                 float2 c = uv - 0.5;
                 float r = length(c);
                 float wedge = 6.2831853 / wedges;
-                float rot = sd * 6.2831853 + n * 0.39;
+                float rot = sd * 6.2831853 + floor(n / 3.0) * 0.39;   // a notch every third step (no flashing)
                 float f = fract((atan2(c.y, c.x) + rot) / wedge);
                 float tri = 1.0 - abs(f - 0.5) * 2.0;
                 float af = wedge * 0.5 * (1.0 - tri) - rot;
@@ -1046,41 +1077,40 @@ static inline half3 compositeVideo(half3 c, FootageTap tp, VideoLayerParams L, h
 // Drop colour layers, the Shutter and Static styles, and the finishers, on the final colour.
 static inline half3 dropLayers(half3 c, float2 texCoord, float2 fragPos, constant EffectsUniforms &uniforms) {
     half a = half(uniforms.txEnv);
-    float n = uniforms.txStep, sd = uniforms.txSeed;
-    int style = int(uniforms.txStyle + 0.5);
-    int layers = int(uniforms.txLayers + 0.5);
-    int colour = layers % 8, fin = layers / 8;
+    int n = int(uniforms.txStep);
+    int sd = int(uniforms.txSeed * 1024.0);
+    // Compile-time: one drop's layers only (kDrop* function constants).
+    const int style = kDropStyle;
+    const int colour = kDropColour, fin = kDropFinisher;
     if (style == TX_STATIC) {
         // Blocky coloured noise takes cells over, smaller cells toward the cut.
         float N = mix(10.0, 60.0, float(a));
-        float2 cell = floor(texCoord * float2(N, N * 0.6667));
-        half gate = half(step(1.0 - float(a) * uniforms.txAmount, txHash(cell + float2(n * 1.7, sd))));
-        half3 nz = half3(half(txHash(cell + float2(n, 1.0))), half(txHash(cell + float2(n, 2.0))), half(txHash(cell + float2(n, 3.0))));
-        c = mix(c, nz, 0.85h * gate);
+        int2 cell = int2(texCoord * float2(N, N * 0.6667));
+        // Which cells are taken is fixed per drop (coverage only grows); their noise is re-drawn per step.
+        half gate = txIUnit(txIHash(cell, sd)) >= 1.0h - a * half(uniforms.txAmount) ? 1.0h : 0.0h;
+        c = mix(c, txIUnit3(txIHash(cell, n * 7 + sd) * 0x9E3779B1u), 0.85h * gate);
     }
     if (colour == DC_POSTERIZE) {
         half lv = mix(32.0h, 4.0h, a);
         c = floor(c * lv + 0.5h) / lv;
     } else if (colour == DC_FALSECOLOUR) {
-        float2 cell = floor(texCoord * float2(16.0, 10.0));
-        float h = txHash(cell + float2(n * 0.73, sd * 3.0));
-        if (h < 0.5 * float(a)) c = h < 0.25 * float(a) ? c.gbr : c.brg;
+        half h = txIUnit(txIHash(int2(texCoord * float2(16.0, 10.0)), n * 3 + sd));
+        if (h < 0.5h * a) c = h < 0.25h * a ? c.gbr : c.brg;
     } else if (colour == DC_GRAIN) {
-        float2 cell = floor(fragPos * 0.25);
-        half3 nz = half3(half(txHash(cell + float2(n, 0.3))), half(txHash(cell + float2(n, 0.6))), half(txHash(cell + float2(n, 0.9))));
+        half3 nz = txIUnit3(txIHash(int2(fragPos * 0.25), n));
         c = mix(c, nz, 0.5h * a * a * a);
     } else if (colour == DC_SCANLINES) {
-        half odd = half(fmod(floor(fragPos.y * 0.5), 2.0));
+        half odd = (int(fragPos.y * 0.5) & 1) != 0 ? 1.0h : 0.0h;
         half l = dot(c, LUMA_W);
         c = mix(c, half3(l), 0.5h * a);
         c *= 1.0h - 0.6h * a * odd;
     }
     if (style == TX_SHUTTER) {
         // Venetian bars close over the picture (shut at the cut).
-        bool vert = fract(sd * 3.0) < 0.5;
-        float N = 6.0 + floor(sd * 10.0);
-        float f = fract((vert ? texCoord.x : texCoord.y) * N);
-        c *= half(step(float(a), f));
+        bool vert = fract(uniforms.txSeed * 3.0) < 0.5;
+        half N = 6.0h + floor(half(uniforms.txSeed) * 10.0h);
+        half f = fract(half(vert ? texCoord.x : texCoord.y) * N);
+        c *= f >= a ? 1.0h : 0.0h;
     }
     half f = half(uniforms.txFinish);
     if (f > 0.0h) {
@@ -1094,7 +1124,7 @@ static inline half3 dropLayers(half3 c, float2 texCoord, float2 fragPos, constan
             c = mix(c, saturate(c + (1.0h - 2.0h * l)), f);
         } else if (fin == DF_COLLAPSE) {
             half h = max(1.0h - f, 0.01h);
-            half inside = half(abs(texCoord.y - 0.5) < 0.5 * float(h));
+            half inside = abs(half(texCoord.y) - 0.5h) < 0.5h * h ? 1.0h : 0.0h;
             c = min(c * (1.0h + 2.0h * f), 1.0h) * inside;
         }
     }
@@ -1181,9 +1211,9 @@ static inline half4 shadeEye(
             float a = uniforms.txSeed * 6.2831853;
             float k = uniforms.txAmount * uniforms.txEnv;
             chromOffset += float2(cos(a), sin(a)) * (0.35 * k) + float2(0.5 - uv.y, uv.x - 0.5) * (0.7 * k);
-        } else if (int(fmod(uniforms.txLayers, 8.0) + 0.5) == DC_SPLIT) {
+        } else if (kDropColour == DC_SPLIT) {
             // Drop split: the channels part along a direction re-drawn on every step.
-            float a = txHash(float2(uniforms.txStep, uniforms.txSeed * 5.0)) * 6.2831853;
+            float a = float(txIUnit(txIHash(int2(int(uniforms.txStep), 5), int(uniforms.txSeed * 1024.0)))) * 6.2831853;
             chromOffset += float2(cos(a), sin(a)) * (0.03 * uniforms.txEnv * uniforms.txEnv * (1.0 + uniforms.txKick));
         }
     }
@@ -1217,15 +1247,15 @@ static inline half4 shadeEye(
     half3 w = half3(0.0h);
     half4 color = prevColor;
     int txs = int(uniforms.txStyle + 0.5);
-    if (uniforms.transitionProgress > 0.0 && txs >= TX_TEAR && txs != TX_BLEED) {
+    if (kDropTx && uniforms.transitionProgress > 0.0 && txs >= TX_TEAR && txs != TX_BLEED) {
         // A drop shows only the outgoing picture until the cut: no new-picture samples. Sort and Punch
         // spend them on four taps of the old one.
-        if (txs == TX_SORT || txs == TX_PUNCH) {
+        if (kDropStyle == TX_SORT || kDropStyle == TX_PUNCH) {
             half a = half(uniforms.txEnv);
             float2 dir;
-            if (txs == TX_SORT) {
+            if (kDropStyle == TX_SORT) {
                 bool vert = fract(uniforms.txSeed * 7.0) < 0.5;
-                dir = (vert ? float2(0.0, 1.0) : float2(1.0, 0.0)) * (uniforms.txAmount * uniforms.txEnv / 3.0);
+                dir = (vert ? float2(0.0, 1.0) : float2(1.0, 0.0)) * (uniforms.txAmount * uniforms.txEnv * (0.6 + uniforms.txKick));
             } else {
                 float2 c0 = 0.5 + 0.3 * (float2(fract(uniforms.txSeed * 5.3), fract(uniforms.txSeed * 8.9)) - 0.5);
                 dir = (c0 - previousUV) * (0.045 * uniforms.txEnv);
@@ -1238,7 +1268,7 @@ static inline half4 shadeEye(
                 half l = dot(c, LUMA_W);
                 if (l > bl) { bl = l; best = c; }
             }
-            if (txs == TX_SORT) {
+            if (kDropStyle == TX_SORT) {
                 // Pixel-sort look: where the picture is bright enough, it takes the brightest tap along one axis.
                 half gate = smoothstep(mix(0.9h, 0.3h, a) - 0.05h, mix(0.9h, 0.3h, a) + 0.05h, dot(prevColor.rgb, LUMA_W));
                 color.rgb = mix(prevColor.rgb, best, gate);
@@ -1533,7 +1563,7 @@ static inline half4 shadeEye(
 
     // === 8. DROP LAYERS (docs/plans/drop-transitions.md 4.2-4.3) ===
     // After the footage and the feedback, so a blackout or a crush covers everything. Only during a drop.
-    if (uniforms.transitionProgress > 0.0 && (uniforms.txLayers > 0.5 || uniforms.txStyle > 22.5)) {
+    if (kDropLayers && uniforms.transitionProgress > 0.0) {
         currentColor = dropLayers(currentColor, texCoord, fragPos, uniforms);
     }
 

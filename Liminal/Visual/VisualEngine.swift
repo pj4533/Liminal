@@ -341,6 +341,8 @@ final class VisualEngine: ObservableObject {
                 continue
             }
             ArchiveFootageService.shared.expectNextImage(after: max(0, cue.downbeat - now()))
+            // The renderers build this drop's specialized pipelines in the background, well before the fill.
+            DropPipelines.announce(cue.spec)
             // Give live generation most of the phrase, with six seconds left for
             // a local decode, crop, colour analysis and both platforms' GPU upload.
             do { try await Task.sleep(for: .seconds(max(0, cue.start - now() - 6))) } catch { return }

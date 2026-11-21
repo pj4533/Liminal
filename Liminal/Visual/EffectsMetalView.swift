@@ -21,6 +21,8 @@ final class EffectsMetalView: MTKView {
     /// Footage interaction-mode variants (effectsFragmentVideo{Keys,Drives,FX}) by variant id, bound only
     /// while a layer needs them (VideoComposite.footageVariant; docs/decisions/footage-fx.md F11).
     private var videoFXPipelineStates: [Int: MTLRenderPipelineState] = [:]
+    /// Drop twins of the pipelines above (DropPipelines), bound while a drop runs.
+    private let dropPipelines = DropPipelines()
 
     // Source texture (from morphPlayer - current/target image)
     private var sourceTexture: MTLTexture?
@@ -168,7 +170,7 @@ final class EffectsMetalView: MTKView {
 
         // DEBUG -LiminalNoEffects: bare image via passthroughFragment (orientation/colour checks).
         let fragmentName = DebugLaunchOptions.noEffects ? "passthroughFragment" : "effectsFragment"
-        guard let fragmentFunction = library.makeFunction(name: fragmentName) else {
+        guard let fragmentFunction = DropPipelines.function(library, name: fragmentName) else {
             LMLog.visual.error("❌ Failed to load effectsFragment function")
             return
         }
@@ -180,21 +182,30 @@ final class EffectsMetalView: MTKView {
         pipelineDescriptor.vertexFunction = vertexFunction
         pipelineDescriptor.fragmentFunction = fragmentFunction
         pipelineDescriptor.colorAttachments[0].pixelFormat = self.colorPixelFormat
+        pipelineDescriptor.label = fragmentName
 
         do {
             pipelineState = try device.makeRenderPipelineState(descriptor: pipelineDescriptor)
+            if !DebugLaunchOptions.noEffects {
+                dropPipelines.register(device: device, library: library, descriptor: pipelineDescriptor, name: fragmentName)
+            }
             LMLog.visual.info("✅ Metal pipeline created successfully")
         } catch {
             LMLog.visual.error("❌ Failed to create pipeline: \(error.localizedDescription)")
         }
-        if !DebugLaunchOptions.noEffects, let f = library.makeFunction(name: "effectsFragmentVideo") {
+        if !DebugLaunchOptions.noEffects, let f = DropPipelines.function(library, name: "effectsFragmentVideo") {
             pipelineDescriptor.fragmentFunction = f
+            pipelineDescriptor.label = "effectsFragmentVideo"
             videoPipelineState = try? device.makeRenderPipelineState(descriptor: pipelineDescriptor)
+            dropPipelines.register(device: device, library: library, descriptor: pipelineDescriptor, name: "effectsFragmentVideo")
         }
         for v in FootageRecipe.fxVariants where !DebugLaunchOptions.noEffects {
-            guard let f = library.makeFunction(name: "effectsFragment" + VideoComposite.variantSuffix(v)) else { continue }
+            let name = "effectsFragment" + VideoComposite.variantSuffix(v)
+            guard let f = DropPipelines.function(library, name: name) else { continue }
             pipelineDescriptor.fragmentFunction = f
+            pipelineDescriptor.label = name
             videoFXPipelineStates[v] = try? device.makeRenderPipelineState(descriptor: pipelineDescriptor)
+            dropPipelines.register(device: device, library: library, descriptor: pipelineDescriptor, name: name)
         }
 
 
@@ -521,7 +532,8 @@ final class EffectsMetalView: MTKView {
 
         if let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) {
             let videoState = videoFXPipelineStates[VideoComposite.footageVariant(uniformsCopy)] ?? videoPipelineState
-            encoder.setRenderPipelineState(footage ? videoState ?? pipelineState : pipelineState)
+            encoder.setRenderPipelineState(dropPipelines.pipeline(for: footage ? videoState ?? pipelineState : pipelineState,
+                                                                  uniforms: uniformsCopy))
             encoder.setFragmentTexture(sourceTexture, index: 0)
             if let saliencyTex = saliencyTexture {
                 encoder.setFragmentTexture(saliencyTex, index: 2)

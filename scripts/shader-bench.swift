@@ -446,14 +446,22 @@ func loadLibrary(_ path: String) -> MTLLibrary {
     catch { fail("cannot load metallib \(path): \(error)") }
 }
 
+/// Drop twins per library (DropPipelines), filled by makePipeline.
+var dropTwins: [ObjectIdentifier: DropPipelines] = [:]
 func makePipeline(_ library: MTLLibrary, _ fragment: String, attachments: Int) -> MTLRenderPipelineState {
     guard let vfn = library.makeFunction(name: "effectsVertex"),
-          let ffn = library.makeFunction(name: fragment) else { fail("missing shader function \(fragment)") }
+          let ffn = DropPipelines.function(library, name: fragment) else { fail("missing shader function \(fragment)") }
     let pd = MTLRenderPipelineDescriptor()
     pd.vertexFunction = vfn
     pd.fragmentFunction = ffn
+    pd.label = fragment
     for a in 0..<attachments { pd.colorAttachments[a].pixelFormat = renderFormat }
-    do { return try device.makeRenderPipelineState(descriptor: pd) } catch { fail("pipeline \(fragment): \(error)") }
+    do {
+        let state = try device.makeRenderPipelineState(descriptor: pd)
+        // The drop twin (kDropTx on), bound for frames of a drop as the renderers do.
+        dropTwins[ObjectIdentifier(library)]?.register(device: device, library: library, descriptor: pd, name: fragment)
+        return state
+    } catch { fail("pipeline \(fragment): \(error)") }
 }
 /// Variant 0 = --metallib (A), variant 1 = --metallib-b (B, interleaved A/B mode).
 struct Variant {
@@ -466,10 +474,12 @@ struct Variant {
     /// renderers do.
     let stereoFX: [Int: MTLRenderPipelineState]
     let monoFX: [Int: MTLRenderPipelineState]
+    let drops: DropPipelines
     func pipeline(mono m: Bool, _ u: EffectsUniforms) -> MTLRenderPipelineState {
         let v = VideoComposite.footageVariant(u)
-        if m { return monoFX[v] ?? mono }
-        return stereoFX[v] ?? stereo!
+        if u.needsDropPipeline { drops.prepare(DropPipelines.Key(u), wait: true) }
+        if m { return drops.pipeline(for: monoFX[v] ?? mono, uniforms: u) }
+        return drops.pipeline(for: stereoFX[v] ?? stereo!, uniforms: u)
     }
 }
 let variantPaths: [(String, String)] = [("A", metallibPath)] + (metallibPathB.map { [("B", $0)] } ?? [])
@@ -481,6 +491,8 @@ func fragmentName(_ lib: MTLLibrary, _ base: String) -> String {
 }
 let variants: [Variant] = variantPaths.map { name, path in
         let lib = loadLibrary(path)
+        let drops = DropPipelines()
+        dropTwins[ObjectIdentifier(lib)] = drops
         let fx = (videoPath != nil || footagePath != nil) && lib.functionNames.contains("effectsFragmentVideoFX")
         var sfx: [Int: MTLRenderPipelineState] = [:], mfx: [Int: MTLRenderPipelineState] = [:]
         if fx {
@@ -493,7 +505,7 @@ let variants: [Variant] = variantPaths.map { name, path in
         return Variant(name: name, path: path,
                        stereo: mono ? nil : makePipeline(lib, fragmentName(lib, "effectsFragmentStereo"), attachments: 2),
                        mono: makePipeline(lib, fragmentName(lib, "effectsFragment"), attachments: 1),
-                       stereoFX: sfx, monoFX: mfx)
+                       stereoFX: sfx, monoFX: mfx, drops: drops)
     }
 
 let sampler: MTLSamplerState = {

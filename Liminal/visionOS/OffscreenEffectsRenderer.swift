@@ -36,6 +36,8 @@ final class OffscreenEffectsRenderer {
     /// while a layer needs them (VideoComposite.footageVariant; docs/decisions/footage-fx.md F11).
     private let videoFXPipelineStates: [Int: MTLRenderPipelineState]
     private let stereoVideoFXPipelineStates: [Int: MTLRenderPipelineState]
+    /// Drop twins of every effects pipeline (DropPipelines), bound while a drop runs.
+    private let dropPipelines: DropPipelines
     private let samplerState: MTLSamplerState
 
     // MARK: - Textures
@@ -147,12 +149,12 @@ final class OffscreenEffectsRenderer {
             return nil
         }
 
-        guard let fragmentFunc = library.makeFunction(name: "effectsFragment") else {
+        guard let fragmentFunc = DropPipelines.function(library, name: "effectsFragment") else {
             LMLog.visual.error("❌ Failed to load effectsFragment")
             return nil
         }
 
-        guard let stereoFragmentFunc = library.makeFunction(name: "effectsFragmentStereo") else {
+        guard let stereoFragmentFunc = DropPipelines.function(library, name: "effectsFragmentStereo") else {
             LMLog.visual.error("❌ Failed to load effectsFragmentStereo")
             return nil
         }
@@ -167,9 +169,13 @@ final class OffscreenEffectsRenderer {
         pipelineDescriptor.vertexFunction = vertexFunc
         pipelineDescriptor.fragmentFunction = fragmentFunc
         pipelineDescriptor.colorAttachments[0].pixelFormat = Self.renderFormat
+        pipelineDescriptor.label = "effectsFragment"
+        let drops = DropPipelines()
+        dropPipelines = drops
 
         do {
             pipelineState = try device.makeRenderPipelineState(descriptor: pipelineDescriptor)
+            drops.register(device: device, library: library, descriptor: pipelineDescriptor, name: "effectsFragment")
         } catch {
             LMLog.visual.error("❌ Failed to create effects pipeline: \(error.localizedDescription)")
             return nil
@@ -181,34 +187,32 @@ final class OffscreenEffectsRenderer {
         stereoDescriptor.fragmentFunction = stereoFragmentFunc
         stereoDescriptor.colorAttachments[0].pixelFormat = Self.renderFormat
         stereoDescriptor.colorAttachments[1].pixelFormat = Self.renderFormat
+        stereoDescriptor.label = "effectsFragmentStereo"
 
         do {
             stereoPipelineState = try device.makeRenderPipelineState(descriptor: stereoDescriptor)
+            drops.register(device: device, library: library, descriptor: stereoDescriptor, name: "effectsFragmentStereo")
         } catch {
             LMLog.visual.error("❌ Failed to create stereo effects pipeline: \(error.localizedDescription)")
             return nil
         }
 
         // Archive footage variants (docs/plans/archive-video.md 2.3); footage is skipped if they fail.
-        videoPipelineState = library.makeFunction(name: "effectsFragmentVideo").flatMap { f in
-            pipelineDescriptor.fragmentFunction = f
-            return try? device.makeRenderPipelineState(descriptor: pipelineDescriptor)
+        func make(_ d: MTLRenderPipelineDescriptor, _ name: String) -> MTLRenderPipelineState? {
+            guard let f = DropPipelines.function(library, name: name) else { return nil }
+            d.fragmentFunction = f
+            d.label = name
+            let state = try? device.makeRenderPipelineState(descriptor: d)
+            if state != nil { drops.register(device: device, library: library, descriptor: d, name: name) }
+            return state
         }
-        stereoVideoPipelineState = library.makeFunction(name: "effectsFragmentStereoVideo").flatMap { f in
-            stereoDescriptor.fragmentFunction = f
-            return try? device.makeRenderPipelineState(descriptor: stereoDescriptor)
-        }
+        videoPipelineState = make(pipelineDescriptor, "effectsFragmentVideo")
+        stereoVideoPipelineState = make(stereoDescriptor, "effectsFragmentStereoVideo")
         var mono: [Int: MTLRenderPipelineState] = [:], stereo: [Int: MTLRenderPipelineState] = [:]
         for v in FootageRecipe.fxVariants {
             let suffix = VideoComposite.variantSuffix(v)
-            if let f = library.makeFunction(name: "effectsFragment" + suffix) {
-                pipelineDescriptor.fragmentFunction = f
-                mono[v] = try? device.makeRenderPipelineState(descriptor: pipelineDescriptor)
-            }
-            if let f = library.makeFunction(name: "effectsFragmentStereo" + suffix) {
-                stereoDescriptor.fragmentFunction = f
-                stereo[v] = try? device.makeRenderPipelineState(descriptor: stereoDescriptor)
-            }
+            mono[v] = make(pipelineDescriptor, "effectsFragment" + suffix)
+            stereo[v] = make(stereoDescriptor, "effectsFragmentStereo" + suffix)
         }
         videoFXPipelineStates = mono
         stereoVideoFXPipelineStates = stereo
@@ -678,7 +682,7 @@ final class OffscreenEffectsRenderer {
             return false
         }
 
-        encoder.setRenderPipelineState(footagePipeline(uniforms) ?? pipelineState)
+        encoder.setRenderPipelineState(dropPipelines.pipeline(for: footagePipeline(uniforms) ?? pipelineState, uniforms: uniforms))
 
         // Set uniforms with ghost tap count for optimized shader loop
         var mutableUniforms = uniforms
@@ -893,7 +897,8 @@ final class OffscreenEffectsRenderer {
             return false
         }
 
-        encoder.setRenderPipelineState(footagePipeline(uniforms, stereo: true) ?? stereoPipelineState)
+        encoder.setRenderPipelineState(dropPipelines.pipeline(for: footagePipeline(uniforms, stereo: true) ?? stereoPipelineState,
+                                                              uniforms: uniforms))
 
         // Shader applies -|offset| to the left eye and +|offset| to the right eye.
         var mutableUniforms = uniforms
@@ -952,7 +957,7 @@ final class OffscreenEffectsRenderer {
             return false
         }
 
-        encoder.setRenderPipelineState(footagePipeline(uniforms) ?? pipelineState)
+        encoder.setRenderPipelineState(dropPipelines.pipeline(for: footagePipeline(uniforms) ?? pipelineState, uniforms: uniforms))
 
         // Stereo parallax is applied in-shader using depth + this signed eye offset.
         var mutableUniforms = uniforms
