@@ -600,7 +600,11 @@ transition. Boom, new drum loop"; many different kinds of transition out. Plan:
   plain pipeline is used (the drop then shows only its stage A glitch). Two mistakes found in the live runs:
   specializing on the main thread stalled the macOS render 350-410 ms per drop, and specializing all 18
   visionOS pipelines at once coincided with 3 and 8 Core Audio overloads in two Simulator runs (0 in two
-  baseline runs and 0 after the change). Unspecialized twins
+  baseline runs and 0 after the change). A third case remained: the first drop is announced right after
+  Play, before the renderer has bound anything, and then all 18 were still compiled at once (one overload
+  93 ms after the announcement in a verification run). Since 20 November nothing is compiled for an
+  announcement made before the first bind; each pipeline gets that drop's twin when it is first bound
+  (verification runs afterwards: 1 overload at the render loop's start, then 0). Unspecialized twins
   cost 1.13-1.24 x the classic transition frame.
 - Drop frames at p = 0.98 with the style's own layer and finisher, against the classic transition frame
   (`trans113`, 3.99 ms): mean 1.056, range 1.031 (shatter, shutter) to 1.111 (bleed); sort 1.098, punch
@@ -638,5 +642,10 @@ transition. Boom, new drum loop"; many different kinds of transition out. Plan:
 - Drop frames cost 1.03-1.11 x the classic transition frame (T48), over the plan's 1.05 / mean 1.02.
 - The display leads are unmeasured: macOS presented times were not reported, and the visionOS 28 ms is an
   estimate that only a device can check (`-LiminalDropLead`).
-- `scripts/drop-sync.py` (audio onset against the cut in a muxed clip) was not written.
+- `scripts/drop-sync.py` (audio onset against the cut in a muxed clip) was not written. A one-off check
+  (64 bars, 72 BPM, seed 2077, Boison Berry repeated) put the first clean frame 1-2 ms after the drum
+  onset at the three new takes, and 44-46 ms after it at the halfway changes: that take plays its beat 32
+  about 43 ms ahead of the grid, and the cut follows the grid, not the attack.
+- Fill detection on the 25 takes at their own tempo: the halfway fill is detected in 13, the turnaround in
+  19; the rest use the default builds (2 and 4 beats).
 - The halfway drop (strength 0.7, beat 32) is a design choice to review with the user (plan 4.6).

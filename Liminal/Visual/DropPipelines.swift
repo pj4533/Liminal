@@ -46,6 +46,8 @@ nonisolated final class DropPipelines: Sendable {
         /// Pipelines bound since the last announcement, and twins already being compiled.
         var used: Set<String> = []
         var pending: Set<String> = []
+        /// The latest announced drop: a pipeline first bound after its announcement gets its twin then.
+        var announced: Key?
     }
     private let state = Mutex(State())
     /// Distinct drops kept compiled (each key holds one twin per registered pipeline).
@@ -91,7 +93,8 @@ nonisolated final class DropPipelines: Sendable {
         // thread (it stalled the macOS render 350-410 ms per drop).
         // Only the pipelines the renderer has been binding are specialized (one to three, not all 18: compiling
         // every variant at once coincided with Core Audio overloads in the Simulator). A pipeline first bound
-        // during the drop is compiled then, and the plain one is used meanwhile.
+        // after the announcement is compiled when it is first bound, and the plain one is used meanwhile; before
+        // anything has been bound (right after Play) every pipeline waits for its first bind.
         let targets = live.withLock { $0.compactMap(\.value) }
         DispatchQueue.global(qos: .background).async { for t in targets { t.prepare(key) } }
     }
@@ -106,7 +109,13 @@ nonisolated final class DropPipelines: Sendable {
                 s.order.append(key)
                 while s.order.count > Self.keep { s.twins[s.order.removeFirst()] = nil }
             }
-            let names: Set<String> = only.map { [$0] } ?? (wait || s.used.isEmpty ? Set(s.bases.map(\.name)) : s.used)
+            if only == nil && !wait {
+                s.announced = key
+                // Nothing bound yet (the first drop is announced right after Play): compile each pipeline when it
+                // is first bound, one at a time, instead of all of them at once (that burst overloaded Core Audio).
+                if s.used.isEmpty { return nil }
+            }
+            let names: Set<String> = only.map { [$0] } ?? (wait ? Set(s.bases.map(\.name)) : s.used)
             if only == nil { s.used = [] }
             let todo = s.bases.filter { b in
                 names.contains(b.name) && s.twins[key]?[b.name] == nil && !s.pending.contains("\(key)|\(b.name)")
@@ -135,7 +144,12 @@ nonisolated final class DropPipelines: Sendable {
     func pipeline(for plain: MTLRenderPipelineState, uniforms: EffectsUniforms) -> MTLRenderPipelineState {
         guard let name = plain.label else { return plain }
         guard uniforms.needsDropPipeline else {
-            state.withLock { _ = $0.used.insert(name) }
+            let late: Key? = state.withLock { s in
+                guard s.used.insert(name).inserted, let k = s.announced, s.twins[k] != nil, s.twins[k]?[name] == nil,
+                      !s.pending.contains("\(k)|\(name)") else { return nil }
+                return k
+            }
+            if let late { DispatchQueue.global(qos: .background).async { [self] in prepare(late, only: name) } }
             return plain
         }
         let key = Key(uniforms)
