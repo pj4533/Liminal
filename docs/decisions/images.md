@@ -334,10 +334,10 @@ The user asked for "as many as you can so the total is much more varied", with t
 The user asked for an in-app record control that saves to Photos, works on Vision Pro, has "absolutely no dropped frames" and the best audio possible. A ScreenCaptureKit window recording tried first for a preview clip was jumpy and was dropped.
 
 - **From the renderer, not the screen.** Each frame is copied on the GPU, in its own command buffer, into an IOSurface pixel buffer from the recorder's pool, and appended to a hardware HEVC track when the command buffer completes. Nothing waits on the GPU; the render thread encodes one small pass. On visionOS the 2048² shell texture is scaled back to 3:2 (2048x1366); the headset view itself (passthrough, room) cannot be recorded by an app, so Record My View in Control Center stays the way to capture that.
-- **Even timing.** Presentation times on the host clock are snapped to 60 Hz slots, so render jitter does not judder; a slot is skipped only when no frame was rendered. Frames wait in a 2 s queue rather than being dropped while the encoder is busy.
+- **Even timing.** (Superseded by D47: frames are placed by their own presentation time, nearest frame per 60 Hz slot, so a render rate above 60 Hz no longer stretches the picture.)
 - **Audio.** Lossless 24-bit LPCM at the engine rate from a unity mixer after the master chain (`recordTap`). Not `mainMixerNode`: touching it while running made AVAudioEngine try to connect one and abort (crash seen in the simulator, 2026-11-21). The tap only fills a lock-free ring; the writer queue builds sample buffers.
 - **Setup off the main actor.** The writer, encoder and copy pipeline took about 0.4 s on the Mac's main thread (which draws the frames) and caused a 427 ms frame gap; building them on a detached task removed it.
-- **Measured.** macOS 60 s: 3588 frames, 59.92 fps, 0 dropped by the recorder, 3 intervals over 25 ms (app main-thread stalls, also present without recording). Simulator: functional only (software HEVC). Photos save checked in the simulator. Device numbers are pending.
+- **Measured.** macOS 60 s (before the timing fix): 3588 frames, 59.92 fps, 0 dropped by the recorder, 3 intervals over 25 ms (app main-thread stalls, also present without recording). Simulator: functional only (software HEVC). Photos save checked in the simulator. The first device movie showed the timing defects of D47; fixed-build device numbers are pending.
 
 ## D47 (2026-11-21): One movie clock for the recording
 

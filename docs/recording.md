@@ -101,6 +101,15 @@ xcrun simctl launch <udid> com.saygoodnight.Liminal -LiminalAutoPlay YES -Limina
 
 ### Checking a recording
 
+Pull the movie off the Vision Pro (the app's `Documents/Recordings` folder), with the headset connected and the app closed:
+
+```sh
+xcrun devicectl device copy from --device <device name or id> --domain-type appDataContainer \
+  --domain-identifier com.saygoodnight.Liminal --source "Documents/Recordings/<name>.mov" --destination ~/Desktop/<name>.mov
+```
+
+For the log of the same run use Console or `log stream` on the device, or run the check without `--log` for the structure checks alone. Keep movies and logs out of git.
+
 `python3 -I scripts/av-sync-check.py MOVIE.mov --log APP.log` checks a movie from the file alone, plus the app's log of the same run (`log stream --level info --predicate 'subsystem == "com.saygoodnight.Liminal"'`, or `xcrun simctl spawn <udid> log stream ...`):
 
 - constant 60 fps (every pts step 1/60 s), both tracks starting at 0 with no edit list and ending within a frame of each other;
