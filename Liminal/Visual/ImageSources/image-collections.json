@@ -3,8 +3,8 @@
  "updated": "2026-11-21",
  "doc": "docs/research/image-apis/collections.md",
  "defaults": {
-  "minLongSide": 2048,
-  "minShortSide": 1365,
+  "minLongSide": 2000,
+  "minShortSide": 1333,
   "targetLongSide": 3072,
   "maxBytes": 12000000,
   "allowedMime": [

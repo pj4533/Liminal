@@ -182,6 +182,10 @@ struct ControlsView: View {
     // MARK: Images & storage
 
     private var imagesSection: some View {
+        imagesSectionContent.id("images")
+    }
+
+    private var imagesSectionContent: some View {
         ControlSection(title: "Images & Storage", systemImage: "photo.stack") {
             APIStatusRow(source: visualEngine.imageSource, apiStatus: visualEngine.sourceStatus)
             ImageCreditLine(metadata: visualEngine.currentMetadata)

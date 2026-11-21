@@ -50,7 +50,7 @@ nonisolated extension ImageProvider {
         }
         let title = (c.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { throw CandidateRejected(reason: "no title") }
-        if source.rejectsTitle(title) { throw CandidateRejected(reason: "title rejected: \(title.prefix(60))") }
+        if source.rejectsTitle(title, itemID: c.itemID) { throw CandidateRejected(reason: "title rejected: \(title.prefix(60))") }
         return ImageSourceCredit(providerID: id, sourceID: source.id, itemID: c.itemID, title: title,
                                  creator: c.creator.flatMap { $0.isEmpty ? nil : $0 }, date: c.date,
                                  institution: context.institution, license: license,

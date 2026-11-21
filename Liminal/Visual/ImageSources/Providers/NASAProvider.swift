@@ -58,8 +58,8 @@ nonisolated struct NASAProvider: ImageProvider {
             guard let d = LooseJSON.array(item["data"]).first as? [String: Any],
                   let nasaID = LooseJSON.string(d["nasa_id"]),
                   (LooseJSON.string(d["media_type"]) ?? "image") == "image" else { continue }
-            let creator = LooseJSON.string(d["photographer"]) ?? LooseJSON.string(d["secondary_creator"])
-                ?? LooseJSON.string(d["center"]).map { "NASA \($0)" }
+            let creator = LooseJSON.plainText(LooseJSON.string(d["photographer"]) ?? LooseJSON.string(d["secondary_creator"]))
+                .map { String($0.prefix(120)) } ?? LooseJSON.string(d["center"]).map { "NASA \($0)" }
             out.append(ImageCandidate(
                 providerID: "nasa", itemID: nasaID, title: LooseJSON.string(d["title"]), creator: creator,
                 date: LooseJSON.year(LooseJSON.string(d["date_created"])), width: nil, height: nil, bytes: nil,

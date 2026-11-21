@@ -189,6 +189,7 @@ extension ContentView {
                     .controlSize(.large)
                     .keyboardShortcut(",", modifiers: .command)
                 }
+                .id("images")
             }
             .padding(16)
         }

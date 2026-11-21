@@ -67,7 +67,15 @@ nonisolated struct WikimediaProvider: ImageProvider {
         var t = fileTitle
         if t.hasPrefix("File:") { t.removeFirst(5) }
         if let dot = t.lastIndex(of: "."), t.distance(from: dot, to: t.endIndex) <= 5 { t = String(t[..<dot]) }
-        return t
+        return cleanTitle(t)
+    }
+
+    /// Drops catalogue suffixes: "Kotau Point. West Coast LCCN2017657809" -> "Kotau Point. West Coast",
+    /// "SUNSET - NARA - 544071" -> "SUNSET".
+    static func cleanTitle(_ title: String) -> String {
+        var t = title.replacingOccurrences(of: #"\s+LCCN\d+$"#, with: "", options: .regularExpression)
+        t = t.replacingOccurrences(of: #"\s+-\s+NARA\s+-\s+\d+$"#, with: "", options: .regularExpression)
+        return t.trimmingCharacters(in: .whitespaces)
     }
 
     static func parse(_ data: Data, thumbWidth: Int) throws -> CandidatePage {
@@ -89,7 +97,7 @@ nonisolated struct WikimediaProvider: ImageProvider {
             let h = useOriginal ? height : (LooseJSON.int(info["thumbheight"]) ?? height)
             out.append(ImageCandidate(
                 providerID: "wikimedia", itemID: fileTitle,
-                title: field("ObjectName") ?? displayTitle(fileTitle),
+                title: field("ObjectName").map(cleanTitle) ?? displayTitle(fileTitle),
                 creator: field("Artist").map { String($0.prefix(120)) },
                 date: LooseJSON.year(field("DateTimeOriginal")),
                 width: w, height: h, bytes: useOriginal ? LooseJSON.int(info["size"]) : nil,

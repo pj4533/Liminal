@@ -123,10 +123,13 @@ nonisolated struct CuratedSource: Codable, Sendable, Equatable {
             + (categories ?? []).map { .category($0) }
     }
 
-    /// True when the title contains a reject word (case-insensitive) or misses a required phrase.
-    func rejectsTitle(_ title: String) -> Bool {
+    /// True when the title contains a reject word (case-insensitive), or neither the title nor the
+    /// provider's item id (a Commons file name such as "File:SUNSET - NARA - 544071.jpg") contains the
+    /// required phrase.
+    func rejectsTitle(_ title: String, itemID: String = "") -> Bool {
         let lower = title.lowercased()
-        if let required = requireTitleContains, !lower.contains(required.lowercased()) { return true }
+        if let required = requireTitleContains?.lowercased(),
+           !lower.contains(required), !itemID.lowercased().contains(required) { return true }
         return (rejectTitleWords ?? []).contains { word in
             let w = word.lowercased()
             // Whole words only, so "man" does not reject "Manhattan".

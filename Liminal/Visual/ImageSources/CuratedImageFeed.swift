@@ -396,7 +396,7 @@ nonisolated final class CuratedImageFeed: Sendable {
                                                 thresholds: d.openness) {
             throw CandidateRejected(reason: reason)
         }
-        if let reason = Self.visionRejection(image, thresholds: d.openness) { throw CandidateRejected(reason: reason) }
+        if let reason = Self.visionRejection(image, paperShare: score.paperShare, thresholds: d.openness) { throw CandidateRejected(reason: reason) }
 
         let analysis = DominantColorExtractor.analyze(image)
         let metadata = ImageMetadata(
@@ -420,7 +420,7 @@ nonisolated final class CuratedImageFeed: Sendable {
 
     /// Text (documents, captions) and prominent faces, on the 3:2 window that will be shown. If Vision
     /// fails (possible in the simulator) the check passes and the failure is logged.
-    static func visionRejection(_ image: CGImage, thresholds t: OpennessThresholds) -> String? {
+    static func visionRejection(_ image: CGImage, paperShare: Double, thresholds t: OpennessThresholds) -> String? {
         let framed = ImageFraming.coverCrop(image)
         let text = VNDetectTextRectanglesRequest()
         let faces = VNDetectFaceRectanglesRequest()
@@ -431,8 +431,12 @@ nonisolated final class CuratedImageFeed: Sendable {
             LMLog.visual.warning("🖼️ [API] Vision checks skipped: \(error.localizedDescription, privacy: .public)")
             return nil
         }
+        // Signs are part of the brief (neon, diners, drive-ins), so text alone rejects only a page:
+        // text on a paper-like picture, or text over a quarter of the frame.
         let textArea = (text.results ?? []).reduce(0.0) { $0 + Double($1.boundingBox.width * $1.boundingBox.height) }
-        if textArea > t.maxTextCoverage { return String(format: "text covers %.0f%% of the frame", textArea * 100) }
+        if textArea > 0.25 || (textArea > t.maxTextCoverage && paperShare > 0.3) {
+            return String(format: "text covers %.0f%% of the frame", textArea * 100)
+        }
         let faceBoxes = faces.results ?? []
         if faceBoxes.count > t.maxFaces { return "\(faceBoxes.count) faces" }
         if let biggest = faceBoxes.map({ Double($0.boundingBox.width * $0.boundingBox.height) }).max(), biggest > t.maxFaceArea {

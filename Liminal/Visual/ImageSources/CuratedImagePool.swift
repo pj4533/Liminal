@@ -130,7 +130,9 @@ nonisolated final class CuratedImagePool: Sendable {
         let fm = FileManager.default
         let verify = root.appendingPathComponent(verifyDirectoryName, isDirectory: true)
         if DebugLaunchOptions.imageAPIFresh {
-            try? fm.removeItem(at: verify)
+            // With -LiminalImageAPIOffline the verify pool of the previous fresh run is reused
+            // (offline-reuse check); otherwise it starts empty.
+            if !DebugLaunchOptions.imageAPIOffline { try? fm.removeItem(at: verify) }
             return CuratedImagePool(root: root, defaults: .standard, directoryName: verifyDirectoryName,
                                     epochKey: epochKey + ".verify")
         }

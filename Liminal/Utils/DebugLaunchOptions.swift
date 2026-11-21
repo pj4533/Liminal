@@ -222,7 +222,7 @@ nonisolated enum DebugLaunchOptions {
     static let videoOffline: Bool = defaults.bool(forKey: "LiminalVideoOffline")
     /// -LiminalVideoOff YES: no footage at all (A/B and perf runs with the feature absent).
     static let videoOff: Bool = defaults.bool(forKey: "LiminalVideoOff")
-    /// -LiminalControlsScroll archive: scroll the control panel / window to that section on appear
+    /// -LiminalControlsScroll archive|images: scroll the control panel / window to that section on appear
     /// (settings screenshots; taps do not work in the Xcode 27 simulator).
     static let controlsScroll: String? = defaults.string(forKey: "LiminalControlsScroll")
     /// -LiminalVideoOffAt <s>: turn the "Archive footage" setting off this many seconds after footage starts
@@ -258,7 +258,8 @@ nonisolated enum DebugLaunchOptions {
     /// -LiminalImageAPISeed <n>: seed of the API ingest and display rotations.
     static let imageAPISeed: UInt64? = defaults.string(forKey: "LiminalImageAPISeed").flatMap { UInt64($0) }
     /// -LiminalImageAPIFresh YES: use an empty CuratedImageStore-Verify folder, so a run proves that
-    /// fetching works and leaves the real pool alone. Removed again by the next normal launch.
+    /// fetching works and leaves the real pool alone. Removed again by the next normal launch. With
+    /// -LiminalImageAPIOffline the verify folder of the previous fresh run is kept and reused.
     static let imageAPIFresh: Bool = defaults.bool(forKey: "LiminalImageAPIFresh")
 
     /// True when any API image flag is set.

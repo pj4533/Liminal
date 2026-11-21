@@ -112,18 +112,6 @@ nonisolated enum ImageRotation {
         let notCurrent = pool.filter { $0.id != current }
         guard !notCurrent.isEmpty else { return pool.first }
 
-        var candidates = notCurrent
-        let sources = Set(pool.map(\.sourceID))
-        if sources.count >= 3, let last = history.recent.last?.sourceID {
-            let other = candidates.filter { $0.sourceID != last }
-            if !other.isEmpty { candidates = other }
-        }
-        let window = max(1, rules.monochromeEvery - 1)
-        if history.recent.suffix(window).contains(where: { $0.monochrome }) {
-            let colour = candidates.filter { !$0.monochrome }
-            if !colour.isEmpty { candidates = colour }
-        }
-
         func weight(_ item: DisplayItem) -> Double {
             var w = max(0.01, item.sourceWeight) * (0.5 + item.openness)
             if let shown = item.lastShown {
@@ -136,11 +124,25 @@ nonisolated enum ImageRotation {
             }
             return w
         }
-        var weights = candidates.map(weight)
-        if weights.allSatisfy({ $0 <= 0 }) {
-            // Pool smaller than the recency window: the least recently shown wins.
-            weights = candidates.map { item in Double(history.serial - (item.lastShown ?? 0) + 1) }
+
+        // Pictures outside the recency window; when there are none (a pool smaller than the window),
+        // every picture, and the least recently shown one wins below.
+        let rested = notCurrent.filter { weight($0) > 0 }
+        var candidates = rested.isEmpty ? notCurrent : rested
+        let sources = Set(pool.map(\.sourceID))
+        if sources.count >= 3, let last = history.recent.last?.sourceID {
+            let other = candidates.filter { $0.sourceID != last }
+            if !other.isEmpty { candidates = other }
         }
+        let window = max(1, rules.monochromeEvery - 1)
+        if history.recent.suffix(window).contains(where: { $0.monochrome }) {
+            let colour = candidates.filter { !$0.monochrome }
+            if !colour.isEmpty { candidates = colour }
+        }
+        if rested.isEmpty {
+            return candidates.max { (history.serial - ($0.lastShown ?? 0)) < (history.serial - ($1.lastShown ?? 0)) }
+        }
+        let weights = candidates.map(weight)
         let total = weights.reduce(0, +)
         var r = Double.random(in: 0..<total, using: &rng)
         for (item, w) in zip(candidates, weights) {

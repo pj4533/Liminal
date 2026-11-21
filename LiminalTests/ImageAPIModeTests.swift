@@ -175,6 +175,11 @@ struct ImageCollectionsTests {
         #expect(s.rejectsTitle("Portrait of a lady"))
         #expect(s.rejectsTitle("Old man by the sea"))
         #expect(!s.rejectsTitle("Manhattan skyline at night"))
+        // requireTitleContains also accepts the provider's item id (Commons file names carry "NARA").
+        var doc = s
+        doc.requireTitleContains = "NARA"
+        #expect(!doc.rejectsTitle("OIL REFINERY IN THE SUNSET", itemID: "File:OIL REFINERY IN THE SUNSET - NARA - 546384.jpg"))
+        #expect(doc.rejectsTitle("A sunset", itemID: "File:A sunset.jpg"))
     }
 
     @Test func promptSpecCarriesTheSourceMood() {
@@ -334,6 +339,7 @@ struct ImageProviderParsingTests {
         #expect(CuratedImageFeed.coverCropFits(width: 3072, height: 2048, defaults: d))
         #expect(CuratedImageFeed.coverCropFits(width: 4096, height: 4096, defaults: d))   // square Hasselblad
         #expect(!CuratedImageFeed.coverCropFits(width: 1920, height: 1280, defaults: d))
+        #expect(CuratedImageFeed.coverCropFits(width: 2026, height: 2651, defaults: d))   // within 2% of 2048 (D40)
         #expect(!CuratedImageFeed.coverCropFits(width: 4000, height: 1200, defaults: d))  // panorama too short
         // Decode size: the crop ends up about 3072 wide.
         #expect(CuratedImageFeed.decodeLongSide(width: 6124, height: 8664, target: 3072) == 4346)
@@ -475,6 +481,19 @@ struct ImageRotationTests {
             let previous = shown[max(0, i - 5)..<i]
             #expect(!previous.contains { $0.monochrome }, "two monochrome within 6 at \(i)")
         }
+    }
+
+    @Test func poolSmallerThanTheWindowShowsTheLeastRecent() {
+        let items = (0..<5).map { i in
+            ImageRotation.DisplayItem(id: UUID(), sourceID: "s\(i % 3)", sourceWeight: 1, openness: 0.5, monochrome: false,
+                                      lastShown: 10 + i)
+        }
+        var history = ImageRotation.DisplayHistory()
+        history.serial = 15
+        history.recent = [.init(sourceID: "s1", monochrome: false)]
+        var rng = SeededRNG(seed: 4)
+        // Every picture is inside the 24-picture window: the oldest whose source differs from the last wins.
+        #expect(ImageRotation.nextDisplay(pool: items, history: history, current: items[4].id, using: &rng)?.id == items[0].id)
     }
 
     @Test func smallPoolsStillRotate() {
@@ -705,6 +724,33 @@ struct ImageQueueAPIModeTests {
         #expect(UserDefaults.standard.data(forKey: GenerationBudget.Keys.ledger) == before)
         #expect(queue.activeSource == .api)
         #expect(queue.activeStore.directory == pool.store.directory)
+    }
+
+    /// API -> AI -> API while running: the stores swap, pending pictures are dropped, and the AI side
+    /// (an automation test host) never generates.
+    @Test func switchingSourcesSwapsStoresWithoutGenerating() async throws {
+        let (queue, pool, root) = makeQueue()
+        defer { try? FileManager.default.removeItem(at: root) }
+        pool.loadIfNeeded()
+        let source = try #require(ImageCollections.bundled.sources.first { $0.enabled })
+        for _ in 0..<3 {
+            try pool.add(jpeg: ImageAPIFixtures.jpeg, metadata: ImageAPIFixtures.metadata(source: source.id), budget: 1 << 40)
+        }
+        let before = UserDefaults.standard.data(forKey: GenerationBudget.Keys.ledger)
+        queue.start()
+        try await Task.sleep(for: .seconds(2))
+        await queue.switchSource(.ai)
+        #expect(queue.activeSource == .ai)
+        #expect(queue.imageSource == .ai)
+        #expect(queue.activeStore.directory != pool.store.directory)
+        #expect(queue.queuedCount == 0)
+        try await Task.sleep(for: .seconds(1))
+        await queue.switchSource(.api)
+        #expect(queue.activeSource == .api)
+        try await Task.sleep(for: .seconds(2))
+        #expect(queue.queuedCount > 0)
+        queue.stop()
+        #expect(UserDefaults.standard.data(forKey: GenerationBudget.Keys.ledger) == before)
     }
 
     @Test func emptyPoolGivesNoFillButStandbyArt() async {
