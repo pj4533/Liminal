@@ -18,17 +18,17 @@ Liminal pairs evolving ambient music with surreal AI imagery, flowing visual eff
 
 ## See it in motion
 
-[![Play the 10-second Lo-Fi preview with stereo sound](docs/media/lofi-preview.jpg)](https://cdn.jsdelivr.net/gh/pj4533/Liminal@e468c17fab86b21b2ab6ba8b19b032190e4cd6d0/docs/media/lofi-preview.mp4)
+[![Play the 12-second Lo-Fi preview with stereo sound](docs/media/lofi-preview.jpg)](https://cdn.jsdelivr.net/gh/pj4533/Liminal@HASH/docs/media/lofi-preview.mp4)
 
-**[Play with sound · 10 seconds · 1.5 MB](https://cdn.jsdelivr.net/gh/pj4533/Liminal@e468c17fab86b21b2ab6ba8b19b032190e4cd6d0/docs/media/lofi-preview.mp4)** · [MP4 in the repository](docs/media/lofi-preview.mp4)
+**[Play with sound · 12 seconds · 2.1 MB](https://cdn.jsdelivr.net/gh/pj4533/Liminal@HASH/docs/media/lofi-preview.mp4)** · [MP4 in the repository](docs/media/lofi-preview.mp4)
 
-Lo-Fi at 72 BPM with AJ Hall’s drums, the warm sub bass slapping on the kicks under a held pad. The audio is the app’s own offline render, and the picture is a cached image and the film passed through the app’s shader. A line from *UFO Interview* (National Archives, 1966) is cut into word pieces. The pieces stutter, pause and reorder on the beat, with echo throws and a dark room, and sit inside the music. The film’s own soundtrack plays far behind as an effected bed. [Original film](https://archive.org/details/342-usaf-42990)
+Lo-Fi at 72 BPM with AJ Hall’s drums, the warm sub bass slapping on the kicks under a held pad. When the drum fill starts, the picture breaks up into drifting macroblocks and gets heavier through the fill; on the first hit of the new drum loop it cuts straight to the next image with no fade in. The audio is the app’s own offline render, and the picture is two cached images passed through the app’s shader. Dialogue from *Ergot: The Story of a Parasitic Fungus* (Wellcome Collection, 1958) and *A Conversation on LSD* (1979) is cut into word pieces on the beat, with the films’ own soundtracks far behind as an effected bed. [Ergot](https://wellcomecollection.org/works/b92v49xa) · [A Conversation on LSD](https://archive.org/details/Timothy_Leary_Archives_198)
 
 ## An atmosphere that keeps changing
 
 - **Two music modes** — drift through slow Ambient scenes or play Lo-Fi. Its bass is a warm dub and boom-bap sub with a hard slap locked to the drummer's kicks and occasional dub throws, in three tones that change every 16 bars. Over it, a soft held pad sits under the melody, played by twenty sampled acoustic programs: pianos, plucked strings and guitars that strum and fingerpick. With a local drum pack, 16-bar takes play through their original fills.
 - **Film dialogue, chopped like an MPC** — each 16-bar loop takes a fresh line from the films and cuts it into word and syllable pieces. The pieces repeat, pause, reorder and land on the beat in every bar, with echo throws, reversed pickups and a long dark room. The chops sit inside the music while the original soundtrack plays far behind as an effected bed.
-- **Living imagery** — generated scenes blend through effects that respond to the music. In Lo-Fi, the picture warps through one of a dozen transition styles during the drum fill and lands on the new image on the downbeat.
+- **Living imagery** — generated scenes blend through effects that respond to the music. In Lo-Fi, every image change is a drop: through the drum fill the old picture tears, crushes, smears or scrambles through one of nineteen glitch styles, then cuts clean to the new image on the first hit of the next loop.
 - **Immersive space** — depth gives the imagery relief as it wraps around you on Vision Pro.
 - **Traces of old film** — Ten pinned films include *Thinking Machines* and Stanford’s *Hear Here*, a 1969 demonstration of speech recognition. Two more slots rotate through discoveries from the Internet Archive. [Film list and credits](docs/experience.md#pinned-films-and-rotating-discoveries)
 - **Make it yours** — choose an Ambient style, set the Lo-Fi BPM, or pin a scale in either mode. Adjust footage volume, visual intensity, and image-generation limits.
