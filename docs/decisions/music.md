@@ -648,6 +648,7 @@ Made while building PASS 1 (conductor, harmony, scenes, mix bus, drone/pad/lead/
   - Reversed pickups are written into the motif cells. Every turnaround has one (it was every second), and so do one split-pause variant and one sparse variant.
   - Echo throws sit on most cell endings, with five repeats at -3, -6, -9, -13 and -17 dB over a 3.5-beat tail.
   - `DialogueMotif.reversedChance` is still not read: the cell arrangement decides.
+  - Since D125 the split-pause and sparse variants are gone; the turnaround's reversed pickup into bar 16 is kept.
 - Why: the user asked for heavier chop effects ("echo more, more repeats, more occasional reverse, more reverb"). The pickup ends 30 ms before its slot (`reversedLeadSeconds`).
 - Evidence: the 72 BPM approval capture has 10 to 12 echo throws and 2 to 3 reversed pickups in 32 bars (`docs/plans/mpc-chopping-measurements.md`, "Heavier chop effects and the line refresh").
 
@@ -862,3 +863,37 @@ Made while building PASS 1 (conductor, harmony, scenes, mix bus, drone/pad/lead/
 Prototype interest on lines from earlier footage captures: "These are all broken." 0.30, "it didn't work that way at all." 0.25, "They've always honored accredited media when" 0.59, against 0.95 to 1.0 for the striking fixture lines.
 
 **Verified.** `DialogueLineInterestTests` (17 cases): text thresholds, word weights, discourse markers, the protected-cut fix, rank order, the first four loops at interest 0.6 or more for four seeds, no repeat while unplayed lines remain and plain lines last, the acoustic order equal to the old formula, the crate preference, and the coordinator's first-plan wait (50 ms transcript: one revision 0 plan with the transcript; 1.8 s transcript: acoustic plan then revision 1). `DialogueMotifTests`, `DialogueRuntimeTests`, `DialogueEngineTests`, `DialogueTranscriptionTests` and `ArchiveVoiceRenderTests` pass (133 cases in all); the runtime tests keep the two-revision flow with `transcriptFirstWait = 0`. Not yet heard on footage, and the on-device speech model's status on the Vision Pro was not checked: without it the choice is acoustic as before.
+
+## D125. The motif becomes a hook: one 2-bar cell on fixed steps, varied only at the phrase ends (2026-11-21)
+
+**Report.** The user on the chops: "They sound good, but they feel a little random. There's not enough of a pattern such that it feels like a hook ... there's variation throughout the time that the chops are used, but there's enough pattern or theme with how the samples are triggered that it becomes a hook ... It sounds too jarbled and not like a hook, not intentional."
+
+**Cause.** `DialogueMotif.arrange` made every 2-bar cell different by construction: the four middle cells were shuffled per loop, each cell drew a hand-written rhythm variant at random and a recurring kind was forced to another variant, the focal piece was a random piece 30 percent of the time, five or more fragments rotated with no home step, `after` items floated with the fragment lengths, fixed items could slide two (the first, six) sixteenths, and coverage repair rotated its fragment. Measured with `DialogueHookProbeTests` (synthetic fixtures, six seeds, three loops each, metrics in `LiminalTests/DialogueHookMetrics.swift`): consecutive cells shared 4 percent of their (step, fragment) hits, no bar ever repeated an earlier bar, 14 of 16 bars had a rhythm of their own, and the line's strongest word ("rhythm" in "listen to the rhythm of the city.") was never played as a piece.
+
+**Change.**
+
+- Roles (`DialogueMotif.hookRoles`): the signature S is the piece with the highest word weight (D124 `fragment.weight`; 0.1 less outside 0.18 to 0.75 s; ties go to the later piece, where English puts its sentence stress), the first piece without text. The response R is the next-strongest piece when its weight is above 0.25, else the line's ending. The third T is the strongest remaining piece. A line that may not be reordered (negation, number) keeps S before R in source order and takes S's head half as T. Stutters repeat S's head half: the first half when the cut splits a word ("Sall-"), else the stronger half ("LSD." rather than "of").
+- Hook templates (`DialogueMotifTuning.hookTemplates`, steps in the 2-bar cell): push S@0 S@3 R@6 | S@16 S@19 T@22 R@26; offbeat S@2 R@8 | S@18 R@24 T@28; snare answer S@0 R@4 T@12 | S@16 R@20 S@24; late S@6 R@10 | S@22 T@26 R@28. One template holds for two loops (`hookLoops`, 32 bars, from the session's `cycleSeed`) while the line changes every loop (D111), then the seeded rotation moves on.
+- The 16-bar form: bars 1-2 the statement (the full line, then the hook's bar B); 3-4 hook; 5-6 hook with an echo throw on its last hit; 7-8 the hook's call, then the phrase-end stutter S, Sa, Sa and R thrown into the halfway drop; 9-10 hook (or, with the 0.45 chance as before, the second full statement and the hook's bar B); 11-12 the drop-out (S once, the split piece's halves with a pause, R thrown); 13-14 the return (one short worded piece at -3 dB at step 12, then the hook's bar B); 15-16 the hook's call, then the turnaround (the reversed pickup into bar 16, Sa three times, R, S landing on the next downbeat). Variation sits only at bars 8, 11-13 and 16.
+- Hook items are `fixed`: exactly on their step or not at all (no slot shift), so every repeat is the same trigger pattern. Coverage repair tries the hook's own item for the empty bar first. A transcript re-cut keeps the template and maps S and R to the new pieces that overlap the old ones most. The phrase-end stutter is exempt from the section budget (its repeats choke each other). Echo tails end 0.15 s before the section's end (`sectionTailLead`), so the next cue's first hook hit is not blocked by the previous plan's tail. When a cue window opens exactly on bar 9, a hook hit on step 0 cannot start before the window and is dropped (the same drop each loop).
+- `reorder`, `callAnswer` and `sparse` are no longer arranged (the enum cases stay for old logs). `DialogueCell.hook` and `DialogueFamily.hook` (appended last, id 14 in `scripts/mixlib/cadence.py`) are new. Blocks now run statement, hook, hook or statement, returnOpen, so C-D2's longest family run is 8 bars, its limit.
+
+**Measured** (`DialogueHookProbeTests` SUMMARY, mean over six seeds and three loops, the three probe shapes):
+
+| Metric | Before | After | Target |
+|---|---|---|---|
+| cellVsBest (best Jaccard against an earlier cell) | 0.10 to 0.12 | 0.54 to 0.57 | 0.45 to 0.80 |
+| cellRepeat (consecutive cells) | 0.04 to 0.05 | 0.34 | at least 0.30 |
+| exactBar (bar equal to bar-2 or bar-4) | 0.00 | 0.42 to 0.45 | at least 0.35 |
+| signature (cells holding the commonest hit) | 0.37 to 0.39 | 0.78 to 0.81 | at least 0.60 |
+| focalStep | 0.32 to 0.33 | 0.63 to 0.71 | - |
+| rhythms (distinct bar step sets) | 13.7 to 14.0 | 7.9 to 8.1 | at most 10 |
+| fragsPer4 | 4.9 to 5.1 | 4.3 to 4.6 | 3.0 to 4.5 |
+| hits per loop | 43 to 45 | 41 to 43 | 32 to 60 |
+
+Example, "Sally, this is mother." at 84 BPM, seed 2 (1 = "Sally,", 2 = "this", 3 = "is mother.", 4 = "Sall-", 6/7 = "is"/"mother."): bars 2 to 7 alternate `1 . . . 3 . . . 1` and `1 . . . 3 . . . . . . . 2`, bar 8 is `1 . 4 . 4 . . . 3`, bar 16 the reversed pickup and `4 . 4 . 4` stutter. "he took a large dose of LSD." takes S = "of LSD.", R = "dose".
+
+Offline capture (`scripts/mix-report.sh --film-reel --bars 32 --seed 1042 --bpm 70 --transcribe`, against the same capture of D124): C-D1, C-D2 (8 bars), C-D3, C-D5, C-D8 (0.74) and C-D9 (occupancy 0.47 to 0.57, sub-line share 0.95) pass; C-B11 lead salience improves (above all others 0.46 to 0.59). C-B8's loudness spread first read 3.46 LU because the return's -3 dB piece had become a long worded piece; capped at 0.35 s (`returnPieceSeconds`) it reads 1.57 LU. Still failing, as on the D124 capture: C-M1 (-15.6 LUFS), C-B8's 1 to 4 kHz SNR (6.0 dB, D124 5.8) and C-D6's simulated lead (-0.02 s, D124 0.08 s; the first-plan transcript wait). C-M3 reads 14.42 dB PLR against 13.88 (bound 14.0): the true peak rose 0.5 dB. A 150 s macOS launch (`-LiminalMusicSeed 4242`, offline footage) committed every plan 1.4 to 3.1 s ahead with `hook` families and transcripts from loop 1.
+
+**Verified.** `DialogueMotifTests` replaces `everyLoopHasStutterSplitAndReorderCells` with `everyLoopRepeatsOneHookCell` (hook cells only play the hook's hits, bars 3-6 identical, per loop signature at least 0.6, at most 10 rhythms, exactBar at least 0.3, cellVsBest at least 0.4), `variationSitsAtPhraseEnds`, `theSignatureIsTheStrongestWord`, `theTriggerRhythmHoldsForTwoLoops`, `aNegatedLineKeepsSourceOrderInsideEachBar` and `aTranscriptRecutKeepsTheHookSignature`. The density, occupancy, grid, one-voice, late-plan, crate, ledger and same-seed tests are unchanged and pass. Not yet heard on footage; the template steps, the two-loop hold and the role weights are the things to tune by ear.
+

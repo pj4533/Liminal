@@ -17,6 +17,8 @@ xcodebuild test -scheme Liminal -destination 'platform=macOS' \
   -only-testing:LiminalTests/ArchiveCachePolicyTests
 ```
 
+For dialogue chop work run the `Dialogue*` suites. `DialogueHookProbeTests` prints each loop's trigger grid (row = bar, column = sixteenth, cell = fragment id), the hook metrics of `LiminalTests/DialogueHookMetrics.swift` and the ranked lines; xcodebuild does not echo the test host's output, so read it from the result bundle with `xcrun xcresulttool export attachments --path <xcresult> --output-path <dir>` (D125).
+
 For bass, chords or mix work add the suites that pin the bass line and voice, the pad, the stem chains and the render (`docs/plans/bass-and-pads.md` 5.1):
 
 ```sh

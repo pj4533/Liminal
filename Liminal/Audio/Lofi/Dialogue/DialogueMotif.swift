@@ -3,9 +3,10 @@ import Foundation
 
 // MPC motif chopping (docs/plans/mpc-chopping.md, section 5; user direction of 19 November 2026).
 // One line per 16-bar loop is the motif. It is split into word and syllable pieces, and the pieces
-// are sequenced on the drummer's sixteenth grid in 2-bar cells (statement, repeat-stutter, split
-// with a pause, reorder, call and answer, a sparse breakdown, the return and a turnaround), so that
-// every bar of the loop has a piece onset. Pure and seeded; nothing here touches audio threads.
+// are sequenced on the drummer's sixteenth grid in 2-bar cells around one repeating hook cell (D125:
+// the line's strongest word on fixed home steps, answered by a second piece), with variation only at
+// the phrase ends, the drop-out and the return, so that every bar of the loop has a piece onset and
+// the loop sounds like a hook rather than a shuffle. Pure and seeded; nothing here touches audio threads.
 
 /// Tuning of the motif layer. Values are *start* hypotheses (plan section 5).
 nonisolated enum DialogueMotifTuning {
@@ -74,6 +75,8 @@ nonisolated enum DialogueMotifTuning {
     static let crateSize = 4
     /// The return's first bar: one short piece this much lower, so the lead's hook stays clear.
     static let returnPieceDB: Float = -3
+    /// A worded return piece is at most this long (else the shortest piece plays).
+    static let returnPieceSeconds = 0.35
     /// Echo throw: repeats every 0.75 beat at these levels, band-limited, inside the following space.
     static let echoDelayBeats = 0.75
     /// Five repeats (three at -6/-10/-15 dB, two before that; user direction of 19 November 2026:
@@ -97,6 +100,28 @@ nonisolated enum DialogueMotifTuning {
     static let lateSlotShift = 6
     /// A statement in the breakdown (the second and last full line) with this chance.
     static let secondStatementChance: Float = 0.45
+    /// Hook templates (D125): (role, step) in the 2-bar hook cell, bar B = steps 16 to 31. Roles are
+    /// `s` the signature (the line's strongest word), `r` the response and `t` a third piece. One
+    /// template holds for `hookLoops` loops (the words change every loop, the trigger rhythm with
+    /// them less often), then the next one in a seeded rotation.
+    enum HookRole: String, Sendable { case s, r, t }
+    static let hookTemplates: [[(HookRole, Int)]] = [
+        // Push: the signature twice, answered.
+        [(.s, 0), (.s, 3), (.r, 6), (.s, 16), (.s, 19), (.t, 22), (.r, 26)],
+        // Offbeat.
+        [(.s, 2), (.r, 8), (.s, 18), (.r, 24), (.t, 28)],
+        // Snare answer.
+        [(.s, 0), (.r, 4), (.t, 12), (.s, 16), (.r, 20), (.s, 24)],
+        // Late.
+        [(.s, 6), (.r, 10), (.s, 22), (.t, 26), (.r, 28)],
+    ]
+    static let hookLoops = 2
+    /// Echo tails end this long before the section's end.
+    static let sectionTailLead = 0.15
+    /// The signature prefers a piece of this length (a word, not a syllable nor a clause).
+    static let signatureSeconds: ClosedRange<Double> = 0.18...0.75
+    /// The response is the next-strongest piece when its word weight is above this, else the line's ending.
+    static let responseWeight: Float = 0.25
     /// Dry seconds of one 8-bar section stay under this share of it: a piece that would pass it is
     /// left out (coverage repair still fills an empty bar). A long line's long pieces at a slow tempo
     /// otherwise crowd the loop past the C-D9 band (D124: interest-ranked lines are longer on average).
@@ -153,12 +178,26 @@ nonisolated struct DialogueMotifCell: Sendable, Equatable {
         var effect: Effect = .none
         /// Places only when the window reaches the next loop (the turnaround's landing).
         var landing = false
+        /// A hook item: exactly on its step (no slot shift), or not at all, so every repeat of the
+        /// hook is the same trigger pattern (D125).
+        var fixed = false
     }
     let kind: DialogueCell
     let bar: Int
     let bars: Int
     let variant: Int
     let items: [Item]
+}
+
+/// The loop's hook (D125): the template, the role pieces and the 2-bar cell they make.
+nonisolated struct DialogueMotifHook: Sendable, Equatable {
+    let template: Int
+    /// Fragment ids of the signature, the response and the third piece.
+    let signature: Int
+    let response: Int
+    let third: Int
+    /// The hook cell's items (slots 0 to 31).
+    let items: [DialogueMotifCell.Item]
 }
 
 /// The motif of one 16-bar loop.
@@ -183,6 +222,8 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
     let seed: UInt64
     /// The line's interest (`DialogueLineInterest`), `acousticInterest` without text.
     var interest: Float = DialogueMotifTuning.acousticInterest
+    /// The repeating hook cell; nil only for motifs built before D125.
+    var hook: DialogueMotifHook? = nil
 
     var line: DialogueMotifFragment { fragments[0] }
     var sampleRate: Double { source.sampleRate }
@@ -221,7 +262,7 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
             if let transcript, !current.usedTranscript, current.source.contentID == source.contentID,
                current.source.sourceStart == source.sourceStart,
                let recut = make(loop: loop, source: source, analysis: analysis, transcript: transcript, memory: memory,
-                                seed: current.seed, beatDuration: beatDuration, line: current.lineUnit) {
+                                seed: current.seed, beatDuration: beatDuration, line: current.lineUnit, recutOf: current) {
                 return recut
             }
             // A loop that only carried the previous line takes a fresh line from a later cue in the
@@ -283,17 +324,20 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
     /// The same line and pieces, arranged for another loop.
     func carried(to loop: Int, seed: UInt64, memory: DialoguePerformanceMemory) -> DialogueMotif {
         let loopSeed = seed ^ UInt64(bitPattern: Int64(loop)) &* 0x9E37_79B9
-        let cells = Self.arrange(fragments: fragments, pieces: pieces, halves: halves, reorderAllowed: reorderAllowed,
-                                 seed: loopSeed, lineSeconds: seconds(0), sampleRate: sampleRate)
+        let arranged = Self.arrange(fragments: fragments, pieces: pieces, halves: halves, reorderAllowed: reorderAllowed,
+                                    seed: loopSeed, lineSeconds: seconds(0), sampleRate: sampleRate,
+                                    hookSeed: memory.cycleSeed ?? seed, loop: loop)
         return DialogueMotif(loop: loop, source: source, analysis: analysis, lineUnit: lineUnit, lineKey: lineKey,
                              fragments: fragments, pieces: pieces, halves: halves, bank: bank, usedTranscript: usedTranscript,
-                             reorderAllowed: reorderAllowed, cells: cells, carried: true, seed: loopSeed, interest: interest)
+                             reorderAllowed: reorderAllowed, cells: arranged.cells, carried: true, seed: loopSeed, interest: interest,
+                             hook: arranged.hook)
     }
 
     /// Chooses the best line (or `line` when given), cuts it into pieces and arranges the loop.
     static func make(loop: Int, source: DialogueSource, analysis: DialogueAnalysis, transcript: DialogueTranscript?,
                      memory: DialoguePerformanceMemory, seed: UInt64, beatDuration: Double, line wanted: Int? = nil,
-                     recycle: Bool = false, minimumInterest: Float = 0, transcribedOnly: Bool = false) -> DialogueMotif? {
+                     recycle: Bool = false, minimumInterest: Float = 0, transcribedOnly: Bool = false,
+                     recutOf previous: DialogueMotif? = nil) -> DialogueMotif? {
         guard let f = analysis.features, !analysis.units.isEmpty, analysis.contentID == source.contentID,
               let samples = source.buffer.floatChannelData?[0] else { return nil }
         var units = analysis.units
@@ -374,15 +418,20 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
         }
         let lineInterest = interest(of: line, words: words, weights: weights)
         let reorderAllowed = lineWords.count < 2 || DialogueReorderGuard.allowsPieceReorder(lineWords.map(\.text))
-        let loopSeed = seed ^ UInt64(bitPattern: Int64(loop)) &* 0x9E37_79B9
-        let cells = arrange(fragments: fragments, pieces: cut.pieces, halves: cut.halves, reorderAllowed: reorderAllowed,
-                            seed: loopSeed, lineSeconds: Double(line.frames.count) / rate, sampleRate: rate)
+        // A re-cut keeps the loop's seeded choices (the breakdown cell).
+        let loopSeed = previous?.seed ?? (seed ^ UInt64(bitPattern: Int64(loop)) &* 0x9E37_79B9)
+        // A transcript re-cut keeps the hook: the new signature and response are the pieces that
+        // overlap the old ones most.
+        let anchors = previous?.hook.map { [previous!.fragments[$0.signature].frames, previous!.fragments[$0.response].frames] } ?? []
+        let arranged = arrange(fragments: fragments, pieces: cut.pieces, halves: cut.halves, reorderAllowed: reorderAllowed,
+                               seed: loopSeed, lineSeconds: Double(line.frames.count) / rate, sampleRate: rate,
+                               hookSeed: memory.cycleSeed ?? seed, loop: loop, anchors: anchors)
         let key = lineKey(analysis.contentID, line.frames)
         let bank = motifBank(fragments, line: line, analysis: analysis, key: key, usedTranscript: lineWords.count >= 2)
         return DialogueMotif(loop: loop, source: source, analysis: analysis, lineUnit: line.id, lineKey: key,
                              fragments: fragments, pieces: cut.pieces, halves: cut.halves, bank: bank,
-                             usedTranscript: lineWords.count >= 2, reorderAllowed: reorderAllowed, cells: cells,
-                             carried: false, seed: loopSeed, interest: lineInterest)
+                             usedTranscript: lineWords.count >= 2, reorderAllowed: reorderAllowed, cells: arranged.cells,
+                             carried: false, seed: loopSeed, interest: lineInterest, hook: arranged.hook)
     }
 
     /// A line's words for the said-once rule: lowercased letters, digits and spaces.
@@ -493,6 +542,8 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
             },
             "cells": cells.map { ["kind": $0.kind.rawValue, "bar": $0.bar, "bars": $0.bars, "variant": $0.variant,
                                   "items": $0.items.map { [$0.fragment, $0.slot] }] as [String: Any] },
+            "hook": hook.map { ["template": $0.template, "signature": $0.signature, "response": $0.response, "third": $0.third,
+                                "items": $0.items.map { [$0.fragment, $0.slot] }] as [String: Any] } as Any,
         ]
     }
 
@@ -706,93 +757,132 @@ private nonisolated struct Cutter {
 // MARK: - Arrangement
 
 nonisolated extension DialogueMotif {
-    /// The loop's eight 2-bar cells: a statement, then repeat-stutter, split with a pause, reorder
-    /// (or call and answer) and one more in a seeded order, a sparse breakdown (sometimes the second
-    /// full line), the return and the turnaround.
-    static func arrange(fragments: [DialogueMotifFragment], pieces: [Int], halves: [Int: [Int]], reorderAllowed: Bool,
-                        seed: UInt64, lineSeconds: Double, sampleRate: Double) -> [DialogueMotifCell] {
-        var rng = MusicRNG(seed: seed ^ 0x4D07_1F00)
+    /// The hook's role pieces (D125): the signature is the piece with the strongest word (the later
+    /// one on ties; the first piece without text), the response the next-strongest when it carries a real word, else the
+    /// line's ending; the third is the first other piece. A re-cut keeps the pieces that overlap the
+    /// old signature and response (`anchors`). A line that may not be reordered keeps signature and
+    /// response in source order.
+    static func hookRoles(fragments: [DialogueMotifFragment], pieces: [Int], halves: [Int: [Int]], reorderAllowed: Bool,
+                          sampleRate: Double, anchors: [Range<Int>] = []) -> (s: Int, r: Int, t: Int) {
         func seconds(_ id: Int) -> Double { Double(fragments[id].frames.count) / sampleRate }
+        func overlap(_ id: Int, _ r: Range<Int>) -> Int {
+            max(0, min(fragments[id].frames.upperBound, r.upperBound) - max(fragments[id].frames.lowerBound, r.lowerBound))
+        }
+        func best(_ list: [Int], latest: Bool = false, by key: (Int) -> Double) -> Int? {
+            // Highest key; the earliest piece on ties, or the latest (`latest`).
+            list.max { (key($0), latest ? fragments[$0].order : -fragments[$0].order) < (key($1), latest ? fragments[$1].order : -fragments[$1].order) }
+        }
         let n = pieces.count
-        // Focal piece X (usually the opening words), the closing piece Y and a middle piece Z.
-        var x = pieces[0]
-        if n > 2, rng.chance(0.3) { x = pieces[rng.int(1...(n - 2))] }
-        let y = pieces[n - 1] == x ? pieces[0] : pieces[n - 1]
-        let z = pieces.first { $0 != x && $0 != y } ?? y
-        // The split piece: the longest piece that has halves; without halves, the shortest pair of
-        // neighbouring pieces stands in (a word group heard as two words with a pause between).
-        func next(_ p: Int) -> Int { pieces.firstIndex(of: p).map { $0 + 1 < n ? pieces[$0 + 1] : pieces[max(0, $0 - 1)] } ?? p }
-        let split = halves.keys.sorted { (seconds($0), -$0) > (seconds($1), -$1) }.first
-        let pair = zip(pieces, pieces.dropFirst()).min { seconds($0.0) + seconds($0.1) < seconds($1.0) + seconds($1.1) }
-        let (sa, sb) = split.flatMap { halves[$0] }.map { ($0[0], $0[1]) } ?? pair.map { ($0.0, $0.1) } ?? (x, z)
-        let xa = halves[x]?[0] ?? x, xb = halves[x]?[1] ?? next(x)
-        let ya = halves[y]?[0] ?? y
-        typealias Item = DialogueMotifCell.Item
-        func at(_ f: Int, _ s: Int, _ e: Item.Effect = .none, gain: Float = 0) -> Item { Item(fragment: f, slot: s, gainDB: gain, effect: e) }
-        func after(_ f: Int, _ gap: Int, min s: Int = 0, _ e: Item.Effect = .none) -> Item { Item(fragment: f, slot: s, after: gap, effect: e) }
-
-        let first = pieces[0], last = pieces[n - 1], second = n > 1 ? pieces[1] : pieces[0]
-        let secondHead = halves[second]?[0] ?? second
-        func items(_ kind: DialogueCell, _ v: Int) -> [Item] {
-            switch kind {
-            case .statement:
-                // The whole line once, its last words thrown into the echo, the focal piece answering.
-                return [at(0, v % 2 == 0 ? 0 : 2), after(y, 2, min: 0, .echoThrow), after(x, 1, min: 20), after(z, 1, min: 26)]
-            case .stutter:
-                switch v % 3 {
-                case 0: return [at(x, 0), after(x, 0), at(y, 10, .echoThrow), at(x, 16), after(x, 0), at(z, 24), after(z, 1, min: 28, .filtered)]
-                case 1: return [at(x, 0), at(x, 6), at(z, 10, .echoThrow), at(x, 16), after(x, 1), after(x, 1, .filtered), at(y, 28)]
-                default: return [at(xa, 0), after(xa, 0), after(x, 0), at(y, 10, .echoThrow), at(z, 16), after(z, 2, .filtered), at(y, 26)]
-                }
-            case .splitPause:
-                switch v % 3 {
-                case 0: return [at(xa, 0), after(xb, 3), at(z, 12), at(sa, 16), after(sb, 3, .echoThrow)]
-                case 1: return [at(sa, 0), after(sb, 4, .echoThrow), Item(fragment: ya, slot: 16, effect: .reversed), at(xa, 16), after(xb, 2), at(z, 28, .echoThrow)]
-                default: return [at(z, 2), at(sa, 8), after(sb, 3, .echoThrow), at(sa, 16), after(sa, 1), after(sb, 3), after(x, 1, min: 28, .echoThrow)]
-                }
-            case .reorder:
-                // Later words before earlier ones ("...want to invest... when they"), always against the source order.
-                switch v % 3 {
-                case 0: return [at(secondHead, 0), after(sa, 0), after(first, 3), at(last, 16), at(first, 22), after(second, 1, min: 26)]
-                case 1: return [at(last, 0), after(first, 2, .echoThrow), at(second, 10), at(second, 16), after(first, 1), at(ya, 28, .echoThrow)]
-                default: return [at(last, 0), after(sa, 2), at(first, 10), at(second, 16), after(first, 2, .echoThrow)]
-                }
-            case .callAnswer:
-                return v % 2 == 0 ? [at(x, 0), at(y, 10, .echoThrow), at(x, 16), at(z, 22), after(y, 1, min: 26, .echoThrow)]
-                    : [at(z, 2), at(x, 10), at(z, 18), at(y, 26, .echoThrow)]
-            case .sparse:
-                return v % 2 == 0 ? [at(sa, 4, .echoThrow), at(x, 10), at(sb, 20, .echoThrow)]
-                    : [at(x, 8), Item(fragment: ya, slot: 16, effect: .reversed), at(z, 16), at(y, 24, .echoThrow)]
-            case .returnOpen:
-                // The return's first bar carries one short, lower piece late in the bar (the lead's hook
-                // opens it); the second bar restates the focal piece.
-                let short = ([xa, x, sb, ya] + pieces).min { seconds($0) < seconds($1) } ?? x
-                return [at(short, v % 2 == 0 ? 12 : 14, gain: DialogueMotifTuning.returnPieceDB), at(x, 16), after(x, 0), at(z, 22), at(y, 26, .echoThrow)]
-            case .turnaround:
-                var list = [at(x, 0), at(z, 6), at(x, 10)]
-                list.append(Item(fragment: ya, slot: 16, effect: .reversed))
-                list += [at(xa, 16), after(xa, 0), after(xa, 0), at(y, 24), Item(fragment: x, slot: 32, landing: true)]
-                return list
-            case .repair:
-                return []
+        var s: Int
+        var r: Int
+        if anchors.count == 2, let a = best(pieces, by: { Double(overlap($0, anchors[0])) }), overlap(a, anchors[0]) > 0 {
+            s = a
+            r = best(pieces.filter { $0 != a }, by: { Double(overlap($0, anchors[1])) }) ?? a
+        } else {
+            let weighted = pieces.contains { fragments[$0].weight > 0 }
+            if weighted {
+                // Ties go to the later piece: English puts the sentence stress on its last content
+                // word ("a large dose of LSD").
+                s = best(pieces, latest: true) { p in
+                    Double(fragments[p].weight) - (DialogueMotifTuning.signatureSeconds.contains(seconds(p)) ? 0 : 0.1)
+                } ?? pieces[0]
+            } else {
+                s = pieces[0]
+            }
+            let others = pieces.filter { $0 != s }
+            if let next = best(others, by: { Double(fragments[$0].weight) }), fragments[next].weight > DialogueMotifTuning.responseWeight {
+                r = next
+            } else {
+                r = pieces[n - 1] == s ? pieces[0] : pieces[n - 1]
             }
         }
-        let r: DialogueCell = reorderAllowed ? .reorder : .callAnswer
-        var middle: [DialogueCell] = [.stutter, .splitPause, r, rng.pick([DialogueCell.callAnswer, .stutter, .splitPause].filter { $0 != r })]
-        middle.shuffle(using: &rng)
-        let breakdown: DialogueCell = rng.chance(DialogueMotifTuning.secondStatementChance) ? .statement : .sparse
-        let kinds: [DialogueCell] = [.statement, middle[0], middle[1], middle[2], breakdown, middle[3], .returnOpen, .turnaround]
-        var used: [DialogueCell: Set<Int>] = [:]
-        var cells: [DialogueMotifCell] = []
-        for (k, kind) in kinds.enumerated() {
-            let variants = [.stutter, .splitPause, .reorder].contains(kind) ? 3 : 2
-            var v = rng.int(0...(variants - 1))
-            while used[kind, default: []].contains(v % variants), used[kind, default: []].count < variants { v += 1 }
-            v %= variants
-            used[kind, default: []].insert(v)
-            cells.append(DialogueMotifCell(kind: kind, bar: 2 * k, bars: 2, variant: v, items: items(kind, v)))
+        if r == s, n > 1 { r = pieces.first { $0 != s }! }
+        if !reorderAllowed, fragments[r].order < fragments[s].order { swap(&s, &r) }
+        let sa = headHalf(s, fragments: fragments, halves: halves)
+        // A line that may not be reordered takes the signature's head half as its third piece, so
+        // each bar plays its new pieces in source order.
+        // Otherwise the third is the strongest remaining piece (source order without text), so a
+        // connective piece ("to the") is the third only when nothing else is left.
+        let rest = pieces.filter { $0 != s && $0 != r }
+        let t = reorderAllowed ? (best(rest, by: { Double(fragments[$0].weight) }) ?? (sa != s ? sa : r)) : (sa != s ? sa : r)
+        return (s, r, t)
+    }
+
+    /// The half of a piece its stutters repeat: the first half when the cut splits a word ("Sall-")
+    /// or nothing carries text, else the half with the stronger word ("LSD." rather than "of").
+    static func headHalf(_ piece: Int, fragments: [DialogueMotifFragment], halves: [Int: [Int]]) -> Int {
+        guard let h = halves[piece], h.count == 2 else { return piece }
+        let a = fragments[h[0]], b = fragments[h[1]]
+        if a.text?.hasSuffix("-") == true || b.weight <= a.weight { return h[0] }
+        return h[1]
+    }
+
+    /// The loop's eight 2-bar cells around one hook cell H (D125): the statement (the full line, then
+    /// H's second bar), H, H with an echo throw, a stutter fill into the halfway drop, H (or the second
+    /// full line), a split-with-pause drop-out, the return and the turnaround. Only the template
+    /// (rotating every `hookLoops` loops from `hookSeed`) and the breakdown cell are seeded.
+    static func arrange(fragments: [DialogueMotifFragment], pieces: [Int], halves: [Int: [Int]], reorderAllowed: Bool,
+                        seed: UInt64, lineSeconds: Double, sampleRate: Double, hookSeed: UInt64, loop: Int,
+                        anchors: [Range<Int>] = []) -> (cells: [DialogueMotifCell], hook: DialogueMotifHook) {
+        var rng = MusicRNG(seed: seed ^ 0x4D07_1F00)
+        func seconds(_ id: Int) -> Double { Double(fragments[id].frames.count) / sampleRate }
+        let roles = hookRoles(fragments: fragments, pieces: pieces, halves: halves, reorderAllowed: reorderAllowed,
+                              sampleRate: sampleRate, anchors: anchors)
+        let (s, r, t) = roles
+        let sa = headHalf(s, fragments: fragments, halves: halves)
+        let ra = halves[r]?[0] ?? r
+        // The split piece: the longest piece that has halves; without halves, the shortest pair of
+        // neighbouring pieces stands in (a word group heard as two words with a pause between).
+        let split = halves.keys.sorted { (seconds($0), -$0) > (seconds($1), -$1) }.first
+        let pair = zip(pieces, pieces.dropFirst()).min { seconds($0.0) + seconds($0.1) < seconds($1.0) + seconds($1.1) }
+        let (splitA, splitB) = split.flatMap { halves[$0] }.map { ($0[0], $0[1]) } ?? pair.map { ($0.0, $0.1) } ?? (s, r)
+        typealias Item = DialogueMotifCell.Item
+        func at(_ f: Int, _ slot: Int, _ e: Item.Effect = .none, gain: Float = 0) -> Item {
+            Item(fragment: f, slot: slot, gainDB: gain, effect: e, fixed: true)
         }
-        return cells
+
+        var mix = MusicRNG(seed: hookSeed ^ 0x600C_ED00)
+        let offset = mix.int(0...(DialogueMotifTuning.hookTemplates.count - 1))
+        let template = (offset + max(0, loop) / DialogueMotifTuning.hookLoops) % DialogueMotifTuning.hookTemplates.count
+        let hook = DialogueMotifTuning.hookTemplates[template].map { role, step in
+            at(role == .s ? s : (role == .r ? r : t), step)
+        }
+        let barA = hook.filter { $0.slot < 16 }, barB = hook.filter { $0.slot >= 16 }
+        var echoed = hook
+        echoed[echoed.count - 1].effect = .echoThrow
+        let sHome = barA.first { $0.fragment == s }?.slot ?? 0
+        let rHome = barB.first { $0.fragment == r }?.slot ?? 24
+        // The return's short piece carries a real word when the line has a short one (it stays short:
+        // at -3 dB a long piece reads as a quiet chop, C-B8's loudness spread).
+        let shorts = [sa, s, splitB, ra] + pieces
+        let worded = shorts.filter { fragments[$0].weight > 0 && seconds($0) <= DialogueMotifTuning.returnPieceSeconds }
+        let short = (worded.isEmpty ? shorts : worded).min { seconds($0) < seconds($1) } ?? s
+
+        let statement = [Item(fragment: 0, slot: 0)] + barB
+        let secondStatement = rng.chance(DialogueMotifTuning.secondStatementChance)
+        let cells: [(DialogueCell, [Item])] = [
+            // The reveal: the full line, then the hook's answer bar.
+            (.statement, statement),
+            (.hook, hook),
+            (.hook, echoed),
+            // Bar 8, the phrase end into the halfway drop: the signature stuttered.
+            (.stutter, barA + [at(s, 16), at(sa, 18), at(sa, 20), at(r, 24, .echoThrow)]),
+            secondStatement ? (.statement, statement) : (.hook, hook),
+            // The drop-out: the signature once, the split piece with a pause, the response thrown.
+            (.splitPause, [at(s, sHome), at(splitA, 8), at(splitB, 12, .echoThrow), at(r, rHome, .echoThrow)]),
+            // The return's first bar carries one short, lower piece late in the bar (the lead's hook
+            // opens it); the second bar is the hook's answer.
+            (.returnOpen, [at(short, 12, gain: DialogueMotifTuning.returnPieceDB)] + barB),
+            // The turnaround: the hook's call, a reversed pickup into bar 16, the signature's head
+            // three times, the response, and the signature landing on the next loop's downbeat.
+            (.turnaround, barA + [Item(fragment: ra, slot: 16, effect: .reversed, fixed: true),
+                                  Item(fragment: sa, slot: 16), Item(fragment: sa, slot: 16, after: 0), Item(fragment: sa, slot: 16, after: 0),
+                                  at(r, 24), Item(fragment: s, slot: 32, landing: true)]),
+        ]
+        let arranged = cells.enumerated().map { k, c in
+            DialogueMotifCell(kind: c.0, bar: 2 * k, bars: 2, variant: template, items: c.1)
+        }
+        return (arranged, DialogueMotifHook(template: template, signature: s, response: r, third: t, items: hook))
     }
 }
 
@@ -857,8 +947,10 @@ nonisolated enum DialogueMotifPerformer {
                 let base = cellStart + item.slot
                 let offset = accentOffset(item)
                 let length = duration(item.fragment)
-                // The section's dry budget; the line statement and the turnaround's landing always play.
-                if item.fragment != 0, !item.landing, drySeconds() + length > budget { continue }
+                // The section's dry budget; the line statement, the turnaround's landing and the phrase-end
+                // stutter (its repeats choke each other, so they cost little) always play.
+                let stutterFill = cell.kind == .stutter && item.slot >= 16
+                if item.fragment != 0, !item.landing, !stutterFill, drySeconds() + length > budget { continue }
                 let shift = firstInCell && placed.isEmpty ? DialogueMotifTuning.lateSlotShift : DialogueMotifTuning.slotShift
                 let candidates: [Int]
                 if let gap = item.after {
@@ -867,7 +959,7 @@ nonisolated enum DialogueMotifPerformer {
                     var s = base
                     while s < cellEnd, snapshot.gridTime(sixteenth: s) - offset < needed { s += 1 }
                     candidates = s < cellEnd ? [s] : []
-                } else if item.landing {
+                } else if item.landing || item.fixed {
                     candidates = [base]
                 } else {
                     candidates = Array(base...(base + shift)).filter { $0 < cellEnd }
@@ -960,43 +1052,44 @@ nonisolated enum DialogueMotifPerformer {
             let barInLoop = Int(((bar - loopBeat) / 4).rounded())
             let returnBar = barInLoop == 12
             let s0 = Int((bar * 4).rounded())
-            var done = false
-            // Recurring pieces first, rotating so repairs do not always pick the same cut.
+            // The hook's own items for this bar first (same step, same piece), so a repaired bar is
+            // on-pattern (D125); then recurring pieces on the generic slots, rotating so repairs do
+            // not always pick the same cut.
+            let hookItems = (motif.hook?.items ?? []).filter { $0.slot / 16 == ((barInLoop % 2) + 2) % 2 }
+                .map { (slot: $0.slot % 16, fragment: $0.fragment) }
             let order = Array(candidates[(rotation % max(1, candidates.count))...] + candidates[..<(rotation % max(1, candidates.count))])
             rotation += 1
-            for slot in DialogueMotifTuning.repairSlots where !done {
-                for f in order {
-                    let accent = snapshot.gridTime(sixteenth: s0 + slot)
-                    let start = accent - motif.accentOffset(f)
-                    var end = start + motif.seconds(f)
-                    guard start >= barStart, start < barEnd, start >= max(hard, floor) else { continue }
-                    let previous = placed.lastIndex { $0.start < start }
-                    let next = placed.firstIndex { $0.start >= start }
-                    var chokePrevious = false
-                    if let p = previous, placed[p].end + DialogueTuning.dryGapSeconds > start {
-                        guard placed[p].fragment != 0, placed[p].effect != .reversed,
-                              start - DialogueTuning.chokeLeadSeconds - placed[p].start >= DialogueMotifTuning.minimumPieceSeconds else { continue }
-                        chokePrevious = true
-                    }
-                    var chokedSelf = false
-                    if let q = next, end + DialogueTuning.dryGapSeconds > placed[q].start {
-                        let cut = placed[q].start - DialogueTuning.chokeLeadSeconds
-                        guard cut - start >= DialogueMotifTuning.minimumPieceSeconds else { continue }
-                        end = cut
-                        chokedSelf = true
-                    }
-                    guard end <= upper else { continue }
-                    if chokePrevious, let p = previous {
-                        placed[p].end = min(placed[p].end, start - DialogueTuning.chokeLeadSeconds)
-                        placed[p].choked = true
-                    }
-                    var e = Placed(fragment: f, cell: .repair, sixteenth: s0 + slot, accent: accent, start: start, end: end,
-                                   gainDB: returnBar ? DialogueMotifTuning.returnPieceDB : 0, effect: .none, landing: false)
-                    e.choked = chokedSelf
-                    placed.insert(e, at: next ?? placed.count)
-                    done = true
-                    break
+            let generic = DialogueMotifTuning.repairSlots.flatMap { slot in order.map { (slot: slot, fragment: $0) } }
+            for (slot, f) in hookItems + generic {
+                let accent = snapshot.gridTime(sixteenth: s0 + slot)
+                let start = accent - motif.accentOffset(f)
+                var end = start + motif.seconds(f)
+                guard start >= barStart, start < barEnd, start >= max(hard, floor) else { continue }
+                let previous = placed.lastIndex { $0.start < start }
+                let next = placed.firstIndex { $0.start >= start }
+                var chokePrevious = false
+                if let p = previous, placed[p].end + DialogueTuning.dryGapSeconds > start {
+                    guard placed[p].fragment != 0, placed[p].effect != .reversed,
+                          start - DialogueTuning.chokeLeadSeconds - placed[p].start >= DialogueMotifTuning.minimumPieceSeconds else { continue }
+                    chokePrevious = true
                 }
+                var chokedSelf = false
+                if let q = next, end + DialogueTuning.dryGapSeconds > placed[q].start {
+                    let cut = placed[q].start - DialogueTuning.chokeLeadSeconds
+                    guard cut - start >= DialogueMotifTuning.minimumPieceSeconds else { continue }
+                    end = cut
+                    chokedSelf = true
+                }
+                guard end <= upper else { continue }
+                if chokePrevious, let p = previous {
+                    placed[p].end = min(placed[p].end, start - DialogueTuning.chokeLeadSeconds)
+                    placed[p].choked = true
+                }
+                var e = Placed(fragment: f, cell: .repair, sixteenth: s0 + slot, accent: accent, start: start, end: end,
+                               gainDB: returnBar ? DialogueMotifTuning.returnPieceDB : 0, effect: .none, landing: false)
+                e.choked = chokedSelf
+                placed.insert(e, at: next ?? placed.count)
+                break
             }
         }
         return placed
@@ -1017,8 +1110,10 @@ nonisolated enum DialogueMotifPerformer {
             switch p.effect {
             case .echoThrow where !p.choked:
                 let beat = snapshot.beatLength(at: Double(p.sixteenth) / 4)
+                // A tail stops `sectionTailLead` before the section's end, so the next cue's first hook
+                // hit (on the downbeat, its accent a little after its start) is never blocked (D125).
                 let tail = min(DialogueMotifTuning.echoTailBeats * beat, nextStart - DialogueTuning.dryGapSeconds - p.end,
-                               max(0, upper - p.end), max(0, spare))
+                               max(0, upper - DialogueMotifTuning.sectionTailLead - p.end), max(0, spare))
                 let delay = DialogueMotifTuning.echoDelayBeats * beat
                 if tail >= max(DialogueMotifTuning.minimumEchoTailSeconds, delay + 0.05) {
                     effect = .echoThrow(delay: delay, tail: tail)

@@ -10,7 +10,7 @@ MASK64 = (1 << 64) - 1
 # DialogueFamily.allCases order: the grammar's families, then the motif cells (wave 4 `chop-motif`).
 FAMILY_IDS = {"anchor": 0, "echo": 1, "callResponse": 2, "sparseReorder": 3, "textureFill": 4, "rest": 5,
               "statement": 6, "stutter": 7, "splitPause": 8, "reorder": 9, "callAnswer": 10, "sparse": 11,
-              "returnOpen": 12, "turnaround": 13}
+              "returnOpen": 12, "turnaround": 13, "hook": 14}
 
 
 def fnv_add(h, x):

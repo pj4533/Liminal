@@ -500,13 +500,18 @@ nonisolated enum DialogueChopEffect: Sendable, Hashable {
 
 /// Cell kinds of the motif layer (docs/plans/mpc-chopping.md, section 5).
 nonisolated enum DialogueCell: String, Sendable, CaseIterable {
+    // `reorder`, `callAnswer` and `sparse` are no longer arranged (D125: the hook form) but stay so old logs parse.
     case statement, stutter, splitPause, reorder, callAnswer, sparse, returnOpen, turnaround, repair
+    /// The loop's repeating 2-bar hook cell (D125).
+    case hook
 }
 
 nonisolated enum DialogueFamily: String, Sendable, CaseIterable {
     case anchor, echo, callResponse, sparseReorder, textureFill, rest
     // Motif blocks are named after the cell that opens them.
     case statement, stutter, splitPause, reorder, callAnswer, sparse, returnOpen, turnaround
+    // Appended last: ids are indices, mirrored in scripts/mixlib/cadence.py (D125).
+    case hook
     var id: UInt64 { UInt64(Self.allCases.firstIndex(of: self)!) }
 }
 

@@ -132,27 +132,150 @@ struct DialogueMotifTests {
         }
     }
 
-    @Test(arguments: MotifShape.all) fileprivate func everyLoopHasStutterSplitAndReorderCells(_ shape: MotifShape) throws {
+    /// The hook form (D125, user direction of 21 November 2026: "it sounds too random ... it needs to
+    /// feel intentional"): one 2-bar hook cell repeats through the loop on fixed steps.
+    @Test(arguments: MotifShape.all) fileprivate func everyLoopRepeatsOneHookCell(_ shape: MotifShape) throws {
         for seed in Self.seeds {
             for (k, loop) in run(shape, seed: seed).loops.enumerated() {
                 let motif = try #require(loop.motif)
-                let label = "\(shape) seed \(seed) loop \(k)"
-                let cells = Set(loop.events.compactMap(\.cell))
-                #expect(cells.contains(.stutter), "\(label): \(cells)")
-                #expect(cells.contains(.splitPause), "\(label): \(cells)")
-                #expect(cells.contains(.turnaround), "\(label): \(cells)")
-                if motif.reorderAllowed {
-                    #expect(cells.contains(.reorder), "\(label): \(cells)")
-                    // A reorder cell plays pieces against the source order at least once.
-                    let order = loop.events.filter { $0.cell == .reorder }.compactMap { $0.piece.map { motif.fragments[$0].order } }
-                    #expect(zip(order, order.dropFirst()).contains { $0 > $1 }, "\(label): reorder order \(order)")
-                } else {
-                    #expect(cells.contains(.callAnswer), "\(label): \(cells)")
+                let hook = try #require(motif.hook)
+                let label = "\(shape) seed \(seed) loop \(k) line '\(motif.text ?? "-")'"
+                let kinds = motif.cells.map(\.kind)
+                let hookCells = kinds.filter { $0 == .hook }.count
+                #expect(hookCells >= (kinds[4] == .statement ? 2 : 3), "\(label): cells \(kinds)")
+                // Every hook cell plays only the hook's own (step, piece) hits, and the two hook cells of
+                // the first cue play the same pattern.
+                let phrase = loop.snapshot.phraseAtOrigin
+                let items = Set(hook.items.map { DialogueHookMetrics.Hit(step: $0.slot, fragment: $0.fragment) })
+                var sets: [Int: Set<DialogueHookMetrics.Hit>] = [:]
+                for e in loop.events where e.cell == .hook {
+                    let s = (e.block - phrase) * 64 + e.slot
+                    sets[s / 32, default: []].insert(DialogueHookMetrics.Hit(step: s % 32, fragment: e.piece ?? -1))
                 }
-                // A repeat-stutter repeats one piece; a split plays the halves of one piece with space between.
+                for (cell, set) in sets { #expect(set.isSubset(of: items), "\(label): cell \(cell) \(set) off the hook \(items)") }
+                #expect(sets[1] != nil && sets[1] == sets[2], "\(label): bars 3-6 differ")
+                let m = DialogueHookMetrics.metrics(DialogueHookMetrics.loopHits(loop.events, loop: phrase / 4))
+                #expect(m.signatureShare >= 0.6, "\(label): signature \(m.signatureShare)")
+                #expect(m.distinctRhythms <= 10, "\(label): \(m.distinctRhythms) rhythms")
+                #expect(m.exactBarRepeats >= 0.3, "\(label): exact bars \(m.exactBarRepeats)")
+                #expect(m.cellVsBest >= 0.4, "\(label): cellVsBest \(m.cellVsBest)")
+            }
+        }
+    }
+
+    /// Variation sits at the phrase ends (bars 8 and 16), the drop-out (11-12) and the return (13).
+    @Test(arguments: MotifShape.all) fileprivate func variationSitsAtPhraseEnds(_ shape: MotifShape) throws {
+        for seed in Self.seeds {
+            for (k, loop) in run(shape, seed: seed).loops.enumerated() {
+                let motif = try #require(loop.motif)
+                let hook = try #require(motif.hook)
+                let label = "\(shape) seed \(seed) loop \(k)"
+                let bars = DialogueHookMetrics.loopHits(loop.events, loop: loop.snapshot.phraseAtOrigin / 4)
+                let barB = Set(hook.items.filter { $0.slot >= 16 }.map { DialogueHookMetrics.Hit(step: $0.slot - 16, fragment: $0.fragment) })
+                #expect(Set(bars[7]) != barB && Set(bars[15]) != barB, "\(label): a phrase end plays the hook")
+                #expect(bars[10].count + bars[11].count < hook.items.count, "\(label): the drop-out is as busy as the hook")
+                let cells = Set(loop.events.compactMap(\.cell))
+                for kind in [DialogueCell.stutter, .splitPause, .turnaround, .returnOpen, .hook] {
+                    #expect(cells.contains(kind), "\(label): no \(kind) in \(cells)")
+                }
+                // The stutter repeats one piece back to back.
                 let stutter = loop.events.filter { $0.cell == .stutter }
                 #expect(zip(stutter, stutter.dropFirst()).contains { $0.piece == $1.piece }, "\(label): no repeated piece")
             }
+        }
+    }
+
+    /// The hook's signature is the line's strongest word ("Sally", "LSD"), and it is the loop's most
+    /// played piece, on one home step.
+    @Test func theSignatureIsTheStrongestWord() throws {
+        let film = MotifShape.film(DialogueHookProbeTests.mixed, id: "mixed-sig", transcribed: true)
+        let shape = MotifShape(name: "mixed-84", bpm: 84, films: [film])
+        var seen: Set<String> = []
+        for seed: UInt64 in [1, 2, 3] {
+            for (k, loop) in run(shape, seed: seed, takes: 5).loops.enumerated() {
+                let motif = try #require(loop.motif)
+                let hook = try #require(motif.hook)
+                let signature = motif.fragments[hook.signature].text ?? ""
+                let label = "seed \(seed) loop \(k) '\(motif.text ?? "-")' S '\(signature)'"
+                if motif.text == "Sally, this is mother." { #expect(signature == "Sally,", "\(label)"); seen.insert("Sally") }
+                if motif.text?.contains("LSD") == true { #expect(signature.contains("LSD"), "\(label)"); seen.insert("LSD") }
+                let pieces = loop.events.compactMap(\.piece).filter { $0 != 0 }
+                let counts = Dictionary(grouping: pieces, by: { $0 }).mapValues(\.count)
+                #expect(counts.max { $0.value < $1.value }?.key == hook.signature || counts[hook.signature] == counts.values.max(),
+                        "\(label): counts \(counts)")
+                let phrase = loop.snapshot.phraseAtOrigin
+                let steps = loop.events.filter { $0.piece == hook.signature }.map { ((($0.block - phrase) * 64 + $0.slot) % 32) }
+                let modal = Dictionary(grouping: steps, by: { $0 }).values.map(\.count).max() ?? 0
+                #expect(modal >= 5, "\(label): signature at most \(modal) times on one step")
+            }
+        }
+        #expect(seen == ["Sally", "LSD"], "\(seen)")
+    }
+
+    /// One trigger rhythm holds for two loops while the words change, then the next template.
+    @Test func theTriggerRhythmHoldsForTwoLoops() throws {
+        for shape in MotifShape.all.prefix(2) {
+            for seed in Self.seeds {
+                let motifs = run(shape, seed: seed, takes: 4).loops.compactMap(\.motif)
+                try #require(motifs.count == 4)
+                let steps = motifs.map { Set($0.hook?.items.map(\.slot) ?? []) }
+                #expect(steps[0] == steps[1] && steps[2] == steps[3], "\(shape) seed \(seed): \(steps)")
+                #expect(steps[1] != steps[2], "\(shape) seed \(seed): the template never rotates")
+            }
+        }
+    }
+
+    /// A line with a negation keeps its pieces in source order inside every hook bar.
+    @Test func aNegatedLineKeepsSourceOrderInsideEachBar() throws {
+        // Short and with distinct sentences, so the hallucination guard (a 3-gram heard three times) keeps the words.
+        let fixture = DialogueFixtures.speech(DialogueFixtures.Options(seconds: 16, seed: 7, sentences: [
+            "we did not stop the car that night.", "I don't know where the river goes.",
+            "the station was empty in the morning.", "nobody wanted to go home.",
+        ]))
+        let film = MotifShape.film(fixture, id: "negated", transcribed: true)
+        let refined = DialogueHierarchy.refine(film.analysis, transcript: try #require(film.transcript))
+        let negated = refined.units.filter { u in
+            [.utterance, .phrase, .wordGroup].contains(u.level) && (u.text.map { $0.contains("not") || $0.contains("n't") } ?? false)
+        }
+        var checked = 0
+        for seed: UInt64 in [1, 2, 3, 4] {
+            for unit in negated {
+                guard let motif = DialogueMotif.make(loop: Int(seed), source: film.source, analysis: film.analysis, transcript: film.transcript,
+                                                     memory: DialoguePerformanceMemory(), seed: seed, beatDuration: 60 / 78.0, line: unit.id),
+                      motif.pieces.count >= 2 else { continue }
+                #expect(!motif.reorderAllowed, "'\(motif.text ?? "-")'")
+                checked += 1
+                for cell in motif.cells where cell.kind == .hook {
+                    for bar in 0..<2 {
+                        // New source positions only: a repeat of a piece already heard (or of its half) is a stutter.
+                        var order: [Int] = []
+                        for item in cell.items.sorted(by: { $0.slot < $1.slot }) where item.slot / 16 == bar {
+                            let o = motif.fragments[item.fragment].order
+                            if !order.contains(o) { order.append(o) }
+                        }
+                        #expect(order == order.sorted(), "'\(motif.text ?? "-")' bar \(bar): \(order)")
+                    }
+                }
+            }
+        }
+        #expect(checked > 0, "negated units \(negated.map { $0.text ?? "-" }), words \(refined.words.count)")
+    }
+
+    /// A transcript re-cut (acoustic pieces become word groups) keeps the hook on the same words.
+    @Test func aTranscriptRecutKeepsTheHookSignature() throws {
+        let film = MotifShape.all[1].films[0]
+        for seed: UInt64 in [1, 2, 3, 5] {
+            var memory = DialoguePerformanceMemory()
+            let acoustic = try #require(DialogueMotif.make(loop: 0, source: film.source, analysis: film.analysis, transcript: nil,
+                                                           memory: memory, seed: seed, beatDuration: 60 / 72.0))
+            memory.setMotif(acoustic, statements: 0)
+            let recut = try #require(DialogueMotif.resolve(loop: 0, source: film.source, analysis: film.analysis, hasBank: true,
+                                                           transcript: film.transcript, memory: memory, seed: seed, beatDuration: 60 / 72.0))
+            #expect(recut.usedTranscript && recut.lineUnit == acoustic.lineUnit)
+            let a = try #require(acoustic.hook), b = try #require(recut.hook)
+            #expect(a.template == b.template)
+            let share = DialogueMotif.overlapShare(acoustic.fragments[a.signature].frames, recut.fragments[b.signature].frames)
+            #expect(share >= 0.5, "seed \(seed): signature overlap \(share)")
         }
     }
 
