@@ -5,8 +5,10 @@ the outgoing drum take's fill starts, gets more broken up through the fill, and 
 the first drum hit of the new loop. "Fade out, but no fade in." "Some sort of glitchy transition. Boom,
 new drum loop." Many different kinds of transition out.
 
-Status: plan only. Nothing below is built. Decisions made during the build go into
-`docs/decisions/transitions.md` as T44 onward.
+Status: built on 20 November 2026; what changed from this plan and the measurements are in
+`docs/decisions/transitions.md` T44-T50 (among them: k = 2.5 / 1.5, the old framing held until the cut,
+the fresh calm under the last quarter second, dive dropped from the outs, per-drop pipeline
+specializations, and the relaxed tail and build gates).
 
 ## 1. What is wrong today
 

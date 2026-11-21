@@ -594,9 +594,13 @@ transition. Boom, new drum loop"; many different kinds of transition out. Plan:
   stage B drop code in every pipeline they were 1.0375: its registers count against every frame (T19, T21).
 - So the stage B drop code (the Sort and Punch taps, the split, the colour layers, Shutter, Static and the
   finishers) is behind function constants (`kDropTx`, `kDropColour`, `kDropFinisher`, `kDropStyle`).
-  `DropPipelines` compiles each drop's specialization for every registered pipeline in the background when
-  the drop is planned (`VisualEngine` announces it at least 6 s ahead) and keeps the last six. Until a twin
-  is ready the plain pipeline is used (the drop then shows only its stage A glitch). Unspecialized twins
+  `DropPipelines` compiles each drop's specialization in the background when the drop is planned
+  (`VisualEngine` announces it at least 6 s ahead), for the pipelines bound since the last drop (a pipeline
+  first bound during the drop is compiled then), and keeps the last six drops. Until a twin is ready the
+  plain pipeline is used (the drop then shows only its stage A glitch). Two mistakes found in the live runs:
+  specializing on the main thread stalled the macOS render 350-410 ms per drop, and specializing all 18
+  visionOS pipelines at once coincided with 3 and 8 Core Audio overloads in two Simulator runs (0 in two
+  baseline runs and 0 after the change). Unspecialized twins
   cost 1.13-1.24 x the classic transition frame.
 - Drop frames at p = 0.98 with the style's own layer and finisher, against the classic transition frame
   (`trans113`, 3.99 ms): mean 1.056, range 1.031 (shatter, shutter) to 1.111 (bleed); sort 1.098, punch
@@ -604,3 +608,35 @@ transition. Boom, new drum loop"; many different kinds of transition out. Plan:
   styles measure 1.02-1.09 (T26). Device cost is unmeasured.
 - The bell styles render identically to main (tide, kaleidoscope, afterimage sequences: max difference 0).
 - Stage A drop styles cost nothing outside a drop (removing them changed non-transition frames by 0).
+
+### T49. Verification (20 November 2026)
+
+- Unit tests (macOS): 142 passed in DropTransitionTests, ImageTransitionTests, ImageStoreTests,
+  EffectLookTests, the archive footage suites, AVCouplingTests, LofiTests, LofiRhythmTests and
+  LofiArrangementTests. macOS and visionOS Simulator builds succeed.
+- Offline clips (`tx-clip.sh --drop`, 60 fps): 19 styles on two pairs (Lightning to Mushrooms at intensity
+  1, a 2.5 s build, strength 1 and 11 hits; the reverse at intensity 0.5, a 1.0 s build, strength 0.7 and 6
+  hits), each with its own colour layer and finisher (all five finishers and all six layers used). All 38
+  pass cut_frame (the first frame of the new picture is the downbeat frame), clean_from_cut, tail,
+  old_residue, peak_at_cut, build_monotonic, pre_leak, seam_in and flash_rate. Gate changes: tail is
+  measured from d + 3 (the trails re-converge on the clean frame in 2 frames, a step of 3-7 x the settled
+  step at d + 1), and build_monotonic uses a 9-frame median and 0.10 (the glitches re-hash per step, so
+  single frames flicker). Distinctness at p = 0.9: worst SSIM 0.57 / 0.64 (limit 0.85).
+- macOS live (`-LiminalAutoPlay -audio.musicMode lofi -archive.enabled NO -LiminalMusicSeed 7`, cached
+  images): 16 drops in two runs; the cut was drawn 3.7-21.9 ms before the downbeat with the 25 ms lead.
+  `addPresentedHandler` reported no presented times, so the measured lead never replaced the default and the
+  presentation time of the cut is not measured. No slow frame near a cut after the fix in T48.
+- visionOS Simulator (`perf-run.sh --lofi --seconds 100`): passes; 4 drops, cut frames start 4.6-12.5 ms
+  after the downbeat minus the 28 ms lead (limit 16.7), no stall, no Core Audio overload, fps 79, GPU eye
+  pass 0.142 ms mean (baseline runs 0.139-0.148).
+- Bell styles render identically to main; non-transition GPU cost 1.0013 x main.
+
+### T50. Open
+
+- Fill detection was not calibrated against the 25 private takes (synthetic fixtures only); `tau` and the
+  weights are the plan's starting values.
+- Drop frames cost 1.03-1.11 x the classic transition frame (T48), over the plan's 1.05 / mean 1.02.
+- The display leads are unmeasured: macOS presented times were not reported, and the visionOS 28 ms is an
+  estimate that only a device can check (`-LiminalDropLead`).
+- `scripts/drop-sync.py` (audio onset against the cut in a muxed clip) was not written.
+- The halfway drop (strength 0.7, beat 32) is a design choice to review with the user (plan 4.6).
