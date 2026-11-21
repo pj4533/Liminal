@@ -568,9 +568,13 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
     }
 
     /// Decodes one stored image (lazily, one at a time) and upscales it if it is small.
+    /// API pool pictures are never upscaled: the ingest gate already keeps their 3:2 crop at 2000 x 1333
+    /// or more, and on a visionOS device the MetalFX path (long side under 2048) would make a 2000-2047 px
+    /// picture four times larger for no visible gain.
     private func makeDisplayItem(_ entry: ImageStore.Entry, from source: ImageStore? = nil) async -> DisplayItem? {
+        let fromPool = source.map { $0 !== store } ?? false
         guard let raw = (source ?? store).loadImage(entry) else { return nil }
-        let display = await upscaleIfNeeded(raw)
+        let display = fromPool ? raw : await upscaleIfNeeded(raw)
         return DisplayItem(id: entry.id, cgImage: display, image: Self.platformImage(display), metadata: entry.metadata)
     }
 

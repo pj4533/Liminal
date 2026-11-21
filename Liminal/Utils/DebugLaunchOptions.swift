@@ -261,10 +261,19 @@ nonisolated enum DebugLaunchOptions {
     /// fetching works and leaves the real pool alone. Removed again by the next normal launch. With
     /// -LiminalImageAPIOffline the verify folder of the previous fresh run is kept and reused.
     static let imageAPIFresh: Bool = defaults.bool(forKey: "LiminalImageAPIFresh")
+    /// -LiminalImageSourceFlipAt <s[,s...]>: at each time (seconds after launch) flip the Images picker
+    /// (AI <-> API) through the same settings binding the picker uses, then put the stored setting
+    /// back, so a locked-screen run can check the switch without saving it (macOS control panel).
+    static let imageSourceFlipAt: [Double]? = {
+        guard let s = defaults.string(forKey: "LiminalImageSourceFlipAt") else { return nil }
+        let times = s.split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }.filter { $0 >= 0 }.sorted()
+        return times.isEmpty ? nil : times
+    }()
 
     /// True when any API image flag is set.
     static var anyImageAPIFlag: Bool {
         imageSource != nil || imageProviders != nil || imageAPIOffline || imageAPISeed != nil || imageAPIFresh
+            || imageSourceFlipAt != nil
     }
 
     /// True when any shell harness flag is set (they also block generation).
@@ -340,6 +349,7 @@ nonisolated enum DebugLaunchOptions {
     static let imageAPIOffline = false
     static let imageAPISeed: UInt64? = nil
     static let imageAPIFresh = false
+    static let imageSourceFlipAt: [Double]? = nil
     static let anyImageAPIFlag = false
 #endif
 
@@ -405,6 +415,7 @@ nonisolated enum DebugLaunchOptions {
         if imageAPIOffline { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalImageAPIOffline=YES (API pool only, no network)") }
         if let n = imageAPISeed { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalImageAPISeed=\(n)") }
         if imageAPIFresh { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalImageAPIFresh=YES (empty verify pool)") }
+        if let t = imageSourceFlipAt { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalImageSourceFlipAt=\(t.map { String(format: "%.0f", $0) }.joined(separator: ","), privacy: .public)s (flips the Images picker, not saved)") }
         if syncStrength != 1 { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalSyncStrength=\(syncStrength, format: .fixed(precision: 2))") }
 #endif
     }()

@@ -236,7 +236,7 @@ Format: decision, why, alternatives.
 - `ImageOpenness.score` on a 48x32 thumbnail of the 3:2 window measures shadow and highlight share (the same luma 0.3 / 18% rule as `VideoComposite`), calm cells, edge density, paper share and saturation. `openness = 0.5 x keyBand + 0.5 x min(calm / 0.35, 1)`.
 - **Tuning on the 409 probe thumbnails** (scratchpad `imageapi/tune`): the plan's `keyShare > 0.75` reject would have removed the night neon diners, dusk skylines, nebulae and the Golden Gate fog, which are the core of the brief. The shader's `keyGain` already tames a key that covers most of the frame, so a large key only lowers the score (band falls to 0.3 at full coverage). Gates as shipped: openness >= 0.2, key share >= 0.04, document = paper > 0.5 and edge > 0.06, monochrome = mean saturation < 0.025 (0.08 would have rejected the pinned Earthrise and fog pictures, measured 0.03-0.06).
 - **Text:** Vision text boxes reject a picture only when they cover more than a quarter of the frame, or more than 6% of a paper-like picture. The first live run rejected a neon sign at 10% under the plain 6% rule, and signs are part of the brief.
-- **People (plan 13.1 default):** reject when a face box covers more than 1.5% of the frame or more than four faces are found; distant figures stay. Vision cannot run in the visionOS Simulator ("Could not create inference context"); the checks then pass and the failure is logged.
+- **People (plan 13.1 default):** reject when a face box covers more than 1.5% of the frame or more than four faces are found; distant figures stay. Vision cannot run in the visionOS Simulator ("Could not create inference context"), so the checks are compiled out of simulator builds (D42): the failed setups during live ingest went with 100-320 ms render stalls. They run on Macs and devices; on a Vision Pro they are unverified.
 - **Framing:** pictures with an aspect of 1.3-1.8 are stored whole (the renderers' cover crop does the rest); others are cut to the most open of five 3:2 windows along the long axis, so the stored file is already 3:2 and saliency and depth stay registered.
 - **Monochrome** (only `cma-early-photographs` may be) is capped at one in six in the display rotation (plan 13.4).
 
@@ -248,8 +248,9 @@ Format: decision, why, alternatives.
 
 ## D40 (2026-11-21): Resolution and fetching
 
-- Requested long side 3072 where the server scales (LOC IIIF `full/!3072,3072`, Commons thumbnails, which come back at Commons' 3840 step or as the original when that is smaller), originals from NASA, Cleveland (`images.print`, 3400 px) and the Met. Decoding uses `CGImageSourceCreateThumbnailAtIndex` sized so the 3:2 crop is about 3072 wide (at most 6144 on the long side), so a large master never expands fully in memory. Stored as JPEG quality 0.9.
-- **Size gate:** the 3:2 cover crop must be at least 2000 x 1333, 2% under 2048 x 1365. The first live run rejected *Icones Farlowianae* plates at 2026 px; the difference is invisible under the effects. No upscaling is needed for any enabled source. The macOS RealESRGAN path stretched any input to 512x512, so `ImageUpscaler.shouldSkipUpscale` now also skips non-square pictures on macOS.
+- Requested long side 2528, the size of Gemini's 2K pictures (`ImageGenerationConfig`), where the server scales (LOC IIIF `full/!2528,2528`, Commons thumbnails, which come back at Commons' 3840 step or as the original when that is smaller), originals from NASA, Cleveland (`images.print`, 3400 px) and the Met. Decoding uses `CGImageSourceCreateThumbnailAtIndex` sized so the 3:2 crop is about 2528 wide (at most 5056 on the long side), so a large master never expands fully in memory. Stored as JPEG quality 0.9.
+- **2528, not 3072 (changed 2026-11-21 in the independent verification, D42):** both renderers draw at most 2048 px wide, so 3072 bought nothing on screen. With 3072 pictures, two Lo-Fi perf runs with ingest live failed with 118-324 ms stalls and 45-175 ms frames at reveals; the same pool scaled to 2528 brought reveals back to the AI-cache range.
+- **Size gate:** the 3:2 cover crop must be at least 2000 x 1333, 2% under 2048 x 1365. The first live run rejected *Icones Farlowianae* plates at 2026 px; the difference is invisible under the effects. No upscaling is needed for any enabled source. Pool pictures never go through the upscaler (`ImageQueue.makeDisplayItem`): its threshold is a 2048 px long side, so on a visionOS device a 2000-2047 px picture would otherwise have gone through MetalFX at 4x (about 8000 px wide). The macOS RealESRGAN path stretched any input to 512x512, so `ImageUpscaler.shouldSkipUpscale` now also skips non-square pictures on macOS.
 - **NASA:** `~large` is only 1920 px (measured 2026-11-21), below the gate, so an original over 12 MB is rejected rather than replaced (one Ames space-colony painting, 29 MB).
 - **Pacing:** one HTTPS client (`ImageHTTP`, ephemeral session, generic User-Agent, no Low Data Mode downloads, https only with NASA's http links upgraded), 1 s minimum per host and 5 s for the Met's two hosts, one download every 4 s at most, ingest only while fewer than 12 never-shown pictures wait. A provider error backs that provider off 1 / 2 / 5 / 15 / 30 min; the Met's HTML bot wall (`.blocked`) goes straight to 30 min; 401/403/404/410 on one item rejects only that item.
 - **Main-actor rule:** the ledger write for "picture shown" happens on a detached task. Written inline from `showReserved` (main actor, at the Lo-Fi reveal) it cost a 107 ms frame in the simulator perf run with ingest live; ingest also runs at background priority.
@@ -262,3 +263,26 @@ Format: decision, why, alternatives.
 - **Lo-Fi perf** (`scripts/perf-run.sh --lofi`, 60 s): plain AI-cache run passes (max frame 33 ms); API with ingest live passes twice after D40's main-actor fix (max 74 and 57 ms, fps 79); API offline passes (max 52 ms).
 - **Across all runs:** 95 pictures stored from 12 sources (licences: Public domain 50, CC0 21, No known restrictions 12, CC BY-SA 11, CC BY 1), 14 rejected (title rules 4, small plates 5, text 2, monochrome 1, NASA original over 12 MB 1, small Met print 1), 0 Gemini log lines.
 - **Not done:** the AI -> API toggle was not clicked in the live app (the Mac's screen was locked, so Peekaboo clicks landed on the login window); `switchSource` API -> AI -> API is covered by `ImageQueueAPIModeTests` instead. Nothing was installed on the Vision Pro.
+
+## D42 (2026-11-21): Independent verification and fixes
+
+Re-checked by a second pass on branch `image-api-mode`: builds (macOS, visionOS Simulator), the image suites (84 tests), a live macOS run, simulator Lo-Fi perf runs, and the source switch.
+
+- **macOS live run** (Lo-Fi, archive footage, fresh pool, 4.4 min, `-LiminalImageSourceFlipAt 165,210`): 19 stored from 12 sources, 1 rejected (monochrome), 7 shown from 7 sources before the switch, each with its credit line in the log. The flip to AI stopped ingest and the API loop, started the AI cache recycler (`cacheOnly=true, cached=38`), and the next reveal showed a cached AI picture; the flip back restarted the API feed and the next reveal showed a pool picture (Hokusai). The picker and status line follow the source in the screenshots. No Gemini request in the log (the only Gemini line is the credentials check of the AI status row).
+- **Fixes:**
+  - The picker's switches ran as unordered detached tasks: a quick AI -> API -> AI could finish on API while the picker showed AI, or interleave inside `switchSource` and start two loops. `VisualEngine.setImageSource` now chains each switch after the previous one.
+  - The Lo-Fi prefetch and reveal checked the AI cache's clear generation even in API mode, so a picture staged before "Clear Curated Pictures" or before a source switch could still be revealed. They now check the store the picture came from and that it is still the active one.
+  - Target size 3072 -> 2528 and no upscaling of pool pictures (D40); Vision compiled out of simulator builds (D38).
+- **Simulator Lo-Fi perf** (`perf-run.sh --lofi --seconds 120`, host under load from other apps). An offline API run (pool only, no ingest) passed like the AI baseline, which isolated the stalls to live ingest:
+
+| Run | Result | Max frame | Frames over 40 ms (whole run) |
+|---|---|---|---|
+| AI cache baseline (two runs) | pass, pass | 53, 53 ms | 3, 4 |
+| API, fresh pool, ingest live, 3072 | fail | 118 ms (first reveal) | 6 |
+| API, warm pool, ingest live, 3072 | fail | 325 ms | 9 |
+| API, same pool scaled to 2528, ingest live | pass | 90 ms | 7 |
+| API, 2528 target, ingest live | fail | 182 ms | 12 |
+| API, pool only (`-LiminalImageAPIOffline YES`) | pass | 59 ms | 3 |
+| API, 2528 + no Vision in the simulator, ingest live (two runs) | pass, pass | 59, 46 ms | 3, 1 |
+
+- **Debug flag added:** `-LiminalImageSourceFlipAt <s[,s]>` flips the Images picker at those times through the settings binding and puts the stored setting back, so the switch can be checked when the screen is locked.

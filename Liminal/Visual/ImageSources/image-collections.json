@@ -5,7 +5,7 @@
  "defaults": {
   "minLongSide": 2000,
   "minShortSide": 1333,
-  "targetLongSide": 3072,
+  "targetLongSide": 2528,
   "maxBytes": 12000000,
   "allowedMime": [
    "image/jpeg",

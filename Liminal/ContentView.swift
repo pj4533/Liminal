@@ -104,6 +104,21 @@ struct ContentView: View {
                 audioEngine.start()
                 LMLog.general.info("🧪 DEBUG: auto-play started")
             }
+            #if DEBUG
+            if let times = DebugLaunchOptions.imageSourceFlipAt {
+                let settings = self.settings
+                Task { @MainActor in
+                    let start = ContinuousClock.now
+                    for t in times {
+                        try? await Task.sleep(until: start + .milliseconds(Int(t * 1000)), clock: .continuous)
+                        let stored = UserDefaults.standard.object(forKey: ImageSource.defaultsKey)
+                        settings.imageSource = settings.imageSource == .ai ? .api : .ai
+                        UserDefaults.standard.set(stored, forKey: ImageSource.defaultsKey)
+                        LMLog.general.info("🧪 DEBUG: Images picker flipped to \(settings.imageSource.rawValue, privacy: .public)")
+                    }
+                }
+            }
+            #endif
         }
         // Settings -> AudioEngine: propagate changes immediately
         .onChange(of: settings.style) { _, newValue in audioEngine.style = newValue }

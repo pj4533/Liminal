@@ -129,6 +129,7 @@ Pass as launch arguments, for example `-LiminalAutoPlay YES`. Defined in `Limina
 | `-LiminalImageAPIOffline YES` | API mode shows only its pool; no network |
 | `-LiminalImageAPISeed <n>` | Seed the API ingest and display rotations |
 | `-LiminalImageAPIFresh YES` | Use an empty `CuratedImageStore-Verify` pool so a run proves fetching without touching the user's pool (removed at the next normal launch). With `-LiminalImageAPIOffline YES` it reuses the previous verify pool |
+| `-LiminalImageSourceFlipAt <s[,s...]>` | Flip the Images picker (AI <-> API) at these times after launch, through the same settings binding, without saving the setting (checks the switch on a locked screen; macOS control panel) |
 
 ### API image mode checks
 
@@ -138,7 +139,8 @@ API mode fetches from free public APIs, never from Gemini, so its verification r
 - macOS: launch the built app with `-LiminalAutoPlay YES -LiminalImageSource api -LiminalImageAPIFresh YES -LiminalImageInterval 8 -archive.enabled YES -LiminalVideoOffline YES` and stream the log. Every stored, rejected and shown picture logs one line (`API image stored: ...`, `API image rejected: ... reason=...`, `API image shown: source=... license=... url=...`). Expect at least six shown pictures from three sources in five minutes and no `[Gemini]` lines.
 - Offline reuse: add `-LiminalImageAPIOffline YES` to the same flags.
 - visionOS Simulator: `xcrun simctl launch <udid> com.saygoodnight.Liminal -LiminalAutoPlay YES -LiminalOpenDome YES -LiminalImageSource api -LiminalImageAPIFresh YES -LiminalImageInterval 8 -LiminalControlsScroll images` (the control window then shows the credit). Vision's text and face checks cannot run in the simulator and are skipped with a log line.
-- Lo-Fi perf: `scripts/perf-run.sh --lofi --extra "-LiminalImageSource api -LiminalImageAPIFresh YES"` (ingest live) and with `-LiminalImageAPIOffline YES`, compared with a plain `--lofi` run.
+- Lo-Fi perf: `scripts/perf-run.sh --lofi --extra "-LiminalImageSource api -LiminalImageAPIFresh YES"` (ingest live) and with `-LiminalImageAPIOffline YES`, compared with a plain `--lofi` run. A fresh pool's first picture arrives inside the measurement window with the depth model cold, so for a like-for-like check run once to fill the pool and measure with the pool kept (in the simulator, copy `CuratedImageStore-Verify` to `CuratedImageStore` in the app container and add `-images.api.cacheEpoch 1`). Results in `docs/decisions/images.md` D42.
+- Source switch: add `-LiminalImageSourceFlipAt 165,210` to the macOS run and look for `Images picker flipped`, `image source -> ai`, `ImageQueue starting (source=ai, cacheOnly=true ...)` and the reverse.
 
 
 ## Scripts (`scripts/`)

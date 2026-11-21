@@ -328,12 +328,19 @@ final class VisualEngine: ObservableObject {
     }
 
     /// AI <-> API (the "Images" picker). Takes effect at the next image change.
+    /// Switches run one after another in the order they were asked for: two detached tasks could
+    /// otherwise run out of order on a quick AI -> API -> AI and leave the queue on the source the
+    /// picker no longer shows, or interleave inside `switchSource` and start two loops.
     func setImageSource(_ source: ImageSource) {
-        guard source != imageSource || imageQueue.activeSource != source else { return }
         stagedImage = nil
         let queue = imageQueue
-        Task.detached { await queue.switchSource(source) }
+        let previous = sourceSwitch
+        sourceSwitch = Task.detached {
+            await previous?.value
+            await queue.switchSource(source)
+        }
     }
+    private var sourceSwitch: Task<Void, Never>?
 
     /// Deletes every cached image (files, sidecars, depth maps, legacy folders), clears the
     /// display buffers and prompt history, and restarts generation if it was running.
@@ -378,11 +385,16 @@ final class VisualEngine: ObservableObject {
             // Give live generation most of the phrase, with six seconds left for
             // a local decode, crop, colour analysis and both platforms' GPU upload.
             do { try await Task.sleep(for: .seconds(max(0, cue.start - now() - 6))) } catch { return }
-            let cacheEpoch = imageQueue.store.clearGeneration
+            // The store the picture comes from (AI cache or API pool) and its clear generation: a
+            // clear or a source switch while the picture is staged keeps it off screen.
+            let epochStore = imageQueue.activeStore
+            let cacheEpoch = epochStore.clearGeneration
+            let queue = imageQueue
+            let sameEpoch = { queue.activeStore === epochStore && epochStore.clearGeneration == cacheEpoch }
             let currentID = imageBuffer.displayedID()
             let prefetch = Task {
                 guard !isClearing, let item = await imageQueue.reserveForFill(excluding: currentID),
-                      !Task.isCancelled, imageQueue.store.clearGeneration == cacheEpoch,
+                      !Task.isCancelled, sameEpoch(),
                       now() < cue.start - 2 else { return }
                 stagedImage = item
                 ArchiveFootageService.shared.queuedImage(item.metadata)
@@ -399,7 +411,7 @@ final class VisualEngine: ObservableObject {
                 LMLog.visual.info("Lo-Fi image reveal re-planned: the take grid moved")
                 continue
             }
-            if let item = stagedImage, !isClearing, imageQueue.store.clearGeneration == cacheEpoch {
+            if let item = stagedImage, !isClearing, sameEpoch() {
                 reveal = cue
                 imageQueue.showReserved(item)
                 standbyIndex += 1

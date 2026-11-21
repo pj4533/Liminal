@@ -120,7 +120,7 @@ struct ImageCollectionsTests {
         let c = ImageCollections.bundled
         #expect(c.version >= 2)
         #expect(c.sources.count >= 12)
-        #expect(c.defaults.targetLongSide == 3072)
+        #expect(c.defaults.targetLongSide == 2528)
         #expect(c.defaults.storeBudgetBytes == 3_000_000_000)
     }
 

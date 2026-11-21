@@ -421,6 +421,12 @@ nonisolated final class CuratedImageFeed: Sendable {
     /// Text (documents, captions) and prominent faces, on the 3:2 window that will be shown. If Vision
     /// fails (possible in the simulator) the check passes and the failure is logged.
     static func visionRejection(_ image: CGImage, paperShare: Double, thresholds t: OpennessThresholds) -> String? {
+        #if targetEnvironment(simulator)
+        // Vision cannot create its inference context in the visionOS Simulator: every attempt failed
+        // (2026-11-21), and the failed setups during live ingest coincided with 100-320 ms render stalls
+        // that an offline (no ingest) run did not have. The checks run on Macs and devices only.
+        return nil
+        #else
         let framed = ImageFraming.coverCrop(image)
         let text = VNDetectTextRectanglesRequest()
         let faces = VNDetectFaceRectanglesRequest()
@@ -443,5 +449,6 @@ nonisolated final class CuratedImageFeed: Sendable {
             return String(format: "a face covers %.1f%% of the frame", biggest * 100)
         }
         return nil
+        #endif
     }
 }
