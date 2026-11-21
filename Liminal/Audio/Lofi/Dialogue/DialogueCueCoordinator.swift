@@ -337,6 +337,10 @@ nonisolated final class DialogueDirector: @unchecked Sendable {
         /// Test seam: extra time spent after classification, standing in for slow analysis.
         var analysisDelay: Duration = .zero
         var transcriptCap = DialogueCueCoordinator.transcriptCap
+        /// Lines played across sessions (D123). The app's file ledger, or an in-memory one under
+        /// XCTest so unit tests neither read nor consume the user's played lines.
+        var ledger: DialogueLineLedger = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil
+            ? .shared : DialogueLineLedger()
         var now: @Sendable () -> Double = { Double(DispatchTime.now().uptimeNanoseconds) / 1e9 }
         /// Bounded SoundAnalysis classification (buffer, seconds, budget). Tests may inject fixed windows.
         var classify: @Sendable (AVAudioPCMBuffer, Double, Double) async -> [LofiSpeechFocus.Window] = {
@@ -346,6 +350,7 @@ nonisolated final class DialogueDirector: @unchecked Sendable {
 
     init(_ settings: Settings = Settings()) {
         self.settings = OSAllocatedUnfairLock(initialState: settings)
+        state.withLock { $0.memory = DialoguePerformanceMemory(ledger: settings.ledger) }
     }
 
     func configure(_ body: (inout Settings) -> Void) { settings.withLock { body(&$0) } }
@@ -368,7 +373,7 @@ nonisolated final class DialogueDirector: @unchecked Sendable {
         return built
     }
 
-    func resetMemory() { state.withLock { $0.memory = DialoguePerformanceMemory(); $0.generation += 1 } }
+    func resetMemory() { state.withLock { $0.memory = DialoguePerformanceMemory(ledger: $0.memory.ledger); $0.generation += 1 } }
 
     // MARK: Bank cache
 
@@ -441,6 +446,10 @@ nonisolated final class DialogueDirector: @unchecked Sendable {
     func commit(_ memory: DialoguePerformanceMemory, expecting generation: Int) -> Int? {
         state.withLock { s -> Int? in
             guard s.generation == generation else { return nil }
+            // Lines that led a loop for the first time in this plan go into the ledger.
+            for use in memory.motifLines where !s.memory.motifLines.contains(use) {
+                memory.ledger.record(contentID: use.contentID, seconds: use.seconds)
+            }
             s.memory = memory
             s.generation += 1
             return s.generation

@@ -391,3 +391,70 @@ struct DialogueMotifTests {
         #expect(!DialogueReorderGuard.allowsPieceReorder(["give", "me", "two", "minutes"]))
     }
 }
+
+// MARK: - Line ledger (D123)
+
+struct DialogueLineLedgerTests {
+    @Test func overlappingLinesCountAsTheSameLine() {
+        #expect(DialogueLineLedger.sameLine(10..<14, 11..<15))      // 3 of 4 s
+        #expect(!DialogueLineLedger.sameLine(10..<14, 13..<17))     // 1 of 4 s
+        let ledger = DialogueLineLedger()
+        #expect(ledger.lastPlay(contentID: "a", seconds: 10..<14) == nil)
+        ledger.record(contentID: "a", seconds: 10..<14, at: Date(timeIntervalSince1970: 100))
+        ledger.record(contentID: "a", seconds: 10.2..<14.1, at: Date(timeIntervalSince1970: 200))
+        let play = ledger.lastPlay(contentID: "a", seconds: 10.5..<13.5)
+        #expect(play?.count == 2 && play?.last == 200)
+        #expect(ledger.lastPlay(contentID: "b", seconds: 10..<14) == nil)
+        #expect(ledger.playedLines(contentID: "a") == 1)
+    }
+
+    @Test func playsSurviveARelaunch() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("ledger-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        DialogueLineLedger(url: url).record(contentID: "film", seconds: 30..<33)
+        var reloaded = DialogueLineLedger(url: url)
+        for _ in 0..<40 where reloaded.playedLines(contentID: "film") == 0 {   // the save is coalesced (about 1 s)
+            try await Task.sleep(for: .milliseconds(100))
+            reloaded = DialogueLineLedger(url: url)
+        }
+        #expect(reloaded.lastPlay(contentID: "film", seconds: 30..<33)?.count == 1)
+    }
+
+    /// "Repeats on chops should be super rare, only after a lot of usage" (user, 21 November 2026).
+    /// Sessions that start fresh (memory reset, as Stop and Play do) still never lead a loop with a
+    /// line already played in an earlier session while the films have unplayed lines.
+    @Test func noLineReturnsAcrossSessionsWhileUnplayedLinesRemain() throws {
+        let films = [MotifShape.film(MotifShape.corpus, id: "corpus-l", transcribed: false),
+                     MotifShape.film(MotifShape.other, id: "other-l", transcribed: false)]
+        let shape = MotifShape(name: "ledger-84", bpm: 84, films: films)
+        let ledger = DialogueLineLedger()
+        var played: [(String, Range<Double>)] = []
+        for session in 0..<3 {
+            var memory = DialoguePerformanceMemory(ledger: ledger)
+            let beat = 60 / shape.bpm
+            for take in 0..<2 {
+                let snapshot = DialogueFixtures.snapshot(bpm: shape.bpm, origin: 0.5 + Double(take) * 64 * beat,
+                                                         phraseAtOrigin: 4 * take, takeIndex: take, seed: 3)
+                for half in 0..<2 {
+                    let cue = take * 2 + half
+                    let film = shape.films[cue % shape.films.count]
+                    let window = snapshot.time(beat: Double(32 * half))..<snapshot.time(beat: Double(32 * (half + 1)))
+                    let before = memory.motifLines
+                    _ = DialogueMotif.plan(source: film.source, analysis: film.analysis, bank: film.bank, transcript: nil,
+                                           snapshot: snapshot, window: window, earliestStart: window.lowerBound,
+                                           memory: &memory, seed: UInt64(7 + session * 10 + cue), cueToken: cue + 1, revision: 0)
+                    for use in memory.motifLines where !before.contains(use) {   // what the coordinator's commit does
+                        ledger.record(contentID: use.contentID, seconds: use.seconds)
+                        played.append((use.contentID, use.seconds))
+                    }
+                }
+            }
+        }
+        #expect(played.count >= 6)
+        for (i, a) in played.enumerated() {
+            for b in played[(i + 1)...] where a.0 == b.0 {
+                #expect(!DialogueLineLedger.sameLine(a.1, b.1), "\(a.0) \(a.1) returned as \(b.1)")
+            }
+        }
+    }
+}

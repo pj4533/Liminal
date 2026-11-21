@@ -48,9 +48,14 @@ nonisolated enum DialogueMotifTuning {
     static let subLineShare = 0.5
     /// The full line plays at most this often per loop.
     static let maximumLineStatements = 2
-    /// A line leads at most this many loops (the first time and one return), never two in a row.
-    static let lineUses = 2
-    static let lineHistory = 8
+    /// A line leads one loop per session. Across sessions `DialogueLineLedger` keeps every played
+    /// line, so a line only returns once the cue's film and the recent films have no unplayed line
+    /// left (D123; before, two uses and an 8-line history let each film's best line return within minutes).
+    static let lineUses = 1
+    static let lineHistory = 512
+    /// The motif picks among this many of the best unplayed lines (seeded), so a film's lines are
+    /// explored rather than always its top-ranked one.
+    static let linePool = 3
     /// Recent films the motif may dig a fresh line from when a loop's own film has none
     /// (19 November 2026: a narration-over-music film gave no line and one line held 32 bars).
     static let crateSize = 4
@@ -107,6 +112,8 @@ nonisolated struct DialogueMotifLineUse: Sendable, Equatable {
     let loop: Int
     let contentID: String
     let frames: Range<Int>
+    /// The line in film seconds (the ledger's key).
+    var seconds: Range<Double> = 0..<0
 }
 
 /// A 2-bar cell of pieces. Slots are sixteenths from the cell start; an `after` item sits on the
@@ -209,6 +216,12 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
         if let dug = fromCrate(loop: loop, excluding: source.contentID, memory: memory, seed: seed, beatDuration: beatDuration) {
             return dug
         }
+        // Every line of this film and the crate has been played (after many hours): reuse the line
+        // played longest ago rather than carrying the last loop's line.
+        if let recycled = make(loop: loop, source: source, analysis: analysis, transcript: transcript, memory: memory,
+                               seed: seed, beatDuration: beatDuration, recycle: true) {
+            return recycled
+        }
         if let previous = memory.motif { return previous.carried(to: loop, seed: seed, memory: memory) }
         return nil
     }
@@ -237,7 +250,8 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
 
     /// Chooses the best line (or `line` when given), cuts it into pieces and arranges the loop.
     static func make(loop: Int, source: DialogueSource, analysis: DialogueAnalysis, transcript: DialogueTranscript?,
-                     memory: DialoguePerformanceMemory, seed: UInt64, beatDuration: Double, line wanted: Int? = nil) -> DialogueMotif? {
+                     memory: DialoguePerformanceMemory, seed: UInt64, beatDuration: Double, line wanted: Int? = nil,
+                     recycle: Bool = false) -> DialogueMotif? {
         guard let f = analysis.features, !analysis.units.isEmpty, analysis.contentID == source.contentID,
               let samples = source.buffer.floatChannelData?[0] else { return nil }
         var units = analysis.units
@@ -257,7 +271,10 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
         } else {
             let ranked = rankedLines(units: units, rejections: rejections, rate: rate, maximum: maximum)
             let used = memory.motifLines
-            func blocked(_ u: SpeechUnit) -> Bool {
+            func filmSeconds(_ u: SpeechUnit) -> Range<Double> {
+                source.sourceSeconds(frame: u.frames.lowerBound)..<source.sourceSeconds(frame: u.frames.upperBound)
+            }
+            func blockedThisSession(_ u: SpeechUnit) -> Bool {
                 let key = lineKey(analysis.contentID, u.frames)
                 if used.filter({ $0.key == key }).count >= DialogueMotifTuning.lineUses { return true }
                 // Never the previous loop's line, nor a line overlapping it by more than half.
@@ -266,7 +283,20 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
                         && overlapShare(use.frames, u.frames) > 0.5
                 }
             }
-            guard let pick = ranked.first(where: { !blocked($0) }) else { return nil }
+            let open = ranked.filter { !blockedThisSession($0) }
+            let pick: SpeechUnit?
+            if recycle {
+                // Every line here has been played: go back to the one played longest ago.
+                pick = open.min { a, b in
+                    (memory.ledger.lastPlay(contentID: analysis.contentID, seconds: filmSeconds(a))?.last ?? 0)
+                        < (memory.ledger.lastPlay(contentID: analysis.contentID, seconds: filmSeconds(b))?.last ?? 0)
+                }
+            } else {
+                let fresh = open.filter { memory.ledger.lastPlay(contentID: analysis.contentID, seconds: filmSeconds($0)) == nil }
+                let pool = Array(fresh.prefix(DialogueMotifTuning.linePool))
+                pick = pool.isEmpty ? nil : pool[Int((seed ^ UInt64(bitPattern: Int64(loop)) &* 0xD6E8_FEB8_6659_FD93) >> 33) % pool.count]
+            }
+            guard let pick else { return nil }
             line = pick
         }
         let count = min(source.frameCount, f.frameCount)
@@ -925,8 +955,11 @@ nonisolated extension DialoguePerformanceMemory {
 
     mutating func setMotif(_ motif: DialogueMotif, statements: Int) {
         if self.motif?.loop != motif.loop || self.motif?.lineKey != motif.lineKey {
+            let frames = motif.line.frames
             motifLines.append(DialogueMotifLineUse(key: motif.lineKey, loop: motif.loop, contentID: motif.source.contentID,
-                                                   frames: motif.line.frames))
+                                                   frames: frames,
+                                                   seconds: motif.source.sourceSeconds(frame: frames.lowerBound)
+                                                       ..< motif.source.sourceSeconds(frame: frames.upperBound)))
             if motifLines.count > DialogueMotifTuning.lineHistory { motifLines.removeFirst(motifLines.count - DialogueMotifTuning.lineHistory) }
         }
         self.motif = motif

@@ -805,3 +805,24 @@ Made while building PASS 1 (conductor, harmony, scenes, mix bus, drone/pad/lead/
 - The files are renamed to the `AJ_HALL_DRUM_BREAK_<NAME>_<BPM>_BPM` scheme and added to the local, gitignored `SlowBurnBeatGrid.json` (100 entries). The bundled catalog wins over loose WAVs, so a break missing from it would be ignored. The new entries carry `onsetPhaseMilliseconds` 0 and `beatSupport` 0, as loose WAVs do; neither is read at playback.
 - Take pool (closest tempo distance plus 4 BPM, the previous take excluded), Vol. 3 alone then all four: 58 BPM 2 to 3, 63 BPM 8 to 23, 65 BPM 12 to 38, 67 BPM 17 to 53, 69 BPM (default) 18 to 64, 72 BPM 16 to 65, 75 BPM 9 to 50, 78 BPM 9 to 29, 82 BPM 9 to 8 (now 78-84 BPM takes, at most 5 % off instead of 9-15 %).
 - Checked: a 32-bar capture at 80 BPM, seed 2077, plays Vol. 2 SWIFTZ (80 BPM). Not yet checked on the new takes: the bass kick-anchor calibration (D115/D118) and the fill detector (T48/T50) were measured on the 25 Vol. 3 takes only; mix baselines at a given seed now draw from a larger pool, so a seed can land on a different take than before.
+
+## D123. Dialogue lines do not repeat until the films run out of unplayed lines (2026-11-21)
+
+**Report.** The user heard the same quotes come back as chops: "We have all that amazing dialog in these old films we need to use it ... Repeats on chops should be super rare, only after a lot of usage. To the point where I probably wouldn't notice."
+
+**Cause.** Each 16-bar loop leads with one line (D111). The rules across loops were loose and short-lived:
+
+- A line could lead two loops (`lineUses = 2`), and only the last 8 lines were remembered (`lineHistory = 8`, about 7 minutes at 72 BPM).
+- The choice was deterministic: the top-ranked unblocked line of the film won. The weaver keeps returning to the same 12 cached films, so once a film's best line left the 8-line history it came straight back.
+- The memory was reset on every Stop and Play, so each session opened with the same favourite lines.
+
+**Change.**
+
+- `DialogueLineLedger` records every line that leads a loop, per film (`contentID`), as film seconds with a play count and the time of the latest play. It is kept in `Application Support/Liminal/DialogueLines.json`, loaded once, and saved on a utility queue at most once a second. Nothing caps or prunes it (A31: no content limits); a line costs about 60 bytes.
+- `DialogueMotif.make` skips any line that overlaps a played line by more than half of the shorter one, in addition to the in-session rules (now `lineUses = 1`, `lineHistory = 512`).
+- It picks among the three best unplayed lines (`linePool = 3`, seeded by the loop), so each film's lines are explored instead of always its top one.
+- Order when a loop needs a line: an unplayed line of the cue's film, then an unplayed line of the crate's last four films (D111), then the cue's film's line played longest ago (`recycle`), and only then the previous loop's line carried. With footage pieces starting at random points of 12 films, the recycle step needs the reachable lines of every recent film to have been played.
+- The coordinator writes the ledger only when a plan is committed (`DialogueCueCoordinator.commit`), so speculative plans that are rebuilt never mark lines as played. `resetMemory` (Stop) keeps the ledger. Under XCTest the coordinator gets an in-memory ledger, so tests neither read nor consume the user's played lines.
+
+**Verified.** `DialogueLineLedgerTests`: overlap rule and counts; the file survives a reload; three sessions with fresh memory over two films lead 12 loops with no line overlapping an earlier one. The dialogue suites (`DialogueMotifTests`, `DialogueRuntimeTests`, `DialogueEngineTests`, `ArchiveVoiceRenderTests` and the other dialogue and archive-audio suites, 116 tests) pass unchanged. Not yet heard on the device over hours of play.
+

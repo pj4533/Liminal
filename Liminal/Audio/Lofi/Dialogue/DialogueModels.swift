@@ -592,8 +592,13 @@ nonisolated struct DialoguePerformanceMemory: Sendable {
     /// Recent films heard by the dialogue layer, newest last (bounded by `DialogueMotifTuning.crateSize`):
     /// when a loop's own film has no usable line, the motif digs a fresh line from one of these.
     var motifCrate: [DialogueMotifCrateEntry] = []
+    /// Lines played in earlier sessions and cues (D123). In memory unless the coordinator hands in
+    /// `DialogueLineLedger.shared`; shared by reference, written only on commit.
+    var ledger = DialogueLineLedger()
 
     init() {}
+
+    init(ledger: DialogueLineLedger) { self.ledger = ledger }
 
     func record(phrase: Int) -> DialogueBlockRecord? { blocks.last { $0.phrase == phrase } }
 
