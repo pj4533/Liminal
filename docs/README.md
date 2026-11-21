@@ -5,6 +5,7 @@
 | Guide | Contents |
 | --- | --- |
 | [Getting started](getting-started.md) | Requirements, API keys, builds and tests |
+| [Recording](recording.md) | The Record button: picture and mix captured from the renderer, HEVC plus 24-bit LPCM, saved to Photos; measurements and the test flag |
 | [Experience and controls](experience.md) | Music, visuals, the ten pinned films, rotating discoveries, source credits and playback settings |
 | [Lo-Fi studio research](research/lofi-studio.md) | Composition, mixing, effect design, and automated audio checks |
 | [Lo-Fi handoff follow-through](research/lofi-handoff-checklist.md) | Arrangement, instrument levels, eight-bar image changes and measured dialogue, effects and soundtrack levels |

@@ -19,6 +19,9 @@ final class GenerativeEngine: ObservableObject {
     let conductor: MusicConductor
     let mix: MixBus
     let master: LofiMasterBus
+    /// Unity mixer after the master chain, the graph's final node: the recorder taps it
+    /// (docs/recording.md). The Lo-Fi calibration keeps its own tap on `master.output`.
+    let recordTap: Mixer
     /// The Ambient chain's Apple sample limiter (offline Ambient renders may bypass it).
     var outputCeiling: PeakLimiter { master.limiter }
     /// Fade of the Lo-Fi stems on stop, also used for each half of a master profile change.
@@ -121,7 +124,8 @@ final class GenerativeEngine: ObservableObject {
             conductor?.updateArchiveTempo(beatDuration: duration, phrase: index, seed: seed)
             master?.setCalibrationBeatDuration(duration)
         }
-        engine.output = master.output
+        recordTap = Mixer(master.output)
+        engine.output = recordTap
         configurationObserver = NotificationCenter.default.publisher(for: .AVAudioEngineConfigurationChange, object: engine.avEngine)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.recoverStoppedGraph() }

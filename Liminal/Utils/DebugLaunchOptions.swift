@@ -272,6 +272,19 @@ nonisolated enum DebugLaunchOptions {
         return times.isEmpty ? nil : times
     }()
 
+    /// -LiminalRecordAt <start>,<seconds>[,photos]: start a recording <start> s after playback is ready and stop
+    /// it <seconds> later, keeping the file in Documents/Recordings without the Photos step (no prompt in
+    /// automation). docs/recording.md.
+    static let recordAt: (start: Double, seconds: Double)? = {
+        guard let s = defaults.string(forKey: "LiminalRecordAt") else { return nil }
+        let v = s.split(separator: ",").prefix(2).compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+        guard v.count == 2, v[0] >= 0, v[1] > 0 else { return nil }
+        return (v[0], v[1])
+    }()
+    /// `-LiminalRecordAt 5,30,photos` also runs the Photos step (grant access first, e.g.
+    /// `xcrun simctl privacy <udid> grant photos-add com.saygoodnight.Liminal`).
+    static let recordToPhotos: Bool = defaults.string(forKey: "LiminalRecordAt")?.lowercased().hasSuffix(",photos") ?? false
+
     /// True when any API image flag is set.
     static var anyImageAPIFlag: Bool {
         imageSource != nil || imageProviders != nil || imageAPIOffline || imageAPISeed != nil || imageAPIFresh
@@ -297,7 +310,7 @@ nonisolated enum DebugLaunchOptions {
             || videoOffline || videoOff || controlsScroll != nil || controlsWidth != nil || videoOffAt != nil
             || dialogueTranscription != nil
             || dropColour != nil || dropFinisher != nil || dropLead != nil || dropOff
-            || anyImageAPIFlag
+            || anyImageAPIFlag || recordAt != nil
     }
 #else
     static let allowGeneration = false
@@ -330,6 +343,8 @@ nonisolated enum DebugLaunchOptions {
     static let shellDepth: Float? = nil
     static let shellTextureStereo = false
     static let hideControls = false
+    static let recordAt: (start: Double, seconds: Double)? = nil
+    static let recordToPhotos = false
     static let autoExitAfter: Double? = nil
     static let depthImagePath: String? = nil
     static let shellCycle: [(image: String, depth: String?)] = []

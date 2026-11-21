@@ -103,6 +103,7 @@ struct ContentView: View {
 
             // DEBUG perf harness: -LiminalAutoPlay YES (always false in Release)
             DebugLaunchOptions.logApplied()
+            RecordingController.shared.scheduleDebugRecording(audio: audioEngine)
             if DebugLaunchOptions.autoPlay, !audioEngine.isRunning {
                 audioEngine.start()
                 LMLog.general.info("🧪 DEBUG: auto-play started")
@@ -168,6 +169,7 @@ extension ContentView {
                                    cachedCount: visualEngine.totalCachedCount,
                                    queuedCount: visualEngine.queuedCount,
                                    source: visualEngine.imageSource)
+                    RecordControls(audio: audioEngine)
                     if let status = visualEngine.statusMessage {
                         Label(status, systemImage: "info.circle")
                             .font(.callout)
@@ -223,6 +225,7 @@ extension ContentView {
 
     private func togglePlayback() {
         if audioEngine.isRunning {
+            RecordingController.shared.playbackStopped()   // finish and save the movie first
             audioEngine.stop()
         } else {
             audioEngine.start()

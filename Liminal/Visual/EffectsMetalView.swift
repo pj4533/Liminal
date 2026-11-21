@@ -35,6 +35,9 @@ final class EffectsMetalView: MTKView {
 
     /// Draw-to-present latency (exponential mean over presented frames), shared by every view.
     nonisolated private static let presentLatency = Mutex<Double?>(nil)
+    /// Drawable size of the last frame, the size of a new recording (RecordingController).
+    nonisolated private static let drawableSizeBox = Mutex(CGSize.zero)
+    nonisolated static var lastDrawableSize: CGSize { drawableSizeBox.withLock { $0 } }
 
     /// Seconds from a draw to its presentation plus half a 60 Hz frame, so the cut errs early
     /// (docs/plans/drop-transitions.md 3.2). 25 ms until frames have been presented; `-LiminalDropLead`.
@@ -582,6 +585,14 @@ final class EffectsMetalView: MTKView {
                 let presented = drawUptime + latency
                 LMLog.visual.info("Lo-Fi drop cut presented \((presented - downbeat) * 1000, format: .fixed(precision: 1)) ms from downbeat")
             }
+        }
+        // Recording: copy this frame into the movie inside the same command buffer (docs/recording.md),
+        // stamped with its expected presentation time on the host clock.
+        let drawableSize = CGSize(width: drawable.texture.width, height: drawable.texture.height)
+        if Self.drawableSizeBox.withLock({ $0 }) != drawableSize { Self.drawableSizeBox.withLock { $0 = drawableSize } }
+        if FrameRecorder.shared.isRecording {
+            FrameRecorder.shared.capture(drawable.texture, commandBuffer: commandBuffer,
+                                         hostTime: mediaAtDraw + Self.dropLead - 0.5 / 60)
         }
         commandBuffer.present(drawable)
         commandBuffer.commit()

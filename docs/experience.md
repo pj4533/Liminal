@@ -133,6 +133,8 @@ In Lo-Fi the bass is the foundation, about as loud as the drums. It plays a shor
 
 Liminal varies note density, reverb, and echo slowly and independently. The mix stays sparse while the balance between the bass, musical textures, and their tails evolves.
 
+**Record.** Under Play/Stop on both platforms: records the rendered picture and the final mix (no controls, cursor or passthrough), and when stopped adds the movie to Photos (add-only permission, asked once). On Vision Pro it records the picture projected on the dome, not the headset view; use Control Center → Record My View for that. See [recording.md](recording.md).
+
 On macOS the panel scrolls, and Cache only, Clear All Images and Reset live in a "Storage & Settings" sheet (Cmd-,). The Archive Footage card (both platforms) also shows what is on screen, the cache size and the film source credit. On visionOS all controls are in the control window (Playback, Music, Archive Footage, Visuals, Images & Storage), plus Enter/Exit Liminal (the immersive space) and a Depth slider for how far the relief comes toward you. While immersed, tap the scene outside the controls to hide the window or bring it back.
 
 

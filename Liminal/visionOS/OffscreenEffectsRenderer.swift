@@ -724,6 +724,12 @@ final class OffscreenEffectsRenderer {
             }
         }
 
+        // Recording: the frame just drawn, scaled back to 3:2, in the same command buffer
+        // (docs/recording.md). RealityKit shows it at about the next vsync.
+        if FrameRecorder.shared.isRecording {
+            FrameRecorder.shared.capture(target, commandBuffer: commandBuffer, hostTime: CACurrentMediaTime() + 1.0 / 60)
+        }
+
         commandBuffer.commit()
         // NO waitUntilCompleted() - GPU works asynchronously while CPU prepares next frame
 

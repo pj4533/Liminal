@@ -57,6 +57,7 @@ struct ControlsView: View {
             .padding(32)
         }
         .onAppear {
+            RecordingController.shared.scheduleDebugRecording(audio: audioEngine)
             controlsVisible = true
             audioEngine.apply(settings)
             applyDebugLaunchOptions()
@@ -110,6 +111,7 @@ struct ControlsView: View {
                            cachedCount: visualEngine.totalCachedCount,
                            queuedCount: visualEngine.queuedCount,
                            source: visualEngine.imageSource)
+            RecordControls(audio: audioEngine)
             if let status = visualEngine.statusMessage {
                 Label(status, systemImage: "info.circle")
                     .font(.callout)
@@ -212,6 +214,7 @@ struct ControlsView: View {
 
     private func togglePlayback() {
         if audioEngine.isRunning {
+            RecordingController.shared.playbackStopped()   // finish and save the movie first
             audioEngine.stop()
         } else {
             audioEngine.start()
