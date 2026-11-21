@@ -20,6 +20,7 @@
 | [Bass and pad research](research/bass-and-pads/README.md) | Boom bap and dub bass, pad chords under a lead, CC0 bass samples, and the plan for the 2026-11-20 rework |
 | [Mix distortion research](research/mix-distortion/README.md) | How distortion was detected by measurement, gain staging, and the drive sweep behind D121 |
 | [Bass tone redo plan](plans/bass-tone-redo.md) | The warm sustained sub with a short strike on the kick, its gates and measurements (D119; rotation D120) |
+| [Drop transitions research](research/drop-transitions.md) | Glitch and datamosh craft, drop-edit timing and audiovisual sync tolerances behind T44-T50 |
 | [Drop transitions plan](plans/drop-transitions.md) | Lo-Fi image changes that build over the drum fill and cut clean on the downbeat (T44-T50) |
 | [Architecture](architecture.md) | Audio and rendering pipelines, dependencies and attribution |
 | [Development reference](development.md) | Debug flags, automation scripts and contributing |

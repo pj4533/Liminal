@@ -458,3 +458,21 @@ carry the real gate.
 Research notes and the code map for this plan are in the session scratchpad (`transitions/research-glitch.md`,
 `transitions/codemap.md`). The sync tolerances come from secondary summaries of ITU-R BT.1359 and the
 audiovisual simultaneity literature; the 20-30 ms figure for percussive transients is approximate.
+
+## 11. Outcome (20 November 2026)
+
+Implemented on branch `transitions-drop` (not pushed, not merged). Measurements, deviations from this plan
+and open items are in `docs/decisions/transitions.md` T44-T50.
+
+- In Lo-Fi every drum-timed image change is a drop: the outgoing picture breaks up from the fill and the
+  downbeat frame is exactly an ordinary frame of the new picture. 19 styles, six colour layers, five
+  finishers. `-LiminalDropOff YES` restores the old behaviour.
+- Passed: unit tests, both builds, 38 of 38 offline clips, ambient transitions and non-drop GPU cost
+  unchanged, visionOS and macOS cut timing in the Simulator and live.
+- Changes from the plan: flatter build curve, old framing held until the cut, base effects calm only in the
+  last quarter second, per-drop shader variants, dive dropped. A review fix starts the new picture's framing
+  on the cut frame.
+- Open: drop frame GPU cost 1.03-1.11 x the classic frame (gate 1.05); fill detector not calibrated on the
+  private takes; display leads unmeasured; halfway cuts follow the grid, not the drummer's actual hit, and
+  land 44-46 ms late on the demo take (snapping to kick or snare landmarks would fix it); a route recovery
+  mid-build is not re-planned.
