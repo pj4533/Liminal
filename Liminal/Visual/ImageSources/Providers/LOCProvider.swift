@@ -20,7 +20,7 @@ nonisolated struct LOCProvider: ImageProvider {
         guard let url = LooseJSON.query("https://www.loc.gov/collections/\(collection)/", [
             ("fo", "json"), ("q", q.q), ("c", String(perPage)), ("sp", String(page)), ("fa", "online-format:image"),
         ]) else { return CandidatePage(candidates: [], next: nil) }
-        let result = try Self.parseSearch(try await http.data(url))
+        let result = try Self.parseSearch(try await http.data(url), allowMaster: source.useMasters ?? false)
         let kept = (source.requireIIIF ?? true) ? result.candidates.filter { $0.hint != nil } : result.candidates
         return CandidatePage(candidates: kept, next: result.next == nil ? nil : String(page + 1))
     }
@@ -30,7 +30,7 @@ nonisolated struct LOCProvider: ImageProvider {
         var c = candidate
         if c.hint == nil {
             guard let url = URL(string: "https://www.loc.gov/item/\(c.itemID)/?fo=json") else { throw CandidateRejected(reason: "bad id") }
-            c = try Self.parseItem(try await http.data(url), id: c.itemID)
+            c = try Self.parseItem(try await http.data(url), id: c.itemID, allowMaster: source.useMasters ?? false)
         }
         guard let service = c.hint else { throw CandidateRejected(reason: "no IIIF service (1024 px only)") }
         if c.width == nil || c.height == nil, let infoURL = URL(string: service + "/info.json") {
@@ -47,8 +47,10 @@ nonisolated struct LOCProvider: ImageProvider {
             let scale = Double(target) / Double(long)
             w = Int((Double(fw) * scale).rounded()); h = Int((Double(fh) * scale).rounded())
         }
-        return ResolvedImage(url: imageURL, width: w, height: h, bytes: nil, mime: "image/jpeg",
-                             credit: try credit(for: c, source: source, context: context, imageURL: imageURL))
+        var resolved = ResolvedImage(url: imageURL, width: w, height: h, bytes: nil, mime: "image/jpeg",
+                                     credit: try credit(for: c, source: source, context: context, imageURL: imageURL))
+        if service.contains("/iiif/master:") { resolved.fallbackURL = URL(string: "\(service)/full/full/0/default.jpg") }
+        return resolved
     }
 
     // MARK: - Parsing
@@ -79,6 +81,21 @@ nonisolated struct LOCProvider: ImageProvider {
         return (service, width, height)
     }
 
+    /// IIIF service of the scanned master behind a 1024 px derivative, the trick from OpenPics' LoC
+    /// provider: `.../storage-services/service/pnp/fsac/1a33000/1a33800/1a33849v.jpg` ->
+    /// `https://tile.loc.gov/image-services/iiif/master:pnp:fsac:1a33000:1a33800:1a33849u`. FSA/OWI
+    /// colour, photochroms and Prokudin-Gorskii only expose their large TIFF masters this way
+    /// (measured 2026-11-21: 4698x3280, 2759x3666, 3808x3726). The size comes from info.json, and an
+    /// item without a master service fails that request and is rejected on its own.
+    static func masterIIIF(from urlString: String) -> String? {
+        let pattern = #"^https://tile\.loc\.gov/storage-services/service/(pnp/[^#?]+?)(?:v|r|_150px|t)\.(?:jpg|gif)(?:[#?].*)?$"#
+        guard let re = try? NSRegularExpression(pattern: pattern),
+              let m = re.firstMatch(in: urlString, range: NSRange(urlString.startIndex..., in: urlString)),
+              let r = Range(m.range(at: 1), in: urlString) else { return nil }
+        let path = urlString[r].replacingOccurrences(of: "/", with: ":")
+        return "https://tile.loc.gov/image-services/iiif/master:\(path)u"
+    }
+
     static func itemID(from idURL: String) -> String {
         idURL.split(separator: "/").last.map(String.init) ?? idURL
     }
@@ -90,7 +107,7 @@ nonisolated struct LOCProvider: ImageProvider {
         return s.split(separator: " ").map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined(separator: " ")
     }
 
-    static func parseSearch(_ data: Data) throws -> (candidates: [ImageCandidate], next: String?) {
+    static func parseSearch(_ data: Data, allowMaster: Bool = false) throws -> (candidates: [ImageCandidate], next: String?) {
         let root = try LooseJSON.object(data)
         var out: [ImageCandidate] = []
         for case let r as [String: Any] in LooseJSON.array(root["results"]) {
@@ -100,6 +117,11 @@ nonisolated struct LOCProvider: ImageProvider {
             var best: (service: String, width: Int?, height: Int?)?
             for case let u as String in LooseJSON.array(r["image_url"]) {
                 if let i = iiif(from: u), (i.width ?? 0) >= (best?.width ?? 0) { best = i }
+            }
+            if best == nil, allowMaster {
+                for case let u as String in LooseJSON.array(r["image_url"]) {
+                    if let m = masterIIIF(from: u) { best = (m, nil, nil); break }
+                }
             }
             let id = itemID(from: idURL)
             out.append(ImageCandidate(
@@ -114,7 +136,7 @@ nonisolated struct LOCProvider: ImageProvider {
     }
 
     /// /item/<id>/?fo=json: title, rights and the IIIF service with the master's size.
-    static func parseItem(_ data: Data, id: String) throws -> ImageCandidate {
+    static func parseItem(_ data: Data, id: String, allowMaster: Bool = false) throws -> ImageCandidate {
         let root = try LooseJSON.object(data)
         let item = LooseJSON.dict(root["item"]) ?? [:]
         var service: String?, width: Int?, height: Int?
@@ -130,13 +152,25 @@ nonisolated struct LOCProvider: ImageProvider {
             if service == nil, let u = LooseJSON.string(res["image"]), let i = iiif(from: u) { service = i.service }
             if service != nil { break }
         }
+        var fromMaster = false
+        if service == nil, allowMaster {
+            for case let res as [String: Any] in LooseJSON.array(root["resources"]) {
+                for case let group as [Any] in LooseJSON.array(res["files"]) {
+                    for case let f as [String: Any] in group {
+                        if service == nil, let u = LooseJSON.string(f["url"]), let m = masterIIIF(from: u) { service = m }
+                    }
+                }
+            }
+            fromMaster = service != nil
+        }
         let contributor = LooseJSON.string(item["contributor_names"]).map {
             // "Highsmith, Carol M., 1946-, photographer" -> "Highsmith, Carol M."
             $0.split(separator: ",").prefix(2).joined(separator: ",").trimmingCharacters(in: .whitespaces)
         }
         return ImageCandidate(providerID: "loc", itemID: id, title: LooseJSON.string(item["title"]),
                               creator: contributor, date: LooseJSON.year(LooseJSON.string(item["date"])),
-                              width: service == nil ? nil : width, height: service == nil ? nil : height,
+                              width: service == nil || fromMaster ? nil : width,
+                              height: service == nil || fromMaster ? nil : height,
                               bytes: nil, mime: "image/jpeg",
                               rights: LooseJSON.string(item["rights_advisory"]) ?? LooseJSON.string(item["rights_information"]),
                               pageURL: "https://www.loc.gov/item/\(id)/", imageURL: nil, hint: service)

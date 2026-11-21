@@ -208,6 +208,20 @@ struct ImageProviderParsingTests {
         #expect(ok.pageURL == "https://www.loc.gov/item/2015632003/")
     }
 
+    @Test func locMastersStandInForTheMissingIIIFDerivative() throws {
+        #expect(LOCProvider.masterIIIF(from: "https://tile.loc.gov/storage-services/service/pnp/fsac/1a33000/1a33800/1a33849v.jpg#h=715&w=1024")
+                == "https://tile.loc.gov/image-services/iiif/master:pnp:fsac:1a33000:1a33800:1a33849u")
+        #expect(LOCProvider.masterIIIF(from: "https://tile.loc.gov/storage-services/service/pnp/ppmsc/07700/07735r.jpg")
+                == "https://tile.loc.gov/image-services/iiif/master:pnp:ppmsc:07700:07735u")
+        #expect(LOCProvider.masterIIIF(from: "https://example.com/pnp/x/1v.jpg") == nil)
+
+        let result = try LOCProvider.parseSearch(try ImageAPIFixtures.data("loc-search.json"), allowMaster: true)
+        let master = result.candidates[0]   // the 2018 item that had only a 1024 px v.jpg
+        #expect(master.hint == "https://tile.loc.gov/image-services/iiif/master:pnp:highsm:52000:52077u")
+        #expect(master.width == nil && master.height == nil)   // read from info.json when resolved
+        #expect(result.candidates[1].hint == "https://tile.loc.gov/image-services/iiif/service:pnp:highsm:31900:31928")
+    }
+
     @Test func locItemAndInfo() throws {
         let item = try LOCProvider.parseItem(try ImageAPIFixtures.data("loc-item.json"), id: "2013631471")
         #expect(item.hint == "https://tile.loc.gov/image-services/iiif/service:pnp:highsm:24200:24293")
@@ -816,5 +830,38 @@ struct ImageQueueAPIModeTests {
         defer { try? FileManager.default.removeItem(at: root) }
         #expect(await queue.reserveForFill(excluding: nil) == nil)
         #expect(queue.standbyImage(index: 0) != nil)
+    }
+}
+
+// MARK: - Scan edges
+
+struct ScanEdgeTrimmerTests {
+    /// 1200x800 slide: a black rebate 8% wide on the left, 2% elsewhere, a mid-grey picture inside.
+    static func slide() -> CGImage {
+        let w = 1200, h = 800
+        let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+        ctx.setFillColor(red: 0, green: 0, blue: 0, alpha: 1)
+        ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+        ctx.setFillColor(red: 0.55, green: 0.5, blue: 0.4, alpha: 1)
+        ctx.fill(CGRect(x: 96, y: 16, width: w - 96 - 24, height: h - 32))
+        return ctx.makeImage()!
+    }
+
+    @Test func blackRebateIsTrimmedSideBySide() throws {
+        let rect = try #require(ScanEdgeTrimmer.contentRect(Self.slide()))
+        #expect(rect.minX >= 96 && rect.minX <= 96 + 40)        // left rebate plus the inset
+        #expect(rect.maxX <= 1200 - 24 && rect.maxX >= 1200 - 24 - 40)
+        #expect(rect.minY >= 16 && rect.maxY <= 800 - 16)
+    }
+
+    @Test func aPictureWithoutRebateStillLosesTheMinimumTrim() throws {
+        let ctx = CGContext(data: nil, width: 900, height: 600, bitsPerComponent: 8, bytesPerRow: 0,
+                            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+        ctx.setFillColor(red: 0.2, green: 0.6, blue: 0.3, alpha: 1)
+        ctx.fill(CGRect(x: 0, y: 0, width: 900, height: 600))
+        let rect = try #require(ScanEdgeTrimmer.contentRect(ctx.makeImage()!))
+        #expect(rect.minX >= 27 && rect.minX <= 30)   // 3% of 900, rounded up on the 300 px proxy
+        #expect(rect.width >= 900 * 0.93 && rect.width <= 900 * 0.94 + 1)
     }
 }

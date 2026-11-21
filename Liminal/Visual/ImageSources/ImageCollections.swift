@@ -108,6 +108,11 @@ nonisolated struct CuratedSource: Codable, Sendable, Equatable {
     var rejectTitleWords: [String]?
     var requireTitleContains: String?
     var requireIIIF: Bool?
+    /// LoC: when a result has no IIIF derivative, use the IIIF service of its scanned master (FSA/OWI
+    /// colour, photochroms), derived from the 1024 px JPEG url. `LOCProvider.masterIIIF`.
+    var useMasters: Bool?
+    /// Trim the film rebate of scanned slides (`ScanEdgeTrimmer`) before the border and openness checks.
+    var trimScanEdges: Bool?
     var requiresKey: String?
     var allowClassification: [String]?
     var allowMonochrome: Bool?

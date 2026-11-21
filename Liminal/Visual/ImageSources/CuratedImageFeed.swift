@@ -273,7 +273,9 @@ nonisolated final class CuratedImageFeed: Sendable {
         let clearGeneration = pool.store.clearGeneration
 
         let d = collections.defaults
-        let context = ResolveContext(targetLongSide: d.targetLongSide, maxBytes: d.maxBytes,
+        // Scans lose their film rebate after decode, so fetch them larger and scale back after the trim.
+        let fetchTarget = (source.trimScanEdges ?? false) ? Self.scanFetchTarget(d.targetLongSide) : d.targetLongSide
+        let context = ResolveContext(targetLongSide: fetchTarget, maxBytes: d.maxBytes,
                                      institution: collections.institution(provider: source.provider),
                                      allowlist: collections.licenseAllowlist)
         do {
@@ -281,7 +283,11 @@ nonisolated final class CuratedImageFeed: Sendable {
             try Self.preDownloadGate(resolved, defaults: d)
             let tmp = pool.tmpDirectory.appendingPathComponent(UUID().uuidString + ".download")
             defer { try? FileManager.default.removeItem(at: tmp) }
-            try await http.download(resolved.url, to: tmp, maxBytes: d.maxBytes)
+            do {
+                try await http.download(resolved.url, to: tmp, maxBytes: d.maxBytes)
+            } catch ImageFetchError.http(let code) where code >= 500 && resolved.fallbackURL != nil {
+                try await http.download(resolved.fallbackURL!, to: tmp, maxBytes: d.maxBytes)
+            }
             succeeded(source.provider)
             try Task.checkCancellation()
             let metadata = try store(file: tmp, resolved: resolved, source: source, clearGeneration: clearGeneration)
@@ -409,7 +415,14 @@ nonisolated final class CuratedImageFeed: Sendable {
     /// Decode, frame, gate, analyse and save. Returns the stored metadata.
     private func store(file: URL, resolved: ResolvedImage, source: CuratedSource, clearGeneration: UInt64) throws -> ImageMetadata {
         let d = collections.defaults
-        let decoded = try Self.decode(file, target: d.targetLongSide)
+        var decoded: CGImage
+        if source.trimScanEdges ?? false {
+            let trimmed = ScanEdgeTrimmer.trimmed(try Self.decode(file, target: Self.scanFetchTarget(d.targetLongSide)))
+            let limit = Self.decodeLongSide(width: trimmed.width, height: trimmed.height, target: d.targetLongSide)
+            decoded = Self.scaled(trimmed, maxLongSide: limit) ?? trimmed
+        } else {
+            decoded = try Self.decode(file, target: d.targetLongSide)
+        }
         var image = BorderTrimmer.trimmedIfBordered(decoded)
         if let window = ImageOpenness.bestWindow(image) {
             image = Self.copy(ImageFraming.crop(image, normalized: window)) ?? image
@@ -436,6 +449,22 @@ nonisolated final class CuratedImageFeed: Sendable {
     }
 
     /// A standalone copy of a cropped image (so the JPEG encoder and later readers do not keep the whole decode).
+    /// Fetch and decode size for `trimScanEdges` sources: room for up to 15% rebate per side.
+    static func scanFetchTarget(_ target: Int) -> Int { Int((Double(target) * 1.35).rounded()) }
+
+    /// A copy no larger than `maxLongSide` on its long side (also a plain copy, so crops drop their parent).
+    static func scaled(_ image: CGImage, maxLongSide: Int) -> CGImage? {
+        let long = max(image.width, image.height)
+        let scale = long > maxLongSide ? Double(maxLongSide) / Double(long) : 1
+        let w = max(1, Int((Double(image.width) * scale).rounded())), h = max(1, Int((Double(image.height) * scale).rounded()))
+        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                  bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return nil }
+        ctx.interpolationQuality = .high
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+        return ctx.makeImage()
+    }
+
     static func copy(_ image: CGImage) -> CGImage? {
         guard let ctx = CGContext(data: nil, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: 0,
                                   space: CGColorSpace(name: CGColorSpace.sRGB)!,

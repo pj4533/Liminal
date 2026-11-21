@@ -47,6 +47,9 @@ nonisolated struct ResolvedImage: Sendable, Equatable {
     var bytes: Int?
     var mime: String?
     let credit: ImageSourceCredit
+    /// Tried once when `url` answers HTTP 5xx. LoC: some FSA/OWI masters fail every scaled IIIF
+    /// request with 500 but serve `full/full` (1-5 MB JPEG, measured 2026-11-21); decode scales it.
+    var fallbackURL: URL? = nil
 }
 
 /// One page of search results. `next` is the cursor of the following page (a page number, an

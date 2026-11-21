@@ -43,7 +43,7 @@
    "search": "https://www.loc.gov/collections/{collection}/?fo=json&q={query}&c={count}&sp={page}&fa=online-format:image",
    "image": "{iiifService}/full/!{target},{target}/0/default.jpg",
    "info": "{iiifService}/info.json",
-   "notes": "Take iiifService from the result's image_url (https://tile.loc.gov/image-services/iiif/service:pnp:...). Skip results with no IIIF service: those only carry a 1024 px v.jpg and a TIFF master. Rights from item.rights_advisory.",
+   "notes": "Take iiifService from the result's image_url (https://tile.loc.gov/image-services/iiif/service:pnp:...). Skip results with no IIIF service: those only carry a 1024 px v.jpg and a TIFF master. Rights from item.rights_advisory. With useMasters, a result with only the 1024 px v.jpg uses the IIIF service of its scanned master instead: storage-services/service/pnp/<path>v.jpg -> image-services/iiif/master:pnp:<path with : for />u (FSA/OWI colour, newer Highsmith items, photochroms).",
    "license": "No known restrictions on publication (rights_advisory)",
    "institution": "Library of Congress"
   },
@@ -159,7 +159,8 @@
     "energy": 0.55,
     "warmth": 0.4
    },
-   "allowMonochrome": false
+   "allowMonochrome": false,
+   "useMasters": true
   },
   {
    "id": "loc-highsmith-landscape",
@@ -202,7 +203,50 @@
     "energy": 0.3,
     "warmth": 0.1
    },
-   "allowMonochrome": false
+   "allowMonochrome": false,
+   "useMasters": true
+  },
+  {
+   "id": "loc-fsa-owi-color",
+   "provider": "loc",
+   "enabled": true,
+   "weight": 2,
+   "themes": [
+    "1939-1944 Kodachrome",
+    "small towns",
+    "roads",
+    "farms",
+    "rail yards",
+    "America"
+   ],
+   "collection": "fsa-owi-color-photographs",
+   "queries": [
+    "landscape",
+    "road",
+    "highway",
+    "main street",
+    "town",
+    "trees",
+    "farm",
+    "railroad",
+    "sky",
+    "night"
+   ],
+   "requireIIIF": true,
+   "useMasters": true,
+   "license": "loc rights_advisory (FSA/OWI, US Government work)",
+   "pinned": [],
+   "mood": {
+    "moods": [
+     "melancholy",
+     "serene"
+    ],
+    "subjectCategory": "landscape",
+    "energy": 0.3,
+    "warmth": 0.5
+   },
+   "allowMonochrome": false,
+   "trimScanEdges": true
   },
   {
    "id": "nasa-space-age",
