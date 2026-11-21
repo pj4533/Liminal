@@ -43,6 +43,9 @@ nonisolated final class DropPipelines: Sendable {
         var library: MTLLibrary?
         var twins: [Key: [String: MTLRenderPipelineState]] = [:]
         var order: [Key] = []
+        /// Pipelines bound since the last announcement, and twins already being compiled.
+        var used: Set<String> = []
+        var pending: Set<String> = []
     }
     private let state = Mutex(State())
     /// Distinct drops kept compiled (each key holds one twin per registered pipeline).
@@ -86,18 +89,30 @@ nonisolated final class DropPipelines: Sendable {
         let key = Key(spec)
         // Specializing the functions is synchronous Metal compilation (about 40 ms each): never on the main
         // thread (it stalled the macOS render 350-410 ms per drop).
+        // Only the pipelines the renderer has been binding are specialized (one to three, not all 18: compiling
+        // every variant at once coincided with Core Audio overloads in the Simulator). A pipeline first bound
+        // during the drop is compiled then, and the plain one is used meanwhile.
         let targets = live.withLock { $0.compactMap(\.value) }
-        DispatchQueue.global(qos: .utility).async { for t in targets { t.prepare(key) } }
+        DispatchQueue.global(qos: .background).async { for t in targets { t.prepare(key) } }
     }
 
-    /// Builds the twins for `key` (asynchronously unless `wait`).
-    func prepare(_ key: Key, wait: Bool = false) {
+    /// Builds the twins for `key` (asynchronously unless `wait`): for the pipelines bound since the last
+    /// announcement, or for `only` (all registered ones when `wait`, the offline tools).
+    func prepare(_ key: Key, wait: Bool = false, only: String? = nil) {
         let job: (MTLDevice, MTLLibrary, [Base])? = state.withLock { s in
-            guard s.twins[key] == nil, let d = s.device, let l = s.library else { return nil }
-            s.twins[key] = [:]
-            s.order.append(key)
-            while s.order.count > Self.keep { s.twins[s.order.removeFirst()] = nil }
-            return (d, l, s.bases)
+            guard let d = s.device, let l = s.library else { return nil }
+            if s.twins[key] == nil {
+                s.twins[key] = [:]
+                s.order.append(key)
+                while s.order.count > Self.keep { s.twins[s.order.removeFirst()] = nil }
+            }
+            let names: Set<String> = only.map { [$0] } ?? (wait || s.used.isEmpty ? Set(s.bases.map(\.name)) : s.used)
+            if only == nil { s.used = [] }
+            let todo = s.bases.filter { b in
+                names.contains(b.name) && s.twins[key]?[b.name] == nil && !s.pending.contains("\(key)|\(b.name)")
+            }
+            for b in todo { s.pending.insert("\(key)|\(b.name)") }
+            return todo.isEmpty ? nil : (d, l, todo)
         }
         guard let (device, library, bases) = job else { return }
         for base in bases {
@@ -106,8 +121,10 @@ nonisolated final class DropPipelines: Sendable {
             twin.fragmentFunction = f
             twin.label = base.name + "+drop"
             let store: @Sendable (MTLRenderPipelineState?) -> Void = { [self] st in
-                guard let st else { return }
-                state.withLock { s in if s.twins[key] != nil { s.twins[key]?[base.name] = st } }
+                state.withLock { s in
+                    s.pending.remove("\(key)|\(base.name)")
+                    if let st, s.twins[key] != nil { s.twins[key]?[base.name] = st }
+                }
             }
             if wait { store(try? device.makeRenderPipelineState(descriptor: twin)) }
             else { device.makeRenderPipelineState(descriptor: twin) { st, _ in store(st) } }
@@ -116,8 +133,19 @@ nonisolated final class DropPipelines: Sendable {
 
     /// `plain`'s drop twin when the frame needs one and it is ready, else `plain`.
     func pipeline(for plain: MTLRenderPipelineState, uniforms: EffectsUniforms) -> MTLRenderPipelineState {
-        guard uniforms.needsDropPipeline, let name = plain.label else { return plain }
+        guard let name = plain.label else { return plain }
+        guard uniforms.needsDropPipeline else {
+            state.withLock { _ = $0.used.insert(name) }
+            return plain
+        }
         let key = Key(uniforms)
-        return state.withLock { $0.twins[key]?[name] } ?? plain
+        var missing = false
+        let twin: MTLRenderPipelineState? = state.withLock { s in
+            if let t = s.twins[key]?[name] { return t }
+            missing = !s.pending.contains("\(key)|\(name)")
+            return nil
+        }
+        if missing { DispatchQueue.global(qos: .userInitiated).async { [self] in prepare(key, only: name) } }
+        return twin ?? plain
     }
 }
