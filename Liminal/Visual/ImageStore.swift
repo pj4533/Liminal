@@ -28,6 +28,7 @@ extension Notification.Name {
 
 nonisolated final class ImageStore: @unchecked Sendable {
 
+    /// The AI (Gemini) cache.
     static let shared = ImageStore()
 
     /// Bump to purge every device's cache on its next launch. 2 = first 3:2 / Gemini 3.1 release,
@@ -57,23 +58,39 @@ nonisolated final class ImageStore: @unchecked Sendable {
     let directory: URL                // .../Liminal/ImageStore
     private let legacyDirectories: [URL]
     private let defaults: UserDefaults
+    /// Epoch bookkeeping of this store (the API pool has its own, so neither purges the other).
+    let epochKey: String
+    let epoch: Int
+    /// Oldest images beyond this are deleted on save; nil = no count cap (the API pool, D39).
+    let maxImageCount: Int?
     private let lock = OSAllocatedUnfairLock()
     nonisolated(unsafe) private var _clearGeneration: UInt64 = 0
 
-    convenience init() {
+    static var applicationRoot: URL {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        self.init(root: appSupport.appendingPathComponent("Liminal", isDirectory: true), defaults: .standard)
+        return appSupport.appendingPathComponent("Liminal", isDirectory: true)
     }
 
-    /// Injectable for tests (temporary directory, private defaults suite).
-    init(root: URL, defaults: UserDefaults) {
+    convenience init() {
+        self.init(root: Self.applicationRoot, defaults: .standard)
+    }
+
+    /// Injectable for tests (temporary directory, private defaults suite). The defaults describe the
+    /// AI cache; a second store (the API pool) passes its own directory, epoch key and no count cap,
+    /// and owns no legacy directories.
+    init(root: URL, defaults: UserDefaults, directoryName: String = "ImageStore",
+         epochKey: String = ImageStore.epochDefaultsKey, epoch: Int = ImageStore.cacheEpoch,
+         maxImages: Int? = ImageStore.maxImages) {
         self.root = root
-        self.directory = root.appendingPathComponent("ImageStore", isDirectory: true)
-        self.legacyDirectories = [
+        self.directory = root.appendingPathComponent(directoryName, isDirectory: true)
+        self.legacyDirectories = directoryName == "ImageStore" ? [
             root.appendingPathComponent("RawImages", isDirectory: true),
             root.appendingPathComponent("UpscaledImages", isDirectory: true),
-        ]
+        ] : []
         self.defaults = defaults
+        self.epochKey = epochKey
+        self.epoch = epoch
+        self.maxImageCount = maxImages
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     }
 
@@ -88,13 +105,13 @@ nonisolated final class ImageStore: @unchecked Sendable {
     // MARK: - Migration
 
     /// Runs once at launch before anything is loaded. A lower or missing stored epoch
-    /// deletes ImageStore/ and the legacy RawImages/ and UpscaledImages/ directories.
+    /// deletes this store's directory (and, for the AI cache, the legacy RawImages/ and UpscaledImages/).
     func migrateIfNeeded() {
-        let stored = defaults.integer(forKey: Self.epochDefaultsKey)   // 0 when missing
-        guard stored < Self.cacheEpoch else { return }
-        LMLog.visual.info("🗄️ [ImageStore] cache epoch \(stored) < \(Self.cacheEpoch): purging all cached images")
+        let stored = defaults.integer(forKey: epochKey)   // 0 when missing
+        guard stored < epoch else { return }
+        LMLog.visual.info("🗄️ [ImageStore] \(self.directory.lastPathComponent, privacy: .public) epoch \(stored) < \(self.epoch): purging its images")
         removeAllFiles()
-        defaults.set(Self.cacheEpoch, forKey: Self.epochDefaultsKey)
+        defaults.set(epoch, forKey: epochKey)
     }
 
     // MARK: - Listing and loading
@@ -179,6 +196,30 @@ nonisolated final class ImageStore: @unchecked Sendable {
         return Entry(id: metadata.id, imageURL: imageURL, metadata: metadata)
     }
 
+    /// Saves JPEG bytes that did not come from Gemini (API mode) with their sidecar.
+    @discardableResult
+    func save(jpeg: Data, metadata: ImageMetadata, clearGeneration: UInt64) throws -> Entry {
+        guard clearGeneration == self.clearGeneration else { throw StoreError.staleClearGeneration }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let imageURL = directory.appendingPathComponent("\(metadata.id.uuidString).jpg")
+        try jpeg.write(to: imageURL, options: .atomic)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.sortedKeys]
+        try encoder.encode(metadata).write(to: sidecarURL(metadata.id), options: .atomic)
+        if clearGeneration != self.clearGeneration {
+            removeFiles(for: metadata.id)
+            throw StoreError.staleClearGeneration
+        }
+        evictBeyondCap()
+        return Entry(id: metadata.id, imageURL: imageURL, metadata: metadata)
+    }
+
+    /// Removes one image with its sidecar and depth map.
+    func remove(id: UUID) {
+        removeFiles(for: id)
+    }
+
     // MARK: - Depth (slot for the dome view; see docs/decisions/images.md)
 
     func saveDepth(_ depth: CGImage, for id: UUID) {
@@ -249,9 +290,10 @@ nonisolated final class ImageStore: @unchecked Sendable {
     }
 
     private func evictBeyondCap() {
+        guard let cap = maxImageCount else { return }
         let all = entries()
-        guard all.count > Self.maxImages else { return }
-        for entry in all.dropFirst(Self.maxImages) {
+        guard all.count > cap else { return }
+        for entry in all.dropFirst(cap) {
             removeFiles(for: entry.id)
         }
     }

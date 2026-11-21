@@ -249,7 +249,7 @@ struct ImageStoreTests {
     @Test func emptyImageStoreHasTwoDistinctBundledPicturesForFills() async throws {
         let (store, root, _) = makeStore()
         defer { try? FileManager.default.removeItem(at: root) }
-        let queue = ImageQueue(store: store)
+        let queue = ImageQueue(store: store, source: .ai)
         #expect(await queue.reserveForFill(excluding: nil) == nil)
         let first = try #require(queue.standbyImage(index: 0))
         let second = try #require(queue.standbyImage(index: 1))
@@ -403,7 +403,26 @@ struct ImageAnalysisTests {
     @Test func upscaleSkipRule() {
         let big = makeImage(width: 2528, height: 1696) { _ in }
         let small = makeImage(width: 1264, height: 848) { _ in }
+        let smallSquare = makeImage(width: 1000, height: 1000) { _ in }
         #expect(ImageUpscaler.shouldSkipUpscale(big))
+        #expect(!ImageUpscaler.shouldSkipUpscale(smallSquare))
+        #if os(macOS)
+        // RealESRGAN squashes to 512x512: a small 3:2 picture is shown as is rather than stretched.
+        #expect(ImageUpscaler.shouldSkipUpscale(small))
+        #else
         #expect(!ImageUpscaler.shouldSkipUpscale(small))
+        #endif
+        #expect(ImageUpscaler.isSquare(width: 1010, height: 1000))
+        #expect(!ImageUpscaler.isSquare(width: 1500, height: 1000))
+    }
+
+    @Test func apiPictureMoodComesFromItsSource() {
+        let source = ImageCollections.bundled.sources.first { $0.id == "loc-highsmith-roadside" }!
+        let meta = ImageMetadata(id: UUID(), createdAt: Date(), spec: source.promptSpec, model: "api.loc", pixelWidth: 60,
+                                 pixelHeight: 40, mimeType: "image/jpeg", dominantColors: [RGB(r: 0.9, g: 0.3, b: 0.2)],
+                                 measuredBrightness: 0.3, measuredSaturation: 0.6)
+        let mood = VisualMoodBuilder.mood(metadata: meta, image: nil)
+        #expect(mood.moodWords == ["electric", "playful", "architecture"])
+        #expect(abs(mood.brightness - 0.3) < 1e-6)
     }
 }

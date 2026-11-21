@@ -1,0 +1,50 @@
+{
+  "item": {
+    "title": "Neon sign for Mel's Drive-In and \"celebrity bar\" in the Hollywood section of Los Angeles, California",
+    "rights_advisory": "No known restrictions on publication.",
+    "date": "2013-01-01",
+    "contributor_names": [
+      "Highsmith, Carol M., 1946-, photographer"
+    ]
+  },
+  "resources": [
+    {
+      "image": "https://tile.loc.gov/image-services/iiif/service:pnp:highsm:24200:24293/full/pct:6.25/0/default.jpg",
+      "url": "https://www.loc.gov/resource/highsm.24293/",
+      "files": [
+        [
+          {
+            "url": "https://tile.loc.gov/image-services/iiif/service:pnp:highsm:24200:24293/full/pct:6.25/0/default.jpg",
+            "width": 253,
+            "height": 273,
+            "mimetype": "image/jpeg"
+          },
+          {
+            "url": "https://tile.loc.gov/image-services/iiif/service:pnp:highsm:24200:24293/full/pct:12.5/0/default.jpg",
+            "width": 506,
+            "height": 546,
+            "mimetype": "image/jpeg"
+          },
+          {
+            "url": "https://tile.loc.gov/image-services/iiif/service:pnp:highsm:24200:24293/full/pct:25/0/default.jpg",
+            "width": 1012,
+            "height": 1093,
+            "mimetype": "image/jpeg"
+          },
+          {
+            "url": "https://tile.loc.gov/image-services/iiif/service:pnp:highsm:24200:24293/full/pct:50/0/default.jpg",
+            "width": 2024,
+            "height": 2186,
+            "mimetype": "image/jpeg"
+          },
+          {
+            "url": "https://tile.loc.gov/storage-services/service/pnp/highsm/24200/24293.jp2",
+            "width": 4048,
+            "height": 4373,
+            "mimetype": "image/jp2"
+          }
+        ]
+      ]
+    }
+  ]
+}

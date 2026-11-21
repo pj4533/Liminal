@@ -136,6 +136,10 @@ final class VisualEngine: ObservableObject {
     @Published private(set) var currentMetadata: ImageMetadata?
     @Published private(set) var statusMessage: String?
     @Published private(set) var isClearing = false
+    /// The image source the queue is running (AI / API).
+    @Published private(set) var imageSource: ImageSource = .current
+    /// API mode's collection status line (nil in AI mode).
+    @Published private(set) var sourceStatus: (text: String, ok: Bool)?
 
     private let imageQueue = ImageQueue()
     /// One per session, shared by both platforms' crossfades (docs/plans/transitions.md 7).
@@ -222,6 +226,20 @@ final class VisualEngine: ObservableObject {
                 self?.statusMessage = message
             }
             .store(in: &cancellables)
+
+        imageQueue.$imageSource
+            .receive(on: RunLoop.main)
+            .sink { [weak self] source in
+                self?.imageSource = source
+            }
+            .store(in: &cancellables)
+
+        imageQueue.$sourceStatus
+            .receive(on: RunLoop.main)
+            .sink { [weak self] status in
+                self?.sourceStatus = status
+            }
+            .store(in: &cancellables)
     }
 
     // MARK: - Control
@@ -297,10 +315,24 @@ final class VisualEngine: ObservableObject {
 
     // MARK: - Cache
 
-    /// Count and size of every cached image on disk (reads directory listings only).
+    /// Count and size of the active source's pictures on disk (the AI cache or the API pool).
     func cacheUsage() async -> ImageStore.Usage {
-        let store = imageQueue.store
-        return await Task.detached { store.usage() }.value
+        let queue = imageQueue
+        return await Task.detached {
+            if queue.activeSource == .api {
+                queue.feed.pool.loadIfNeeded()
+                return queue.feed.pool.usage()
+            }
+            return queue.store.usage()
+        }.value
+    }
+
+    /// AI <-> API (the "Images" picker). Takes effect at the next image change.
+    func setImageSource(_ source: ImageSource) {
+        guard source != imageSource || imageQueue.activeSource != source else { return }
+        stagedImage = nil
+        let queue = imageQueue
+        Task.detached { await queue.switchSource(source) }
     }
 
     /// Deletes every cached image (files, sidecars, depth maps, legacy folders), clears the

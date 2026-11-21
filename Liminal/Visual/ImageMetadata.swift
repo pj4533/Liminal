@@ -27,6 +27,10 @@ nonisolated struct ImageMetadata: Codable, Sendable, Equatable {
     let measuredSaturation: Double
     /// Set when a real film frame served as the subject reference.
     var archiveReference: ArchiveReference? = nil
+    /// API mode only: where the picture came from (title, creator, institution, licence, links).
+    var source: ImageSourceCredit? = nil
+    /// API mode only: how much room the picture leaves for the film (ImageOpenness), measured at ingest.
+    var openness: OpennessScore? = nil
 
     nonisolated struct ArchiveReference: Codable, Sendable, Equatable {
         let clipID: String

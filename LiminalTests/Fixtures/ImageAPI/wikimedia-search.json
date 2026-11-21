@@ -1,0 +1,112 @@
+{
+  "continue": {
+    "gsroffset": 5,
+    "continue": "gsroffset||"
+  },
+  "query": {
+    "pages": {
+      "17164526": {
+        "pageid": 17164526,
+        "ns": 6,
+        "title": "File:(FROM THE DOCUMERICA-1 EXHIBITION. FOR OTHER IMAGES IN THIS ASSIGNMENT, SEE FICHE NUMBER 24.) - NARA - 553000.jpg",
+        "index": 3,
+        "imagerepository": "local",
+        "imageinfo": [
+          {
+            "size": 595989,
+            "width": 3000,
+            "height": 2195,
+            "thumburl": "https://upload.wikimedia.org/wikipedia/commons/4/4f/%28FROM_THE_DOCUMERICA-1_EXHIBITION._FOR_OTHER_IMAGES_IN_THIS_ASSIGNMENT%2C_SEE_FICHE_NUMBER_24.%29_-_NARA_-_553000.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail_unscaled",
+            "thumbwidth": 3072,
+            "thumbheight": 2248,
+            "thumbattribs": {
+              "src": "https://upload.wikimedia.org/wikipedia/commons/4/4f/%28FROM_THE_DOCUMERICA-1_EXHIBITION._FOR_OTHER_IMAGES_IN_THIS_ASSIGNMENT%2C_SEE_FICHE_NUMBER_24.%29_-_NARA_-_553000.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail_unscaled",
+              "decoding": "async",
+              "loading": "lazy",
+              "width": 3072,
+              "height": 2248
+            },
+            "url": "https://upload.wikimedia.org/wikipedia/commons/4/4f/%28FROM_THE_DOCUMERICA-1_EXHIBITION._FOR_OTHER_IMAGES_IN_THIS_ASSIGNMENT%2C_SEE_FICHE_NUMBER_24.%29_-_NARA_-_553000.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+            "descriptionurl": "https://commons.wikimedia.org/wiki/File:(FROM_THE_DOCUMERICA-1_EXHIBITION._FOR_OTHER_IMAGES_IN_THIS_ASSIGNMENT,_SEE_FICHE_NUMBER_24.)_-_NARA_-_553000.jpg",
+            "descriptionshorturl": "https://commons.wikimedia.org/wiki/Special:Redirect/page/17164526",
+            "extmetadata": {
+              "ObjectName": {
+                "value": "<div class=\"fn\">\n<i>(FROM THE DOCUMERICA-1 EXHIBITION. FOR OTHER IMAGES IN THIS ASSIGNMENT, SEE FICHE NUMBER 24.)</i></div>",
+                "source": "commons-desc-page"
+              },
+              "Artist": {
+                "value": "<bdi><a href=\"https://www.wikidata.org/wiki/Q133212063\" class=\"extiw\" title=\"d:Q133212063\"><span title=\"photographer active in Texas 1960s-present\">Jim Olive</span></a></bdi>",
+                "source": "commons-desc-page"
+              },
+              "DateTimeOriginal": {
+                "value": "June 1972<div style=\"display: none;\">date QS:P571,+1972-06-00T00:00:00Z/10</div>",
+                "source": "commons-desc-page"
+              },
+              "Credit": {
+                "value": "<a href=\"https://en.wikipedia.org/wiki/U.S._National_Archives_and_Records_Administration\" class=\"extiw\" title=\"en:U.S. National Archives and Records Administration\">U.S. National Archives and Records Administration</a>",
+                "source": "commons-desc-page"
+              },
+              "LicenseShortName": {
+                "value": "Public domain",
+                "source": "commons-desc-page",
+                "hidden": ""
+              }
+            },
+            "mime": "image/jpeg"
+          }
+        ]
+      },
+      "16929944": {
+        "pageid": 16929944,
+        "ns": 6,
+        "title": "File:SUNSET BEHIND POWER LINES IN GALVESTON BAY INDUSTRIAL AREA - NARA - 543903.jpg",
+        "index": 2,
+        "imagerepository": "local",
+        "imageinfo": [
+          {
+            "size": 776329,
+            "width": 3000,
+            "height": 2016,
+            "thumburl": "https://upload.wikimedia.org/wikipedia/commons/5/52/SUNSET_BEHIND_POWER_LINES_IN_GALVESTON_BAY_INDUSTRIAL_AREA_-_NARA_-_543903.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail_unscaled",
+            "thumbwidth": 3072,
+            "thumbheight": 2064,
+            "thumbattribs": {
+              "src": "https://upload.wikimedia.org/wikipedia/commons/5/52/SUNSET_BEHIND_POWER_LINES_IN_GALVESTON_BAY_INDUSTRIAL_AREA_-_NARA_-_543903.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail_unscaled",
+              "decoding": "async",
+              "loading": "lazy",
+              "width": 3072,
+              "height": 2064
+            },
+            "url": "https://upload.wikimedia.org/wikipedia/commons/5/52/SUNSET_BEHIND_POWER_LINES_IN_GALVESTON_BAY_INDUSTRIAL_AREA_-_NARA_-_543903.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+            "descriptionurl": "https://commons.wikimedia.org/wiki/File:SUNSET_BEHIND_POWER_LINES_IN_GALVESTON_BAY_INDUSTRIAL_AREA_-_NARA_-_543903.jpg",
+            "descriptionshorturl": "https://commons.wikimedia.org/wiki/Special:Redirect/page/16929944",
+            "extmetadata": {
+              "ObjectName": {
+                "value": "<div class=\"fn\">\n<i>SUNSET BEHIND POWER LINES IN GALVESTON BAY INDUSTRIAL AREA</i></div>",
+                "source": "commons-desc-page"
+              },
+              "Artist": {
+                "value": "<bdi><a href=\"https://www.wikidata.org/wiki/Q133212063\" class=\"extiw\" title=\"d:Q133212063\"><span title=\"photographer active in Texas 1960s-present\">Jim Olive</span></a></bdi>",
+                "source": "commons-desc-page"
+              },
+              "DateTimeOriginal": {
+                "value": "May 1972<div style=\"display: none;\">date QS:P571,+1972-05-00T00:00:00Z/10</div>",
+                "source": "commons-desc-page"
+              },
+              "Credit": {
+                "value": "<a href=\"https://en.wikipedia.org/wiki/U.S._National_Archives_and_Records_Administration\" class=\"extiw\" title=\"en:U.S. National Archives and Records Administration\">U.S. National Archives and Records Administration</a>",
+                "source": "commons-desc-page"
+              },
+              "LicenseShortName": {
+                "value": "Public domain",
+                "source": "commons-desc-page",
+                "hidden": ""
+              }
+            },
+            "mime": "image/jpeg"
+          }
+        ]
+      }
+    }
+  }
+}

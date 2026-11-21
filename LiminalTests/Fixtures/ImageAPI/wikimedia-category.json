@@ -1,0 +1,110 @@
+{
+  "continue": {
+    "gcmcontinue": "file|4252594f5a4f412e202d204d4f4f535449455245204c43434e323031353634383931302e4a5047|68030884",
+    "continue": "gcmcontinue||"
+  },
+  "query": {
+    "pages": {
+      "68009652": {
+        "pageid": 68009652,
+        "ns": 6,
+        "title": "File:Acephala. - Muscheln LCCN2014645038.jpg",
+        "imagerepository": "local",
+        "imageinfo": [
+          {
+            "size": 11715518,
+            "width": 6124,
+            "height": 8664,
+            "thumburl": "https://thumb.wikimedia.org/wikipedia/commons/thumb/1/1d/Acephala._-_Muscheln_LCCN2014645038.jpg/3840px-Acephala._-_Muscheln_LCCN2014645038.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+            "thumbwidth": 3072,
+            "thumbheight": 4346,
+            "thumbattribs": {
+              "src": "https://thumb.wikimedia.org/wikipedia/commons/thumb/1/1d/Acephala._-_Muscheln_LCCN2014645038.jpg/3840px-Acephala._-_Muscheln_LCCN2014645038.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+              "decoding": "async",
+              "loading": "lazy",
+              "width": 3072,
+              "height": 4346
+            },
+            "url": "https://upload.wikimedia.org/wikipedia/commons/1/1d/Acephala._-_Muscheln_LCCN2014645038.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+            "descriptionurl": "https://commons.wikimedia.org/wiki/File:Acephala._-_Muscheln_LCCN2014645038.jpg",
+            "descriptionshorturl": "https://commons.wikimedia.org/wiki/Special:Redirect/page/68009652",
+            "extmetadata": {
+              "ObjectName": {
+                "value": "Acephala. - Muscheln LCCN2014645038",
+                "source": "mediawiki-metadata"
+              },
+              "DateTimeOriginal": {
+                "value": "1904",
+                "source": "commons-desc-page"
+              },
+              "Credit": {
+                "value": "<p>Library of Congress\n</p>\n<ul><li><i>Catalog:</i> <a rel=\"nofollow\" class=\"external free\" href=\"https://lccn.loc.gov/2014645038\">https://lccn.loc.gov/2014645038</a></li>\n<li><i>Image download:</i> <a rel=\"nofollow\" class=\"external free\" href=\"https://cdn.loc.gov/service/pnp/ds/05300/05320v.jpg\">https://cdn.loc.gov/service/pnp/ds/05300/05320v.jpg</a></li>\n<li><i>Original url:</i> <a rel=\"nofollow\" class=\"external free\" href=\"https://www.loc.gov/pictures/item/2014645038/\">https://www.loc.gov/pictures/item/2014645038/</a></li></ul>",
+                "source": "commons-desc-page"
+              },
+              "Artist": {
+                "value": "Giltsch, Adolf, 1852-1911, lithographer; Haeckel, Ernst, 1834-1919, artist",
+                "source": "commons-desc-page"
+              },
+              "LicenseShortName": {
+                "value": "Public domain",
+                "source": "commons-desc-page",
+                "hidden": ""
+              }
+            },
+            "mime": "image/jpeg"
+          }
+        ]
+      },
+      "68032074": {
+        "pageid": 68032074,
+        "ns": 6,
+        "title": "File:Amphoridea. - Urnensterne LCCN2015648975.jpg",
+        "imagerepository": "local",
+        "imageinfo": [
+          {
+            "size": 7887191,
+            "width": 6156,
+            "height": 8408,
+            "thumburl": "https://thumb.wikimedia.org/wikipedia/commons/thumb/2/20/Amphoridea._-_Urnensterne_LCCN2015648975.jpg/3840px-Amphoridea._-_Urnensterne_LCCN2015648975.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+            "thumbwidth": 3072,
+            "thumbheight": 4196,
+            "thumbattribs": {
+              "src": "https://thumb.wikimedia.org/wikipedia/commons/thumb/2/20/Amphoridea._-_Urnensterne_LCCN2015648975.jpg/3840px-Amphoridea._-_Urnensterne_LCCN2015648975.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+              "decoding": "async",
+              "loading": "lazy",
+              "width": 3072,
+              "height": 4196
+            },
+            "url": "https://upload.wikimedia.org/wikipedia/commons/2/20/Amphoridea._-_Urnensterne_LCCN2015648975.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+            "descriptionurl": "https://commons.wikimedia.org/wiki/File:Amphoridea._-_Urnensterne_LCCN2015648975.jpg",
+            "descriptionshorturl": "https://commons.wikimedia.org/wiki/Special:Redirect/page/68032074",
+            "extmetadata": {
+              "ObjectName": {
+                "value": "Amphoridea. - Urnensterne LCCN2015648975",
+                "source": "mediawiki-metadata"
+              },
+              "DateTimeOriginal": {
+                "value": "1904",
+                "source": "commons-desc-page"
+              },
+              "Credit": {
+                "value": "<p>Library of Congress\n</p>\n<ul><li><i>Catalog:</i> <a rel=\"nofollow\" class=\"external free\" href=\"https://lccn.loc.gov/2015648975\">https://lccn.loc.gov/2015648975</a></li>\n<li><i>Image download:</i> <a rel=\"nofollow\" class=\"external free\" href=\"https://cdn.loc.gov/service/pnp/ds/07600/07625v.jpg\">https://cdn.loc.gov/service/pnp/ds/07600/07625v.jpg</a></li>\n<li><i>Original url:</i> <a rel=\"nofollow\" class=\"external free\" href=\"https://www.loc.gov/pictures/item/2015648975/\">https://www.loc.gov/pictures/item/2015648975/</a></li></ul>",
+                "source": "commons-desc-page"
+              },
+              "Artist": {
+                "value": "Giltsch, Adolf, 1852-1911, lithographer; Haeckel, Ernst, 1834-1919, artist",
+                "source": "commons-desc-page"
+              },
+              "LicenseShortName": {
+                "value": "Public domain",
+                "source": "commons-desc-page",
+                "hidden": ""
+              }
+            },
+            "mime": "image/jpeg"
+          }
+        ]
+      }
+    }
+  }
+}

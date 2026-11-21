@@ -1,0 +1,107 @@
+{
+  "batchcomplete": "",
+  "query": {
+    "pages": {
+      "11643688": {
+        "pageid": 11643688,
+        "ns": 6,
+        "title": "File:Amanita muscaria qtl4.jpg",
+        "imagerepository": "local",
+        "imageinfo": [
+          {
+            "size": 5280364,
+            "width": 3500,
+            "height": 2508,
+            "thumburl": "https://upload.wikimedia.org/wikipedia/commons/2/20/Amanita_muscaria_qtl4.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail_unscaled",
+            "thumbwidth": 3072,
+            "thumbheight": 2201,
+            "thumbattribs": {
+              "src": "https://upload.wikimedia.org/wikipedia/commons/2/20/Amanita_muscaria_qtl4.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail_unscaled",
+              "decoding": "async",
+              "loading": "lazy",
+              "width": 3072,
+              "height": 2201
+            },
+            "url": "https://upload.wikimedia.org/wikipedia/commons/2/20/Amanita_muscaria_qtl4.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+            "descriptionurl": "https://commons.wikimedia.org/wiki/File:Amanita_muscaria_qtl4.jpg",
+            "descriptionshorturl": "https://commons.wikimedia.org/wiki/Special:Redirect/page/11643688",
+            "extmetadata": {
+              "ObjectName": {
+                "value": "Amanita muscaria qtl4",
+                "source": "mediawiki-metadata"
+              },
+              "DateTimeOriginal": {
+                "value": "2010-09-19",
+                "source": "commons-desc-page"
+              },
+              "Credit": {
+                "value": "<span class=\"int-own-work\" lang=\"en\">Own work</span>",
+                "source": "commons-desc-page"
+              },
+              "Artist": {
+                "value": "<a href=\"//commons.wikimedia.org/wiki/User:Quartl\" title=\"User:Quartl\">Quartl</a>",
+                "source": "commons-desc-page"
+              },
+              "LicenseShortName": {
+                "value": "CC BY-SA 3.0",
+                "source": "commons-desc-page",
+                "hidden": ""
+              }
+            },
+            "mime": "image/jpeg"
+          }
+        ]
+      },
+      "16931583": {
+        "pageid": 16931583,
+        "ns": 6,
+        "title": "File:SUNSET - NARA - 544071.jpg",
+        "imagerepository": "local",
+        "imageinfo": [
+          {
+            "size": 767687,
+            "width": 3000,
+            "height": 2023,
+            "thumburl": "https://upload.wikimedia.org/wikipedia/commons/1/1e/SUNSET_-_NARA_-_544071.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail_unscaled",
+            "thumbwidth": 3072,
+            "thumbheight": 2072,
+            "thumbattribs": {
+              "src": "https://upload.wikimedia.org/wikipedia/commons/1/1e/SUNSET_-_NARA_-_544071.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail_unscaled",
+              "decoding": "async",
+              "loading": "lazy",
+              "width": 3072,
+              "height": 2072
+            },
+            "url": "https://upload.wikimedia.org/wikipedia/commons/1/1e/SUNSET_-_NARA_-_544071.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+            "descriptionurl": "https://commons.wikimedia.org/wiki/File:SUNSET_-_NARA_-_544071.jpg",
+            "descriptionshorturl": "https://commons.wikimedia.org/wiki/Special:Redirect/page/16931583",
+            "extmetadata": {
+              "ObjectName": {
+                "value": "<div class=\"fn\">\n<i>SUNSET</i></div>",
+                "source": "commons-desc-page"
+              },
+              "Artist": {
+                "value": "<bdi><a href=\"https://www.wikidata.org/wiki/Q56248982\" class=\"extiw\" title=\"d:Q56248982\"><span title=\"photographer and writer born in 1944, in Tucson, Arizona, United States\">Cornelius M. Keyes</span></a></bdi>",
+                "source": "commons-desc-page"
+              },
+              "DateTimeOriginal": {
+                "value": "June 1972<div style=\"display: none;\">date QS:P571,+1972-06-00T00:00:00Z/10</div>",
+                "source": "commons-desc-page"
+              },
+              "Credit": {
+                "value": "<a href=\"https://en.wikipedia.org/wiki/U.S._National_Archives_and_Records_Administration\" class=\"extiw\" title=\"en:U.S. National Archives and Records Administration\">U.S. National Archives and Records Administration</a>",
+                "source": "commons-desc-page"
+              },
+              "LicenseShortName": {
+                "value": "Public domain",
+                "source": "commons-desc-page",
+                "hidden": ""
+              }
+            },
+            "mime": "image/jpeg"
+          }
+        ]
+      }
+    }
+  }
+}

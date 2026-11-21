@@ -25,8 +25,13 @@ struct ClearImagesSection: View {
         ByteCountFormatter.string(fromByteCount: usage?.bytes ?? 0, countStyle: .file)
     }
 
+    private var isAPI: Bool { visualEngine.imageSource == .api }
+
     private var usageLine: String {
-        guard let usage else { return "Counting cached images" }
+        guard let usage else { return isAPI ? "Counting saved pictures" : "Counting cached images" }
+        if isAPI {
+            return "\(usage.imageCount) curated \(usage.imageCount == 1 ? "picture" : "pictures") saved, \(sizeText)"
+        }
         let noun = usage.imageCount == 1 ? "image" : "images"
         return "\(usage.imageCount) cached \(noun), \(sizeText)"
     }
@@ -40,7 +45,7 @@ struct ClearImagesSection: View {
                     if visualEngine.isClearing {
                         ProgressView().controlSize(.small)
                     } else {
-                        DestructiveLabel(title: "Clear All Images", systemImage: "trash")
+                        DestructiveLabel(title: isAPI ? "Clear Curated Pictures" : "Clear All Images", systemImage: "trash")
                     }
                 }
                 .frame(minHeight: ControlMetrics.buttonHeight)
@@ -51,11 +56,12 @@ struct ClearImagesSection: View {
             #endif
             .disabled(visualEngine.isClearing)
             .confirmationDialog(
-                "Delete all \(usage?.imageCount ?? 0) images (\(sizeText))?",
+                isAPI ? "Delete all \(usage?.imageCount ?? 0) curated pictures (\(sizeText))?"
+                      : "Delete all \(usage?.imageCount ?? 0) images (\(sizeText))?",
                 isPresented: $confirming,
                 titleVisibility: .visible
             ) {
-                Button("Delete All Images", role: .destructive) {
+                Button(isAPI ? "Delete Curated Pictures" : "Delete All Images", role: .destructive) {
                     Task {
                         await visualEngine.clearAllImages()
                         await refresh()
@@ -63,7 +69,8 @@ struct ClearImagesSection: View {
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("This cannot be undone. New images will be generated.")
+                Text(isAPI ? "This cannot be undone. New pictures will be fetched from the collections."
+                           : "This cannot be undone. New images will be generated.")
             }
 
             Text(usageLine)
@@ -71,7 +78,8 @@ struct ClearImagesSection: View {
                 .foregroundStyle(.secondary)
                 .wrapping()
 
-            Text("Deletes every cached image and its metadata. Settings are kept.")
+            Text(isAPI ? "Deletes the curated pictures saved on this device and their credits. AI images and settings are kept."
+                       : "Deletes every cached AI image and its metadata. Settings are kept.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .wrapping()
@@ -82,6 +90,9 @@ struct ClearImagesSection: View {
             Task { await refresh() }
         }
         .onChange(of: visualEngine.totalCachedCount) { _, _ in
+            Task { await refresh() }
+        }
+        .onChange(of: visualEngine.imageSource) { _, _ in
             Task { await refresh() }
         }
     }

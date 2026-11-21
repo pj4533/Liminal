@@ -1,0 +1,41 @@
+{
+  "pagination": {
+    "next": "https://www.loc.gov/collections/carol-m-highsmith/?c=5&fa=online-format:image&fo=json&q=drive-in+theater&sp=2"
+  },
+  "results": [
+    {
+      "id": "http://www.loc.gov/item/2018700196/",
+      "title": "Creative marquee for the Finger Lakes Drive-In move theater in Auburn, New York The theater has (as of 2018) been open since 1947",
+      "date": "2018-01-01",
+      "url": "https://www.loc.gov/item/2018700196/",
+      "contributor": [
+        "highsmith, carol m."
+      ],
+      "image_url": [
+        "https://tile.loc.gov/storage-services/service/pnp/highsm/52000/52077_150px.jpg#h=96&w=150",
+        "https://tile.loc.gov/storage-services/service/pnp/highsm/52000/52077r.jpg#h=411&w=640",
+        "https://tile.loc.gov/storage-services/service/pnp/highsm/52000/52077v.jpg#h=658&w=1024"
+      ],
+      "item": {
+        "rights_advisory": "No known restrictions on publication."
+      }
+    },
+    {
+      "id": "http://www.loc.gov/item/2015632003/",
+      "title": "The screen and sound poles (minus their audio boxes) at the Hilltop Drive-In Theater in Chester, West Virginia, which was once one of 75 active drive-in movie theaters in the state",
+      "date": "2015-01-01",
+      "url": "https://www.loc.gov/item/2015632003/",
+      "contributor": [
+        "highsmith, carol m."
+      ],
+      "image_url": [
+        "https://tile.loc.gov/image-services/iiif/service:pnp:highsm:31900:31928/full/pct:6.25/0/default.jpg#h=307&w=460",
+        "https://tile.loc.gov/image-services/iiif/service:pnp:highsm:31900:31928/full/pct:12.5/0/default.jpg#h=614&w=920",
+        "https://tile.loc.gov/image-services/iiif/service:pnp:highsm:31900:31928/full/pct:25/0/default.jpg#h=1228&w=1840"
+      ],
+      "item": {
+        "rights_advisory": "No known restrictions on publication."
+      }
+    }
+  ]
+}
