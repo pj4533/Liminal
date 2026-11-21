@@ -18,9 +18,9 @@ Liminal pairs evolving ambient music with surreal AI imagery, flowing visual eff
 
 ## See it in motion
 
-[![Play the 12-second Lo-Fi preview with stereo sound](docs/media/lofi-preview.jpg)](https://cdn.jsdelivr.net/gh/pj4533/Liminal@3a84961752b494932b346acf15d13a5f1c6f76c1/docs/media/lofi-preview.mp4)
+[![Play the 12-second Lo-Fi preview with stereo sound](docs/media/lofi-preview.jpg)](https://github.com/pj4533/Liminal/blob/main/docs/media/lofi-preview.mp4)
 
-**[Play with sound · 12 seconds · 2.1 MB](https://cdn.jsdelivr.net/gh/pj4533/Liminal@3a84961752b494932b346acf15d13a5f1c6f76c1/docs/media/lofi-preview.mp4)** · [MP4 in the repository](docs/media/lofi-preview.mp4)
+**[Play with sound · 12 seconds · 2.1 MB](https://github.com/pj4533/Liminal/blob/main/docs/media/lofi-preview.mp4)**
 
 Lo-Fi at 72 BPM with AJ Hall’s drums, the warm sub bass slapping on the kicks under a held pad. When the drum fill starts, the picture breaks up into drifting macroblocks and gets heavier through the fill; on the first hit of the new drum loop it cuts straight to the next image with no fade in. The audio is the app’s own offline render, and the picture is two cached images passed through the app’s shader. Dialogue from *Ergot: The Story of a Parasitic Fungus* (Wellcome Collection, 1958) and *A Conversation on LSD* (1979) is cut into word pieces on the beat, with the films’ own soundtracks far behind as an effected bed. [Ergot](https://wellcomecollection.org/works/b92v49xa) · [A Conversation on LSD](https://archive.org/details/Timothy_Leary_Archives_198)
 
