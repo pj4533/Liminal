@@ -121,8 +121,13 @@ nonisolated final class CuratedImagePool: Sendable {
         var loaded = false
         var items: [UUID: PoolItem] = [:]
         var ledger = CuratedLedger()
+        /// Bumped by every ledger change, so a slower writer never replaces a newer file.
+        var ledgerVersion: UInt64 = 0
     }
     private let state = Mutex(State())
+    /// Version of the ledger on disk. Held while writing: the ingest task and the shown-picture task
+    /// write from different threads, and an older snapshot must not land after a newer one.
+    private let written = Mutex<UInt64>(0)
 
     /// The pool the app uses: the real folder, or the empty verify folder under -LiminalImageAPIFresh.
     static func makeDefault() -> CuratedImagePool {
@@ -211,21 +216,27 @@ nonisolated final class CuratedImagePool: Sendable {
         return (try? decoder.decode(CuratedLedger.self, from: data)) ?? CuratedLedger()
     }
 
-    /// Writes the ledger (small; called after each ingest and each picture shown).
-    private func persist(_ ledger: CuratedLedger) {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        guard let data = try? encoder.encode(ledger) else { return }
-        try? FileManager.default.createDirectory(at: store.directory, withIntermediateDirectories: true)
-        try? data.write(to: ledgerURL, options: .atomic)
+    /// Writes the ledger (small; called after each ingest and each picture shown). Never on a render
+    /// or audio thread: callers are the ingest task and detached bookkeeping tasks.
+    private func persist(_ ledger: CuratedLedger, version: UInt64) {
+        written.withLock { onDisk in
+            guard version > onDisk else { return }
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            guard let data = try? encoder.encode(ledger) else { return }
+            try? FileManager.default.createDirectory(at: store.directory, withIntermediateDirectories: true)
+            try? data.write(to: ledgerURL, options: .atomic)
+            onDisk = version
+        }
     }
 
     private func mutateLedger(_ body: (inout CuratedLedger) -> Void) {
-        let snapshot = state.withLock { s -> CuratedLedger in
+        let (snapshot, version) = state.withLock { s -> (CuratedLedger, UInt64) in
             body(&s.ledger)
-            return s.ledger
+            s.ledgerVersion &+= 1
+            return (s.ledger, s.ledgerVersion)
         }
-        persist(snapshot)
+        persist(snapshot, version: version)
     }
 
     var ledger: CuratedLedger { state.withLock { $0.ledger } }
@@ -277,12 +288,14 @@ nonisolated final class CuratedImagePool: Sendable {
     }
 
     /// Saves a new picture and applies the budget. Returns the ids evicted to make room.
+    /// `clearGeneration` is the store's generation when the picture's ingest began: a picture that was
+    /// in flight during "Clear Curated Pictures" is refused instead of outliving the clear.
     @discardableResult
-    func add(jpeg: Data, metadata: ImageMetadata, budget: Int64) throws -> [UUID] {
-        let clear = store.clearGeneration
+    func add(jpeg: Data, metadata: ImageMetadata, budget: Int64, clearGeneration: UInt64? = nil) throws -> [UUID] {
+        let clear = clearGeneration ?? store.clearGeneration
         let entry = try store.save(jpeg: jpeg, metadata: metadata, clearGeneration: clear)
         guard let item = Self.poolItem(entry) else { return [] }
-        let (evict, snapshot) = state.withLock { s -> ([UUID], CuratedLedger) in
+        let (evict, snapshot, version) = state.withLock { s -> ([UUID], CuratedLedger, UInt64) in
             s.items[item.id] = item
             s.ledger.candidates[item.candidateKey] = .init(stored: item.id, rejected: nil, date: Date())
             let evict = CuratedPoolPolicy.evictions(items: Array(s.items.values), shown: s.ledger.shown,
@@ -291,10 +304,11 @@ nonisolated final class CuratedImagePool: Sendable {
                 if let gone = s.items.removeValue(forKey: id) { s.ledger.candidates[gone.candidateKey] = nil }
                 s.ledger.shown[id] = nil
             }
-            return (evict, s.ledger)
+            s.ledgerVersion &+= 1
+            return (evict, s.ledger, s.ledgerVersion)
         }
         for id in evict { store.remove(id: id) }
-        persist(snapshot)
+        persist(snapshot, version: version)
         if !evict.isEmpty { LMLog.visual.info("🖼️ [API] pool over budget: removed \(evict.count) least recently shown") }
         return evict
     }
@@ -328,10 +342,15 @@ nonisolated final class CuratedImagePool: Sendable {
     @discardableResult
     func clear() -> ImageStore.Usage {
         let removed = usage()
-        store.clearEverything()
-        state.withLock { s in
-            s.items = [:]
-            s.ledger = CuratedLedger()
+        // Under the writer lock, so a ledger write already under way cannot bring the old file back.
+        written.withLock { onDisk in
+            store.clearEverything()
+            onDisk = state.withLock { s in
+                s.items = [:]
+                s.ledger = CuratedLedger()
+                s.ledgerVersion &+= 1
+                return s.ledgerVersion
+            }
         }
         try? FileManager.default.createDirectory(at: tmpDirectory, withIntermediateDirectories: true)
         return removed

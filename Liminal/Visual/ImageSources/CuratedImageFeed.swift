@@ -50,8 +50,9 @@ nonisolated final class CuratedImageFeed: Sendable {
         var backoff: [String: Backoff] = [:]
         /// Sources with nothing left to try, until this date.
         var dry: [String: Date] = [:]
-        /// Picked for display but not yet shown (queued).
-        var reserved: Set<UUID> = []
+        /// Picked for display but not yet shown (queued), with when. A pick that is dropped without being
+        /// shown (a Lo-Fi stage that missed its reveal) expires after `reservationLifetime`.
+        var reserved: [UUID: Date] = [:]
         var networkDown = false
         var ingested = 0
         var rejected = 0
@@ -61,6 +62,10 @@ nonisolated final class CuratedImageFeed: Sendable {
 
     static let backoffLadder: [TimeInterval] = [60, 120, 300, 900, 1800]
     static let perPage = 20
+    /// Longer than any queue wait (two pending pictures at the longest image interval, or a Lo-Fi phrase).
+    static let reservationLifetime: TimeInterval = 600
+    /// Decoded pixels above this are refused before decoding: a small PNG can declare a huge canvas.
+    static let maxSourcePixels = 150_000_000
 
     init(collections: ImageCollections = .bundled, pool: CuratedImagePool = .makeDefault(),
          providers: [String: any ImageProvider] = ImageProviders.all(),
@@ -124,7 +129,9 @@ nonisolated final class CuratedImageFeed: Sendable {
     func nextDisplay(current: UUID?) -> ImageStore.Entry? {
         pool.loadIfNeeded()
         let (items, history) = pool.displayItems(sourceWeights: sourceWeights)
-        let reserved = state.withLock { $0.reserved }
+        let now = Date()
+        expireReservations(olderThan: Self.reservationLifetime, now: now)
+        let reserved = state.withLock { Set($0.reserved.keys) }
         let open = items.filter { !reserved.contains($0.id) && $0.id != current }
         guard !open.isEmpty else { return nil }
         let rules = ImageRotation.DisplayRules(recencyWindow: collections.defaults.recencyWindow,
@@ -133,7 +140,7 @@ nonisolated final class CuratedImageFeed: Sendable {
             ImageRotation.nextDisplay(pool: open, history: history, current: current, rules: rules, using: &s.displayRNG)
         }
         guard let pick, let item = pool.item(pick.id) else { return nil }
-        state.withLock { _ = $0.reserved.insert(pick.id) }
+        state.withLock { $0.reserved[pick.id] = now }
         return pool.store.entry(id: item.id, url: item.url)
     }
 
@@ -147,9 +154,14 @@ nonisolated final class CuratedImageFeed: Sendable {
     /// A picture became the one on screen.
     func markShown(_ metadata: ImageMetadata) {
         guard let credit = metadata.source else { return }
-        state.withLock { _ = $0.reserved.remove(metadata.id) }
+        state.withLock { _ = $0.reserved.removeValue(forKey: metadata.id) }
         pool.markShown(metadata.id)
         LMLog.visual.info("🖼️ API image shown: source=\(credit.sourceID, privacy: .public) item=\(credit.itemID, privacy: .public) title=\(credit.title, privacy: .public) creator=\(credit.creator ?? "-", privacy: .public) license=\(credit.license, privacy: .public) url=\(credit.sourceURL, privacy: .public)")
+    }
+
+    /// Frees picks that were never shown (dropped stages), so they can be picked again.
+    func expireReservations(olderThan lifetime: TimeInterval, now: Date = Date()) {
+        state.withLock { s in s.reserved = s.reserved.filter { now.timeIntervalSince($0.value) < lifetime } }
     }
 
     /// The display queue was drained (source switch, clear, stop).
@@ -252,9 +264,13 @@ nonisolated final class CuratedImageFeed: Sendable {
             candidate = c
             succeeded(source.provider)
         } catch {
+            // Stopping ingest (source switch, Stop, Clear) is not a provider failure.
+            if Self.isCancellation(error) { return }
             backOff(source.provider, error)
             return
         }
+        // The pool's clear generation now: a picture in flight during Clear is refused when saved.
+        let clearGeneration = pool.store.clearGeneration
 
         let d = collections.defaults
         let context = ResolveContext(targetLongSide: d.targetLongSide, maxBytes: d.maxBytes,
@@ -268,7 +284,7 @@ nonisolated final class CuratedImageFeed: Sendable {
             try await http.download(resolved.url, to: tmp, maxBytes: d.maxBytes)
             succeeded(source.provider)
             try Task.checkCancellation()
-            let metadata = try store(file: tmp, resolved: resolved, source: source)
+            let metadata = try store(file: tmp, resolved: resolved, source: source, clearGeneration: clearGeneration)
             state.withLock { $0.ingested += 1 }
             let o = metadata.openness
             LMLog.visual.info("🖼️ API image stored: source=\(source.id, privacy: .public) item=\(candidate.itemID, privacy: .public) size=\(metadata.pixelWidth)x\(metadata.pixelHeight) openness=\(o?.openness ?? 0, format: .fixed(precision: 2)) key=\(o?.keyShare ?? 0, format: .fixed(precision: 2)) license=\(resolved.credit.license, privacy: .public) url=\(resolved.url.absoluteString, privacy: .public)")
@@ -276,11 +292,19 @@ nonisolated final class CuratedImageFeed: Sendable {
             reject(candidate, source: source, reason: rejection.reason)
         } catch let error as ImageFetchError where error.isItemFailure {
             reject(candidate, source: source, reason: error.description)
-        } catch is CancellationError {
+        } catch let error where Self.isCancellation(error) {
             return
+        } catch ImageStore.StoreError.staleClearGeneration {
+            LMLog.visual.info("🖼️ [API] dropped \(candidate.itemID, privacy: .public): the pool was cleared while it was fetched")
         } catch {
             backOff(source.provider, error)
         }
+    }
+
+    static func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        if let u = error as? URLError, u.code == .cancelled { return true }
+        return false
     }
 
     private func reject(_ c: ImageCandidate, source: CuratedSource, reason: String) {
@@ -367,6 +391,8 @@ nonisolated final class CuratedImageFeed: Sendable {
         var w = (props[kCGImagePropertyPixelWidth] as? Int) ?? 0
         var h = (props[kCGImagePropertyPixelHeight] as? Int) ?? 0
         if let o = props[kCGImagePropertyOrientation] as? Int, o >= 5 { swap(&w, &h) }
+        guard w > 0, h > 0 else { throw CandidateRejected(reason: "no pixel size") }
+        if w * h > maxSourcePixels { throw CandidateRejected(reason: "\(w)x\(h) is too many pixels to decode") }
         let maxPixel = decodeLongSide(width: w, height: h, target: target)
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
@@ -381,7 +407,7 @@ nonisolated final class CuratedImageFeed: Sendable {
     }
 
     /// Decode, frame, gate, analyse and save. Returns the stored metadata.
-    private func store(file: URL, resolved: ResolvedImage, source: CuratedSource) throws -> ImageMetadata {
+    private func store(file: URL, resolved: ResolvedImage, source: CuratedSource, clearGeneration: UInt64) throws -> ImageMetadata {
         let d = collections.defaults
         let decoded = try Self.decode(file, target: d.targetLongSide)
         var image = BorderTrimmer.trimmedIfBordered(decoded)
@@ -405,7 +431,7 @@ nonisolated final class CuratedImageFeed: Sendable {
             dominantColors: analysis.colors, measuredBrightness: analysis.brightness,
             measuredSaturation: analysis.saturation, archiveReference: nil, source: resolved.credit, openness: score)
         guard let jpeg = ImageStore.encodeJPEG(image, quality: 0.9) else { throw CandidateRejected(reason: "encode failed") }
-        try pool.add(jpeg: jpeg, metadata: metadata, budget: d.storeBudgetBytes)
+        try pool.add(jpeg: jpeg, metadata: metadata, budget: d.storeBudgetBytes, clearGeneration: clearGeneration)
         return metadata
     }
 

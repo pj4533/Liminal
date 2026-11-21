@@ -51,8 +51,14 @@ nonisolated extension ImageProvider {
         let title = (c.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { throw CandidateRejected(reason: "no title") }
         if source.rejectsTitle(title, itemID: c.itemID) { throw CandidateRejected(reason: "title rejected: \(title.prefix(60))") }
+        let creator = c.creator?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let named = creator.flatMap { $0.isEmpty ? nil : $0 }
+        // CC BY and CC BY-SA are kept only when the credit can name the author (D37).
+        if license.uppercased().hasPrefix("CC BY"), named == nil {
+            throw CandidateRejected(reason: "\(license) without a creator to credit")
+        }
         return ImageSourceCredit(providerID: id, sourceID: source.id, itemID: c.itemID, title: title,
-                                 creator: c.creator.flatMap { $0.isEmpty ? nil : $0 }, date: c.date,
+                                 creator: named, date: c.date,
                                  institution: context.institution, license: license,
                                  licenseURL: ImageRights.licenseURL(license),
                                  sourceURL: c.pageURL ?? imageURL.absoluteString, imageURL: imageURL.absoluteString)

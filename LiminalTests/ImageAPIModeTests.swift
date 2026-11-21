@@ -380,6 +380,23 @@ struct ImageRightsTests {
         #expect(ImageRights.licenseURL("CC BY-SA 3.0") == "https://creativecommons.org/licenses/by-sa/3.0/")
         #expect(ImageRights.licenseURL("CC0") == "https://creativecommons.org/publicdomain/zero/1.0/")
     }
+
+    @Test func attributionLicencesNeedACreator() throws {
+        let provider = WikimediaProvider()
+        let source = ImageAPIFixtures.source(provider: "wikimedia")
+        let url = URL(string: "https://upload.wikimedia.org/x.jpg")!
+        var c = ImageCandidate(providerID: "wikimedia", itemID: "File:x.jpg", title: "Fly agaric", creator: "  ",
+                               rights: "CC BY-SA 3.0")
+        #expect(throws: CandidateRejected.self) {
+            _ = try provider.credit(for: c, source: source, context: ImageAPIFixtures.context, imageURL: url)
+        }
+        c.creator = "Quartl"
+        #expect(try provider.credit(for: c, source: source, context: ImageAPIFixtures.context, imageURL: url).creator == "Quartl")
+        // Public domain needs no creator.
+        c.creator = nil
+        c.rights = "Public domain"
+        #expect(try provider.credit(for: c, source: source, context: ImageAPIFixtures.context, imageURL: url).creator == nil)
+    }
 }
 
 // MARK: - Rotation
@@ -690,6 +707,47 @@ struct CuratedImagePoolTests {
         pool.recordRejected("loc:x", reason: "test")
         pool.clear()
         #expect(pool.count == 0 && pool.seenKeys.isEmpty && pool.store.imageCount() == 0)
+    }
+
+    /// A picture whose ingest began before Clear is refused, and the cleared ledger stays cleared on disk.
+    @Test func pictureInFlightDuringClearIsRefused() throws {
+        let (root, defaults) = ImageAPIFixtures.tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let pool = CuratedImagePool(root: root, defaults: defaults)
+        pool.loadIfNeeded()
+        pool.recordRejected("loc:before", reason: "test")
+        let generation = pool.store.clearGeneration
+        pool.clear()
+        #expect(throws: ImageStore.StoreError.self) {
+            try pool.add(jpeg: ImageAPIFixtures.jpeg, metadata: ImageAPIFixtures.metadata(), budget: 1 << 40,
+                         clearGeneration: generation)
+        }
+        #expect(pool.count == 0 && pool.store.imageCount() == 0)
+        pool.recordRejected("loc:after", reason: "test")
+        let again = CuratedImagePool(root: root, defaults: defaults)
+        again.loadIfNeeded()
+        #expect(again.seenKeys == ["loc:after"])
+    }
+}
+
+// MARK: - Feed reservations
+
+struct CuratedImageFeedTests {
+    /// A picture picked for display but never shown is not held back forever.
+    @Test func droppedReservationsExpire() throws {
+        let (root, defaults) = ImageAPIFixtures.tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let pool = CuratedImagePool(root: root, defaults: defaults)
+        pool.loadIfNeeded()
+        let feed = CuratedImageFeed(collections: .bundled, pool: pool, providers: ImageProviders.all(environment: [:]),
+                                    offline: true, filter: nil, seed: 1)
+        let source = try #require(feed.sources.first)
+        let meta = ImageAPIFixtures.metadata(source: source.id)
+        try pool.add(jpeg: ImageAPIFixtures.jpeg, metadata: meta, budget: 1 << 40)
+        #expect(feed.nextDisplay(current: nil)?.id == meta.id)
+        #expect(feed.nextDisplay(current: nil) == nil)   // reserved
+        feed.expireReservations(olderThan: 0)
+        #expect(feed.nextDisplay(current: nil)?.id == meta.id)
     }
 }
 
