@@ -124,7 +124,8 @@ struct DialogueMotifTests {
                 let occupancy = loop.events.map(\.duration).reduce(0, +) / seconds
                 // Footage captures measure the 35 to 60 percent target; the synthetic voice speaks faster,
                 // so its word pieces are shorter and the floor here is lower.
-                #expect((0.25...0.62).contains(occupancy), "\(label): occupancy \(occupancy)")
+                #expect((0.25...0.62).contains(occupancy),
+                        "\(label): occupancy \(occupancy), line \(motif.text ?? "-") \(motif.seconds(0)) s, \(loop.events.count) events")
                 // Native rate only; nothing is slower than the source.
                 #expect(loop.events.allSatisfy { $0.transform == .native })
             }

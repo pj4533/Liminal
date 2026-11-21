@@ -108,6 +108,7 @@ import Testing
         let transcript = DialogueFixtures.transcript(Self.clauses)
         var settings = DialogueDirector.Settings(transcriptProvider: { FixtureTranscriptProvider(transcript, delay: .milliseconds(200)) })
         settings.classify = { _, _, _ in [] }
+        settings.transcriptFirstWait = 0
         let director = DialogueDirector(settings)
         let start = Double(DispatchTime.now().uptimeNanoseconds) / 1e9
         let beat = 60.0 / 70

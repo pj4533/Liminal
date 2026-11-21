@@ -645,9 +645,12 @@ struct DialogueRuntimeTests {
 /// scheduling, so classification returns no windows (neutral weights), as when it times out.
 extension DialogueDirector.Settings {
     static func neutral(transcriptProvider: @escaping @Sendable () -> any TranscriptProvider,
-                        analysisDelay: Swift.Duration = .zero, transcriptCap: Double = DialogueCueCoordinator.transcriptCap) -> Self {
+                        analysisDelay: Swift.Duration = .zero, transcriptCap: Double = DialogueCueCoordinator.transcriptCap,
+                        transcriptFirstWait: Double = 0) -> Self {
         var s = Self(transcriptProvider: transcriptProvider, analysisDelay: analysisDelay, transcriptCap: transcriptCap)
         s.classify = { _, _, _ in [] }
+        // The two-revision flow (acoustic plan, then the refinement) unless a test asks for the first-plan wait (D124).
+        s.transcriptFirstWait = transcriptFirstWait
         return s
     }
 }

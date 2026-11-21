@@ -19,6 +19,28 @@ nonisolated enum DialogueCueCoordinator {
     /// A first block with less than this many beats left after the bed starts is a stub (its last
     /// bar is a rest anyway); the transcript then targets the block after the next one.
     static let stubBlockBeats = 4.0
+    /// The first plan waits for the transcript no later than this before the window, less the commit
+    /// margin, so its build still commits in time (D124).
+    static let firstPlanBudget = 0.45
+
+    /// The transcript if `task` finishes within `seconds`: `(true, transcript)`, else `(false, nil)`.
+    /// The task is never cancelled here; a late transcript still reaches the refinement path.
+    static func transcript(_ task: Task<DialogueTranscript?, Never>, within seconds: Double) async -> (arrived: Bool, transcript: DialogueTranscript?) {
+        guard seconds > 0 else { return (false, nil) }
+        let race = OSAllocatedUnfairLock<CheckedContinuation<(Bool, DialogueTranscript?), Never>?>(initialState: nil)
+        func resume(_ value: (Bool, DialogueTranscript?)) {
+            race.withLock { c in c?.resume(returning: value); c = nil }
+        }
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<(Bool, DialogueTranscript?), Never>) in
+                race.withLock { $0 = continuation }
+                Task { let t = await task.value; resume((true, t)) }
+                Task { try? await Task.sleep(for: .milliseconds(Int(seconds * 1000))); resume((false, nil)) }
+            }
+        } onCancel: {
+            resume((false, nil))
+        }
+    }
 
     struct Timings: Sendable, Equatable {
         var classifyMs: Double = 0
@@ -337,6 +359,9 @@ nonisolated final class DialogueDirector: @unchecked Sendable {
         /// Test seam: extra time spent after classification, standing in for slow analysis.
         var analysisDelay: Duration = .zero
         var transcriptCap = DialogueCueCoordinator.transcriptCap
+        /// The first plan waits this long (from the cue's start) for the transcript, so the loop's
+        /// line is chosen by its words (D124). 0 keeps the acoustic-first, refine-later flow.
+        var transcriptFirstWait = 1.2
         /// Lines played across sessions (D123). The app's file ledger, or an in-memory one under
         /// XCTest so unit tests neither read nor consume the user's played lines.
         var ledger: DialogueLineLedger = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil
@@ -506,6 +531,27 @@ nonisolated final class DialogueDirector: @unchecked Sendable {
         if config.analysisDelay > .zero { try? await Task.sleep(for: config.analysisDelay) }
         guard !Task.isCancelled else { return finish("cancelled") }
 
+        // The first plan takes the transcript when it is ready in time (D124): the line is chosen by
+        // its words and cut by words from bar 1. Only this task waits; the bed and the music never do.
+        var firstTranscript: DialogueTranscript?
+        if let task = transcriptTask {
+            let until = min(started + config.transcriptFirstWait,
+                            window.lowerBound - DialogueCueCoordinator.commitMargin - DialogueCueCoordinator.firstPlanBudget)
+            let (arrived, transcript) = await DialogueCueCoordinator.transcript(task, within: until - now())
+            guard !Task.isCancelled else { return finish("cancelled") }
+            if arrived {
+                transcriptTask = nil
+                if let transcript {
+                    firstTranscript = transcript
+                    outcome.transcriptArrivedAt = now()
+                    if let r = reuse {
+                        reuse = .init(analysis: r.analysis, bank: DialogueEngine.bank(r.analysis, transcript: transcript, seed: seed),
+                                      transcript: transcript)
+                    }
+                }
+            }
+        }
+
         // Build, then verify the cue token and the transport revision. A changed transport keeps
         // the analysis and bank and plans again; a vanished one discards the plan.
         var built: DialogueCueCoordinator.Built?
@@ -515,13 +561,15 @@ nonisolated final class DialogueDirector: @unchecked Sendable {
             let (memory, generation) = memorySnapshot()
             memoryBefore = memory
             let earliest = now() + DialogueCueCoordinator.commitMargin
-            var candidate = DialogueCueCoordinator.build(source: source, speech: speech, transcript: reuse?.transcript,
+            var candidate = DialogueCueCoordinator.build(source: source, speech: speech, transcript: reuse?.transcript ?? firstTranscript,
                                                          transport: info, window: window, earliestStart: earliest,
                                                          memory: memory, seed: seed, revision: 0, classifyMs: classifyMs,
                                                          reuse: reuse)
             if reuse == nil { store(source, analysis: candidate.analysis, bank: candidate.bank) }
+            // A first-plan transcript is cached with the bank it refined (the reused one, or this build's).
+            if let firstTranscript { store(source, transcript: firstTranscript, refined: reuse?.bank ?? candidate.bank) }
             candidate = withCacheCost(candidate)
-            reuse = reuse ?? .init(analysis: candidate.analysis, bank: candidate.bank)
+            reuse = reuse ?? .init(analysis: candidate.analysis, bank: candidate.bank, transcript: firstTranscript)
             classifyMs = 0
             guard !Task.isCancelled else { return finish("cancelled") }
             guard isCurrent() else { return finish("staleCue") }
@@ -542,6 +590,7 @@ nonisolated final class DialogueDirector: @unchecked Sendable {
             }
             built = candidate
             outcome.posted.append(ArchiveVoice.ChopPlan(token: source.cueToken, revision: 0, chops: chops))
+            if firstTranscript != nil { outcome.transcriptUsed = true }
             outcome.built.append(candidate)
             DialogueCueCoordinator.report(candidate, cue: source.cueToken,
                                           lead: candidate.firstStart.map { $0 - (outcome.readyAt ?? 0) })

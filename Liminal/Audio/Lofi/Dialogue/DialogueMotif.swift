@@ -56,6 +56,19 @@ nonisolated enum DialogueMotifTuning {
     /// The motif picks among this many of the best unplayed lines (seeded), so a film's lines are
     /// explored rather than always its top-ranked one.
     static let linePool = 3
+    /// Line interest (D124, `DialogueLineInterest`): a line's value is scaled by
+    /// `interestFloor + (1 - interestFloor) * interest`, so a clear plain line still roughly ties a
+    /// murky striking one.
+    static let interestFloor: Float = 0.35
+    /// Lines below this are plain: the own film's plain lines wait until the crate's striking ones are played.
+    static let plainInterest: Float = 0.30
+    /// A crate line at least this interesting beats the own film's plain or unknown lines.
+    static let strikingInterest: Float = 0.60
+    /// The interest of a line without text (no transcript): above `plainInterest`, so the acoustic
+    /// choice is unchanged.
+    static let acousticInterest: Float = 0.45
+    /// The seeded pool holds only lines worth at least this share of the best unplayed line.
+    static let linePoolShare: Float = 0.85
     /// Recent films the motif may dig a fresh line from when a loop's own film has none
     /// (19 November 2026: a narration-over-music film gave no line and one line held 32 bars).
     static let crateSize = 4
@@ -84,6 +97,13 @@ nonisolated enum DialogueMotifTuning {
     static let lateSlotShift = 6
     /// A statement in the breakdown (the second and last full line) with this chance.
     static let secondStatementChance: Float = 0.45
+    /// Dry seconds of one 8-bar section stay under this share of it: a piece that would pass it is
+    /// left out (coverage repair still fills an empty bar). A long line's long pieces at a slow tempo
+    /// otherwise crowd the loop past the C-D9 band (D124: interest-ranked lines are longer on average).
+    static let maximumSectionOccupancy = 0.56
+    /// Dry pieces plus echo tails of one section stay under this share: echo tails are shortened
+    /// (or left out below `minimumEchoTailSeconds`) once the section reaches it.
+    static let maximumSectionOccupancyWithEcho = 0.60
     /// Coverage repair tries these sixteenths of an empty bar, in order.
     static let repairSlots = [8, 4, 12, 6, 10, 14, 2, 1, 3, 5, 7, 9, 11, 13, 15]
 }
@@ -104,6 +124,8 @@ nonisolated struct DialogueMotifFragment: Sendable, Equatable {
     let fadeIn: Int
     let fadeOut: Int
     let text: String?
+    /// The highest word weight inside the fragment (`DialogueLineInterest.wordWeights`); 0 for acoustic cuts.
+    var weight: Float = 0
 }
 
 /// A line that led a loop.
@@ -114,6 +136,9 @@ nonisolated struct DialogueMotifLineUse: Sendable, Equatable {
     let frames: Range<Int>
     /// The line in film seconds (the ledger's key).
     var seconds: Range<Double> = 0..<0
+    /// The line's words, lowercased, when it had a transcript: a film that says the same sentence
+    /// twice offers it once per session (D124).
+    var text: String? = nil
 }
 
 /// A 2-bar cell of pieces. Slots are sixteenths from the cell start; an `after` item sits on the
@@ -156,6 +181,8 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
     /// Carried over from an earlier loop because this loop's film offered no line.
     let carried: Bool
     let seed: UInt64
+    /// The line's interest (`DialogueLineInterest`), `acousticInterest` without text.
+    var interest: Float = DialogueMotifTuning.acousticInterest
 
     var line: DialogueMotifFragment { fragments[0] }
     var sampleRate: Double { source.sampleRate }
@@ -206,11 +233,24 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
             }
             return current
         }
-        // The motif ranks its own lines, so a cue whose pad bank is empty can still offer one.
-        if let fresh = make(loop: loop, source: source, analysis: analysis, transcript: transcript, memory: memory,
-                            seed: seed, beatDuration: beatDuration) {
-            return fresh
+        // A new loop (D124). The ledger blocks every played line at every step (D123); the tiers only
+        // order the unplayed ones: the own film's lines that are not plain, a striking transcribed
+        // line from the crate, any own line, any crate line. A cue with no transcript yet tries the
+        // crate's striking lines first: a known striking line beats an unknown one. Without any
+        // transcript every line is `acousticInterest`, so the order is the acoustic one of before.
+        func own(_ minimum: Float) -> DialogueMotif? {
+            make(loop: loop, source: source, analysis: analysis, transcript: transcript, memory: memory, seed: seed,
+                 beatDuration: beatDuration, minimumInterest: minimum)
         }
+        func striking() -> DialogueMotif? {
+            fromCrate(loop: loop, excluding: source.contentID, memory: memory, seed: seed, beatDuration: beatDuration,
+                      minimumInterest: DialogueMotifTuning.strikingInterest, transcribedOnly: true)
+        }
+        if transcript == nil, let dug = striking() { return dug }
+        if let fresh = own(DialogueMotifTuning.plainInterest) { return fresh }
+        if transcript != nil, let dug = striking() { return dug }
+        // The motif ranks its own lines, so a cue whose pad bank is empty can still offer one.
+        if let fresh = own(0) { return fresh }
         // This film has no usable line (music under the narration, say): dig a fresh line from the
         // crate of recent films, newest first, before ever repeating the last loop's line.
         if let dug = fromCrate(loop: loop, excluding: source.contentID, memory: memory, seed: seed, beatDuration: beatDuration) {
@@ -228,10 +268,12 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
 
     /// A fresh line from the crate of recent films (newest first), never this cue's own film.
     static func fromCrate(loop: Int, excluding contentID: String, memory: DialoguePerformanceMemory, seed: UInt64,
-                          beatDuration: Double) -> DialogueMotif? {
+                          beatDuration: Double, minimumInterest: Float = 0, transcribedOnly: Bool = false) -> DialogueMotif? {
         for entry in memory.motifCrate.reversed() where entry.source.contentID != contentID {
+            if transcribedOnly, entry.transcript == nil { continue }
             if let dug = make(loop: loop, source: entry.source, analysis: entry.analysis, transcript: entry.transcript,
-                              memory: memory, seed: seed, beatDuration: beatDuration) {
+                              memory: memory, seed: seed, beatDuration: beatDuration, minimumInterest: minimumInterest,
+                              transcribedOnly: transcribedOnly) {
                 return dug
             }
         }
@@ -245,13 +287,13 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
                                  seed: loopSeed, lineSeconds: seconds(0), sampleRate: sampleRate)
         return DialogueMotif(loop: loop, source: source, analysis: analysis, lineUnit: lineUnit, lineKey: lineKey,
                              fragments: fragments, pieces: pieces, halves: halves, bank: bank, usedTranscript: usedTranscript,
-                             reorderAllowed: reorderAllowed, cells: cells, carried: true, seed: loopSeed)
+                             reorderAllowed: reorderAllowed, cells: cells, carried: true, seed: loopSeed, interest: interest)
     }
 
     /// Chooses the best line (or `line` when given), cuts it into pieces and arranges the loop.
     static func make(loop: Int, source: DialogueSource, analysis: DialogueAnalysis, transcript: DialogueTranscript?,
                      memory: DialoguePerformanceMemory, seed: UInt64, beatDuration: Double, line wanted: Int? = nil,
-                     recycle: Bool = false) -> DialogueMotif? {
+                     recycle: Bool = false, minimumInterest: Float = 0, transcribedOnly: Bool = false) -> DialogueMotif? {
         guard let f = analysis.features, !analysis.units.isEmpty, analysis.contentID == source.contentID,
               let samples = source.buffer.floatChannelData?[0] else { return nil }
         var units = analysis.units
@@ -265,11 +307,13 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
         }
         let rate = analysis.sampleRate
         let maximum = min(DialogueMotifTuning.lineSeconds.upperBound, DialogueMotifTuning.lineMaximumBars * 4 * beatDuration)
+        let weights = DialogueLineInterest.wordWeights(words)
         let line: SpeechUnit
         if let wanted, let unit = units.first(where: { $0.id == wanted }) {
             line = unit
         } else {
-            let ranked = rankedLines(units: units, rejections: rejections, rate: rate, maximum: maximum)
+            let ranked = rankLines(units: units, rejections: rejections, rate: rate, maximum: maximum, words: words, weights: weights)
+                .filter { $0.interest >= minimumInterest && (!transcribedOnly || $0.unit.text != nil) }
             let used = memory.motifLines
             func filmSeconds(_ u: SpeechUnit) -> Range<Double> {
                 source.sourceSeconds(frame: u.frames.lowerBound)..<source.sourceSeconds(frame: u.frames.upperBound)
@@ -283,59 +327,117 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
                         && overlapShare(use.frames, u.frames) > 0.5
                 }
             }
-            let open = ranked.filter { !blockedThisSession($0) }
+            let open = ranked.filter { !blockedThisSession($0.unit) }
             let pick: SpeechUnit?
             if recycle {
                 // Every line here has been played: go back to the one played longest ago.
                 pick = open.min { a, b in
-                    (memory.ledger.lastPlay(contentID: analysis.contentID, seconds: filmSeconds(a))?.last ?? 0)
-                        < (memory.ledger.lastPlay(contentID: analysis.contentID, seconds: filmSeconds(b))?.last ?? 0)
-                }
+                    (memory.ledger.lastPlay(contentID: analysis.contentID, seconds: filmSeconds(a.unit))?.last ?? 0)
+                        < (memory.ledger.lastPlay(contentID: analysis.contentID, seconds: filmSeconds(b.unit))?.last ?? 0)
+                }?.unit
             } else {
-                let fresh = open.filter { memory.ledger.lastPlay(contentID: analysis.contentID, seconds: filmSeconds($0)) == nil }
-                let pool = Array(fresh.prefix(DialogueMotifTuning.linePool))
-                pick = pool.isEmpty ? nil : pool[Int((seed ^ UInt64(bitPattern: Int64(loop)) &* 0xD6E8_FEB8_6659_FD93) >> 33) % pool.count]
+                // Words this session already led with from this film: the same sentence said again, or
+                // a phrase inside one ("this is mother." after "Sally, this is mother."), waits too.
+                let said = used.filter { $0.contentID == analysis.contentID }.compactMap(\.text).map { " \($0) " }
+                func alreadySaid(_ u: SpeechUnit) -> Bool {
+                    guard let text = u.text else { return false }
+                    let words = " \(Self.spokenText(text)) "
+                    return said.contains { $0.contains(words) || words.contains($0) }
+                }
+                let fresh = open.filter {
+                    memory.ledger.lastPlay(contentID: analysis.contentID, seconds: filmSeconds($0.unit)) == nil && !alreadySaid($0.unit)
+                }
+                // The seeded pool holds the best unplayed lines worth at least `linePoolShare` of the
+                // leader, so a striking line is not a coin flip against a plain one (D124).
+                let leader = fresh.first?.value ?? 0
+                let pool = Array(fresh.prefix(DialogueMotifTuning.linePool).filter { $0.value >= DialogueMotifTuning.linePoolShare * leader })
+                var rng = MusicRNG(seed: seed ^ (UInt64(bitPattern: Int64(loop)) &* 0xD6E8_FEB8_6659_FD93))
+                pick = pool.isEmpty ? nil : pool[rng.int(0...(pool.count - 1))].unit
             }
             guard let pick else { return nil }
             line = pick
         }
         let count = min(source.frameCount, f.frameCount)
         guard line.frames.lowerBound >= 0, line.frames.upperBound <= count else { return nil }
-        let lineWords = words.filter { line.frames.contains(($0.frames.lowerBound + $0.frames.upperBound) / 2) }
+        let lineIndices = words.indices.filter { line.frames.contains((words[$0].frames.lowerBound + words[$0].frames.upperBound) / 2) }
+        let lineWords = lineIndices.map { words[$0] }
         var cutter = Cutter(f: f, samples: samples, count: count, rate: rate)
         guard let cut = cutter.cut(line, words: lineWords) else { return nil }
+        // Fragment weights: the strongest word inside each cut (the hook layer's signature piece).
+        var fragments = cut.fragments
+        if !lineIndices.isEmpty {
+            for k in fragments.indices {
+                let frames = fragments[k].frames
+                fragments[k].weight = lineIndices.filter { frames.contains((words[$0].frames.lowerBound + words[$0].frames.upperBound) / 2) }
+                    .map { weights[$0] }.max() ?? 0
+            }
+        }
+        let lineInterest = interest(of: line, words: words, weights: weights)
         let reorderAllowed = lineWords.count < 2 || DialogueReorderGuard.allowsPieceReorder(lineWords.map(\.text))
         let loopSeed = seed ^ UInt64(bitPattern: Int64(loop)) &* 0x9E37_79B9
-        let cells = arrange(fragments: cut.fragments, pieces: cut.pieces, halves: cut.halves, reorderAllowed: reorderAllowed,
+        let cells = arrange(fragments: fragments, pieces: cut.pieces, halves: cut.halves, reorderAllowed: reorderAllowed,
                             seed: loopSeed, lineSeconds: Double(line.frames.count) / rate, sampleRate: rate)
         let key = lineKey(analysis.contentID, line.frames)
-        let bank = motifBank(cut.fragments, line: line, analysis: analysis, key: key, usedTranscript: lineWords.count >= 2)
+        let bank = motifBank(fragments, line: line, analysis: analysis, key: key, usedTranscript: lineWords.count >= 2)
         return DialogueMotif(loop: loop, source: source, analysis: analysis, lineUnit: line.id, lineKey: key,
-                             fragments: cut.fragments, pieces: cut.pieces, halves: cut.halves, bank: bank,
+                             fragments: fragments, pieces: cut.pieces, halves: cut.halves, bank: bank,
                              usedTranscript: lineWords.count >= 2, reorderAllowed: reorderAllowed, cells: cells,
-                             carried: false, seed: loopSeed)
+                             carried: false, seed: loopSeed, interest: lineInterest)
+    }
+
+    /// A line's words for the said-once rule: lowercased letters, digits and spaces.
+    static func spokenText(_ text: String) -> String {
+        text.lowercased().filter { $0.isLetter || $0.isNumber || $0 == " " }.split(separator: " ").joined(separator: " ")
+    }
+
+    /// A line's interest: from its words when it has text, else `acousticInterest`.
+    static func interest(of u: SpeechUnit, words: [DialogueWordSpan], weights: [Float]) -> Float {
+        guard u.text != nil, let r = u.tokenRange, r.lowerBound >= 0, r.upperBound <= words.count, weights.count == words.count,
+              !r.isEmpty else { return DialogueMotifTuning.acousticInterest }
+        return DialogueLineInterest.interest(words: words[r], weights: weights[r], text: u.text)
+    }
+
+    /// A candidate line with its value (sound, fit, length, transcript bonus and interest) and interest.
+    struct RankedLine {
+        let unit: SpeechUnit
+        let value: Float
+        let interest: Float
     }
 
     /// Whole lines in rank order: sound times line fit, transcribed lines first among equals.
-    static func rankedLines(units: [SpeechUnit], rejections: [DialogueRejection], rate: Double, maximum: Double) -> [SpeechUnit] {
+    static func rankedLines(units: [SpeechUnit], rejections: [DialogueRejection], rate: Double, maximum: Double,
+                            words: [DialogueWordSpan] = []) -> [SpeechUnit] {
+        rankLines(units: units, rejections: rejections, rate: rate, maximum: maximum, words: words,
+                  weights: DialogueLineInterest.wordWeights(words)).map(\.unit)
+    }
+
+    /// Whole lines in rank order with their values: sound times line fit times interest, transcribed
+    /// lines first among equals. `weights` are `DialogueLineInterest.wordWeights(words)`.
+    static func rankLines(units: [SpeechUnit], rejections: [DialogueRejection], rate: Double, maximum: Double,
+                          words: [DialogueWordSpan], weights: [Float]) -> [RankedLine] {
         let rejected = Dictionary(rejections.map { ($0.unit, $0.reason) }, uniquingKeysWith: { a, _ in a })
         let lines = units.filter {
             [.utterance, .phrase, .wordGroup].contains($0.level) && rejected[$0.id] == nil
                 && $0.score.sound >= DialogueTuning.minimumPadSound && $0.nuclei >= DialogueMotifTuning.lineMinimumNuclei
         }
+        var interests: [Int: Float] = [:]
+        for u in lines { interests[u.id] = interest(of: u, words: words, weights: weights) }
         func value(_ u: SpeechUnit) -> Float {
+            let interest = interests[u.id] ?? DialogueMotifTuning.acousticInterest
             let d = u.seconds(rate)
             let length = d <= DialogueMotifTuning.preferredLineSeconds ? 1
                 : max(0.8, 1 - 0.2 * Float((d - DialogueMotifTuning.preferredLineSeconds) / (DialogueMotifTuning.lineSeconds.upperBound - DialogueMotifTuning.preferredLineSeconds)))
             return u.score.sound * DialogueBankBuilder.lineFit(u, units: units, rejected: rejected) * length
                 * (u.text != nil ? DialogueMotifTuning.transcribedLineBonus : 1)
+                * (DialogueMotifTuning.interestFloor + (1 - DialogueMotifTuning.interestFloor) * interest)
         }
-        func within(_ r: ClosedRange<Double>) -> [SpeechUnit] {
+        func within(_ r: ClosedRange<Double>) -> [RankedLine] {
             lines.filter { r.contains($0.seconds(rate)) && $0.seconds(rate) <= maximum }
-                .sorted { (value($0), -$0.id) > (value($1), -$1.id) }
+                .map { RankedLine(unit: $0, value: value($0), interest: interests[$0.id] ?? DialogueMotifTuning.acousticInterest) }
+                .sorted { ($0.value, -$0.unit.id) > ($1.value, -$1.unit.id) }
         }
         let preferred = within(DialogueMotifTuning.lineSeconds)
-        let relaxed = within(DialogueMotifTuning.relaxedLineSeconds).filter { u in !preferred.contains { $0.id == u.id } }
+        let relaxed = within(DialogueMotifTuning.relaxedLineSeconds).filter { u in !preferred.contains { $0.unit.id == u.unit.id } }
         return preferred + relaxed
     }
 
@@ -378,12 +480,13 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
         return [
             "loop": loop, "line": text as Any, "lineUnit": lineUnit, "lineKey": String(lineKey, radix: 16),
             "usedTranscript": usedTranscript, "reorderAllowed": reorderAllowed, "carried": carried,
+            "interest": r3(Double(interest)),
             "fragments": fragments.map { fr -> [String: Any] in
                 var e: [String: Any] = ["id": fr.id, "kind": fr.kind.rawValue, "order": fr.order,
                                         "source": [r3(source.sourceSeconds(frame: fr.frames.lowerBound)),
                                                    r3(source.sourceSeconds(frame: fr.frames.upperBound))],
                                         "duration": r3(seconds(fr.id)), "accentOffset": r3(accentOffset(fr.id)),
-                                        "subLine": isSubLine(fr.id)]
+                                        "subLine": isSubLine(fr.id), "weight": r3(Double(fr.weight))]
                 if let parent = fr.parent { e["parent"] = parent }
                 if let t = fr.text { e["text"] = t }
                 return e
@@ -738,6 +841,8 @@ nonisolated enum DialogueMotifPerformer {
         }
         let lineStatements = memory.motifStatements(loop: motif.loop)
         var statements = lineStatements
+        let budget = DialogueMotifTuning.maximumSectionOccupancy * (boundary - snapshot.time(beat: owned.lowerBound))
+        func drySeconds() -> Double { placed.reduce(0) { $0 + ($1.end - $1.start) } }
 
         for cell in motif.cells {
             let cellBeat = loopBeat + Double(cell.bar * 4)
@@ -752,6 +857,8 @@ nonisolated enum DialogueMotifPerformer {
                 let base = cellStart + item.slot
                 let offset = accentOffset(item)
                 let length = duration(item.fragment)
+                // The section's dry budget; the line statement and the turnaround's landing always play.
+                if item.fragment != 0, !item.landing, drySeconds() + length > budget { continue }
                 let shift = firstInCell && placed.isEmpty ? DialogueMotifTuning.lateSlotShift : DialogueMotifTuning.slotShift
                 let candidates: [Int]
                 if let gap = item.after {
@@ -781,7 +888,9 @@ nonisolated enum DialogueMotifPerformer {
                         // One dry voice: the earlier piece is choked (never the line), else the slot moves on.
                         guard let last = placed.last, last.fragment != 0, last.effect != .reversed,
                               start - DialogueTuning.chokeLeadSeconds - last.start >= DialogueMotifTuning.minimumPieceSeconds else { continue }
-                        placed[placed.count - 1].end = start - DialogueTuning.chokeLeadSeconds
+                        // A choke only shortens: a start inside the dry gap after the earlier piece's end
+                        // must not stretch that piece past its pad (D124 seed-19 finding).
+                        placed[placed.count - 1].end = min(placed[placed.count - 1].end, start - DialogueTuning.chokeLeadSeconds)
                         placed[placed.count - 1].choked = true
                     }
                     placed.append(Placed(fragment: item.fragment, cell: cell.kind, sixteenth: s, accent: accent, start: start, end: end,
@@ -795,7 +904,8 @@ nonisolated enum DialogueMotifPerformer {
             }
         }
         placed = repair(placed, motif: motif, snapshot: snapshot, owned: owned, hard: hard, floor: floor, upper: upper)
-        let events = finish(placed, motif: motif, snapshot: snapshot, upper: upper)
+        let events = finish(placed, motif: motif, snapshot: snapshot, upper: upper,
+                            budget: DialogueMotifTuning.maximumSectionOccupancyWithEcho * (boundary - snapshot.time(beat: owned.lowerBound)))
 
         // Blocks touching the window, as the grammar logs them; each block is named by its first cell.
         let firstBeat = snapshot.beat(time: window.lowerBound)
@@ -877,7 +987,7 @@ nonisolated enum DialogueMotifPerformer {
                     }
                     guard end <= upper else { continue }
                     if chokePrevious, let p = previous {
-                        placed[p].end = start - DialogueTuning.chokeLeadSeconds
+                        placed[p].end = min(placed[p].end, start - DialogueTuning.chokeLeadSeconds)
                         placed[p].choked = true
                     }
                     var e = Placed(fragment: f, cell: .repair, sixteenth: s0 + slot, accent: accent, start: start, end: end,
@@ -893,8 +1003,11 @@ nonisolated enum DialogueMotifPerformer {
     }
 
     /// Events from placed pieces: effect tails inside the following space, blocks and slots.
-    static func finish(_ placed: [Placed], motif: DialogueMotif, snapshot: DialogueTransportSnapshot, upper: Double) -> [DialogueEvent] {
+    static func finish(_ placed: [Placed], motif: DialogueMotif, snapshot: DialogueTransportSnapshot, upper: Double,
+                       budget: Double = .infinity) -> [DialogueEvent] {
         var out: [DialogueEvent] = []
+        // Echo tails share what the dry pieces leave of the section's budget, first come first served.
+        var spare = budget - placed.reduce(0) { $0 + ($1.end - $1.start) }
         let lastPhrase = snapshot.phraseAtOrigin + Int((snapshot.beat(time: upper - 1e-6) / 16).rounded(.down))
         for (i, p) in placed.enumerated() {
             let pad = motif.bank.pads[p.fragment]
@@ -905,11 +1018,12 @@ nonisolated enum DialogueMotifPerformer {
             case .echoThrow where !p.choked:
                 let beat = snapshot.beatLength(at: Double(p.sixteenth) / 4)
                 let tail = min(DialogueMotifTuning.echoTailBeats * beat, nextStart - DialogueTuning.dryGapSeconds - p.end,
-                               max(0, upper - p.end))
+                               max(0, upper - p.end), max(0, spare))
                 let delay = DialogueMotifTuning.echoDelayBeats * beat
                 if tail >= max(DialogueMotifTuning.minimumEchoTailSeconds, delay + 0.05) {
                     effect = .echoThrow(delay: delay, tail: tail)
                     end = p.end + tail
+                    spare -= tail
                 }
             case .filtered: effect = .filtered
             case .reversed: effect = .reversed
@@ -959,7 +1073,8 @@ nonisolated extension DialoguePerformanceMemory {
             motifLines.append(DialogueMotifLineUse(key: motif.lineKey, loop: motif.loop, contentID: motif.source.contentID,
                                                    frames: frames,
                                                    seconds: motif.source.sourceSeconds(frame: frames.lowerBound)
-                                                       ..< motif.source.sourceSeconds(frame: frames.upperBound)))
+                                                       ..< motif.source.sourceSeconds(frame: frames.upperBound),
+                                                   text: motif.usedTranscript ? motif.text.map(DialogueMotif.spokenText) : nil))
             if motifLines.count > DialogueMotifTuning.lineHistory { motifLines.removeFirst(motifLines.count - DialogueMotifTuning.lineHistory) }
         }
         self.motif = motif

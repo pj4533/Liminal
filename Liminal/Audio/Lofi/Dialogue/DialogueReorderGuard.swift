@@ -107,8 +107,10 @@ nonisolated enum DialogueReorderGuard {
         func through(_ i: Int, limit: Int, _ accept: (WordClass) -> Bool) -> Int? {
             var j = i + 1
             while j < tagged.count, j <= i + limit {
-                if accept(tagged[j].wordClass) { return j }
+                // A span never runs past clause punctuation, not even into the next word ("the other
+                // one. Sally," once protected "one. Sally" and rejected both sentences, D124).
                 if tagged[j - 1].endsClause { return nil }
+                if accept(tagged[j].wordClass) { return j }
                 j += 1
             }
             return nil

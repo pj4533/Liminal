@@ -826,3 +826,39 @@ Made while building PASS 1 (conductor, harmony, scenes, mix bus, drone/pad/lead/
 
 **Verified.** `DialogueLineLedgerTests`: overlap rule and counts; the file survives a reload; three sessions with fresh memory over two films lead six loops with no line overlapping an earlier one. The dialogue suites (`DialogueMotifTests`, `DialogueRuntimeTests`, `DialogueEngineTests`, `ArchiveVoiceRenderTests` and the other dialogue and archive-audio suites, 116 tests) pass unchanged. Not yet heard on the device over hours of play.
 
+
+## D124. Dialogue lines are chosen by how interesting their words are (2026-11-21)
+
+**Report.** The user wanted the chopped lines picked more intelligently: "sometimes the words are very plain when we want ... the cool words, like if it's talking about drug use or LSD ... something that is just interesting rather than just connective words." A hook built from "Sally, this is mother." worked because it was a self-contained phrase with a name in it.
+
+**Cause.** Measured with a probe suite on synthetic fixtures (the real `DialogueMotif` code, plain and evocative sentences side by side):
+
+- The line value was sound clarity times `lineFit` (the last word and punctuation) times length. Nothing scored what the words were. The plainest lines ("what is it that you want to do.", "there is one of them over there.") led the first loops; "he took a large dose of LSD." ranked 6th of 12.
+- The seeded pick among the top three unplayed lines was `pool[(seed ^ loop &* k) >> 33 % count]`. `&*` binds tighter than `^`, so for small seeds the index was 0 every loop, and for real 64-bit seeds it was a coin flip between a striking and a plain line.
+- `DialogueReorderGuard.protectedSpans` accepted the word after a clause end before checking the clause end, so "the other one. Sally," was protected as one span (number plus noun) and both "and then we went to the other one." and "Sally, this is mother." were rejected as protected cuts.
+- In the live app the line was almost never chosen with a transcript: revision 0 was always acoustic, and the transcript only re-cut the same line by words.
+
+**Change.**
+
+- `DialogueReorderGuard.protectedSpans`: a span never runs past clause punctuation, not even into the next word.
+- `DialogueLineInterest` (new, pure, on-device): one weight per word from the NaturalLanguage tags `DialogueReorderGuard.tag` already computes, a stop list and a small lexicon of evocative stems. Function and connective words weigh 0, other content words 0.25 (0.4 for a long noun, verb or adjective), numbers 0.5, names and vocatives 0.8 (not discourse markers such as "Yes,", "Well,", "Thus,"), and lexicon words their category weight: drugs and psychedelia 1.0, mind, dreams and the occult 0.9, death and danger 0.9, space and science 0.85, love, the body and address terms 0.75, vivid nouns and imperatives 0.7. Entries ending in `*` match by prefix; the others match the word or a plain inflection, imperatives only the exact word ("minded" is not "mind", "runs" is not "run"). Line interest is `0.5 peak + 0.2 second best + 0.3 min(1, content share / 0.6)`, plus 0.08 for "!" or "?", 0.10 for a vocative start, 0.06 for an imperative start and 0.05 for two to seven words, times 0.8 for a connective start, 0.75 for a dangling function word at the end and 0.9 above ten words. No network and no model calls; the lexicon is taste and the thing to tune by ear.
+- `DialogueMotif.rankLines`: value times `0.35 + 0.65 interest` (`interestFloor`), so a clear plain line still roughly ties a murky striking one. A line without text has `acousticInterest = 0.45`, so without a transcript the order is the acoustic one of before.
+- The seeded pool holds the top three unplayed lines worth at least 0.85 of the best (`linePoolShare`), and the pick is a real `MusicRNG` draw on the seed and loop.
+- Resolve order for a new loop (the D123 ledger still blocks every played line at every step): the own film's unplayed lines of interest at least 0.30 (`plainInterest`), then a transcribed crate line of interest at least 0.60 (`strikingInterest`), then any own line, then any crate line, then recycle, then carry. A cue whose transcript is not ready yet tries the striking crate lines first: a known striking line from a film heard in the last four cues beats an unknown line.
+- A sentence a film says twice, or a phrase inside a line already led ("this is mother." after "Sally, this is mother."), waits until the other unplayed lines are used (`DialogueMotifLineUse.text`).
+- `DialogueMotifFragment.weight` (the strongest word inside each cut) and `DialogueMotif.interest` are set in `make` and logged (`weight`, `interest` in the plan's `motif` element), for the hook work.
+- `DialogueDirector.run` waits for the transcript before the first plan, up to `transcriptFirstWait = 1.2` s from the cue's start and never later than `firstPlanBudget = 0.45` s plus the commit margin before the window. Only the dialogue task waits; the bed and the music never do, and the transcript task is never cancelled on the timeout. In time, revision 0 is built with it (line chosen and cut by words from bar 1) and no refinement follows; late, the acoustic plan and the revision 1 refinement run as before.
+- Two performer guards that interest-ranked lines exposed (they are longer on average, and the old index-0 pick never reached the long lines of the test fixtures): a choke only ever shortens the earlier piece (a start inside the dry gap used to stretch it past its pad by up to the gap), and one 8-bar section keeps its dry pieces under 0.56 and dry plus echo tails under 0.60 of its length (`maximumSectionOccupancy`, `maximumSectionOccupancyWithEcho`; echo tails are shortened first). One fixture loop at 62 BPM with a 2.8 s line had reached 0.67.
+
+**Measured** (probe, mixed fixture with a transcript, 10 loops, seeds 1, 2, 3 and a 64-bit seed):
+
+| | Before | After |
+|---|---|---|
+| Loops 1 to 3 | "what is it that you want to do." / "there is one of them over there." / "it did not work that way at all." (every seed) | "Sally, this is mother." / "I saw a flying saucer over the desert." / "your mind is dreaming in color." (seed 1; seed 3 opens with "he took a large dose of LSD.") |
+| Rank of the LSD line | 6 of 12 | 1 |
+| "Sally, this is mother." | rejected (protected cut) | ranks 2nd |
+| First loop of a plain line | 1 | 6 (after the five striking lines) |
+
+Prototype interest on lines from earlier footage captures: "These are all broken." 0.30, "it didn't work that way at all." 0.25, "They've always honored accredited media when" 0.59, against 0.95 to 1.0 for the striking fixture lines.
+
+**Verified.** `DialogueLineInterestTests` (17 cases): text thresholds, word weights, discourse markers, the protected-cut fix, rank order, the first four loops at interest 0.6 or more for four seeds, no repeat while unplayed lines remain and plain lines last, the acoustic order equal to the old formula, the crate preference, and the coordinator's first-plan wait (50 ms transcript: one revision 0 plan with the transcript; 1.8 s transcript: acoustic plan then revision 1). `DialogueMotifTests`, `DialogueRuntimeTests`, `DialogueEngineTests`, `DialogueTranscriptionTests` and `ArchiveVoiceRenderTests` pass (133 cases in all); the runtime tests keep the two-revision flow with `transcriptFirstWait = 0`. Not yet heard on footage, and the on-device speech model's status on the Vision Pro was not checked: without it the choice is acoustic as before.
