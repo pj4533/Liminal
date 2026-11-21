@@ -123,7 +123,22 @@ Pass as launch arguments, for example `-LiminalAutoPlay YES`. Defined in `Limina
 | `-LiminalVideoFile <mp4>`, `-LiminalVideoMix <0-1>` | Play a local clip, no network / one hour-long piece at a constant mix (stills) |
 | `-LiminalVideoOffline YES`, `-LiminalVideoOff YES` | Cache only, no Internet Archive requests / no footage at all |
 | `-LiminalVideoOffAt <s>` | Turn the Archive footage setting off that many seconds after footage starts (fade-out check), not saved |
-| `-LiminalControlsScroll archive`, `-LiminalControlsWidth <pt>` | Scroll the control panel/window to the Archive Footage card / visionOS controls window width (layout screenshots) |
+| `-LiminalControlsScroll archive\|images`, `-LiminalControlsWidth <pt>` | Scroll the control panel/window to the Archive Footage / Images & Storage card / visionOS controls window width (layout screenshots) |
+| `-LiminalImageSource ai\|api` | Use this image source for the launch without saving it (`-visual.imageSource api` also works but is not an automation flag) |
+| `-LiminalImageProvider <id[,id]>` | Restrict API ingest and display to these provider ids (loc, nasa, wikimedia, cma, met) or source ids |
+| `-LiminalImageAPIOffline YES` | API mode shows only its pool; no network |
+| `-LiminalImageAPISeed <n>` | Seed the API ingest and display rotations |
+| `-LiminalImageAPIFresh YES` | Use an empty `CuratedImageStore-Verify` pool so a run proves fetching without touching the user's pool (removed at the next normal launch). With `-LiminalImageAPIOffline YES` it reuses the previous verify pool |
+
+### API image mode checks
+
+API mode fetches from free public APIs, never from Gemini, so its verification runs may use the network. Serialize launches with the other runs and terminate the app afterwards.
+
+- Unit tests: `-only-testing:LiminalTests/ImageSourceSettingsTests -only-testing:LiminalTests/ImageCollectionsTests -only-testing:LiminalTests/ImageProviderParsingTests -only-testing:LiminalTests/ImageRightsTests -only-testing:LiminalTests/ImageRotationTests -only-testing:LiminalTests/ImageOpennessTests -only-testing:LiminalTests/CuratedImagePoolTests -only-testing:LiminalTests/ImageQueueAPIModeTests` (fixtures in `LiminalTests/Fixtures/ImageAPI/`, trimmed from live responses of 2026-11-21).
+- macOS: launch the built app with `-LiminalAutoPlay YES -LiminalImageSource api -LiminalImageAPIFresh YES -LiminalImageInterval 8 -archive.enabled YES -LiminalVideoOffline YES` and stream the log. Every stored, rejected and shown picture logs one line (`API image stored: ...`, `API image rejected: ... reason=...`, `API image shown: source=... license=... url=...`). Expect at least six shown pictures from three sources in five minutes and no `[Gemini]` lines.
+- Offline reuse: add `-LiminalImageAPIOffline YES` to the same flags.
+- visionOS Simulator: `xcrun simctl launch <udid> com.saygoodnight.Liminal -LiminalAutoPlay YES -LiminalOpenDome YES -LiminalImageSource api -LiminalImageAPIFresh YES -LiminalImageInterval 8 -LiminalControlsScroll images` (the control window then shows the credit). Vision's text and face checks cannot run in the simulator and are skipped with a log line.
+- Lo-Fi perf: `scripts/perf-run.sh --lofi --extra "-LiminalImageSource api -LiminalImageAPIFresh YES"` (ingest live) and with `-LiminalImageAPIOffline YES`, compared with a plain `--lofi` run.
 
 
 ## Scripts (`scripts/`)

@@ -134,3 +134,12 @@ The 3:2 cover crop costs the most on square NASA frames and portrait plates (Hae
 - **Smithsonian** needs an api.data.gov key (env `SMITHSONIAN_API_KEY`). The source is disabled without one.
 - **Europeana** would need a key, but it is not used.
 - **Every enabled source is keyless:** LOC, NASA, Commons, Cleveland and the Met.
+
+## First live ingest (2026-11-21)
+
+The app's own ingest ran on macOS and in the visionOS Simulator (decisions/images.md D41). 95 pictures were stored
+from all 12 enabled sources and 14 were rejected: 4 DOCUMERICA files by a title rule that was then fixed, 5
+*Icones Farlowianae* and Cooke plates under 2048 px (the gate now allows 2% under, which admits the 2026 px ones), 2
+for text (a Haeckel plate caption and a neon sign, before the text rule was relaxed), 1 grey Earthrise
+(`as8-15-2561`), 1 NASA original of 29 MB (`AC76-0628`) and 1 small Met print. LOC timed out once and backed off
+for a minute; the Met did not hit its bot wall at 5 s per request.

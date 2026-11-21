@@ -1,5 +1,12 @@
 # Image source "AI vs API": plan
 
+> **Status (2026-11-21): implemented** on branch `image-api-mode`. What changed from this plan while building, with
+> measurements, is in `docs/decisions/images.md` D36-D41: no upper key-share gate (it rejected the night neon and
+> nebulae), monochrome at saturation < 0.025, text rejects only paper-like pictures or text over a quarter of the
+> frame, size gate 2000 x 1333, NASA originals over 12 MB rejected (`~large` is 1920 px), the Smithsonian key read
+> from the environment only, and the "picture shown" ledger write moved off the main actor. Section 11 gate 5 (the
+> toggle clicked in the live app) was covered by a unit test because the Mac's screen was locked during the runs.
+
 A second way of getting pictures. **AI** is today's Gemini generation. **API** shows curated public-domain and
 openly licensed imagery fetched from library, museum and space-agency APIs: roadside neon, 1970s Kodachrome,
 Apollo-era Earth views, photochroms, fungi, woodblock landscapes. It is a mode toggle with the same look as
