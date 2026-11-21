@@ -24,8 +24,9 @@ The table lists the sources that were kept. "Long side" is the measured size of 
 | fungi-photographs | Commons featured and quality pictures of fungi | 2306-5184 | CC BY-SA / CC BY / PD per file | Fly agarics and shelf fungi on dark forest floors | 2 |
 | fungi-plates | Commons *Icones Farlowianae* (1929), Cooke *Illustrations of British Fungi* (1888) | 2063-3388 | PD / CC BY 2.0 | Botanical mushroom plates on cream paper | 1 |
 | haeckel-art-forms | Commons *Kunstformen der Natur* (parent category, LOC copies) | 6000-8952 (portrait) | PD | Symmetric psychedelic natural forms | 1 |
+| landsat-earth-as-art | Commons: eight pinned USGS/NASA Landsat false-colour scenes (*Earth as Art*, MSS near-infrared 1972-81, Lena Delta, Malaspina Glacier, Holuhraun) | 2015-7193 | PD / CC BY 2.0 / CC0 per file | Saturated magenta, cyan and orange colour fields: the most psychedelic source. Added 2026-11-21 in the verification (D42); the posters in the same search carry text and are not pinned | 1 |
 | photochrom-landscapes | Commons, LOC photochroms | 3300-7300 | PD | Hand-tinted 1890-1910 colour views: gorges, coasts, ruins | 2 |
-| cma-ukiyoe-landscapes | Cleveland Museum of Art, `type=Print`: Hiroshige, Hokusai, moonlight | 3400 | CC0 | Night rain, fireworks, full moons | 2 |
+| cma-ukiyoe-landscapes | Cleveland Museum of Art, `type=Print`: Hiroshige, Hokusai, moonlight | 3400 | CC0 | Night rain, fireworks, full moons | 1 (2 until D42) |
 | cma-early-photographs | Cleveland, `type=Photograph`: landscape, forest, trees | 3400 | CC0 | 1850s-1900 albumen landscapes, Fontainebleau forest | 1 |
 | met-landscapes | The Met: Mount Fuji (department 6), woodblock landscapes, moonlight, tree photographs (department 19) | 2000-4000 | CC0 if `isPublicDomain` | Hokusai, 1878 Calaveras Grove sequoias | 1 |
 | si-american-landscapes (disabled) | Smithsonian: SAAM landscapes, NASM | 3000 (ids.si.edu, measured 2999x2263) | CC0 | American landscape painting | 1, needs a key |

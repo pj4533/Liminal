@@ -471,6 +471,40 @@
    "allowMonochrome": false
   },
   {
+   "id": "landsat-earth-as-art",
+   "provider": "wikimedia",
+   "enabled": true,
+   "weight": 1,
+   "themes": [
+    "psychedelic",
+    "false colour",
+    "Earth as Art",
+    "rivers",
+    "glaciers"
+   ],
+   "license": "Public domain (USGS/NASA Landsat) / CC BY 2.0 (USGS Flickr), per file",
+   "pinned": [
+    "File:Cubism—Landsat Style.jpg",
+    "File:Lena River Delta - Landsat 2000.jpg",
+    "File:Malaspina Glacier, Alaska (2749).jpg",
+    "File:Shetlandinseln (Landsat).jpg",
+    "File:Holuhraun False Color OLI Landsat 8 01.jpg",
+    "File:Shalkarteniz 1975-05-09 Landsat 1-5 MSS L1 False Color Near Infrared.jpg",
+    "File:Shalkarteniz 1981-06-18 Landsat 1-5 MSS L1 False Color Near Infrared.jpg",
+    "File:Ebinur 1972-09-21 Landsat 1-5 MSS L1 False Color Near Infrared.jpg"
+   ],
+   "mood": {
+    "moods": [
+     "euphoric",
+     "majestic"
+    ],
+    "subjectCategory": "landscape",
+    "energy": 0.5,
+    "warmth": 0.2
+   },
+   "allowMonochrome": false
+  },
+  {
    "id": "photochrom-landscapes",
    "provider": "wikimedia",
    "enabled": true,
@@ -515,7 +549,7 @@
    "id": "cma-ukiyoe-landscapes",
    "provider": "cma",
    "enabled": true,
-   "weight": 2,
+   "weight": 1,
    "themes": [
     "woodblock prints",
     "night",
