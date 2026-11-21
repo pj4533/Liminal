@@ -84,7 +84,10 @@ nonisolated final class DropPipelines: Sendable {
     static func announce(_ spec: TransitionSpec) {
         guard spec.drop != nil else { return }
         let key = Key(spec)
-        for box in live.withLock({ $0 }) { box.value?.prepare(key) }
+        // Specializing the functions is synchronous Metal compilation (about 40 ms each): never on the main
+        // thread (it stalled the macOS render 350-410 ms per drop).
+        let targets = live.withLock { $0.compactMap(\.value) }
+        DispatchQueue.global(qos: .utility).async { for t in targets { t.prepare(key) } }
     }
 
     /// Builds the twins for `key` (asynchronously unless `wait`).
