@@ -167,7 +167,7 @@ nonisolated final class CuratedImageFeed: Sendable {
     func startIngest() {
         state.withLock { s in
             guard s.ingestTask == nil else { return }
-            s.ingestTask = Task.detached(priority: .utility) { [weak self] in
+            s.ingestTask = Task.detached(priority: .background) { [weak self] in
                 await self?.ingestLoop()
             }
         }

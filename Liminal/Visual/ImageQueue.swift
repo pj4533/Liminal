@@ -243,9 +243,12 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
     }
 
     /// Bookkeeping when a picture becomes the one on screen (API: rotation history and the credit log line).
+    /// The ledger write and log line run on a detached task: `showReserved` is called on the main actor
+    /// at the Lo-Fi reveal, where the visionOS render loop must not wait on file I/O.
     private func didShow(_ metadata: ImageMetadata?) {
         guard let metadata, metadata.source != nil else { return }
-        feed.markShown(metadata)
+        let feed = self.feed
+        Task.detached(priority: .utility) { feed.markShown(metadata) }
     }
 
     // MARK: - Public API
