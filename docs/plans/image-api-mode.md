@@ -427,3 +427,23 @@ These have defaults in the plan and are easy to change later.
 2. **CC BY-SA fungi photographs.** Enabled with attribution. Disable for a strictly PD / CC0 pool.
 3. **Pool budget.** 3 GB, least recently shown removed only past it and re-fetchable. Raise it rather than cap.
 4. **Monochrome.** At most 1 in 6, from one source. Set to zero for colour only.
+
+## Outcome (2026-11-21)
+
+Built and merged-ready on `image-api-mode`. Rationale and measurements: `docs/decisions/images.md` D36-D43.
+
+- **Shipped:** the AI | API picker (Settings key, macOS and visionOS controls), five keyless providers (Library of
+  Congress, NASA, Wikimedia Commons, Cleveland, the Met; Smithsonian only with `SMITHSONIAN_API_KEY`), 13 curated
+  sources in `image-collections.json` including Landsat Earth as Art, the pool with its own 3 GB budget, the
+  openness gates, and the credit line in the controls.
+- **Results:** 522 unit tests passed; live macOS and visionOS Simulator runs stored pictures from all 12 enabled
+  sources with 0 Gemini requests. Lo-Fi perf with live ingest passes (max frame 46-59 ms vs 53 ms for AI in the
+  simulator) after moving ingest and ledger writes off the render loop and storing at 2528 px.
+- **Changed from the plan:** see the status note above, plus D42 (switch serialisation, simulator Vision checks
+  compiled out) and D43 (attribution needs a creator, ledger ordering, clear during ingest, reservation expiry,
+  cancellation, 150 MP decode limit).
+- **Open:** the picker was driven by `-LiminalImageSourceFlipAt` and a unit test rather than a click (locked
+  screen); Vision text and face checks are unverified on a Vision Pro; device frame times are unverified; weak
+  spots are paper margins on plates, id-only NASA titles, long Commons creator lines and little true 1960s
+  psychedelic poster art (LoC rock posters are 1024 px or smaller). The four user decisions in section 13 stay at
+  their defaults.

@@ -22,6 +22,10 @@
 | [Bass tone redo plan](plans/bass-tone-redo.md) | The warm sustained sub with a short strike on the kick, its gates and measurements (D119; rotation D120) |
 | [Drop transitions research](research/drop-transitions.md) | Glitch and datamosh craft, drop-edit timing and audiovisual sync tolerances behind T44-T50 |
 | [Drop transitions plan](plans/drop-transitions.md) | Lo-Fi image changes that build over the drum fill and cut clean on the downbeat (T44-T50) |
+| [Image API survey](research/image-apis/survey.md) | Which public image APIs work in 2026, their keys, resolution and rights |
+| [Image collections](research/image-apis/collections.md) | The curated collections API mode rotates through, measured sizes, rejections and live ingest results |
+| [OpenPics notes](research/image-apis/openpics.md) | Endpoints and lessons from the earlier OpenPics app |
+| [API image mode plan](plans/image-api-mode.md) | The AI vs API source toggle, provider layer, pool, gates and outcome (D36-D43) |
 | [Architecture](architecture.md) | Audio and rendering pipelines, dependencies and attribution |
 | [Development reference](development.md) | Debug flags, automation scripts and contributing |
 | [Decision records](decisions/README.md) | Design rationale and review index |
