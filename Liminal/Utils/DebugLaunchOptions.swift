@@ -222,7 +222,7 @@ nonisolated enum DebugLaunchOptions {
     static let videoOffline: Bool = defaults.bool(forKey: "LiminalVideoOffline")
     /// -LiminalVideoOff YES: no footage at all (A/B and perf runs with the feature absent).
     static let videoOff: Bool = defaults.bool(forKey: "LiminalVideoOff")
-    /// -LiminalControlsScroll archive: scroll the control panel / window to that section on appear
+    /// -LiminalControlsScroll archive|images: scroll the control panel / window to that section on appear
     /// (settings screenshots; taps do not work in the Xcode 27 simulator).
     static let controlsScroll: String? = defaults.string(forKey: "LiminalControlsScroll")
     /// -LiminalVideoOffAt <s>: turn the "Archive footage" setting off this many seconds after footage starts
@@ -241,6 +241,40 @@ nonisolated enum DebugLaunchOptions {
     /// understanding" mode instead of the setting (not saved). allowDownload still downloads only
     /// through the setting's Download model path (DialogueSpeechAssets.requestInstallIfAllowed).
     static let dialogueTranscription: String? = defaults.string(forKey: "LiminalDialogueTranscription")
+
+    // API image mode (docs/plans/image-api-mode.md 8). Every one of these blocks Gemini generation;
+    // none of them blocks fetching from the free public image APIs.
+
+    /// -LiminalImageSource ai|api: use this image source for this launch instead of the setting (not saved).
+    static let imageSource: String? = defaults.string(forKey: "LiminalImageSource")
+    /// -LiminalImageProvider <id[,id]>: restrict API ingest and display to these provider or source ids.
+    static let imageProviders: [String]? = {
+        guard let s = defaults.string(forKey: "LiminalImageProvider") else { return nil }
+        let ids = s.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        return ids.isEmpty ? nil : ids
+    }()
+    /// -LiminalImageAPIOffline YES: API mode shows only pictures already in the pool; no network.
+    static let imageAPIOffline: Bool = defaults.bool(forKey: "LiminalImageAPIOffline")
+    /// -LiminalImageAPISeed <n>: seed of the API ingest and display rotations.
+    static let imageAPISeed: UInt64? = defaults.string(forKey: "LiminalImageAPISeed").flatMap { UInt64($0) }
+    /// -LiminalImageAPIFresh YES: use an empty CuratedImageStore-Verify folder, so a run proves that
+    /// fetching works and leaves the real pool alone. Removed again by the next normal launch. With
+    /// -LiminalImageAPIOffline the verify folder of the previous fresh run is kept and reused.
+    static let imageAPIFresh: Bool = defaults.bool(forKey: "LiminalImageAPIFresh")
+    /// -LiminalImageSourceFlipAt <s[,s...]>: at each time (seconds after launch) flip the Images picker
+    /// (AI <-> API) through the same settings binding the picker uses, then put the stored setting
+    /// back, so a locked-screen run can check the switch without saving it (macOS control panel).
+    static let imageSourceFlipAt: [Double]? = {
+        guard let s = defaults.string(forKey: "LiminalImageSourceFlipAt") else { return nil }
+        let times = s.split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }.filter { $0 >= 0 }.sorted()
+        return times.isEmpty ? nil : times
+    }()
+
+    /// True when any API image flag is set.
+    static var anyImageAPIFlag: Bool {
+        imageSource != nil || imageProviders != nil || imageAPIOffline || imageAPISeed != nil || imageAPIFresh
+            || imageSourceFlipAt != nil
+    }
 
     /// True when any shell harness flag is set (they also block generation).
     static var anyShellFlag: Bool {
@@ -261,6 +295,7 @@ nonisolated enum DebugLaunchOptions {
             || videoOffline || videoOff || controlsScroll != nil || controlsWidth != nil || videoOffAt != nil
             || dialogueTranscription != nil
             || dropColour != nil || dropFinisher != nil || dropLead != nil || dropOff
+            || anyImageAPIFlag
     }
 #else
     static let allowGeneration = false
@@ -309,6 +344,13 @@ nonisolated enum DebugLaunchOptions {
     static let controlsWidth: Double? = nil
     static let videoOffAt: Double? = nil
     static let dialogueTranscription: String? = nil
+    static let imageSource: String? = nil
+    static let imageProviders: [String]? = nil
+    static let imageAPIOffline = false
+    static let imageAPISeed: UInt64? = nil
+    static let imageAPIFresh = false
+    static let imageSourceFlipAt: [Double]? = nil
+    static let anyImageAPIFlag = false
 #endif
 
     private static let logOnce: Void = {
@@ -365,6 +407,15 @@ nonisolated enum DebugLaunchOptions {
             let ok = DialogueTranscriptionMode(argument: m) != nil
             LMLog.general.info("🧪 DEBUG FLAG applied: LiminalDialogueTranscription=\(m, privacy: .public)\(ok ? "" : " (unknown mode, ignored)", privacy: .public)")
         }
+        if let s = imageSource {
+            let ok = ImageSource(argument: s) != nil
+            LMLog.general.info("🧪 DEBUG FLAG applied: LiminalImageSource=\(s, privacy: .public)\(ok ? "" : " (unknown source, ignored)", privacy: .public)")
+        }
+        if let p = imageProviders { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalImageProvider=\(p.joined(separator: ","), privacy: .public)") }
+        if imageAPIOffline { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalImageAPIOffline=YES (API pool only, no network)") }
+        if let n = imageAPISeed { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalImageAPISeed=\(n)") }
+        if imageAPIFresh { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalImageAPIFresh=YES (empty verify pool)") }
+        if let t = imageSourceFlipAt { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalImageSourceFlipAt=\(t.map { String(format: "%.0f", $0) }.joined(separator: ","), privacy: .public)s (flips the Images picker, not saved)") }
         if syncStrength != 1 { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalSyncStrength=\(syncStrength, format: .fixed(precision: 2))") }
 #endif
     }()

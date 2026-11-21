@@ -1,0 +1,776 @@
+{
+ "version": 2,
+ "updated": "2026-11-21",
+ "doc": "docs/research/image-apis/collections.md",
+ "defaults": {
+  "minLongSide": 2000,
+  "minShortSide": 1333,
+  "targetLongSide": 2528,
+  "maxBytes": 12000000,
+  "allowedMime": [
+   "image/jpeg",
+   "image/png"
+  ],
+  "userAgent": "Liminal/1.0 (ambient audiovisual app; curated public-domain imagery)",
+  "maxRequestsPerSecond": 1,
+  "storeBudgetBytes": 3000000000,
+  "minFreeBytes": 1000000000,
+  "unseenAhead": 12,
+  "ingestInterval": 4,
+  "recencyWindow": 24,
+  "monochromeEvery": 6,
+  "candidateRefreshDays": 7,
+  "hostGaps": {
+   "collectionapi.metmuseum.org": 5,
+   "images.metmuseum.org": 5
+  },
+  "defaultHostGap": 1,
+  "openness": {
+   "minOpenness": 0.2,
+   "minKeyShare": 0.04,
+   "documentPaperShare": 0.5,
+   "documentEdgeDensity": 0.06,
+   "maxTextCoverage": 0.06,
+   "monochromeSaturation": 0.025,
+   "maxFaceArea": 0.015,
+   "maxFaces": 4
+  }
+ },
+ "providers": {
+  "loc": {
+   "name": "Library of Congress",
+   "auth": "none",
+   "search": "https://www.loc.gov/collections/{collection}/?fo=json&q={query}&c={count}&sp={page}&fa=online-format:image",
+   "image": "{iiifService}/full/!{target},{target}/0/default.jpg",
+   "info": "{iiifService}/info.json",
+   "notes": "Take iiifService from the result's image_url (https://tile.loc.gov/image-services/iiif/service:pnp:...). Skip results with no IIIF service: those only carry a 1024 px v.jpg and a TIFF master. Rights from item.rights_advisory.",
+   "license": "No known restrictions on publication (rights_advisory)",
+   "institution": "Library of Congress"
+  },
+  "nasa": {
+   "name": "NASA Image and Video Library",
+   "auth": "none",
+   "search": "https://images-api.nasa.gov/search?q={query}&media_type=image&year_start={yearStart}&year_end={yearEnd}&page_size={count}&page={page}",
+   "assets": "https://images-api.nasa.gov/asset/{nasa_id}",
+   "notes": "Use ~orig when a HEAD shows it is at most maxBytes; ~large is only 1920 px, below the size gate, so an oversized original is rejected rather than replaced. Rewrite http to https. Many Hasselblad scans are square (about 4096x4096), and the 3:2 cover crop keeps 4096x2731.",
+   "license": "NASA media are generally not copyrighted (US Government work); keep center, photographer and description as credit",
+   "institution": "NASA"
+  },
+  "wikimedia": {
+   "name": "Wikimedia Commons",
+   "auth": "none (descriptive User-Agent required)",
+   "category": "https://commons.wikimedia.org/w/api.php?action=query&format=json&generator=categorymembers&gcmtitle=Category:{category}&gcmtype=file&gcmlimit={count}&gcmcontinue={continue}&prop=imageinfo&iiprop=url|size|mime|extmetadata&iiurlwidth=2048&iiextmetadatafilter=LicenseShortName|Artist|DateTimeOriginal|ObjectName|Credit",
+   "search": "https://commons.wikimedia.org/w/api.php?action=query&format=json&generator=search&gsrnamespace=6&gsrsearch={query}%20filetype:bitmap&gsrlimit={count}&gsroffset={offset}&prop=imageinfo&iiprop=url|size|mime|extmetadata&iiurlwidth=2048&iiextmetadatafilter=LicenseShortName|Artist|DateTimeOriginal|ObjectName|Credit",
+   "image": "original url when the file is at most targetLongSide wide, else imageinfo.thumburl at iiurlwidth=targetLongSide (Commons serves its 3840 px step)",
+   "notes": "Pause about 1 s between API calls: bursts returned errors during probing. Reject TIFF, SVG, PDF and DjVu. License from extmetadata.LicenseShortName, credit from Artist and Credit.",
+   "license": "Per file; allowlist below",
+   "institution": "Wikimedia Commons"
+  },
+  "cma": {
+   "name": "Cleveland Museum of Art Open Access",
+   "auth": "none",
+   "search": "https://openaccess-api.clevelandart.org/api/artworks/?q={query}&type={type}&has_image=1&cc0=1&limit={count}&skip={skip}",
+   "image": "images.print.url (JPEG, about 3400 px on the long side, 2-4 MB)",
+   "notes": "Never use images.full (TIFF). share_license_status must be CC0.",
+   "license": "CC0",
+   "institution": "Cleveland Museum of Art"
+  },
+  "met": {
+   "name": "The Metropolitan Museum of Art Open Access",
+   "auth": "none",
+   "search": "https://collectionapi.metmuseum.org/public/collection/v1.1/search?hasImages=true&isPublicDomain=true&q={query}&departmentId={departmentId}&limit={count}&offset={offset}",
+   "object": "https://collectionapi.metmuseum.org/public/collection/v1/objects/{objectID}",
+   "image": "primaryImage (original, up to 4000 px)",
+   "notes": "The v1.1 isPublicDomain filter is NOT applied server-side (NOT-PD objects came back), so check isPublicDomain on every object. An Incapsula WAF blocked the API and images.metmuseum.org after about 100 requests in a burst; keep to one object per several seconds and treat 403 HTML as a temporary outage. Fallback mirror: Internet Archive collection metropolitanmuseumofart-gallery (each item has <objectID>.jpg plus a _mma.json record).",
+   "license": "CC0 when isPublicDomain is true",
+   "institution": "The Metropolitan Museum of Art"
+  },
+  "si": {
+   "name": "Smithsonian Open Access",
+   "auth": "api.data.gov key (env SMITHSONIAN_API_KEY); DEMO_KEY allows only 10 requests",
+   "search": "https://api.si.edu/openaccess/api/v1.0/search?q={query}+AND+online_media_type:Images&api_key={key}&rows={count}&start={start}",
+   "image": "content.descriptiveNonRepeating.online_media.media[0].content (ids.si.edu deliveryService, measured 2999x2263 JPEG)",
+   "notes": "Optional. Skip the provider when no key is configured. Many rows have online_media null even with the media filter.",
+   "license": "CC0 (metadata_usage.access)",
+   "institution": "Smithsonian Institution"
+  }
+ },
+ "licenseAllowlist": [
+  "Public domain",
+  "PD",
+  "CC0",
+  "No restrictions",
+  "No known restrictions on publication",
+  "CC BY 2.0",
+  "CC BY 2.5",
+  "CC BY 3.0",
+  "CC BY 4.0",
+  "CC BY-SA 2.0",
+  "CC BY-SA 2.5",
+  "CC BY-SA 3.0",
+  "CC BY-SA 4.0"
+ ],
+ "sources": [
+  {
+   "id": "loc-highsmith-roadside",
+   "provider": "loc",
+   "enabled": true,
+   "weight": 3,
+   "themes": [
+    "retro roadside",
+    "neon",
+    "diners",
+    "drive-in",
+    "route 66",
+    "vintage cars"
+   ],
+   "collection": "carol-m-highsmith",
+   "queries": [
+    "neon sign motel",
+    "diner neon",
+    "drive-in theater",
+    "route 66",
+    "vintage car",
+    "old gas station",
+    "roadside attraction"
+   ],
+   "requireIIIF": true,
+   "license": "loc rights_advisory (Highsmith gift to the public)",
+   "pinned": [
+    "2013631471",
+    "2017881793",
+    "2015632003",
+    "2017885609",
+    "2010630400",
+    "2010630069",
+    "2010638658",
+    "2011631207",
+    "2010630156",
+    "2013633512",
+    "2015632614",
+    "2014630329"
+   ],
+   "mood": {
+    "moods": [
+     "electric",
+     "playful"
+    ],
+    "subjectCategory": "architecture",
+    "energy": 0.55,
+    "warmth": 0.4
+   },
+   "allowMonochrome": false
+  },
+  {
+   "id": "loc-highsmith-landscape",
+   "provider": "loc",
+   "enabled": true,
+   "weight": 2,
+   "themes": [
+    "landscapes",
+    "trees",
+    "fog",
+    "desert",
+    "night cityscape"
+   ],
+   "collection": "carol-m-highsmith",
+   "queries": [
+    "redwood forest",
+    "fog",
+    "Monument Valley",
+    "desert highway",
+    "skyline at night"
+   ],
+   "requireIIIF": true,
+   "license": "loc rights_advisory",
+   "pinned": [
+    "2013632523",
+    "2013635145",
+    "2013632243",
+    "2013632725",
+    "2011630130",
+    "2011630273",
+    "2016632994",
+    "2013630402"
+   ],
+   "mood": {
+    "moods": [
+     "majestic",
+     "serene"
+    ],
+    "subjectCategory": "landscape",
+    "energy": 0.3,
+    "warmth": 0.1
+   },
+   "allowMonochrome": false
+  },
+  {
+   "id": "nasa-space-age",
+   "provider": "nasa",
+   "enabled": true,
+   "weight": 3,
+   "themes": [
+    "space age",
+    "earth from orbit",
+    "moon",
+    "1960s",
+    "1970s"
+   ],
+   "queries": [
+    {
+     "q": "earth from apollo",
+     "yearStart": 1966,
+     "yearEnd": 1972
+    },
+    {
+     "q": "gemini earth view",
+     "yearStart": 1965,
+     "yearEnd": 1966
+    },
+    {
+     "q": "lunar surface",
+     "yearStart": 1969,
+     "yearEnd": 1972
+    },
+    {
+     "q": "skylab earth",
+     "yearStart": 1973,
+     "yearEnd": 1974
+    },
+    {
+     "q": "space colony",
+     "yearStart": 1975,
+     "yearEnd": 1977
+    }
+   ],
+   "rejectTitleWords": [
+    "press conference",
+    "presidential",
+    "portrait",
+    "diagram",
+    "chart",
+    "crew"
+   ],
+   "license": "nasa",
+   "pinned": [
+    "as11-44-6549",
+    "as11-44-6552",
+    "as13-60-8588",
+    "as8-15-2561",
+    "s65-34661",
+    "s65-45763",
+    "s66-63517",
+    "as11-40-5927",
+    "sl4-143-4707",
+    "sl3-121-2371",
+    "AC76-0628",
+    "ARC-1975-AC75-1086",
+    "ARC-1976-AC76-0525"
+   ],
+   "mood": {
+    "moods": [
+     "majestic",
+     "eerie"
+    ],
+    "subjectCategory": "celestial",
+    "energy": 0.4,
+    "warmth": -0.3
+   },
+   "allowMonochrome": false
+  },
+  {
+   "id": "nasa-deep-space",
+   "provider": "nasa",
+   "enabled": true,
+   "weight": 1,
+   "themes": [
+    "psychedelic",
+    "nebula",
+    "cosmic colour"
+   ],
+   "queries": [
+    {
+     "q": "nebula",
+     "yearStart": 1990,
+     "yearEnd": 2026
+    },
+    {
+     "q": "pillars of creation",
+     "yearStart": 1995,
+     "yearEnd": 2026
+    }
+   ],
+   "rejectTitleWords": [
+    "3-D",
+    "diagram",
+    "chart",
+    "keynote"
+   ],
+   "license": "nasa",
+   "pinned": [
+    "PIA14417",
+    "PIA03096",
+    "PIA03606",
+    "PIA15658",
+    "PIA25433"
+   ],
+   "mood": {
+    "moods": [
+     "euphoric",
+     "majestic"
+    ],
+    "subjectCategory": "celestial",
+    "energy": 0.5,
+    "warmth": 0.0
+   },
+   "allowMonochrome": false
+  },
+  {
+   "id": "documerica-1970s",
+   "provider": "wikimedia",
+   "enabled": true,
+   "weight": 3,
+   "themes": [
+    "1970s",
+    "Kodachrome",
+    "highways",
+    "driving",
+    "cityscapes",
+    "sunsets"
+   ],
+   "searches": [
+    "DOCUMERICA sunset",
+    "DOCUMERICA highway traffic",
+    "DOCUMERICA night",
+    "DOCUMERICA skyline",
+    "DOCUMERICA desert"
+   ],
+   "categories": [
+    "DOCUMERICA photographs by Charles O'Rear",
+    "DOCUMERICA photographs by John Messina"
+   ],
+   "requireTitleContains": "NARA",
+   "license": "Public domain (EPA DOCUMERICA, US Government work, via NARA)",
+   "pinned": [
+    "File:SUNSET - NARA - 544071.jpg",
+    "File:SUNSET - NARA - 544655.jpg",
+    "File:OIL REFINERY IN THE SUNSET - NARA - 546384.jpg",
+    "File:PUGET SOUND AT SUNSET, SEEN FROM MARYSVILLE - NARA - 552277.jpg",
+    "File:EXPRESS BUS LANE ON SHIRLEY HIGHWAY, A MAJOR ARTERY CONNECTING THE NORTHERN VIRGINIA SUBURBS WITH THE CITY OF... - NARA - 553894.jpg",
+    "File:5.P.M. TRAFFIC ON ROUTE 2 IN BAYOMAN - NARA - 546370.jpg",
+    "File:MIDAFTERNOON TRAFFIC ON SHIRLEY HIGHWAY. ADDITIONAL LANES ARE UNDER CONSTRUCTION - NARA - 547222.jpg",
+    "File:OHIO RIVER AND LOUISVILLE AT NIGHT - NARA - 545913.jpg",
+    "File:A GOOD WIND AND A GOOD SAIL ON HOOVER DAM'S LAKE MEAD - NARA - 549082.jpg"
+   ],
+   "mood": {
+    "moods": [
+     "melancholy",
+     "intimate"
+    ],
+    "subjectCategory": "landscape",
+    "energy": 0.4,
+    "warmth": 0.5
+   },
+   "allowMonochrome": false
+  },
+  {
+   "id": "fungi-photographs",
+   "provider": "wikimedia",
+   "enabled": true,
+   "weight": 2,
+   "themes": [
+    "mushrooms",
+    "fungi",
+    "forest floor"
+   ],
+   "categories": [
+    "Featured pictures of fungi",
+    "Quality images of fungi"
+   ],
+   "license": "Per file: CC BY-SA / CC BY / PD (attribution kept)",
+   "pinned": [
+    "File:Amanita muscaria qtl4.jpg",
+    "File:Agaricales-20191229-RM-101505.jpg",
+    "File:Bamberg Hain Pilze Unidentified Pholiota stack.jpg",
+    "File:2017.05.13.-04-Bruehl Rohrhof--Laetiporus sulphureus (Gemeiner Schwefelporling).jpg"
+   ],
+   "mood": {
+    "moods": [
+     "lush",
+     "eerie"
+    ],
+    "subjectCategory": "plant",
+    "energy": 0.35,
+    "warmth": 0.1
+   },
+   "allowMonochrome": false
+  },
+  {
+   "id": "fungi-plates",
+   "provider": "wikimedia",
+   "enabled": true,
+   "weight": 1,
+   "themes": [
+    "mushrooms",
+    "botanical plates",
+    "mycology"
+   ],
+   "categories": [
+    "Icones Farlowianae",
+    "Illustrations of British Fungi (Hymenomycetes), to serve as an atlas to the \"Handbook of British Fungi\""
+   ],
+   "license": "Public domain / CC BY 2.0 (BHL scans)",
+   "pinned": [],
+   "mood": {
+    "moods": [
+     "eerie",
+     "intimate"
+    ],
+    "subjectCategory": "plant",
+    "energy": 0.25,
+    "warmth": 0.3
+   },
+   "allowMonochrome": false
+  },
+  {
+   "id": "haeckel-art-forms",
+   "provider": "wikimedia",
+   "enabled": true,
+   "weight": 1,
+   "themes": [
+    "psychedelic",
+    "symmetry",
+    "natural forms",
+    "fungi"
+   ],
+   "categories": [
+    "Kunstformen der Natur"
+   ],
+   "rejectTitleWords": [
+    "page",
+    "Titel",
+    "Vorwort",
+    "Inhalt"
+   ],
+   "license": "Public domain (1899-1904)",
+   "pinned": [
+    "File:Basimycetes. - Schwammpilze LCCN2015648945.jpg",
+    "File:Ciliata. - Wimperlinge LCCN2015647734.jpg",
+    "File:Crinoidea. - Palmensterne LCCN2015648907.jpg",
+    "File:Ctenophorae. - Kammquallen LCCN2015648914.jpg"
+   ],
+   "mood": {
+    "moods": [
+     "euphoric",
+     "eerie"
+    ],
+    "subjectCategory": "creature",
+    "energy": 0.5,
+    "warmth": 0.0
+   },
+   "allowMonochrome": false
+  },
+  {
+   "id": "landsat-earth-as-art",
+   "provider": "wikimedia",
+   "enabled": true,
+   "weight": 1,
+   "themes": [
+    "psychedelic",
+    "false colour",
+    "Earth as Art",
+    "rivers",
+    "glaciers"
+   ],
+   "license": "Public domain (USGS/NASA Landsat) / CC BY 2.0 (USGS Flickr), per file",
+   "pinned": [
+    "File:Cubism—Landsat Style.jpg",
+    "File:Lena River Delta - Landsat 2000.jpg",
+    "File:Malaspina Glacier, Alaska (2749).jpg",
+    "File:Shetlandinseln (Landsat).jpg",
+    "File:Holuhraun False Color OLI Landsat 8 01.jpg",
+    "File:Shalkarteniz 1975-05-09 Landsat 1-5 MSS L1 False Color Near Infrared.jpg",
+    "File:Shalkarteniz 1981-06-18 Landsat 1-5 MSS L1 False Color Near Infrared.jpg",
+    "File:Ebinur 1972-09-21 Landsat 1-5 MSS L1 False Color Near Infrared.jpg"
+   ],
+   "mood": {
+    "moods": [
+     "euphoric",
+     "majestic"
+    ],
+    "subjectCategory": "landscape",
+    "energy": 0.5,
+    "warmth": 0.2
+   },
+   "allowMonochrome": false
+  },
+  {
+   "id": "photochrom-landscapes",
+   "provider": "wikimedia",
+   "enabled": true,
+   "weight": 2,
+   "themes": [
+    "vintage colour",
+    "landscapes",
+    "coasts",
+    "old views"
+   ],
+   "categories": [
+    "Photochrom pictures from the Library of Congress",
+    "Photochrom prints collection"
+   ],
+   "rejectTitleWords": [
+    "girl",
+    "woman",
+    "belle",
+    "man",
+    "portrait",
+    "beggars",
+    "type"
+   ],
+   "license": "Public domain (LOC photochroms, 1890-1910)",
+   "pinned": [
+    "File:In Buller Gorge I LCCN2017658073.jpg",
+    "File:In Buller Gorge II LCCN2017658074.jpg",
+    "File:Kotau Point. West Coast LCCN2017657809.jpg"
+   ],
+   "mood": {
+    "moods": [
+     "serene",
+     "majestic"
+    ],
+    "subjectCategory": "landscape",
+    "energy": 0.3,
+    "warmth": 0.3
+   },
+   "allowMonochrome": false
+  },
+  {
+   "id": "cma-ukiyoe-landscapes",
+   "provider": "cma",
+   "enabled": true,
+   "weight": 1,
+   "themes": [
+    "woodblock prints",
+    "night",
+    "rain",
+    "moon",
+    "landscapes"
+   ],
+   "queries": [
+    {
+     "q": "Hiroshige",
+     "type": "Print"
+    },
+    {
+     "q": "Hokusai",
+     "type": "Print"
+    },
+    {
+     "q": "moonlight",
+     "type": "Print"
+    }
+   ],
+   "license": "CC0",
+   "pinned": [
+    106962,
+    103244,
+    120225,
+    126086,
+    152499,
+    106965
+   ],
+   "mood": {
+    "moods": [
+     "serene",
+     "melancholy"
+    ],
+    "subjectCategory": "landscape",
+    "energy": 0.25,
+    "warmth": -0.1
+   },
+   "allowMonochrome": false
+  },
+  {
+   "id": "cma-early-photographs",
+   "provider": "cma",
+   "enabled": true,
+   "weight": 1,
+   "themes": [
+    "trees",
+    "forests",
+    "landscapes",
+    "old photographs"
+   ],
+   "queries": [
+    {
+     "q": "landscape",
+     "type": "Photograph"
+    },
+    {
+     "q": "forest",
+     "type": "Photograph"
+    },
+    {
+     "q": "trees",
+     "type": "Photograph"
+    }
+   ],
+   "license": "CC0",
+   "pinned": [
+    157126,
+    157013,
+    154048,
+    154698,
+    164940,
+    156527
+   ],
+   "mood": {
+    "moods": [
+     "melancholy",
+     "serene"
+    ],
+    "subjectCategory": "landscape",
+    "energy": 0.2,
+    "warmth": 0.2
+   },
+   "allowMonochrome": true
+  },
+  {
+   "id": "met-landscapes",
+   "provider": "met",
+   "enabled": true,
+   "weight": 1,
+   "themes": [
+    "woodblock prints",
+    "trees",
+    "giant sequoias",
+    "moonlight"
+   ],
+   "queries": [
+    {
+     "q": "Mount Fuji",
+     "departmentId": 6
+    },
+    {
+     "q": "landscape woodblock"
+    },
+    {
+     "q": "moonlight landscape"
+    },
+    {
+     "q": "trees photograph",
+     "departmentId": 19
+    }
+   ],
+   "allowClassification": [
+    "Prints",
+    "Paintings",
+    "Photographs",
+    "Drawings"
+   ],
+   "license": "CC0 when isPublicDomain",
+   "pinned": [
+    56611,
+    54887,
+    57196,
+    56229,
+    459334,
+    732749,
+    732813,
+    732816
+   ],
+   "mood": {
+    "moods": [
+     "serene",
+     "majestic"
+    ],
+    "subjectCategory": "landscape",
+    "energy": 0.25,
+    "warmth": 0.0
+   },
+   "allowMonochrome": false
+  },
+  {
+   "id": "si-american-landscapes",
+   "provider": "si",
+   "enabled": false,
+   "weight": 1,
+   "requiresKey": "SMITHSONIAN_API_KEY",
+   "themes": [
+    "landscapes",
+    "American art"
+   ],
+   "queries": [
+    "landscape AND unit_code:SAAM",
+    "space AND unit_code:NASM"
+   ],
+   "license": "CC0",
+   "pinned": [],
+   "mood": {
+    "moods": [
+     "serene",
+     "majestic"
+    ],
+    "subjectCategory": "landscape",
+    "energy": 0.25,
+    "warmth": 0.1
+   },
+   "allowMonochrome": false
+  }
+ ],
+ "rejected": [
+  {
+   "source": "LOC FSA/OWI color, photochrom, Prokudin-Gorskii, Detroit Publishing, Margolies, Japanese prints",
+   "reason": "Only a 1024 px JPEG plus 30-144 MB TIFF masters; IIIF info.json 404 or 1024 max. Use the Wikimedia copies of LOC photochroms instead (up to 7300 px)."
+  },
+  {
+   "source": "LOC Highsmith items added 2018 and later",
+   "reason": "Many carry only a 1024 px v.jpg (no JP2/IIIF), filtered by requireIIIF"
+  },
+  {
+   "source": "LOC psychedelic rock posters (Bill Graham, Avalon Ballroom)",
+   "reason": "Rights status not evaluated; 1024 px or less"
+  },
+  {
+   "source": "LOC Yanker poster collection",
+   "reason": "640 px JPEG only"
+  },
+  {
+   "source": "Wikimedia Category:Kunstformen der Natur (1899)",
+   "reason": "Full-book BHL scans, mostly text pages; use the parent category plates"
+  },
+  {
+   "source": "Wikimedia Category:Marbled paper",
+   "reason": "Book bindings with colour rulers and spines"
+  },
+  {
+   "source": "Wikimedia Category:Toadstools, mushrooms, fungi, edible and poisonous",
+   "reason": "Lovely plates, but 1908 px long side"
+  },
+  {
+   "source": "Wikimedia Ansel Adams NARA series, Photochrom Zentralbibliothek Zuerich",
+   "reason": "Capped at 2000 px; candidate for a later upscale tier"
+  },
+  {
+   "source": "Wikimedia Category:Googie architecture",
+   "reason": "Modern snapshots, mixed sizes and licences; Highsmith covers the subject better"
+  },
+  {
+   "source": "Internet Archive free-text (psychedelic, kodachrome)",
+   "reason": "AI art, music covers and uploader-asserted licences"
+  },
+  {
+   "source": "Europeana",
+   "reason": "Mostly 400-1000 px previews; production key needed"
+  },
+  {
+   "source": "Met Walker Evans and 1950s photographs",
+   "reason": "Not public domain"
+  },
+  {
+   "source": "CMA mushroom query",
+   "reason": "Returns decorative objects (lamps, boxes); restrict CMA to Print/Photograph types"
+  }
+ ]
+}

@@ -5,6 +5,7 @@
 ## Features
 
 - **Generative audio** includes Ambient with eight synthesis layers and four styles, and [Lo-Fi](#lo-fi) with sampled acoustic pianos, plucked strings and clean guitars, a warm riddim bass in three rotating tones, a held pad, MPC-style dialogue chops, and optional local drum recordings. The [music decision record](decisions/music.md) covers the Ambient engine.
+- **Images: AI or API.** A toggle under Ambient / Lo-Fi chooses where pictures come from. **API** shows curated public-domain and openly licensed pictures from the Library of Congress, NASA, Wikimedia Commons, the Cleveland Museum of Art and the Met: 1950s-70s roadside neon and cars, 1970s DOCUMERICA Kodachromes, Apollo, Gemini and Skylab Earth views, nebulae, photochroms, Hiroshige and Hokusai prints, early landscape photographs, fungi, Haeckel's *Art Forms in Nature* and Landsat false-colour Earth. Each picture's title, creator, institution and licence show under "Now showing" with a link to its source. See [API image sources](#api-image-sources) and `decisions/images.md` D36-D42
 - **AI Visuals**: Gemini image generation (gemini-nano-banana-2.1, the configured primary model, 3:2 at 2K; hourly and daily spending cap) driven by a style/subject/transformation/palette prompt system for varied, photoreal-but-surreal imagery. See `decisions/images.md`
 - **GPU Effects**: one Metal fragment shader with Ken Burns motion, turbulence distortion, chromatic aberration, a family of 12 image transitions that hide the swap inside a surge of the live effects (picked without repeats, docs/decisions/transitions.md), hue shifts, ghost taps, stochastic bloom, feedback warping and a final vibrance stage that keeps colors vivid; a slow clarity cycle and a strain budget keep the image recognisable, scaled by the Effect intensity setting
 - **Audio-visual coupling**: the music drives the visuals (note glow, scene intensity, chord-tied hue, ghost-tap burst on scene change) and each new image sends a mood (brightness, warmth, saturation, energy, mood words) back to the music. A "Sync visuals to music" switch turns the music-to-visuals direction off. See `decisions/av-coupling.md`
@@ -38,6 +39,26 @@ Liminal can sample a fresh excerpt from a cached film before generating the next
 
 If Gemini reports a billing error, Liminal cycles through cached images while it waits to retry. The first retry is after about a minute, with longer pauses if billing errors continue. Restarting Liminal clears the pause.
 
+## API image sources
+
+API mode rotates through these collections (`Liminal/Visual/ImageSources/image-collections.json`). A picture is kept only when its own record is public domain, CC0, carries no known restrictions, or is CC BY / CC BY-SA, and only when it reaches 2K in a 3:2 crop and leaves room for the film. Pictures are fetched one at a time and kept on the device (up to 3 GB, the least recently shown removed beyond that), so the rotation keeps going offline. API mode never generates with Gemini.
+
+| Collection | Institution | Licence | Source |
+| --- | --- | --- | --- |
+| Carol M. Highsmith: roadside, neon, diners, drive-ins, vintage cars | Library of Congress | No known restrictions on publication | [Highsmith Archive](https://www.loc.gov/collections/carol-m-highsmith/) |
+| Carol M. Highsmith: redwoods, fog, Monument Valley, desert highways, skylines | Library of Congress | No known restrictions on publication | [Highsmith Archive](https://www.loc.gov/collections/carol-m-highsmith/) |
+| Space age: Apollo, Gemini and Skylab Earth views, lunar surface, 1970s space colonies | NASA | US Government work | [NASA Image and Video Library](https://images.nasa.gov/) |
+| Deep space: nebulae | NASA | US Government work | [NASA Image and Video Library](https://images.nasa.gov/) |
+| DOCUMERICA (EPA, 1971-77) | US National Archives via Wikimedia Commons | Public domain | [Commons](https://commons.wikimedia.org/wiki/Category:DOCUMERICA) |
+| Featured and quality pictures of fungi | Wikimedia Commons photographers | CC BY-SA / CC BY (creator and licence shown) | [Commons](https://commons.wikimedia.org/wiki/Category:Featured_pictures_of_fungi) |
+| *Icones Farlowianae*, Cooke's *Illustrations of British Fungi* | Biodiversity Heritage Library via Wikimedia Commons | Public domain / CC BY 2.0 | [Commons](https://commons.wikimedia.org/wiki/Category:Icones_Farlowianae) |
+| Ernst Haeckel, *Kunstformen der Natur* (1899-1904) | Library of Congress via Wikimedia Commons | Public domain | [Commons](https://commons.wikimedia.org/wiki/Category:Kunstformen_der_Natur) |
+| Landsat false-colour Earth (*Earth as Art*, 1972-2014) | USGS and NASA via Wikimedia Commons | Public domain / CC BY 2.0 (creator and licence shown) | [Commons](https://commons.wikimedia.org/wiki/Category:Landsat_images) |
+| Photochrom views (1890-1910) | Library of Congress via Wikimedia Commons | Public domain | [Commons](https://commons.wikimedia.org/wiki/Category:Photochrom_prints_collection) |
+| Hiroshige, Hokusai and moonlight prints | Cleveland Museum of Art | CC0 | [Open Access](https://www.clevelandart.org/open-access) |
+| Early landscape and forest photographs | Cleveland Museum of Art | CC0 | [Open Access](https://www.clevelandart.org/open-access) |
+| Mount Fuji, woodblock landscapes, moonlight, tree photographs | The Metropolitan Museum of Art | CC0 (public-domain objects) | [Open Access](https://www.metmuseum.org/about-the-met/policies-and-documents/open-access) |
+
 ## Lo-Fi
 
 Choose **Lo-Fi** in the Music section. Set the **BPM** and optionally pin a **Scale**. Changes wait for a 16-bar boundary. Each installed drum take plays in its original order for all 16 bars, with tempo and pitch changing together to fit the selected BPM. The next take is selected around that tempo. Lo-Fi gets the next picture ready ahead of each eight-bar boundary. If the queue and cache have no different image ready, two bundled Liminal pictures can alternate offline. When you press Play, **Preparing beat…** is shown until the music is ready. The image effects and archival footage start with the music clock.
@@ -63,16 +84,17 @@ An excerpt whose audio falls below the silence threshold can play with visuals a
 | Control | Effect |
 |--------|--------|
 | **Music mode** | Ambient or Lo-Fi |
+| **Images** | AI (Gemini generation) or API (curated public-domain collections, no generation). Takes effect at the next image change |
 | **BPM** | Lo-Fi playback tempo |
 | **Style** | Ambient palette. Choose Drift, Glass, Deep, or Garden. |
 | **Scale** | Ambient harmony. Auto lets key and mode drift. Choosing a scale pins it. |
 | **Effect intensity** | How far the effects bend the picture, Subtle to Wild (default 50%). The effects breathe between clear and wild stretches over minutes, and each new image starts clear. See `decisions/effects-balance.md` |
 | **Sync visuals to music** | Music drives hue, motion, bloom and ghost bursts (on by default) |
 | **Debug effect** | Debug visualization of the effect (macOS panel) |
-| **Cache only** | Skip generation and recycle cached images |
+| **Cache only** | Skip generation and recycle cached images (AI only; hidden in API mode, as are the image limits) |
 | **New images per hour / day** | Spending cap on Gemini image generation (default 20 / 50); past it, cached images are shown |
 | **Reset Generation Counts** | Starts the rolling hourly and daily usage counts at zero. Future generations still count toward the configured limits. |
-| **Clear All Images** | Wipes every cached image after confirmation and restarts generation |
+| **Clear All Images** | Wipes every cached image after confirmation and restarts generation. In API mode the button reads **Clear Curated Pictures** and clears only the API pool |
 | **Archive footage** | Old film always woven subtly into the scene (on by default); turning it off fades picture and sound out in 2 s |
 | **Change speed** | Ambient changes film every 20–30, 12–20, or 8–12 seconds (Slow, Medium, Fast). Lo-Fi follows the eight-bar drum fills. |
 | **Footage audio** | Mutes both the film and its sampled drops at 0%. The mix is tuned at 50%. Turning it up gives the film up to 6 dB more level, while the musical drops gain at most 1.2 dB. |

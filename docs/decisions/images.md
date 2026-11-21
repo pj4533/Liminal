@@ -6,6 +6,7 @@
 - Prompt system: style (16, 13 photographic) x subject (about 110 concrete objects/places) x transformation (25) x palette (17) x composition (8), with recency-weighted anti-repetition and 20% chance of a 3-4 image series (D5, D10, D11). No people, no text-bearing subjects (D8, D9). The old scenes survive as one style (D6).
 - Clear cache on device: open the controls panel, find "Clear All Images" (ClearImagesSection, same in the visionOS controls and the macOS window), confirm. It wipes all caches, cancels in-flight work and restarts generation (D15). Also, this release bumps cacheEpoch to 2, so the first launch deletes the old cached images automatically (D14).
 - Scores, eval1 (16 new vs 6 old, 1-5): recognizability 5, photorealism 4, style variety 5, palette variety 4, surreal 5, effect suitability 4. Old set was samey blue-grey abstract CGI-looking scenes (D32).
+- **API mode (D36-D41, 2026-11-21):** "Images: AI | API". API shows curated public-domain and openly licensed pictures from the Library of Congress, NASA, Wikimedia Commons, Cleveland and the Met, gated for rights, 2K size, room for the film, text and faces, kept in their own 3 GB pool with a credit per picture. API mode never calls Gemini.
 - Open questions for the user:
   1. Spend: pacing generates only to keep 2 images pending, but 2K Gemini images are costlier than before. Want an hourly cap setting?
   2. Another provider or key: not worth it now (D31). Flux, gpt-image or Midjourney were not tested and each needs a new key. Revisit only if you want more control over style than Gemini gives.
@@ -212,3 +213,95 @@ Format: decision, why, alternatives.
   - The tail was trimmed elsewhere ("rich tactile surface texture" overlapped the new clause) to keep every prompt in 110-140 words (400-prompt check).
   - A final 2K check (4 images, seed 777) gave a canyon cistern, a macro bonsai, a bioluminescent tree and an aerial temple; all read as photographs.
 - **Cap:** the default daily limit drops from 100 to **50** (about $2.50-3 a day at the new price, well under the user's $5/day ceiling); hourly stays 20.
+
+## D36 (2026-11-21): A second image source, "API": curated collections beside Gemini
+
+- **Request (user, 2026-11-20/21):** a mode that finds imagery online instead of generating it, from approved collections that fit the vibe (psychedelic, old films and old imagery, 1950s-70s, mushrooms, trees, landscapes, retro views and cityscapes, driving), open enough for the film footage to show through, at high resolution, as a toggle like Ambient / Lo-Fi.
+- **What:** a segmented "Images: AI | API" picker directly under the Ambient / Lo-Fi picker on both platforms (`ImageSourceControls`, setting `visual.imageSource`, default AI). Switching keeps the picture on screen; the next image change (timer in Ambient, drum boundary in Lo-Fi) shows the new source.
+- **Seam:** API mode is a third loop inside `ImageQueue` (`startAPIFeed`) producing the same `DisplayItem`s. Buffer, Lo-Fi reserve, 3:2 crop, saliency, depth, mood and footage are unchanged; `EffectsUniforms`, shaders and the 2048 visionOS render size are untouched.
+- **Never Gemini in API mode:** no request, no `GenerationBudget.check()`/`record()`, no prompt history. `requestImage` refuses unless the active source is AI, and a Gemini result that lands after a switch is dropped. The Gemini cap UI and Cache Only are hidden while API is selected. API fetching has its own gate: automation flags block Gemini, never the free public APIs.
+- **Fallback ladder:** queued pictures, then the API pool on disk, then the bundled standby art. The AI cache is never shown in API mode.
+- **Verified:** across the macOS and visionOS Simulator runs of 2026-11-21 (section D41), 0 `[Gemini]` log lines.
+
+## D37 (2026-11-21): Sources, providers and the rights rule
+
+- **Providers (all keyless):** Library of Congress (collection JSON + IIIF), NASA Image and Video Library, Wikimedia Commons (MediaWiki API), Cleveland Museum of Art Open Access, the Met Open Access. Smithsonian is coded but registered only when `SMITHSONIAN_API_KEY` is in the environment (not in `Secrets.swift`, so existing local `Secrets.swift` files keep compiling), and its source stays disabled until its sizes are measured. Research: `docs/research/image-apis/survey.md`, `collections.md`, `openpics.md`.
+- **Sources:** the 12 enabled sources of `Liminal/Visual/ImageSources/image-collections.json`, each with a weight, pinned ids, queries or categories, and a mood block (moods, subject category, energy, warmth) that becomes the picture's synthesized `PromptSpec`, so `VisualMoodBuilder` still sends mood words to the music.
+- **Rights:** a picture is kept only when its own record says public domain, CC0, "No known restrictions", or CC BY / CC BY-SA (`ImageRights`): LOC `rights_advisory`, NASA as US Government work, Commons `LicenseShortName` (ported licences such as "CC BY-SA 3.0 de" map to the base licence), Cleveland `share_license_status == CC0`, Met `isPublicDomain` per object (the v1.1 search ignores its own filter). Unknown, empty, NC and ND are rejected. Every picture stores title, creator, date, institution, licence, licence link, page and file URL; the control panel shows it under "Now showing" with a link.
+- **OpenPics lesson revisited:** the old LOC "largest/larger/large" resource trick no longer reaches 2K; only items with a IIIF service do, and their full size is read from the search result's `pct:` derivative fragment, so a search hit needs no extra request.
+- **CC BY-SA fungi photographs** stay enabled with attribution (plan 13.2). One line in the JSON disables them.
+
+## D38 (2026-11-21): Openness, documents and people at ingest
+
+- `ImageOpenness.score` on a 48x32 thumbnail of the 3:2 window measures shadow and highlight share (the same luma 0.3 / 18% rule as `VideoComposite`), calm cells, edge density, paper share and saturation. `openness = 0.5 x keyBand + 0.5 x min(calm / 0.35, 1)`.
+- **Tuning on the 409 probe thumbnails** (scratchpad `imageapi/tune`): the plan's `keyShare > 0.75` reject would have removed the night neon diners, dusk skylines, nebulae and the Golden Gate fog, which are the core of the brief. The shader's `keyGain` already tames a key that covers most of the frame, so a large key only lowers the score (band falls to 0.3 at full coverage). Gates as shipped: openness >= 0.2, key share >= 0.04, document = paper > 0.5 and edge > 0.06, monochrome = mean saturation < 0.025 (0.08 would have rejected the pinned Earthrise and fog pictures, measured 0.03-0.06).
+- **Text:** Vision text boxes reject a picture only when they cover more than a quarter of the frame, or more than 6% of a paper-like picture. The first live run rejected a neon sign at 10% under the plain 6% rule, and signs are part of the brief.
+- **People (plan 13.1 default):** reject when a face box covers more than 1.5% of the frame or more than four faces are found; distant figures stay. Vision cannot run in the visionOS Simulator ("Could not create inference context"), so the checks are compiled out of simulator builds (D42): the failed setups during live ingest went with 100-320 ms render stalls. They run on Macs and devices; on a Vision Pro they are unverified.
+- **Framing:** pictures with an aspect of 1.3-1.8 are stored whole (the renderers' cover crop does the rest); others are cut to the most open of five 3:2 windows along the long axis, so the stored file is already 3:2 and saliency and depth stay registered.
+- **Monochrome** (only `cma-early-photographs` may be) is capped at one in six in the display rotation (plan 13.4).
+
+## D39 (2026-11-21): The API pool on disk
+
+- `Application Support/Liminal/CuratedImageStore/`, an `ImageStore` with its own folder, epoch key (`images.api.cacheEpoch`) and no count cap, so neither store's migration can purge the other (unit tested). `ledger.json` beside it records every candidate (stored or rejected with a reason, so nothing is downloaded twice), search cursors, cached search pages and when each picture was last shown.
+- **Budget 3 GB** (plan 13.3, about 1,200-2,500 pictures at 1-2.5 MB). Nothing that can play is capped (A31): only past the budget, right after a save, is the least recently shown picture removed, and its ledger entry cleared so it can come back. Ingest pauses with under 1 GB free. Launch cleanup removes only images without sidecars, sidecars without images, names that are not `<UUID>.jpg|json`, and temp downloads older than an hour.
+- "Clear images" in API mode ("Clear Curated Pictures") clears this pool and its ledger, never the AI cache.
+
+## D40 (2026-11-21): Resolution and fetching
+
+- Requested long side 2528, the size of Gemini's 2K pictures (`ImageGenerationConfig`), where the server scales (LOC IIIF `full/!2528,2528`, Commons thumbnails, which come back at Commons' 3840 step or as the original when that is smaller), originals from NASA, Cleveland (`images.print`, 3400 px) and the Met. Decoding uses `CGImageSourceCreateThumbnailAtIndex` sized so the 3:2 crop is about 2528 wide (at most 5056 on the long side), so a large master never expands fully in memory. Stored as JPEG quality 0.9.
+- **2528, not 3072 (changed 2026-11-21 in the independent verification, D42):** both renderers draw at most 2048 px wide, so 3072 bought nothing on screen. With 3072 pictures, two Lo-Fi perf runs with ingest live failed with 118-324 ms stalls and 45-175 ms frames at reveals; the same pool scaled to 2528 brought reveals back to the AI-cache range.
+- **Size gate:** the 3:2 cover crop must be at least 2000 x 1333, 2% under 2048 x 1365. The first live run rejected *Icones Farlowianae* plates at 2026 px; the difference is invisible under the effects. No upscaling is needed for any enabled source. Pool pictures never go through the upscaler (`ImageQueue.makeDisplayItem`): its threshold is a 2048 px long side, so on a visionOS device a 2000-2047 px picture would otherwise have gone through MetalFX at 4x (about 8000 px wide). The macOS RealESRGAN path stretched any input to 512x512, so `ImageUpscaler.shouldSkipUpscale` now also skips non-square pictures on macOS.
+- **NASA:** `~large` is only 1920 px (measured 2026-11-21), below the gate, so an original over 12 MB is rejected rather than replaced (one Ames space-colony painting, 29 MB).
+- **Pacing:** one HTTPS client (`ImageHTTP`, ephemeral session, generic User-Agent, no Low Data Mode downloads, https only with NASA's http links upgraded), 1 s minimum per host and 5 s for the Met's two hosts, one download every 4 s at most, ingest only while fewer than 12 never-shown pictures wait. A provider error backs that provider off 1 / 2 / 5 / 15 / 30 min; the Met's HTML bot wall (`.blocked`) goes straight to 30 min; 401/403/404/410 on one item rejects only that item.
+- **Main-actor rule:** the ledger write for "picture shown" happens on a detached task. Written inline from `showReserved` (main actor, at the Lo-Fi reveal) it cost a 107 ms frame in the simulator perf run with ingest live; ingest also runs at background priority.
+
+## D41 (2026-11-21): Verification
+
+- **macOS live run** (`-LiminalAutoPlay YES -LiminalImageSource api -LiminalImageAPIFresh YES -LiminalImageInterval 8 -archive.enabled YES -LiminalVideoOffline YES`, 5 min, Lo-Fi from the saved setting): 21 pictures stored, 11 rejected, 9 shown from 8 sources; screenshots showed correct 3:2 framing (Highsmith's Maverick Inn neon, a Buller Gorge photochrom, a Laetiporus bracket fungus) with the film showing through.
+- **Offline reuse** (`-LiminalImageAPIOffline YES` on that pool, Ambient, 8 s): 18 pictures shown in 2.5 min, ingest off, no network requests.
+- **visionOS Simulator** (`-LiminalOpenDome YES`, Ambient, fresh pool, 4.5 min): 33 stored, 2 rejected, 29 shown from 11 sources; the control window shows the credit ("Sudden Shower over Shin-Ōhashi Bridge ... Utagawa Hiroshige, 1857 · Cleveland Museum of Art · CC0").
+- **Lo-Fi perf** (`scripts/perf-run.sh --lofi`, 60 s): plain AI-cache run passes (max frame 33 ms); API with ingest live passes twice after D40's main-actor fix (max 74 and 57 ms, fps 79); API offline passes (max 52 ms).
+- **Across all runs:** 95 pictures stored from 12 sources (licences: Public domain 50, CC0 21, No known restrictions 12, CC BY-SA 11, CC BY 1), 14 rejected (title rules 4, small plates 5, text 2, monochrome 1, NASA original over 12 MB 1, small Met print 1), 0 Gemini log lines.
+- **Not done:** the AI -> API toggle was not clicked in the live app (the Mac's screen was locked, so Peekaboo clicks landed on the login window); `switchSource` API -> AI -> API is covered by `ImageQueueAPIModeTests` instead. Nothing was installed on the Vision Pro.
+
+## D42 (2026-11-21): Independent verification and fixes
+
+Re-checked by a second pass on branch `image-api-mode`: builds (macOS, visionOS Simulator), the image suites (84 tests), a live macOS run, simulator Lo-Fi perf runs, and the source switch.
+
+- **macOS live run** (Lo-Fi, archive footage, fresh pool, 4.4 min, `-LiminalImageSourceFlipAt 165,210`): 19 stored from 12 sources, 1 rejected (monochrome), 7 shown from 7 sources before the switch, each with its credit line in the log. The flip to AI stopped ingest and the API loop, started the AI cache recycler (`cacheOnly=true, cached=38`), and the next reveal showed a cached AI picture; the flip back restarted the API feed and the next reveal showed a pool picture (Hokusai). The picker and status line follow the source in the screenshots. No Gemini request in the log (the only Gemini line is the credentials check of the AI status row).
+- **Fixes:**
+  - The picker's switches ran as unordered detached tasks: a quick AI -> API -> AI could finish on API while the picker showed AI, or interleave inside `switchSource` and start two loops. `VisualEngine.setImageSource` now chains each switch after the previous one.
+  - The Lo-Fi prefetch and reveal checked the AI cache's clear generation even in API mode, so a picture staged before "Clear Curated Pictures" or before a source switch could still be revealed. They now check the store the picture came from and that it is still the active one.
+  - Target size 3072 -> 2528 and no upscaling of pool pictures (D40); Vision compiled out of simulator builds (D38).
+- **Simulator Lo-Fi perf** (`perf-run.sh --lofi --seconds 120`, host under load from other apps). An offline API run (pool only, no ingest) passed like the AI baseline, which isolated the stalls to live ingest:
+
+| Run | Result | Max frame | Frames over 40 ms (whole run) |
+|---|---|---|---|
+| AI cache baseline (two runs) | pass, pass | 53, 53 ms | 3, 4 |
+| API, fresh pool, ingest live, 3072 | fail | 118 ms (first reveal) | 6 |
+| API, warm pool, ingest live, 3072 | fail | 325 ms | 9 |
+| API, same pool scaled to 2528, ingest live | pass | 90 ms | 7 |
+| API, 2528 target, ingest live | fail | 182 ms | 12 |
+| API, pool only (`-LiminalImageAPIOffline YES`) | pass | 59 ms | 3 |
+| API, 2528 + no Vision in the simulator, ingest live (two runs) | pass, pass | 59, 46 ms | 3, 1 |
+
+- **Debug flag added:** `-LiminalImageSourceFlipAt <s[,s]>` flips the Images picker at those times through the settings binding and puts the stored setting back, so the switch can be checked when the screen is locked.
+- **Vibe check** (contact sheet of the 54 distinct pictures the verification runs stored and showed, scratchpad `share/imgapi/displayed.jpg`): the 1950s-70s brief is well served (DOCUMERICA highway traffic at dusk, sunsets and refineries; Highsmith neon diners, motels, drive-ins, an Edsel grille and Havana Chevrolets; Gemini and Apollo Earth views), as are trees and landscapes (redwoods, Monument Valley, desert highway, photochroms) and mushrooms (fly agaric, shelf fungi). Japanese woodblock prints were 10 of 54 (Cleveland weight 2 plus the Met), more than the brief asks for, and psychedelic colour came only from nebulae and Haeckel. Changes: Cleveland's ukiyo-e weight 2 -> 1, and a new `landsat-earth-as-art` source (weight 1, eight pinned USGS/NASA false-colour Landsat scenes on Commons, public domain or CC BY 2.0). A macOS run restricted to it stored 7 of the 8 at 2528 px (one MSS scene rejected for too little film key, 0.04) and showed them with their credits.
+- **Still weak:** paper margins on some plates and prints (Haeckel, *Icones Farlowianae*, a Hiroshige mat, a 1975 Ames painting with a white border) and the Met's mostly blank Fuji scrolls; NASA titles that are just the item id; long Commons creator lines (Malaspina: "Image provided by the USGS EROS Data Center ..."). True 1960s psychedelic poster art was not added: the LOC rock posters are 1024 px or less with unevaluated rights, and Commons' *Psychedelic art* category is mostly modern CC BY-SA snapshots.
+
+## D43 (2026-11-21): Code review fixes
+
+A review of the whole `image-api-mode` branch found these and fixed them (unit tests in `ImageAPIModeTests`):
+
+- **Attribution:** a CC BY or CC BY-SA picture whose record names no creator is now rejected ("CC BY-SA 3.0 without a creator to credit"). The credit line could not have met the licence's attribution term. Public domain, CC0 and "No known restrictions" pictures still need only a title.
+- **Ledger writes in order:** the ingest task and the detached "picture shown" task both wrote `ledger.json`, each from a snapshot taken under the lock and written after the lock was released, so an older snapshot could land last. A lost candidate record would let the same item be downloaded again after a relaunch. Each change now carries a version, and a writer lock skips any snapshot older than the one on disk.
+- **Clear while fetching:** a picture whose download began before "Clear Curated Pictures" was saved afterwards, because the clear generation was read at save time. Ingest now reads it before resolving the candidate, so that picture is refused. The clear also holds the writer lock, so a ledger write that is already under way cannot bring the old file back.
+- **Dropped reservations:** a picture picked for display but never shown, such as a Lo-Fi stage that missed its reveal, stayed reserved until the next Stop or source switch, which could starve a small pool. Reservations now expire after 10 minutes.
+- **Cancellation is not a provider failure:** stopping ingest (source switch, Stop, Clear) during a search used to put that provider into a 1-minute backoff. `CancellationError` and `URLError.cancelled` are now ignored.
+- **Decode bound:** files whose header declares more than 150 megapixels, or no size at all, are rejected before decoding. A 12 MB PNG can declare a canvas that ImageIO would decode in full.
+
+Left as they are, with the reasons:
+
+- **Size limit enforced after download:** the download is checked against 12 MB after it completes. Providers that declare a size (Commons originals, Cleveland, NASA's HEAD) are gated before downloading, and the 180 s resource timeout bounds the rest. A streaming cap would need a delegate-based download.
+- **3 GB pool budget:** this is the plan's default (plan 13.3) and is still for the user to decide against A31.
+- **NASA rights:** NASA rights are taken as US Government work for every item. A few NASA library items are third-party works; the title-reject words remain the guard.

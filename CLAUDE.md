@@ -7,7 +7,7 @@ Guidance for Claude Code in this repository. It extends [AGENTS.md](AGENTS.md), 
 Liminal is a native SwiftUI ambient audiovisual app for **macOS 26+ and visionOS**. It has no iOS target and no web backend. It:
 
 - synthesizes music in two modes: **Ambient** (eight synthesis layers, styles Drift/Glass/Deep/Garden) and **Lo-Fi** (sampled instruments, deep bass, optional private drum takes, and archive dialogue chopped on the beat);
-- generates surreal 3:2 2K images with Gemini, caches them on disk, and reuses the cache when generation is capped or unavailable;
+- generates surreal 3:2 2K images with Gemini, caches them on disk, and reuses the cache when generation is capped or unavailable (**AI** image source), or shows curated public-domain and openly licensed pictures from library, museum and NASA APIs (**API** image source, a toggle beside Ambient / Lo-Fi);
 - renders the images through one staged Metal effects shader (MTKView on macOS; RealityKit drawables on a depth-displaced wraparound shell on visionOS);
 - weaves Internet Archive footage and its treated soundtrack into the scene.
 
@@ -40,7 +40,7 @@ A successful build does not show that the visuals are correct. Build, terminate 
 
 ## Do not spend Gemini budget
 
-Automated test runs once exceeded the user's monthly Google budget. Any DEBUG launch with an automation flag (`-LiminalAutoPlay`, `-LiminalOpenDome`, `-LiminalMusicSeed`, `-LiminalFreezeTime`, perf/test flags…) suppresses generation and shows cached images or the test card. `DebugLaunchOptions.blocksImageGeneration` is the gate. Add any new automation flag to it. Pass `-LiminalAllowGeneration YES` only when generation itself is under test, and keep that to a handful of images. Never press Play in a flagless launch during automation.
+Automated test runs once exceeded the user's monthly Google budget. Any DEBUG launch with an automation flag (`-LiminalAutoPlay`, `-LiminalOpenDome`, `-LiminalMusicSeed`, `-LiminalFreezeTime`, perf/test flags…) suppresses generation and shows cached images or the test card. `DebugLaunchOptions.blocksImageGeneration` is the gate. Add any new automation flag to it. Pass `-LiminalAllowGeneration YES` only when generation itself is under test, and keep that to a handful of images. Never press Play in a flagless launch during automation. API image mode (`-LiminalImageSource api`) never calls Gemini and may fetch from the free public image APIs in verification runs; its flags (`-LiminalImageSource`, `-LiminalImageProvider`, `-LiminalImageAPIOffline`, `-LiminalImageAPISeed`, `-LiminalImageAPIFresh`, `-LiminalImageSourceFlipAt`) are automation flags too. Use `-LiminalImageAPIFresh YES` so a run fills a throwaway verify pool instead of the user's.
 
 ## Repository map
 
@@ -51,6 +51,7 @@ Automated test runs once exceeded the user's monthly Google budget. Any DEBUG la
 - `Liminal/Audio/Lofi/Dialogue/`: dialogue chopping. Analyzer, hierarchy, pad bank builder, motif and performer, reorder guard, chop renderer, cue coordinator and director, transcription provider and assets. See `docs/architecture.md#dialogue-chopping-pipeline`.
 - `Liminal/Audio/Lofi/DSP/`: biquad, dynamics, loudness, saturation, stereo, true peak, master kernel and finisher.
 - `Liminal/Visual/`: `GeminiClient`, `ModelRouter`, `ImageGenerationConfig`, `GenerationBudget`, `Prompt/`, `ImageQueue`/`ImageStore`/`AtomicImageBuffer`, `ImageFraming`, upscalers, `DepthMapGenerator` (Core ML depth), `DepthAnalyzer` (Vision saliency, an actor), `TimerDrivenCrossfade`, `EffectsMetalView` (macOS), `EffectsUniformsComputer`, `MusicReactor`/`MusicModulation`, `Spatial/`.
+- `Liminal/Visual/ImageSources/`: API image mode. `ImageSource` (AI/API), `image-collections.json` (the approved sources, moods, gates) and `ImageCollections`, `ImageHTTP` (paced https client), `Providers/` (LOC, NASA, Wikimedia, Cleveland, Met, optional Smithsonian), `ImageRights`, `ImageOpenness`, `ImageRotation`, `CuratedImagePool` (own store + ledger, 3 GB) and `CuratedImageFeed` (ingest and display). `Liminal/ImageSourceControls.swift` holds the picker, the credit line and the status row.
 - `Liminal/Shaders/`: `EffectsRenderer.metal` (single staged fragment shader), `ArchiveVideo.metal`, `DreamyEffects.metal`. `Liminal/EffectsUniforms.swift` is the CPU-side layout contract.
 - `Liminal/Archive/`: catalog/client/seed list (`archive-seeds.json`), `ArchiveClipStore` (3 GB cache, 10 pinned + 2 rotating, launch sweep of unindexed and temp files), `VideoFrameSource`, `FootageWeaver`, `VideoComposite`, `ArchiveAudio` (decode and cue math).
 - `Liminal/Services/`: `SettingsService` (persistent settings), `EnvironmentService` (credentials).
@@ -83,6 +84,7 @@ Automated test runs once exceeded the user's monthly Google budget. Any DEBUG la
 **Images and generation.**
 - Settings live in `ImageGenerationConfig` and caps in `GenerationBudget`. The primary model is `gemini-nano-banana-2.1` and the fallback is `gemini-3.1-flash-lite-image`. Treat these as repo configuration, not verified provider availability.
 - Cache reuse is the fallback whenever generation is capped or unavailable.
+- API mode (decisions/images.md D36-D41) never calls Gemini, `GenerationBudget` or the prompt history, and never shows the AI cache. Its display side reads only from its own pool (`CuratedImageStore/`, separate epoch key, no count cap, 3 GB budget evicting the least recently shown); the network only adds to the pool. Keep pictures only when their record passes `ImageRights` (PD, CC0, no known restrictions, CC BY / BY-SA) and keep each picture's credit. Keep network, decode and ledger writes off the main actor.
 
 **Archive.** Retain each source's credit (`docs/experience.md` film table). Ten pinned films plus two rotating discoveries share a 3 GB cache. Do not add size caps or budgets that change what can play (user decision, 2026-11-19, A31); if more storage is needed, raise the storage. Launch cleanup only removes files the index does not list and stale temp files.
 

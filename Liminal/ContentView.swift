@@ -104,10 +104,26 @@ struct ContentView: View {
                 audioEngine.start()
                 LMLog.general.info("🧪 DEBUG: auto-play started")
             }
+            #if DEBUG
+            if let times = DebugLaunchOptions.imageSourceFlipAt {
+                let settings = self.settings
+                Task { @MainActor in
+                    let start = ContinuousClock.now
+                    for t in times {
+                        try? await Task.sleep(until: start + .milliseconds(Int(t * 1000)), clock: .continuous)
+                        let stored = UserDefaults.standard.object(forKey: ImageSource.defaultsKey)
+                        settings.imageSource = settings.imageSource == .ai ? .api : .ai
+                        UserDefaults.standard.set(stored, forKey: ImageSource.defaultsKey)
+                        LMLog.general.info("🧪 DEBUG: Images picker flipped to \(settings.imageSource.rawValue, privacy: .public)")
+                    }
+                }
+            }
+            #endif
         }
         // Settings -> AudioEngine: propagate changes immediately
         .onChange(of: settings.style) { _, newValue in audioEngine.style = newValue }
         .onChange(of: settings.pinnedScale) { _, newValue in audioEngine.pinnedScale = newValue }
+        .onChange(of: settings.imageSource) { _, source in visualEngine.setImageSource(source) }
         .onChange(of: audioEngine.isPlaybackReady ? audioEngine.musicMode : nil, initial: true) { _, playingMode in
             if playingMode != nil { visualEngine.start(music: audioEngine) } else { visualEngine.stop() }
         }
@@ -147,7 +163,8 @@ extension ContentView {
                     PlaybackStatus(isPlaying: audioEngine.isPlaybackReady,
                            isPreparing: audioEngine.isRunning && !audioEngine.isPlaybackReady,
                                    cachedCount: visualEngine.totalCachedCount,
-                                   queuedCount: visualEngine.queuedCount)
+                                   queuedCount: visualEngine.queuedCount,
+                                   source: visualEngine.imageSource)
                     if let status = visualEngine.statusMessage {
                         Label(status, systemImage: "info.circle")
                             .font(.callout)
@@ -176,7 +193,8 @@ extension ContentView {
                     .id("archive")
 
                 ControlSection(title: "Images & Storage", systemImage: "photo.stack") {
-                    APIStatusRow()
+                    APIStatusRow(source: visualEngine.imageSource, apiStatus: visualEngine.sourceStatus)
+                    ImageCreditLine(metadata: visualEngine.currentMetadata)
                     Button {
                         showingSettings = true
                     } label: {
@@ -186,6 +204,7 @@ extension ContentView {
                     .controlSize(.large)
                     .keyboardShortcut(",", modifiers: .command)
                 }
+                .id("images")
             }
             .padding(16)
         }
@@ -232,18 +251,21 @@ struct SettingsSheetView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     ControlSection(title: "Images", systemImage: "photo.stack") {
-                        ExplainedToggle(title: "Cache only",
-                                        explanation: "Show only images already saved on this Mac. No new images are generated, which is useful for testing effects without API costs.",
-                                        isOn: $settings.cacheOnly)
-                        if settings.cacheOnly && visualEngine.totalCachedCount == 0 {
-                            Label("No cached images, so nothing will display.",
-                                  systemImage: "exclamationmark.triangle.fill")
-                                .font(.callout)
-                                .foregroundStyle(.yellow)
-                                .wrapping()
-                        }
-                        if !settings.cacheOnly {
-                            ImageLimitSection(settings: settings)
+                        // Gemini controls only matter in AI mode; API mode never generates.
+                        if settings.imageSource == .ai {
+                            ExplainedToggle(title: "Cache only",
+                                            explanation: "Show only images already saved on this Mac. No new images are generated, which is useful for testing effects without API costs.",
+                                            isOn: $settings.cacheOnly)
+                            if settings.cacheOnly && visualEngine.totalCachedCount == 0 {
+                                Label("No cached images, so nothing will display.",
+                                      systemImage: "exclamationmark.triangle.fill")
+                                    .font(.callout)
+                                    .foregroundStyle(.yellow)
+                                    .wrapping()
+                            }
+                            if !settings.cacheOnly {
+                                ImageLimitSection(settings: settings)
+                            }
                         }
                         Divider()
                         ClearImagesSection(visualEngine: visualEngine)

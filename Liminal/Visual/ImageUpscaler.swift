@@ -62,7 +62,19 @@ final class ImageUpscaler {
     nonisolated static let skipThreshold = 2048
 
     nonisolated static func shouldSkipUpscale(_ image: CGImage) -> Bool {
-        max(image.width, image.height) >= skipThreshold
+        if max(image.width, image.height) >= skipThreshold { return true }
+        #if os(macOS)
+        // RealESRGAN resizes its input to 512x512 and returns 2048x2048: a non-square picture would come
+        // out stretched. Show it as is instead (the GPU scales it). Plan image-api-mode 4.4.
+        if !isSquare(width: image.width, height: image.height) { return true }
+        #endif
+        return false
+    }
+
+    /// Square within 2%.
+    nonisolated static func isSquare(width: Int, height: Int) -> Bool {
+        guard width > 0, height > 0 else { return false }
+        return abs(Double(width) / Double(height) - 1) <= 0.02
     }
 
     // MARK: - Public API

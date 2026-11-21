@@ -134,6 +134,7 @@ struct PlaybackStatus: View {
     var isPreparing = false
     let cachedCount: Int
     let queuedCount: Int
+    var source: ImageSource = .ai
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -145,26 +146,14 @@ struct PlaybackStatus: View {
                     .fontWeight(.medium)
                     .wrapping()
             }
-            Text("\(cachedCount) \(cachedCount == 1 ? "image" : "images") cached, \(queuedCount) in queue")
+            Text(source == .api
+                 ? "\(cachedCount) curated \(cachedCount == 1 ? "picture" : "pictures") saved, \(queuedCount) in queue"
+                 : "\(cachedCount) \(cachedCount == 1 ? "image" : "images") cached, \(queuedCount) in queue")
                 .font(.callout.monospacedDigit())
                 .foregroundStyle(.secondary)
                 .wrapping()
         }
         .accessibilityElement(children: .combine)
-    }
-}
-
-/// Gemini credential status with a colored dot.
-struct APIStatusRow: View {
-    var body: some View {
-        let ready = EnvironmentService.shared.hasValidCredentials
-        HStack(spacing: 8) {
-            Circle()
-                .fill(ready ? Color.green : Color.red)
-                .frame(width: 10, height: 10)
-            Text(ready ? "Gemini API ready" : "Missing Gemini API key")
-                .wrapping()
-        }
     }
 }
 

@@ -29,6 +29,7 @@ final class SettingsService: ObservableObject {
         static let legacyArchiveAmount = "archive.amount"
         static let archiveAudioLevel = "archive.audioLevel"
         static let dialogueTranscription = DialogueTranscriptionMode.defaultsKey
+        static let imageSource = ImageSource.defaultsKey
     }
 
     // MARK: - Defaults
@@ -62,6 +63,12 @@ final class SettingsService: ObservableObject {
 
     @Published var musicMode: MusicMode {
         didSet { defaults.set(musicMode.rawValue, forKey: Keys.musicMode) }
+    }
+
+    /// "Images": AI (Gemini generation) or API (curated collections, D36). Read off the main actor
+    /// through `ImageSource.current`, which uses the same key.
+    @Published var imageSource: ImageSource {
+        didSet { defaults.set(imageSource.rawValue, forKey: Keys.imageSource) }
     }
 
     @Published var lofi: LofiOptions {
@@ -154,6 +161,9 @@ final class SettingsService: ObservableObject {
 
         self.style = MusicStyle.ID(rawValue: defaults.string(forKey: Keys.style) ?? "") ?? Self.defaultStyle
         self.musicMode = MusicMode(rawValue: defaults.string(forKey: Keys.musicMode) ?? "") ?? .ambient
+        // -LiminalImageSource (DEBUG) wins; assigning in init does not run didSet, so it is not saved.
+        self.imageSource = ImageSource.resolve(stored: defaults.string(forKey: Keys.imageSource),
+                                               debugFlag: DebugLaunchOptions.imageSource)
         self.lofi = defaults.data(forKey: Keys.lofi).flatMap { try? JSONDecoder().decode(LofiOptions.self, from: $0) } ?? LofiOptions()
         self.scaleAuto = defaults.object(forKey: Keys.scaleAuto) as? Bool ?? Self.defaultScaleAuto
 
@@ -188,6 +198,7 @@ final class SettingsService: ObservableObject {
         currentScale = Self.defaultScale
         style = Self.defaultStyle
         musicMode = .ambient
+        imageSource = ImageSource.defaultSource
         lofi = LofiOptions()
         scaleAuto = Self.defaultScaleAuto
         imageInterval = Self.defaultImageInterval

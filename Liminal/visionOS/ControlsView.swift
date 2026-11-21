@@ -68,6 +68,7 @@ struct ControlsView: View {
         .onDisappear { controlsVisible = false }
         .onChange(of: settings.style) { _, newValue in audioEngine.style = newValue }
         .onChange(of: settings.pinnedScale) { _, newValue in audioEngine.pinnedScale = newValue }
+        .onChange(of: settings.imageSource) { _, source in visualEngine.setImageSource(source) }
         .onChange(of: audioEngine.isPlaybackReady ? audioEngine.musicMode : nil, initial: true) { _, playingMode in
             if playingMode != nil { visualEngine.start(music: audioEngine) } else { visualEngine.stop() }
         }
@@ -107,7 +108,8 @@ struct ControlsView: View {
             PlaybackStatus(isPlaying: audioEngine.isPlaybackReady,
                            isPreparing: audioEngine.isRunning && !audioEngine.isPlaybackReady,
                            cachedCount: visualEngine.totalCachedCount,
-                           queuedCount: visualEngine.queuedCount)
+                           queuedCount: visualEngine.queuedCount,
+                           source: visualEngine.imageSource)
             if let status = visualEngine.statusMessage {
                 Label(status, systemImage: "info.circle")
                     .font(.callout)
@@ -152,17 +154,20 @@ struct ControlsView: View {
             ExplainedToggle(title: "Sync visuals to music",
                             explanation: "Color, motion and bloom follow the music as it plays.",
                             isOn: $settings.syncVisualsToMusic)
-            ExplainedToggle(title: "Cache only",
-                            explanation: "Show only images already saved on this device. No new images are generated.",
-                            isOn: $settings.cacheOnly)
-            if settings.cacheOnly && visualEngine.totalCachedCount == 0 {
-                Label("No cached images, so nothing will display.", systemImage: "exclamationmark.triangle.fill")
-                    .font(.callout)
-                    .foregroundStyle(.yellow)
-                    .wrapping()
-            }
-            if !settings.cacheOnly {
-                ImageLimitSection(settings: settings)
+            // Gemini controls only matter in AI mode; API mode never generates.
+            if settings.imageSource == .ai {
+                ExplainedToggle(title: "Cache only",
+                                explanation: "Show only images already saved on this device. No new images are generated.",
+                                isOn: $settings.cacheOnly)
+                if settings.cacheOnly && visualEngine.totalCachedCount == 0 {
+                    Label("No cached images, so nothing will display.", systemImage: "exclamationmark.triangle.fill")
+                        .font(.callout)
+                        .foregroundStyle(.yellow)
+                        .wrapping()
+                }
+                if !settings.cacheOnly {
+                    ImageLimitSection(settings: settings)
+                }
             }
         }
     }
@@ -177,8 +182,13 @@ struct ControlsView: View {
     // MARK: Images & storage
 
     private var imagesSection: some View {
+        imagesSectionContent.id("images")
+    }
+
+    private var imagesSectionContent: some View {
         ControlSection(title: "Images & Storage", systemImage: "photo.stack") {
-            APIStatusRow()
+            APIStatusRow(source: visualEngine.imageSource, apiStatus: visualEngine.sourceStatus)
+            ImageCreditLine(metadata: visualEngine.currentMetadata)
             ClearImagesSection(visualEngine: visualEngine)
             Divider()
             // No destructive role: its red title is unreadable on glass; the icon is red instead.

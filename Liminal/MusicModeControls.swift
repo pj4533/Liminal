@@ -11,6 +11,8 @@ struct MusicModeControls: View {
             }
             .pickerStyle(.segmented)
             .accessibilityIdentifier("musicMode")
+            // AI vs API sits directly under Ambient vs Lo-Fi (docs/plans/image-api-mode.md 7).
+            ImageSourceControls(settings: settings)
             if settings.musicMode == .ambient {
                 StylePicker(style: $settings.style)
             } else {

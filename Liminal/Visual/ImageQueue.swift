@@ -41,6 +41,10 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
     @MainActor @Published private(set) var totalCachedCount = 0
     /// Short explanation for the UI when nothing new is coming (Cache Only with an empty cache, all models cooling down).
     @MainActor @Published private(set) var statusMessage: String?
+    /// API mode: "Curated collections: 5 of 5 sources online" and whether that is all well (APIStatusRow).
+    @MainActor @Published private(set) var sourceStatus: (text: String, ok: Bool)?
+    /// The source the queue is running (AI or API); changed by `switchSource`.
+    @MainActor @Published private(set) var imageSource: ImageSource
 
     // MARK: - Dependencies
 
@@ -99,6 +103,35 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
     private let taskLock = NSLock()
     nonisolated(unsafe) private var _generationTask: Task<Void, Never>?
     nonisolated(unsafe) private var _isRunning = false
+    nonisolated(unsafe) private var _activeSource: ImageSource
+    /// Bumped by every source switch: results of the previous source's loop are dropped.
+    nonisolated(unsafe) private var _sourceGeneration: UInt64 = 0
+    private let feedLock = NSLock()
+    nonisolated(unsafe) private var _feed: CuratedImageFeed?
+    private let feedFactory: @Sendable () -> CuratedImageFeed
+
+    /// The source the loops serve; read off the main actor.
+    var activeSource: ImageSource {
+        taskLock.withLock { _activeSource }
+    }
+    private var sourceGeneration: UInt64 {
+        taskLock.withLock { _sourceGeneration }
+    }
+
+    /// API mode's ingest and display rotation, created on first use (AI-only sessions never build it).
+    var feed: CuratedImageFeed {
+        feedLock.withLock {
+            if let f = _feed { return f }
+            let f = feedFactory()
+            _feed = f
+            return f
+        }
+    }
+
+    /// The store the active source shows from: the AI cache or the API pool.
+    var activeStore: ImageStore {
+        activeSource == .api ? feed.pool.store : store
+    }
 
     private var generationTask: Task<Void, Never>? {
         get { taskLock.withLock { _generationTask } }
@@ -112,11 +145,15 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
     // MARK: - Init
 
     init(config: ImageGenerationConfig = .standard, store: ImageStore = .shared,
-         director: PromptDirector = PromptDirector()) {
+         director: PromptDirector = PromptDirector(), source: ImageSource = .current,
+         feed: @escaping @Sendable () -> CuratedImageFeed = { CuratedImageFeed() }) {
         self.config = config
         self.store = store
         self.director = director
         self.gemini = GeminiClient(timeout: config.requestTimeout)
+        self._activeSource = source
+        self._imageSource = Published(initialValue: source)
+        self.feedFactory = feed
 
         // Purge old caches (cache epoch) before anything is listed or decoded.
         store.migrateIfNeeded()
@@ -157,6 +194,10 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
             return
         }
         #endif
+        if activeSource == .api {
+            await loadInitialAPIImage()
+            return
+        }
         let files = store.imageFiles()
         await publishCachedCount(files.count)
         LMLog.visual.info("📂 [ImageQueue] \(files.count) cached images")
@@ -182,6 +223,34 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
         }
     }
 
+    /// API mode: one random picture from the pool, else nothing (Lo-Fi shows the standby art, and in
+    /// Ambient the first fetched picture shows itself). The AI cache and the test card are not used.
+    private func loadInitialAPIImage() async {
+        let feed = self.feed
+        feed.pool.loadIfNeeded()
+        await publishCachedCount(feed.pool.count)
+        LMLog.visual.info("📂 [ImageQueue] API pool: \(feed.pool.count) pictures")
+        guard !imageBuffer.hasCurrent(), let entry = feed.anyPicture(),
+              let item = await makeDisplayItem(entry, from: feed.pool.store) else { return }
+        guard !imageBuffer.hasCurrent(), activeSource == .api else { return }
+        imageBuffer.storeCurrent(item.cgImage, metadata: item.metadata, id: item.id)
+        await state.noteShown(item.id)
+        didShow(item.metadata)
+        await MainActor.run {
+            self.currentImage = item.image
+            self.currentMetadata = item.metadata
+        }
+    }
+
+    /// Bookkeeping when a picture becomes the one on screen (API: rotation history and the credit log line).
+    /// The ledger write and log line run on a detached task: `showReserved` is called on the main actor
+    /// at the Lo-Fi reveal, where the visionOS render loop must not wait on file I/O.
+    private func didShow(_ metadata: ImageMetadata?) {
+        guard let metadata, metadata.source != nil else { return }
+        let feed = self.feed
+        Task.detached(priority: .utility) { feed.markShown(metadata) }
+    }
+
     // MARK: - Public API
 
     /// Shown when generation is off and the cache is empty.
@@ -205,8 +274,14 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
         if DebugLaunchOptions.testImageDirectoryFiles != nil { startTestDirectoryCycler(); return }
         if DebugLaunchOptions.testPattern || DebugLaunchOptions.testImagePath != nil { return }  // fixed image only
         #endif
-        LMLog.visual.info("ImageQueue starting (cacheOnly=\(cacheOnly), cached=\(self.totalCachedCount))")
         statusMessage = nil
+        if activeSource == .api {
+            // API mode has its own gate: automation flags block Gemini, never the free public APIs.
+            LMLog.visual.info("ImageQueue starting (source=api)")
+            startAPIFeed()
+            return
+        }
+        LMLog.visual.info("ImageQueue starting (source=ai, cacheOnly=\(cacheOnly), cached=\(self.totalCachedCount))")
         if cacheOnly {
             startCacheRecycler()
         } else {
@@ -219,6 +294,8 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
         isRunning = false
         generationTask?.cancel()
         generationTask = nil
+        feedLock.withLock { _feed }?.stopIngest()
+        feedLock.withLock { _feed }?.releaseReserved()
         Task { await state.clearBuffer() }
         queuedCount = 0
         isGenerating = false
@@ -238,9 +315,45 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
     /// Request a new image (mood change trigger).
     @MainActor
     func requestNewImage() {
-        guard !generationDisabled else { return }
+        guard !generationDisabled, activeSource == .ai else { return }
         if generationTask == nil || generationTask?.isCancelled == true {
             startContinuousGeneration()
+        }
+    }
+
+    /// Switches between AI and API. The picture on screen stays; pending pictures of the old source are
+    /// dropped and the next image change (timer or drum boundary) shows the new source.
+    func switchSource(_ source: ImageSource) async {
+        let changed = taskLock.withLock { () -> Bool in
+            guard _activeSource != source else { return false }
+            _activeSource = source
+            _sourceGeneration &+= 1
+            return true
+        }
+        guard changed else { return }
+        let task = generationTask
+        generationTask = nil
+        task?.cancel()
+        await task?.value
+        if source == .ai { feedLock.withLock { _feed }?.stopIngest() }
+        feedLock.withLock { _feed }?.releaseReserved()
+        await state.clearBuffer()
+        #if os(visionOS)
+        while imageBuffer.takePending() != nil {}
+        #endif
+        ArchiveFootageService.shared.queuedImage(nil)
+        let count = source == .api ? { feed.pool.loadIfNeeded(); return feed.pool.count }() : store.imageCount()
+        await MainActor.run {
+            self.imageSource = source
+            self.queuedCount = 0
+            self.isGenerating = false
+            self.statusMessage = nil
+            self.sourceStatus = nil
+            self.totalCachedCount = count
+        }
+        LMLog.visual.info("🖼️ [ImageQueue] image source -> \(source.rawValue, privacy: .public)")
+        if isRunning {
+            await MainActor.run { self.start() }
         }
     }
 
@@ -248,6 +361,10 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
     /// (docs/decisions/images.md D15). Restarts generation if the queue was running
     /// and Cache Only is off.
     func clearAllImages() async {
+        if activeSource == .api {
+            await clearAPIPool()
+            return
+        }
         // 1. Files first, so nothing can be reloaded; bumps clearGeneration.
         let removed = store.clearEverything()
 
@@ -286,6 +403,33 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
         }
     }
 
+    /// API mode's "Clear images": the pool and its ledger, never the AI cache. Fetching restarts.
+    private func clearAPIPool() async {
+        let task = generationTask
+        generationTask = nil
+        task?.cancel()
+        await task?.value
+        let feed = self.feed
+        feed.stopIngest()
+        let removed = feed.clear()
+        ArchiveFootageService.shared.queuedImage(nil)
+        ArchiveFootageService.shared.displayedImage(nil)
+        imageBuffer.clear()
+        await state.reset()
+        await MainActor.run {
+            self.currentImage = nil
+            self.nextImage = nil
+            self.currentMetadata = nil
+            self.queuedCount = 0
+            self.totalCachedCount = 0
+            NotificationCenter.default.post(name: .imageCacheCleared, object: nil)
+        }
+        LMLog.visual.info("🗑️ [ImageQueue] Clear images (API pool): removed \(removed.imageCount) pictures")
+        if isRunning {
+            await MainActor.run { self.start() }
+        }
+    }
+
     // MARK: - Advance
 
     /// Reserve a distinct picture well ahead of the audio deadline. A slow generator
@@ -305,6 +449,14 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
             if currentID == nil || item.id != currentID { return item }
         }
         #endif
+        if activeSource == .api {
+            let feed = self.feed
+            for _ in 0..<3 {
+                guard let entry = feed.nextDisplay(current: currentID) else { break }
+                if let item = await makeDisplayItem(entry, from: feed.pool.store) { return item }
+            }
+            return nil
+        }
         let recent = await state.recent()
         let files = store.imageFiles().filter { $0.id != currentID }
         let fresh = files.filter { !recent.suffix(4).contains($0.id) }
@@ -330,6 +482,7 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
         imageBuffer.storeCurrent(item.cgImage, metadata: item.metadata, id: item.id)
         currentMetadata = item.metadata
         currentImage = item.image
+        didShow(item.metadata)
         Task {
             await state.noteShown(item.id)
             queuedCount = await pendingCount()
@@ -340,7 +493,10 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
         #if os(visionOS)
         let advanced = imageBuffer.advanceFromQueue()
         let metadata = imageBuffer.loadCurrentMetadata()
-        if advanced { await state.noteShown(metadata?.id) }
+        if advanced {
+            await state.noteShown(metadata?.id)
+            didShow(metadata)
+        }
         let pending = imageBuffer.pendingCount()
         await MainActor.run {
             self.queuedCount = pending
@@ -352,6 +508,7 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
             return
         }
         await state.noteShown(item.id)
+        didShow(item.metadata)
         let following = await state.first()
         let remaining = await state.count()
         imageBuffer.store(current: item.cgImage, next: following?.cgImage, metadata: item.metadata, id: item.id)
@@ -382,6 +539,7 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
         } else {
             imageBuffer.storeCurrent(item.cgImage, metadata: item.metadata, id: item.id)
             await state.noteShown(item.id)
+            didShow(item.metadata)
             await MainActor.run { self.currentMetadata = item.metadata }
         }
         let pending = imageBuffer.pendingCount()
@@ -391,6 +549,7 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
         if imageBuffer.loadCurrent() == nil {
             imageBuffer.storeCurrent(item.cgImage, metadata: item.metadata, id: item.id)
             await state.noteShown(item.id)
+            didShow(item.metadata)
             await MainActor.run {
                 self.currentImage = item.image
                 self.currentMetadata = item.metadata
@@ -409,9 +568,13 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
     }
 
     /// Decodes one stored image (lazily, one at a time) and upscales it if it is small.
-    private func makeDisplayItem(_ entry: ImageStore.Entry) async -> DisplayItem? {
-        guard let raw = store.loadImage(entry) else { return nil }
-        let display = await upscaleIfNeeded(raw)
+    /// API pool pictures are never upscaled: the ingest gate already keeps their 3:2 crop at 2000 x 1333
+    /// or more, and on a visionOS device the MetalFX path (long side under 2048) would make a 2000-2047 px
+    /// picture four times larger for no visible gain.
+    private func makeDisplayItem(_ entry: ImageStore.Entry, from source: ImageStore? = nil) async -> DisplayItem? {
+        let fromPool = source.map { $0 !== store } ?? false
+        guard let raw = (source ?? store).loadImage(entry) else { return nil }
+        let display = fromPool ? raw : await upscaleIfNeeded(raw)
         return DisplayItem(id: entry.id, cgImage: display, image: Self.platformImage(display), metadata: entry.metadata)
     }
 
@@ -422,6 +585,48 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
         } catch {
             LMLog.visual.warning("🔬 upscale failed, showing original: \(error.localizedDescription)")
             return image
+        }
+    }
+
+    // MARK: - API feed (docs/plans/image-api-mode.md 4.3)
+
+    /// Display loop of API mode: keeps `targetPendingCount` pool pictures queued (disk only, never the
+    /// network) and starts the ingest loop beside it. No Gemini, no budget, no prompt history.
+    private func startAPIFeed() {
+        guard generationTask == nil || generationTask?.isCancelled == true else { return }
+        let feed = self.feed
+        let generation = sourceGeneration
+        feed.startIngest()
+        LMLog.visual.info("🖼️ [ImageQueue] API feed starting")
+        generationTask = Task.detached { [weak self] in
+            feed.pool.loadIfNeeded()
+            var lastStatus: String?? = .none
+            var lastLine: (String, Bool)?
+            while !Task.isCancelled {
+                guard let self, self.sourceGeneration == generation else { return }
+                if await self.pendingCount() < self.config.targetPendingCount {
+                    let current = self.imageBuffer.loadCurrentMetadata()?.id
+                    if let entry = feed.nextDisplay(current: current),
+                       let item = await self.makeDisplayItem(entry, from: feed.pool.store) {
+                        guard !Task.isCancelled, self.sourceGeneration == generation else { return }
+                        await self.enqueue(item)
+                    }
+                }
+                let message = feed.statusMessage()
+                let line = feed.statusLine()
+                let count = feed.pool.count
+                if lastStatus != .some(message) || lastLine?.0 != line.text || lastLine?.1 != line.ok {
+                    lastStatus = .some(message)
+                    lastLine = (line.text, line.ok)
+                    await MainActor.run {
+                        self.statusMessage = message
+                        self.sourceStatus = line
+                    }
+                }
+                await MainActor.run { if self.totalCachedCount != count { self.totalCachedCount = count } }
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+            LMLog.visual.info("🖼️ [ImageQueue] API feed stopped")
         }
     }
 
@@ -615,6 +820,8 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
     /// model that rejects imageSize is retried once without it.
     private func requestImage(spec: PromptSpec, model: String, reference: ArchiveFootageService.ImageReference?)
         async throws -> (GeneratedImageData, ImageMetadata.ArchiveReference?) {
+        // Second lock on the Gemini path: API mode never generates.
+        guard activeSource == .ai else { throw CancellationError() }
         func generate(_ prompt: String, jpeg: Data?) async throws -> GeneratedImageData {
             let size = config.imageSize(for: model)
             do {
@@ -649,6 +856,10 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
                                  archiveReference: ImageMetadata.ArchiveReference?, clearGeneration: UInt64) async {
         guard clearGeneration == store.clearGeneration else {
             LMLog.visual.info("🗑️ [Pipeline] dropping image generated before Clear All Images")
+            return
+        }
+        guard activeSource == .ai else {
+            LMLog.visual.info("🖼️ [Pipeline] dropping a Gemini image that finished after switching to API")
             return
         }
 
