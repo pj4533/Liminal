@@ -18,7 +18,7 @@ The first time, the system asks for permission to **add** to the photo library (
 |---|---|---|
 | Picture | The effects view's drawable, every frame, at its pixel size (for example 1824x1216 for a 912x608 pt view on a Retina display) | The 2048² effects texture that is mapped onto the immersive shell, scaled back to the picture's 3:2 (2048x1366) |
 | Video codec | HEVC, about 0.35 bit per pixel at 60 Hz, at least 40 Mbit/s (46 Mbit/s at 1824x1216, 58 Mbit/s at 2048x1366), no frame reordering, Rec. 709 tags | same |
-| Frame rate | 60 Hz | 60 Hz (the render loop's rate) |
+| Frame rate | Constant 60 fps: every frame 1/60 s, frame count = length x 60 | same; the render loop runs at about 82 fps (sleep-paced towards 90 Hz), and each 60 Hz slot holds the frame shown nearest its time |
 | Audio | The final mix after the master chain, **lossless 24-bit LPCM**, stereo, at the engine's rate (48 kHz) | same |
 | Container | QuickTime `.mov`, named `Liminal yyyy-MM-dd at HH.mm.ss.mov` | same |
 
@@ -30,16 +30,19 @@ The first time, the system asks for permission to **add** to the photo library (
 
 - **`FrameRecorder`** (nonisolated, one shared instance).
   - **Video.** Each renderer calls `capture(_:commandBuffer:hostTime:)` after encoding its frame and before committing the command buffer: macOS in `EffectsMetalView.draw` (source: the drawable texture), visionOS in `OffscreenEffectsRenderer.renderAndPresent` (source: the bgra8Unorm view of the shell drawable). The recorder takes a pixel buffer from its own `CVPixelBufferPool` (IOSurface-backed, Metal compatible, at least 16 buffers), wraps it with `CVMetalTextureCache`, and encodes one full-screen-triangle pass (`RecorderCopy.metal`, bilinear) into it **in the same command buffer**. Both sources hold sRGB-encoded values in a `bgra8Unorm` texture, so the copy passes values through unchanged. When the command buffer completes, the pixel buffer is appended to the HEVC track on the recorder's serial `writerQueue`. Nothing waits on the GPU, and the render thread only encodes the small pass.
-  - **Even frame times.** Each frame is stamped with its expected presentation time on the host clock (macOS: draw time plus the measured present latency; visionOS: about one frame after submission), then snapped to the nearest 60 Hz slot from the first frame. Two frames in one slot take consecutive slots. Render-timing jitter of a few milliseconds therefore does not make the movie judder; a slot is skipped only when the app really did not render a frame.
+  - **Timing: one movie clock** (`RecordingTiming.swift`, D47). Movie time 0 is the presentation time of the first frame (T0, on the uptime clock the Lo-Fi transport and the drop cuts use). Video slot k is at exactly k/60 s and audio sample n at exactly n/rate s; nothing is placed by "next slot" or "next sample" alone, so the tracks cannot drift or shift against each other. Both start at 0 (no edit list) and end together at the end of the last slot.
+    - *Frames.* Each frame carries its presentation time: macOS the draw time plus the measured present latency (`dropLead` minus its half-frame early bias); visionOS the display time the render loop expects for the frame, sampled with its drop state (`LofiImageReveal.presentationLatency`: the 28 ms display lead minus its half-frame early bias, 22 ms), passed to `renderAndPresent(presentationTime:)`. `FrameSlotter` puts each frame in the slot nearest that time: two frames for one slot keep the nearer (above 60 Hz about a quarter of the frames are surplus), a slot without a frame repeats the previous one (up to 10 s), a late frame is dropped. For a source near 60 Hz a small hysteresis stops a phase on a slot boundary from alternating drop and repeat. Measured slot error is at most 12 ms, typically under 6.
+    - *Audio.* The tap writes each buffer with its `AVAudioTime` host and sample time (`AudioRing.Mark`). `AudioTimeline` places a buffer at the track position of the time it is heard (host time plus the tapped node's `outputPresentationLatency`, read once at start and again after a route recovery): a buffer that continues the previous one goes straight after it, sample for sample; lost samples (a dropped buffer, a ring overrun) become exactly that much silence; a break in the sample clock (an engine restart) is placed again by its host time; audio heard before T0 is skipped and a late first buffer is preceded by silence. It also follows the audio device's clock against the host clock (`driftSeconds`), and video times are corrected by it, so the movie's clock is the audio's.
+    - *Pre-roll.* The ring is drained every 20 ms from the start, also before the first frame arrives (the last 2 s are kept), so it never fills while the movie waits for video.
   - **No drops from the recorder.** The real-time hardware HEVC encoder keeps up at 60 Hz; frames that arrive while the encoder is busy wait in a queue of up to 2 s (120 frames) instead of being dropped. On stop the queue is flushed before the track is finished.
-  - **Audio.** `GenerativeEngine.recordTap`, a unity `Mixer` after the master chain and the graph's final node, carries the recorder's tap (1024-frame buffers). `AVAudioEngine.mainMixerNode` is never touched: AudioKit does not use it, and accessing it makes AVAudioEngine try to connect one while running, which throws. The Lo-Fi master calibration keeps its own tap on `master.output`. The tap block only copies floats into `AudioRing`, a single-producer single-consumer ring of interleaved stereo (10 s, atomics, no locks, no allocation). Every 20 ms `writerQueue` drains it into `CMSampleBuffer`s and appends them to the LPCM track, stamped from the first buffer's host time plus the output's presentation latency (read once at start), so the audio is placed where it is heard. On stop the audio is cut at the end of the last video frame.
-  - **Stats.** `Recording finished: … frames over … s (… fps), max interval … ms, … long, … dropped, audio … s, … audio overruns` is logged when a movie is closed.
-- **`RecordingController`** (main actor): builds the writer, encoder session and copy pipeline **off the main actor** (on macOS the main thread draws the frames, and this setup took about 0.4 s), installs the tap, publishes the phase for the button, finishes on Stop or when playback stops, and saves to Photos with `PHPhotoLibrary.requestAuthorization(for: .addOnly)` and `PHAssetCreationRequest.creationRequestForAssetFromVideo(atFileURL:)`.
+  - **Audio.** `GenerativeEngine.recordTap`, a unity `Mixer` after the master chain and the graph's final node, carries the recorder's tap (it asks for 1024 frames; the device delivers its IO buffer, 4800 frames at the 100 ms visionOS buffer and in the simulator). `AVAudioEngine.mainMixerNode` is never touched: AudioKit does not use it, and accessing it makes AVAudioEngine try to connect one while running, which throws. The Lo-Fi master calibration keeps its own tap on `master.output`. The tap block only copies floats and one time stamp into `AudioRing`, a single-producer single-consumer ring of interleaved stereo (10 s, atomics, no locks, no allocation); a buffer that does not fit, or arrives at another sample rate, is dropped whole with its stamp. `writerQueue` turns the placements into `CMSampleBuffer`s on the LPCM track.
+  - **Stats.** `Recording finished: N frames (… s at 60 fps) from M rendered at … fps, … surplus, … repeated, max slot error … ms, … dropped, … capture failures, first frame after … s; audio … s, … silence frames, … skipped before start, … discontinuities, … overruns, … rate mismatches, drift … ms, latency … ms` is logged when a movie is closed, then `Recording clock: Lo-Fi take downbeat at movie … s, beat … s, T0 uptime …, drift … ms` (the audible grid on the movie clock, for `scripts/av-sync-check.py`). Any audio buffer that is not contiguous logs `Recording audio: buffer at track …`.
+- **`RecordingController`** (main actor): asks for add-only Photos access **before** a first recording (a prompt during a recording held up its first frame on the device), builds the writer, encoder session and copy pipeline **off the main actor** (on macOS the main thread draws the frames, and this setup took about 0.4 s), installs the tap, publishes the phase for the button, finishes on Stop or when playback stops, refreshes the audio latency after a route recovery (`routeRecovered`), and saves to Photos with `PHPhotoLibrary.requestAuthorization(for: .addOnly)` and `PHAssetCreationRequest.creationRequestForAssetFromVideo(atFileURL:)`.
 - **`RecordControls`**: the button and status line in both control panels.
 
 **Permissions.** `Info.plist` has `NSPhotoLibraryAddUsageDescription`. The macOS sandbox gets the Photos entitlement from the build setting `ENABLE_RESOURCE_ACCESS_PHOTO_LIBRARY = YES` (`com.apple.security.personal-information.photos-library`). No other permission is needed: the recorder reads the app's own frames and audio, not the screen or microphone.
 
-## Measurements (2026-11-21)
+## Measurements (2026-11-21, before the timing fix)
 
 | Run | Frames | Rate | Long intervals (>25 ms) | Dropped by recorder | Audio |
 |---|---|---|---|---|---|
@@ -52,6 +55,32 @@ The first time, the system asks for permission to **add** to the photo library (
 - File check (ffprobe): `hevc` 2048x1366 bt709, `pcm_s24le` 48 kHz stereo; peak -1.15 dBFS, RMS -15.9 dB on a Lo-Fi section, matching the master's ceiling.
 - The Photos step was checked in the simulator after `xcrun simctl privacy <udid> grant photos-add com.saygoodnight.Liminal` ("Recording added to Photos").
 
+## The Vision Pro movie that was out of sync, and the fix (2026-11-21, D47)
+
+On the device the live picture and sound were in sync, but the saved movie's drop cuts were seconds late: the picture was late by 7.2 s at the first cut, 17.3, 27.3 and 37.4 s at the next three, and the last 42 s had no sound. Measured from the file (`scripts/av-sync-check.py --legacy`):
+
+| | Device movie (before) | Cause |
+|---|---|---|
+| Video | 9189 frames, every step exactly 1/60 s, 153.15 s | The render loop runs at about 81.6 fps; "two frames in one slot take consecutive slots" gave every frame its own slot, so the picture ran 1.36x slower than real time (0.36 s late per second) |
+| Audio | 123.000 s of media, an edit list skipping the first 12.113 s, a hard splice at exactly sample 480,000 (10.000 s, the ring's capacity; prediction-error ratio 126 against 1.9 median at other buffer joins) | The first frame reached the recorder 12.1 s after the tap started; the drain waited for it, the 10 s ring filled, about 2.1 s of audio was dropped and the rest was stamped by sample count, so everything after the splice was 2.1 s early |
+| Fit | offset = 2.76 s + 0.360 x t; residuals within 51 ms | Both causes, nothing else |
+
+After the fix (same check, `--log` with the run's log):
+
+| Run | Video | Audio | Drop cuts vs their audible downbeat | Kick onsets vs the transport grid |
+|---|---|---|---|---|
+| visionOS Simulator, Lo-Fi, 90 s, 768x512 H.264, render 77 fps | 5387 frames, every step 1/60 s, 89.783 s; 1653 surplus, 94 repeated | 89.783 s, no edit list, no splice, no silence except 44 ms padded at the end, drift -0.47 ms | +12.1, +2.8, -6.5 ms | 94 kicks, median +9.3 ms |
+| visionOS Simulator, Lo-Fi + footage and dialogue, 150 s, 768x512 H.264, render 78 fps, every tap buffer traced | 8989 frames, every step 1/60 s, 149.817 s; 2785 surplus, 24 repeated, max slot error 12.4 ms | 149.817 s, equal to the video to the sample, 1498 tap buffers all contiguous, 0 inserted silence except the end pad, drift -0.81 ms | -3.6, +3.7, -5.6, +1.7, +9.0 ms | 138 kicks, median +23.6 ms |
+| macOS, Lo-Fi, 90 s, 1824x1216 HEVC | 5393 frames over 89.88 s from 5387 rendered at 59.93 fps, 0 surplus, 6 repeated, max slot error 10.6 ms, 0 dropped | 89.883 s, 0 discontinuities, 0 overruns, drift -0.49 ms, latency 1.2 ms | (file not readable from the terminal: the app's sandbox) | |
+| macOS, Lo-Fi + footage and dialogue, 150 s, traced | 8992 frames from 8985 rendered at 59.95 fps, 1 surplus, 8 repeated, max slot error 12.0 ms | 149.867 s, 1498 tap buffers all contiguous and none containing exact zeros, drift -0.80 ms | (live log: drawn -7.0 to -18.3 ms before the downbeat, lead 25 ms) | |
+
+- The clock the recorder relies on was checked sample for sample with `tools/TapTimingCheck.swift` on macOS (player -> mixer -> tapped mixer -> output, five `play(at:)` impulses): tap host time + index / rate equalled the scheduled host time within half a sample (-0.02 to -0.48 samples), tap buffers were 4800 frames with no sample-time gaps.
+- The kick-onset median is detector lag (a 5 ms RMS of a 40-140 Hz band peaks after the attack), the drummer's hand-played timing and the take's first hit sitting 4-8 ms after the boundary (drop-transitions 3.2); it moves with the take, never by a buffer (21-100 ms), and does not step anywhere in a movie.
+- `driftSeconds` grows about 5 ppm on both platforms (-0.47 ms at 90 s, -0.81 ms at 150 s): the output's real sample rate against the host clock. The video follows it; uncorrected it would be about 19 ms per hour.
+- With footage and dialogue on, the simulator's own rendered mix twice contained exact-zero runs inside contiguous tap buffers (69 ms and 12 ms in 150 s; one 47 ms run in an earlier untraced run). The trace shows the zeros arrive in the tap's buffers with contiguous sample and host times, so they are in what the engine rendered (and played), not lost by the recorder; the same 150 s on macOS had none. Not checked on the device. `scripts/av-sync-check.py` lists them as warnings.
+- A cut lands within one 60 Hz slot (±8.3 ms) of where it was shown live, plus the cut's own early bias (a drop is evaluated half a frame late so it errs early). On the device, the 28 ms visionOS display lead is still an estimate shared with the live cut: the movie reproduces what the app intends, and the remaining live error, if any, is the same in the movie.
+- Not yet measured on the device: the fixed build's movie. Check it with `scripts/av-sync-check.py MOVIE --log LOG` (expect PASS) or, without a log, with the structure checks alone.
+
 ## Testing
 
 `-LiminalRecordAt <start>,<seconds>` starts a recording `<start>` seconds after playback is ready and stops it `<seconds>` later, keeping the file without the Photos step (no permission prompt during automation). Add `,photos` to include the Photos step. The flag is in `DebugLaunchOptions.blocksImageGeneration`, so it never spends Gemini budget. Example:
@@ -61,3 +90,21 @@ open Liminal.app --args -LiminalAutoPlay YES -audio.musicMode lofi -archive.enab
 ```
 
 Read the `Recording finished:` log line for frame and drop counts. In the visionOS Simulator the file is in the app's data container under `Documents/Recordings`.
+
+**Simulator timing checks.** The simulator's software HEVC encoder writes about 35 fps even at 384x256, so a full-size simulator movie drops frames in the encoder queue. `-LiminalRecordSize WxH` and `-LiminalRecordCodec h264` (DEBUG) record smaller and with H.264, which keeps up at 768x512. `-LiminalRecordTrace YES` logs every tap buffer's host time, sample time and track position, and any exact-zero run inside it (`REC mark ...`):
+
+```sh
+xcrun simctl launch <udid> com.saygoodnight.Liminal -LiminalAutoPlay YES -LiminalOpenDome YES -audio.musicMode lofi \
+  -LiminalMusicSeed 7 -LiminalTestImage <dir of jpgs> -LiminalRecordAt 8,90 -LiminalRecordSize 768x512 -LiminalRecordCodec h264
+```
+
+### Checking a recording
+
+`python3 -I scripts/av-sync-check.py MOVIE.mov --log APP.log` checks a movie from the file alone, plus the app's log of the same run (`log stream --level info --predicate 'subsystem == "com.saygoodnight.Liminal"'`, or `xcrun simctl spawn <udid> log stream ...`):
+
+- constant 60 fps (every pts step 1/60 s), both tracks starting at 0 with no edit list and ending within a frame of each other;
+- the audio media whole: no strong hard splice on a tap-buffer join (a closed-up overrun scores over 100; weaker candidates, usually musical edges, are warnings), and exact-zero runs inside the movie listed as warnings (padded lost audio, or zeros the engine rendered);
+- each drop cut against its audible downbeat (`Lo-Fi image reveal at downbeat` uptimes on the movie clock from the `Recording clock` line): within 25 ms or it fails;
+- the kick onsets against the transport's beat grid.
+
+It exits 1 on a failure and writes `avsync.json` (and a plot with `--plot`). `--legacy` adds the analysis that diagnosed the device movie. The unit tests are `-only-testing:LiminalTests/RecordingTimingTests` (render streams at 48, 60, 83, 90 and 120 Hz with jitter, 10-minute drift, overruns, restarts, pre-roll).

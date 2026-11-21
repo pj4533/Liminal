@@ -111,6 +111,9 @@ off the audio thread) and its result is published on the existing side channel a
   With an exact latency and the half-frame bias, the first clean frame is presented between half a
   frame before `tD` and half a frame after it (±8.3 ms at 60 Hz, ±5.5 ms at 90 Hz). Sound after
   picture is tolerated far better than picture after sound, so errors should fall early.
+- The Record movie places each frame at `lead` minus the half-frame bias (the expected real
+  presentation, `LofiImageReveal.presentationLatency` on visionOS), so a recorded cut sits where it
+  was shown, within one 60 Hz slot (docs/recording.md, D47).
 - The clock is continuous (uptime, the same base as `transportOrigin`). A dropped frame makes `p` jump
   forward; the cut is the first frame with `p >= 1` and cannot be skipped. The build holds its peak
   until then.

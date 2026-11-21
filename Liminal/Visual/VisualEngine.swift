@@ -34,6 +34,16 @@ nonisolated struct LofiImageReveal: Sendable {
         #endif
     }
 
+    /// The display lead without its half-frame early bias: when a frame evaluated now is actually shown
+    /// (visionOS: two 90 Hz frames, 22 ms, an estimate). The recorder stamps visionOS frames with it.
+    static var presentationLatency: Double {
+        #if os(visionOS)
+        return displayLead - 0.5 / 90
+        #else
+        return displayLead - 0.5 / 60
+        #endif
+    }
+
     var isDrop: Bool { spec.drop != nil }
     var duration: Double { isDrop ? downbeat - fillStart : Double(spec.duration) }
     /// When the image is shown (the crossfade machinery starts): the pre-roll before a drop's build.

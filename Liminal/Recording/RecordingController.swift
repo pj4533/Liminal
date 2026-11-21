@@ -27,12 +27,16 @@ final class RecordingController: ObservableObject {
     private var skipPhotos = false
     private var debugScheduled = false
     private var starting = false
+    /// The engine being recorded (for the Lo-Fi grid in the finished log).
+    private weak var recordingAudio: GenerativeEngine?
 
     var isRecording: Bool { if case .recording = phase { return true }; return false }
 
     /// Recording picture size: the macOS drawable at its current size, or the visionOS shell
-    /// texture scaled back to the picture's 3:2 (2048 x 1366).
+    /// texture scaled back to the picture's 3:2 (2048 x 1366). DEBUG `-LiminalRecordSize WxH` overrides it
+    /// (the simulator's software encoder cannot keep 60 fps at full size).
     static var pictureSize: (width: Int, height: Int) {
+        if let size = DebugLaunchOptions.recordSize { return size }
         #if os(visionOS)
         return (2048, 1366)
         #else
@@ -60,19 +64,34 @@ final class RecordingController: ObservableObject {
         guard let device = MTLCreateSystemDefaultDevice() else {
             LMLog.visual.error("🔴 Recording could not start: no Metal device"); return
         }
-        let avEngine = audio.engine.avEngine
+        starting = true
+        let askPhotos = !skipPhotos
+        Task { @MainActor [weak self, weak audio] in
+            // Ask for add-only Photos access before the recording, never during it: a first-run prompt
+            // in the middle of a recording held up the first frame for seconds (D47).
+            if askPhotos, PHPhotoLibrary.authorizationStatus(for: .addOnly) == .notDetermined {
+                _ = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
+            }
+            guard let self, let audio else { self?.starting = false; return }
+            begin(audio: audio, device: device)
+        }
+    }
+
+    private func begin(audio: GenerativeEngine, device: MTLDevice) {
         // The final mix: never `avEngine.mainMixerNode` (AudioKit does not use it, and touching it
         // makes AVAudioEngine connect one while running, which throws).
         let mixer = audio.recordTap.avAudioNode
         let format = mixer.outputFormat(forBus: 0)
-        // Read once: the device query is synchronous (CLAUDE.md audio contract).
-        let latency = avEngine.outputNode.presentationLatency
+        // Tap host time to heard: the latency downstream of the tapped node, the same mapping the Lo-Fi
+        // transport uses (player.outputPresentationLatency). Read once: the device query is synchronous
+        // (CLAUDE.md audio contract); routeRecovered() reads it again.
+        let latency = mixer.outputPresentationLatency
+        LMLog.visual.info("🔴 Recording audio latency \(latency * 1000, format: .fixed(precision: 1)) ms (output node \(audio.engine.avEngine.outputNode.presentationLatency * 1000, format: .fixed(precision: 1)) ms), \(format.sampleRate, format: .fixed(precision: 0)) Hz")
         let stamp = Self.fileStamp.string(from: Date())
         let url = Self.recordingsFolder.appendingPathComponent("Liminal \(stamp).mov")
         let size = Self.pictureSize
         let folder = Self.recordingsFolder
-        let askPhotos = !skipPhotos
-        starting = true
+        recordingAudio = audio
         // Writer, encoder session and the copy pipeline are built off the main actor: on macOS the
         // main thread draws the frames, and this setup took about 0.4 s (2026-11-21).
         Task.detached(priority: .userInitiated) {
@@ -94,8 +113,6 @@ final class RecordingController: ObservableObject {
                 case .success:
                     controller.tappedMixer = mixer
                     controller.phase = .recording(since: Date())
-                    // Ask for add-only Photos access up front, so the save at the end does not wait on a prompt.
-                    if askPhotos { Task { _ = await PHPhotoLibrary.requestAuthorization(for: .addOnly) } }
                 case .failure(let error):
                     LMLog.visual.error("🔴 Recording could not start: \(error.localizedDescription, privacy: .public)")
                     controller.phase = .failed(error.localizedDescription)
@@ -104,16 +121,30 @@ final class RecordingController: ObservableObject {
         }
     }
 
+    /// GenerativeEngine rebuilt the route while recording: the output latency may have changed.
+    func routeRecovered(audio: GenerativeEngine) {
+        guard isRecording else { return }
+        let latency = audio.recordTap.avAudioNode.outputPresentationLatency
+        FrameRecorder.shared.updateAudioLatency(latency)
+        LMLog.visual.info("🔴 Recording: route recovered, audio latency \(latency * 1000, format: .fixed(precision: 1)) ms")
+    }
+
     func stop() {
         guard isRecording else { return }
         phase = .finishing
         tappedMixer?.removeTap(onBus: 0)
         tappedMixer = nil
+        // The audible Lo-Fi grid (uptime of the take's downbeat as heard), to check the movie against.
+        let grid = recordingAudio?.musicState.read().lofiTakeGrid
+        recordingAudio = nil
         FrameRecorder.shared.stop { result in
             Task { @MainActor in
                 switch result {
                 case .failure(let error): RecordingController.shared.phase = .failed(error.localizedDescription)
                 case .success(let (url, stats)):
+                    if let grid, let origin = stats.movieTime(uptime: grid.origin) {
+                        LMLog.visual.info("⏹️ Recording clock: Lo-Fi take downbeat at movie \(origin, format: .fixed(precision: 4)) s, beat \(grid.beatDuration, format: .fixed(precision: 5)) s, T0 uptime \(stats.t0 ?? 0, format: .fixed(precision: 4)), drift \(stats.driftSeconds * 1000, format: .fixed(precision: 2)) ms")
+                    }
                     if RecordingController.shared.skipPhotos {
                         LMLog.visual.info("⏹️ Debug recording kept at \(url.path, privacy: .public)")
                         RecordingController.shared.phase = .saved("Saved in Recordings")

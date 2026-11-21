@@ -645,6 +645,8 @@ struct ImmersiveDomeView: View {
                 // Per-image vibrance factors (measured once per image, cached), blended across a crossfade
                 var vibrance = ImageColorStats.cachedFactors(key: cgImage) { cgImage }
                 // A drop (docs/plans/drop-transitions.md 3.5): only the old picture until the cut, then a step.
+                // The frame's presentation time, sampled with the drop state: the recorder places it by this.
+                let presentAt = ArchiveFootageService.uptime() + LofiImageReveal.presentationLatency
                 let dropFrame = transitionState.dropFrame
                 let inDrop = dropFrame.map { !$0.done } ?? false
                 if transitionState.isTransitioning, let prev = transitionState.previousImage {
@@ -780,7 +782,8 @@ struct ImmersiveDomeView: View {
                     )
                 } else if let monoDrawable {
                     submitted = renderer.renderAndPresent(drawable: monoDrawable, sourceImage: cgImage,
-                                                          previousImage: previousImage, uniforms: uniforms)
+                                                          previousImage: previousImage, uniforms: uniforms,
+                                                          presentationTime: presentAt)
                 } else {
                     submitted = false
                 }
@@ -794,7 +797,7 @@ struct ImmersiveDomeView: View {
                 if timeSinceStats >= perfLogInterval {
                     let avgRenderTime = totalRenderTime / Double(frameCount)
                     let actualFPS = Double(submittedFrames) / timeSinceStats
-                    let fpsPercent = (actualFPS / 60.0) * 100
+                    let fpsPercent = (actualFPS / 90.0) * 100
 
                     let hasDepth = effectsRenderer?.depthTexture != nil
                     let hasStereo = stereoMaterialBuilder != nil
@@ -803,7 +806,7 @@ struct ImmersiveDomeView: View {
                     let intervalP95 = GPUTimingStats.percentile(frameIntervals, 0.95)
                     let gpuFragment = effectsRenderer?.gpuStats.drain().logFragment ?? "gpu n=0"
 
-                    let perfLine = "📊 visionOS PERF: fps=\(String(format: "%.1f", actualFPS)) (\(String(format: "%.0f", fpsPercent))% of 60) | render avg=\(String(format: "%.1f", avgRenderTime))ms max=\(String(format: "%.1f", maxRenderTime))ms | dropped=\(droppedFrames) unsubmitted=\(frameCount - submittedFrames) | transition=\(String(format: "%.0f", transitionState.transitionProgress * 100))% | interval p95=\(String(format: "%.2f", intervalP95))ms worst=\(String(format: "%.2f", frameIntervals.last ?? 0))ms | \(gpuFragment)"
+                    let perfLine = "📊 visionOS PERF: fps=\(String(format: "%.1f", actualFPS)) (\(String(format: "%.0f", fpsPercent))% of 90) | render avg=\(String(format: "%.1f", avgRenderTime))ms max=\(String(format: "%.1f", maxRenderTime))ms | dropped=\(droppedFrames) unsubmitted=\(frameCount - submittedFrames) | transition=\(String(format: "%.0f", transitionState.transitionProgress * 100))% | interval p95=\(String(format: "%.2f", intervalP95))ms worst=\(String(format: "%.2f", frameIntervals.last ?? 0))ms | \(gpuFragment)"
                     LMLog.visual.info("\(perfLine, privacy: .public)")
                     if lastVideoMix > 0 {
                         LMLog.visual.info("📼 FOOTAGE mix=\(String(format: "%.3f", lastVideoMix), privacy: .public) A=\(String(format: "%.3f", lastVideoMixes.0), privacy: .public) \(footageFrame.state.a?.resolvedRecipe.name ?? "-", privacy: .public) B=\(String(format: "%.3f", lastVideoMixes.1), privacy: .public) \(footageFrame.state.b?.resolvedRecipe.name ?? "-", privacy: .public)")

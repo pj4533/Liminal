@@ -281,9 +281,22 @@ nonisolated enum DebugLaunchOptions {
         guard v.count == 2, v[0] >= 0, v[1] > 0 else { return nil }
         return (v[0], v[1])
     }()
+    /// `-LiminalRecordCodec h264`: record H.264 instead of HEVC (simulator timing checks; its software
+    /// HEVC encoder writes about 35 fps even at 384x256).
+    static let recordH264: Bool = defaults.string(forKey: "LiminalRecordCodec")?.lowercased() == "h264"
+    /// `-LiminalRecordTrace YES`: log every recorded tap buffer's time stamp and track position.
+    static let recordTrace: Bool = defaults.bool(forKey: "LiminalRecordTrace")
     /// `-LiminalRecordAt 5,30,photos` also runs the Photos step (grant access first, e.g.
     /// `xcrun simctl privacy <udid> grant photos-add com.saygoodnight.Liminal`).
     static let recordToPhotos: Bool = defaults.string(forKey: "LiminalRecordAt")?.lowercased().hasSuffix(",photos") ?? false
+    /// `-LiminalRecordSize 1024x682`: record at this size instead of the picture's (simulator timing checks:
+    /// its software HEVC encoder cannot keep 60 fps at 2048x1366).
+    static let recordSize: (width: Int, height: Int)? = {
+        guard let s = defaults.string(forKey: "LiminalRecordSize") else { return nil }
+        let v = s.lowercased().split(separator: "x").compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }
+        guard v.count == 2, v[0] >= 16, v[1] >= 16 else { return nil }
+        return (v[0], v[1])
+    }()
 
     /// True when any API image flag is set.
     static var anyImageAPIFlag: Bool {
@@ -310,7 +323,7 @@ nonisolated enum DebugLaunchOptions {
             || videoOffline || videoOff || controlsScroll != nil || controlsWidth != nil || videoOffAt != nil
             || dialogueTranscription != nil
             || dropColour != nil || dropFinisher != nil || dropLead != nil || dropOff
-            || anyImageAPIFlag || recordAt != nil
+            || anyImageAPIFlag || recordAt != nil || recordSize != nil || recordH264 || recordTrace
     }
 #else
     static let allowGeneration = false
@@ -345,6 +358,9 @@ nonisolated enum DebugLaunchOptions {
     static let hideControls = false
     static let recordAt: (start: Double, seconds: Double)? = nil
     static let recordToPhotos = false
+    static let recordSize: (width: Int, height: Int)? = nil
+    static let recordH264 = false
+    static let recordTrace = false
     static let autoExitAfter: Double? = nil
     static let depthImagePath: String? = nil
     static let shellCycle: [(image: String, depth: String?)] = []

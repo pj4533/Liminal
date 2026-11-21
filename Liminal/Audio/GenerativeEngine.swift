@@ -202,6 +202,7 @@ final class GenerativeEngine: ObservableObject {
                     if !engine.avEngine.isRunning { try engine.start() }
                     recovery = nil
                     activateMusicMode()
+                    RecordingController.shared.routeRecovered(audio: self)
                     LMLog.audio.info("Audio route recovered; playback restarted")
                     return
                 } catch {

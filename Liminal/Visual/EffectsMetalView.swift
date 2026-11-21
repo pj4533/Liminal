@@ -587,12 +587,13 @@ final class EffectsMetalView: MTKView {
             }
         }
         // Recording: copy this frame into the movie inside the same command buffer (docs/recording.md),
-        // stamped with its expected presentation time on the host clock.
+        // stamped with its expected presentation time in uptime seconds: the draw plus the measured
+        // present latency (dropLead adds half a frame so cuts err early; the stamp takes it back out).
         let drawableSize = CGSize(width: drawable.texture.width, height: drawable.texture.height)
         if Self.drawableSizeBox.withLock({ $0 }) != drawableSize { Self.drawableSizeBox.withLock { $0 = drawableSize } }
         if FrameRecorder.shared.isRecording {
             FrameRecorder.shared.capture(drawable.texture, commandBuffer: commandBuffer,
-                                         hostTime: mediaAtDraw + Self.dropLead - 0.5 / 60)
+                                         presentationTime: drawUptime + Self.dropLead - 0.5 / 60)
         }
         commandBuffer.present(drawable)
         commandBuffer.commit()

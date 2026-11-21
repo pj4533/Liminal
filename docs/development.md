@@ -130,6 +130,7 @@ Pass as launch arguments, for example `-LiminalAutoPlay YES`. Defined in `Limina
 | `-LiminalImageAPISeed <n>` | Seed the API ingest and display rotations |
 | `-LiminalImageAPIFresh YES` | Use an empty `CuratedImageStore-Verify` pool so a run proves fetching without touching the user's pool (removed at the next normal launch). With `-LiminalImageAPIOffline YES` it reuses the previous verify pool |
 | `-LiminalRecordAt <start>,<seconds>[,photos]` | Start a recording `<start>` s after playback is ready and stop it `<seconds>` later; keeps the file in `Documents/Recordings` and skips Photos unless `,photos` is given ([recording.md](recording.md)) |
+| `-LiminalRecordSize <W>x<H>`, `-LiminalRecordCodec h264`, `-LiminalRecordTrace YES` | Record at this size / with H.264 instead of the picture's size and HEVC (simulator timing checks: its software HEVC encoder cannot keep 60 fps); the trace logs every tap buffer's stamp and track position; check the movie with `scripts/av-sync-check.py` ([recording.md](recording.md#checking-a-recording)) |
 | `-LiminalImageSourceFlipAt <s[,s...]>` | Flip the Images picker (AI <-> API) at these times after launch, through the same settings binding, without saving the setting (checks the switch on a locked screen; macOS control panel) |
 
 ### API image mode checks

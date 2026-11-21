@@ -560,7 +560,10 @@ final class OffscreenEffectsRenderer {
     ///   - previousImage: Optional previous image for GPU crossfade blending during transitions
     ///   - uniforms: Effect parameters (includes transitionProgress for blending)
     /// - Returns: True if rendering succeeded
-    func renderAndPresent(drawable: TextureResource.Drawable, sourceImage: CGImage, previousImage: CGImage? = nil, uniforms: EffectsUniforms) -> Bool {
+    /// `presentationTime`: when this frame is expected on the display (uptime seconds), sampled with its
+    /// drop state; the recorder places the frame by it (docs/recording.md).
+    func renderAndPresent(drawable: TextureResource.Drawable, sourceImage: CGImage, previousImage: CGImage? = nil, uniforms: EffectsUniforms,
+                          presentationTime: Double? = nil) -> Bool {
         renderCount += 1
         perfFrameCount += 1
         let shouldLog = renderCount == 1 || renderCount % 300 == 0
@@ -725,9 +728,10 @@ final class OffscreenEffectsRenderer {
         }
 
         // Recording: the frame just drawn, scaled back to 3:2, in the same command buffer
-        // (docs/recording.md). RealityKit shows it at about the next vsync.
+        // (docs/recording.md), placed by the display time the render loop expects for it.
         if FrameRecorder.shared.isRecording {
-            FrameRecorder.shared.capture(target, commandBuffer: commandBuffer, hostTime: CACurrentMediaTime() + 1.0 / 60)
+            let presented = presentationTime ?? ArchiveFootageService.uptime() + LofiImageReveal.presentationLatency
+            FrameRecorder.shared.capture(target, commandBuffer: commandBuffer, presentationTime: presented)
         }
 
         commandBuffer.commit()
