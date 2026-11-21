@@ -90,9 +90,14 @@ nonisolated final class FrameRecorder: @unchecked Sendable {
     static let slotRate = 60.0
     /// Audio kept before the first frame arrives (only audio heard after it is used).
     static let preRollSeconds = 2.0
+    /// At stop, how long the tap keeps feeding the ring so the audio reaches the last frame's end
+    /// (a tap buffer is delivered about its length, 100 ms, after its first sample is heard).
+    static let tailWaitSeconds = 0.6
 
     /// Cheap check for the render threads.
     private let active = Atomic<Bool>(false)
+    /// The tap's check: stays on after `active` until the audio reaches the movie's end (see `stop`).
+    private let audioActive = Atomic<Bool>(false)
     var isRecording: Bool { active.load(ordering: .relaxed) }
 
     private let writerQueue = DispatchQueue(label: "com.saygoodnight.Liminal.recorder", qos: .userInitiated)
@@ -233,14 +238,19 @@ nonisolated final class FrameRecorder: @unchecked Sendable {
         session.audioTimer = timer
         state.withLock { $0.session = session }
         timer.resume()
+        audioActive.store(true, ordering: .relaxed)
         active.store(true, ordering: .relaxed)
         LMLog.visual.info("🔴 Recording started: \(w)x\(h) \(DebugLaunchOptions.recordH264 ? "H.264" : "HEVC", privacy: .public) \(bitrate / 1_000_000) Mbit/s + 24-bit LPCM, \(url.lastPathComponent, privacy: .public)")
     }
 
     /// Stops and finishes the file. Calls back on the writer queue with the file URL and stats.
+    /// The video ends now; the audio tap keeps feeding the ring until the audio heard up to the last
+    /// frame's end has arrived (at most `tailWaitSeconds`), so the movie does not end in padded silence.
+    /// Remove the tap only after the completion.
     func stop(completion: @escaping @Sendable (Result<(URL, Stats), Error>) -> Void) {
         active.store(false, ordering: .relaxed)
         guard let session = state.withLock({ s -> Session? in defer { s.session = nil }; return s.session }) else {
+            audioActive.store(false, ordering: .relaxed)
             completion(.failure(RecorderError.writer("not recording"))); return
         }
         writerQueue.async { [self] in
@@ -249,6 +259,16 @@ nonisolated final class FrameRecorder: @unchecked Sendable {
             for out in session.slotter.finish() { enqueue(session, out) }
             updateVideoStats(session)
             flushPending(session, wait: true)
+            if session.t0 != nil, let last = session.slotter.lastSlot {
+                let endFrame = Int((Double(last + 1) / Self.slotRate * session.rate).rounded())
+                let deadline = ArchiveFootageService.uptime() + Self.tailWaitSeconds
+                drainAudio(session, final: false)
+                while session.timeline.written < endFrame, ArchiveFootageService.uptime() < deadline {
+                    Thread.sleep(forTimeInterval: 0.01)
+                    drainAudio(session, final: false)
+                }
+            }
+            audioActive.store(false, ordering: .relaxed)
             drainAudio(session, final: true)
             // Both tracks end at the end of the last slot: trim the audio there, or pad it with silence.
             if session.t0 != nil, let last = session.slotter.lastSlot {
@@ -382,7 +402,7 @@ nonisolated final class FrameRecorder: @unchecked Sendable {
 
     /// The final mix's tap: copy into the ring and nothing else.
     func audioTap(_ buffer: AVAudioPCMBuffer, _ when: AVAudioTime) {
-        guard active.load(ordering: .relaxed), let data = buffer.floatChannelData else { return }
+        guard audioActive.load(ordering: .relaxed), let data = buffer.floatChannelData else { return }
         let frames = Int(buffer.frameLength)
         let channels = Int(buffer.format.channelCount)
         guard frames > 0, channels > 0 else { return }

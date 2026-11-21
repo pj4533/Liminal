@@ -132,13 +132,15 @@ final class RecordingController: ObservableObject {
     func stop() {
         guard isRecording else { return }
         phase = .finishing
-        tappedMixer?.removeTap(onBus: 0)
-        tappedMixer = nil
+        // The tap stays until the recorder has the audio up to the last frame (FrameRecorder.stop);
+        // no recording can start while finishing, so `tappedMixer` is still this recording's.
         // The audible Lo-Fi grid (uptime of the take's downbeat as heard), to check the movie against.
         let grid = recordingAudio?.musicState.read().lofiTakeGrid
         recordingAudio = nil
         FrameRecorder.shared.stop { result in
             Task { @MainActor in
+                RecordingController.shared.tappedMixer?.removeTap(onBus: 0)
+                RecordingController.shared.tappedMixer = nil
                 switch result {
                 case .failure(let error): RecordingController.shared.phase = .failed(error.localizedDescription)
                 case .success(let (url, stats)):

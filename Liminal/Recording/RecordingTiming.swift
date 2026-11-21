@@ -32,6 +32,9 @@ nonisolated struct FrameSlotter<Frame> {
         let error: Double
     }
 
+    /// Mean frame step (in slots) within this of 1 counts as "near the output rate" (54-66 Hz at 60).
+    static var nearRateWindow: Double { 0.1 }
+
     let rate: Double
     let hysteresis: Double
     let maxRepeats: Int
@@ -62,13 +65,16 @@ nonisolated struct FrameSlotter<Frame> {
         offered += 1
         let x = time * rate
         if let lx = lastX {
-            let step = x - lx
+            // Clamped, so one stall or hiccup cannot pull an 80-90 fps mean into the 60 Hz window.
+            let step = min(max(x - lx, 0), 1.75)
             meanStep = meanStep.map { $0 + 0.1 * (step - $0) } ?? step
         }
         lastX = x
         var s = max(0, Int(x.rounded()))
         let floor = lastEmitted?.slot ?? -1
-        let nearRate = meanStep.map { abs($0 - 1) < 0.2 } ?? false
+        // Within 10% of the output rate only: above it every slot gets a frame anyway, and a hiccup in an
+        // 80-90 fps stream must not switch hysteresis on (it moved frames up to 0.75 slot, 12.5 ms, D47).
+        let nearRate = meanStep.map { abs($0 - 1) < Self.nearRateWindow } ?? false
         if let cand = candidate, nearRate {
             let c = cand.slot
             if s == c, x >= Double(c) + 0.5 - hysteresis { s = c + 1 }

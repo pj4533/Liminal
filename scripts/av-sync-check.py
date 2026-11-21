@@ -367,7 +367,23 @@ def main():
             db = up - clock["t0"] - clock["drift_s"]
             if not (0 < db < v_span):
                 continue
-            c = min(cuts, key=lambda c: abs(c / 60 - db)) if cuts else None
+            # The biggest one-frame change within 100 ms of the downbeat, when it stands out from its
+            # second: a heavy drop build (footage flashes, glitch hits) can change the picture more
+            # than the cut itself, and the global detector keeps only one cut per 5 s.
+            k0 = int(round(db * 60))
+            lo, hi = max(1, k0 - 6), min(len(d) - 1, k0 + 7)
+            c = None
+            if hi > lo:
+                around = np.median(d[max(1, k0 - 30): k0 + 31])
+                big = [k for k in range(lo, hi) if d[k] >= 15.0 and d[k] >= 2.5 * around]
+                # The new picture's first frame: the big change after which the picture settles (a
+                # build's last flash frame changes as much, but the frame after it changes again).
+                settled = [k for k in big if max(d[k + 1: k + 4], default=0) * 2 <= d[k]]
+                pick = settled or big
+                if pick:
+                    c = max(pick, key=lambda k: d[k])
+            if c is None:
+                c = min(cuts, key=lambda c: abs(c / 60 - db)) if cuts else None
             row = {"downbeat_s": db, "frame": c, "cut_s": c / 60 if c is not None else None,
                    "offset_ms": (c / 60 - db) * 1000 if c is not None else None}
             hit = nearest_onset(kick, fr, db + a_start, 0.04)

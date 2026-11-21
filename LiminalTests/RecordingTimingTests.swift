@@ -68,11 +68,13 @@ struct RecordingTimingTests {
         #expect(run.slotter.dropped == 0)
     }
 
-    /// The user's device recording (D47): 9189 frames at about 82.9 fps cover 110.9 s, not 153 s.
+    /// The user's device recording (D47): 9189 frames over the real 113.0 s (81.3 fps; the audio media
+    /// is 123.0 s from 12.1 s before the first frame, plus the 2.1 s the overrun lost) cover 113.0 s,
+    /// not 153 s.
     @Test func deviceRenderRateKeepsRealLength() {
-        let run = render(fps: 82.86, seconds: 9189 / 82.86, jitter: 0.003)
+        let run = render(fps: 81.31, seconds: 9189 / 81.31, jitter: 0.003)
         let span = Double(run.outputs.count) / 60
-        #expect(abs(span - 110.9) < 0.1, "span \(span)")
+        #expect(abs(span - 113.0) < 0.1, "span \(span)")
         // A drop cut presented at 57.5 s is in the slot of 57.5 s, not 0.36 s per s later.
         let cutFrame = run.times.firstIndex { $0 >= 57.5 }!
         let slot = run.outputs.first { $0.frame >= cutFrame && !$0.repeated }!.slot
