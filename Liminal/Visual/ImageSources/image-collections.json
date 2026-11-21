@@ -1739,6 +1739,421 @@
     "warmth": 0.2
    },
    "allowMonochrome": false
+  },
+  {
+   "id": "loc-margolies-roadside",
+   "provider": "loc",
+   "enabled": true,
+   "weight": 3,
+   "themes": [
+    "1976-95 Kodachrome roadside",
+    "motel neon",
+    "drive-ins",
+    "diners",
+    "gas stations",
+    "mini golf",
+    "dinosaurs"
+   ],
+   "partof": "john margolies roadside america photograph archive",
+   "queries": [
+    "motel sign",
+    "drive-in",
+    "diner",
+    "gas station",
+    "mini golf",
+    "neon",
+    "dinosaur"
+   ],
+   "requireIIIF": true,
+   "useMasters": true,
+   "trimScanEdges": true,
+   "license": "loc rights_advisory (No known restrictions on publication)",
+   "pinned": [
+    "2017703583",
+    "2017703591",
+    "2017703592",
+    "2017702426",
+    "2017702428",
+    "2017709814",
+    "2017702562"
+   ],
+   "mood": {
+    "moods": [
+     "playful",
+     "electric"
+    ],
+    "subjectCategory": "architecture",
+    "energy": 0.55,
+    "warmth": 0.5
+   },
+   "allowMonochrome": false
+  },
+  {
+   "id": "loc-photochrom",
+   "provider": "loc",
+   "enabled": true,
+   "weight": 1,
+   "themes": [
+    "1890-1910 photochrom lakes, canyons and sunsets"
+   ],
+   "collection": "photochrom-prints",
+   "queries": [
+    "lake",
+    "sunset",
+    "canyon",
+    "moonlight",
+    "waterfall"
+   ],
+   "requireIIIF": true,
+   "useMasters": true,
+   "trimScanEdges": true,
+   "rejectTitleWords": [
+    "girl",
+    "woman",
+    "man",
+    "types",
+    "type",
+    "costume",
+    "peasant"
+   ],
+   "license": "loc rights_advisory (No known restrictions on publication)",
+   "pinned": [
+    "2008678241",
+    "2017649296",
+    "2017649299",
+    "2001700813",
+    "2008679690",
+    "2017649294"
+   ],
+   "mood": {
+    "moods": [
+     "serene",
+     "majestic"
+    ],
+    "subjectCategory": "landscape",
+    "energy": 0.3,
+    "warmth": 0.3
+   },
+   "allowMonochrome": false
+  },
+  {
+   "id": "loc-prokudin-gorskii",
+   "provider": "loc",
+   "enabled": true,
+   "weight": 1,
+   "themes": [
+    "1905-15 three-colour glass plates",
+    "rivers",
+    "lakes"
+   ],
+   "collection": "prokudin-gorskii",
+   "queries": [
+    "river",
+    "lake",
+    "zakat",
+    "view"
+   ],
+   "requireIIIF": true,
+   "useMasters": true,
+   "trimScanEdges": true,
+   "edgeInset": 0.08,
+   "license": "loc rights_advisory (No known restrictions on publication)",
+   "pinned": [
+    "2018679724",
+    "2018680980",
+    "2018679170"
+   ],
+   "mood": {
+    "moods": [
+     "serene",
+     "eerie"
+    ],
+    "subjectCategory": "landscape",
+    "energy": 0.3,
+    "warmth": 0.2
+   },
+   "allowMonochrome": false
+  },
+  {
+   "id": "loc-detroit-landscapes",
+   "provider": "loc",
+   "enabled": true,
+   "weight": 1,
+   "themes": [
+    "1880-1920 glass negatives",
+    "canyons",
+    "falls",
+    "night views"
+   ],
+   "collection": "detroit-publishing-company",
+   "queries": [
+    "canyon",
+    "falls",
+    "night",
+    "lake",
+    "mountains"
+   ],
+   "requireIIIF": true,
+   "useMasters": true,
+   "trimScanEdges": true,
+   "license": "loc rights_advisory (No known restrictions on publication)",
+   "pinned": [
+    "2016802650",
+    "2016796971",
+    "2016817416"
+   ],
+   "mood": {
+    "moods": [
+     "majestic",
+     "melancholy"
+    ],
+    "subjectCategory": "landscape",
+    "energy": 0.25,
+    "warmth": 0.0
+   },
+   "allowMonochrome": true
+  },
+  {
+   "id": "loc-japanese-prints",
+   "provider": "loc",
+   "enabled": true,
+   "weight": 1,
+   "themes": [
+    "Hiroshige and Hokusai",
+    "moon",
+    "snow",
+    "rain",
+    "Fuji"
+   ],
+   "collection": "japanese-fine-prints-pre-1915",
+   "queries": [
+    "moon",
+    "snow",
+    "rain",
+    "night",
+    "mount fuji"
+   ],
+   "requireIIIF": true,
+   "useMasters": true,
+   "rejectTitleWords": [
+    "envelope",
+    "envelopes"
+   ],
+   "license": "loc rights_advisory (No known restrictions on publication)",
+   "pinned": [
+    "2008661032",
+    "2008680225",
+    "2008660526",
+    "2009615043"
+   ],
+   "mood": {
+    "moods": [
+     "serene",
+     "melancholy"
+    ],
+    "subjectCategory": "landscape",
+    "energy": 0.25,
+    "warmth": -0.1
+   },
+   "allowMonochrome": false
+  },
+  {
+   "id": "loc-gottscho-fireworks",
+   "provider": "loc",
+   "enabled": true,
+   "weight": 1,
+   "themes": [
+    "1939 World's Fair fireworks transparencies"
+   ],
+   "collection": "gottscho-schleisner",
+   "queries": [
+    "fireworks"
+   ],
+   "requireIIIF": true,
+   "useMasters": true,
+   "trimScanEdges": true,
+   "license": "loc rights_advisory (No known restrictions on publication)",
+   "pinned": [
+    "2018750450",
+    "2018750451",
+    "2018750452",
+    "2018750453",
+    "2018750454",
+    "2018750455",
+    "2018750456",
+    "2018750465",
+    "2018750466",
+    "2018750467",
+    "2018750469"
+   ],
+   "mood": {
+    "moods": [
+     "euphoric",
+     "electric"
+    ],
+    "subjectCategory": "celestial",
+    "energy": 0.7,
+    "warmth": 0.2
+   },
+   "allowMonochrome": false
+  },
+  {
+   "id": "loc-fsa-owi-bw-landscapes",
+   "provider": "loc",
+   "enabled": true,
+   "weight": 1,
+   "themes": [
+    "1935-44 FSA/OWI black-and-white landscapes",
+    "highways",
+    "dust storms",
+    "grain elevators",
+    "desert"
+   ],
+   "collection": "fsa-owi-black-and-white-negatives",
+   "queries": [
+    "highway",
+    "dust storm",
+    "grain elevator",
+    "desert",
+    "glacier"
+   ],
+   "requireIIIF": true,
+   "useMasters": true,
+   "trimScanEdges": true,
+   "rejectTitleWords": [
+    "portrait",
+    "family",
+    "children",
+    "child",
+    "woman",
+    "man",
+    "boy",
+    "girl"
+   ],
+   "license": "loc rights_advisory (No known restrictions on publication)",
+   "pinned": [
+    "2017760354",
+    "2017768823"
+   ],
+   "mood": {
+    "moods": [
+     "melancholy",
+     "majestic"
+    ],
+    "subjectCategory": "landscape",
+    "energy": 0.3,
+    "warmth": 0.0
+   },
+   "allowMonochrome": true
+  },
+  {
+   "id": "loc-popular-graphic-arts-moonlight",
+   "provider": "loc",
+   "enabled": true,
+   "weight": 1,
+   "themes": [
+    "1850-1900 chromolithographs",
+    "moonlit lakes",
+    "sunsets"
+   ],
+   "collection": "popular-graphic-arts",
+   "queries": [
+    "moonlight",
+    "sunset",
+    "lake"
+   ],
+   "requireIIIF": true,
+   "useMasters": true,
+   "license": "loc rights_advisory (No known restrictions on publication)",
+   "pinned": [
+    "2003677746",
+    "2018756622",
+    "2017650239"
+   ],
+   "mood": {
+    "moods": [
+     "serene",
+     "melancholy"
+    ],
+    "subjectCategory": "landscape",
+    "energy": 0.25,
+    "warmth": 0.3
+   },
+   "allowMonochrome": false
+  },
+  {
+   "id": "loc-highsmith-space-fair",
+   "provider": "loc",
+   "enabled": true,
+   "weight": 1,
+   "themes": [
+    "Highsmith: space centres, rockets, Ferris wheels, fireworks"
+   ],
+   "collection": "carol-m-highsmith",
+   "queries": [
+    "space center",
+    "ferris wheel",
+    "fireworks",
+    "rocket"
+   ],
+   "requireIIIF": true,
+   "useMasters": true,
+   "license": "loc rights_advisory (No known restrictions on publication)",
+   "pinned": [
+    "2015634076",
+    "2017881028",
+    "2011630263",
+    "2017687218"
+   ],
+   "mood": {
+    "moods": [
+     "electric",
+     "euphoric"
+    ],
+    "subjectCategory": "architecture",
+    "energy": 0.55,
+    "warmth": 0.2
+   },
+   "allowMonochrome": false
+  },
+  {
+   "id": "loc-matson-desert",
+   "provider": "loc",
+   "enabled": true,
+   "weight": 1,
+   "themes": [
+    "1898-1946 Matson glass negatives",
+    "Sinai",
+    "Dead Sea",
+    "Palmyra",
+    "dunes"
+   ],
+   "partof": "matson (g. eric and edith) photograph collection",
+   "queries": [
+    "desert",
+    "dead sea",
+    "sand dunes",
+    "palmyra"
+   ],
+   "requireIIIF": true,
+   "useMasters": true,
+   "trimScanEdges": true,
+   "license": "loc rights_advisory (No known restrictions on publication)",
+   "pinned": [
+    "2019695682",
+    "2019706273",
+    "2019700416"
+   ],
+   "mood": {
+    "moods": [
+     "eerie",
+     "majestic"
+    ],
+    "subjectCategory": "landscape",
+    "energy": 0.25,
+    "warmth": 0.2
+   },
+   "allowMonochrome": true
   }
  ],
  "rejected": [

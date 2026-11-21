@@ -18,8 +18,7 @@ This page is the timeline of the research behind API mode. It links to the detai
 | 2026-11-21 | **Code review** | CC BY needs a creator; ledger writes versioned; clear-while-fetching fixed; reservations expire; cancellation is not a failure; 150 MP decode bound | D43 |
 | 2026-11-21 | **FSA/OWI masters.** The user remembered high-resolution FSA photographs in OpenPics and asked whether the OpenPics trick had been tried | It had not been followed far enough. The TIFF master path maps onto a IIIF `master:` service, giving 4641-7738 px. About half need the `full/full` fallback; `ScanEdgeTrimmer` removes the film rebate. `loc-fsa-owi-color` added, and Highsmith gained `useMasters` | D44, [collections.md](../research/image-apis/collections.md#library-of-congress) |
 | 2026-11-21 | **Second pass outside the LoC.** Expand Commons, NASA, Cleveland and the Met, and re-test institutions that were skipped | 17 new sources. Digital Commonwealth (Tichnor postcards) and Art Institute of Chicago providers added (commit "Add Digital Commonwealth and Art Institute of Chicago providers and 19 more curated sources") | [other-institutions.md](../research/image-apis/other-institutions.md), [new-providers.md](../research/image-apis/new-providers.md) |
-
-<!-- LOC-BATCH: add the upcoming Library of Congress batch to this timeline. -->
+| 2026-11-21 | **Library of Congress pass.** Survey every P&P collection that fits, apply the scanned-master route, check rights per collection | 10 new LoC sources: Margolies Roadside America, photochrom, Prokudin-Gorskii, Detroit Publishing, Japanese prints, Gottscho fireworks, FSA/OWI B&W, popular graphic arts, Highsmith space and fairs, Matson. New `partof` search route and `edgeInset` (D45) | [loc-collections.md](../research/image-apis/loc-collections.md) |
 
 ## What each step taught
 

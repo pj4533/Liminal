@@ -2,7 +2,7 @@
 
 [← Image sources](README.md) · [Pipeline](pipeline.md) · [Providers](providers.md) · [Adding a source](adding-a-source.md) · [Research history](research-history.md)
 
-Every source in `Liminal/Visual/ImageSources/image-collections.json` (version 2, updated 2026-11-21). 33 of 34 sources are enabled, with a total weight of 48. The JSON is the authority; this page was written from it on 2026-11-21. Measured sizes come from the research passes ([collections](../research/image-apis/collections.md), [other institutions](../research/image-apis/other-institutions.md), [new providers](../research/image-apis/new-providers.md)) and the live ingest runs (`decisions/images.md` D41-D44).
+Every source in `Liminal/Visual/ImageSources/image-collections.json` (version 2, updated 2026-11-21). 43 of 44 sources are enabled, with a total weight of 60. The JSON is the authority; this page was written from it on 2026-11-21. Measured sizes come from the research passes ([collections](../research/image-apis/collections.md), [other institutions](../research/image-apis/other-institutions.md), [new providers](../research/image-apis/new-providers.md)) and the live ingest runs (`decisions/images.md` D41-D44).
 
 How to read the columns:
 
@@ -49,6 +49,16 @@ How to read the columns:
 | [`met-hiroshige-night`](#met-hiroshige-night) | met | 1 | yes | no | 4 | 1 | Hiroshige, night, moonlight, rain |
 | [`dc-tichnor-postcards`](#dc-tichnor-postcards) | dc | 3 | yes | no | 0 | 12 | 1930-45 linen postcards, motels, highways, moonlit main streets |
 | [`aic-landscapes`](#aic-landscapes) | aic | 1 | yes | no | 0 | 8 | 19th-century landscape painting and prints, moonlight, forests, rivers |
+| [`loc-margolies-roadside`](#loc-margolies-roadside) | loc | 3 | yes | no | 7 | 7 | 1976-95 Kodachrome roadside, motel neon, drive-ins |
+| [`loc-photochrom`](#loc-photochrom) | loc | 1 | yes | no | 6 | 5 | 1890-1910 photochrom lakes, canyons and sunsets |
+| [`loc-prokudin-gorskii`](#loc-prokudin-gorskii) | loc | 1 | yes | no | 3 | 4 | 1905-15 three-colour glass plates, rivers, lakes |
+| [`loc-detroit-landscapes`](#loc-detroit-landscapes) | loc | 1 | yes | yes | 3 | 5 | 1880-1920 glass negatives, canyons, falls |
+| [`loc-japanese-prints`](#loc-japanese-prints) | loc | 1 | yes | no | 4 | 5 | Hiroshige and Hokusai, moon, snow |
+| [`loc-gottscho-fireworks`](#loc-gottscho-fireworks) | loc | 1 | yes | no | 11 | 1 | 1939 World's Fair fireworks transparencies |
+| [`loc-fsa-owi-bw-landscapes`](#loc-fsa-owi-bw-landscapes) | loc | 1 | yes | yes | 2 | 5 | 1935-44 FSA/OWI black-and-white landscapes, highways, dust storms |
+| [`loc-popular-graphic-arts-moonlight`](#loc-popular-graphic-arts-moonlight) | loc | 1 | yes | no | 3 | 3 | 1850-1900 chromolithographs, moonlit lakes, sunsets |
+| [`loc-highsmith-space-fair`](#loc-highsmith-space-fair) | loc | 1 | yes | no | 4 | 4 | Highsmith: space centres, rockets, Ferris wheels, fireworks |
+| [`loc-matson-desert`](#loc-matson-desert) | loc | 1 | yes | yes | 3 | 4 | 1898-1946 Matson glass negatives, Sinai, Dead Sea |
 
 Weight by provider (enabled sources): wikimedia 20, nasa 9, loc 7, cma 4, met 4, dc 3, aic 1 (total 48).
 
@@ -67,7 +77,7 @@ API mode exists because these institutions publish their collections openly. Eac
 
 The user-facing credits table is in [experience.md](../experience.md#api-image-sources).
 
-<!-- LOC-BATCH: the upcoming Library of Congress batch goes here: add rows to the table above and a section per source below. -->
+The ten Library of Congress sources at the end of the table were added with D45; their sections are at the end of this page.
 
 ## Source by source
 
@@ -880,3 +890,233 @@ The JSON also keeps a `rejected` list so nobody re-adds them by accident. It is 
 | CMA mushroom query | Returns decorative objects (lamps, boxes); restrict CMA to Print/Photograph types |
 
 Two of those entries are out of date: FSA/OWI colour now reaches its masters through the IIIF `master:` route (D44), and the newer Highsmith items are reached the same way through `useMasters`. Photochroms and Prokudin-Gorskii could use the same route but have not been added from the LoC (photochroms come through Commons). More rejected institutions and categories, with reasons, are in [research-history.md](research-history.md#rejected-and-why).
+
+## Library of Congress batch (D45)
+
+Research: [loc-collections.md](../research/image-apis/loc-collections.md).
+
+### loc-margolies-roadside
+
+- **Provider:** `loc` (Library of Congress). **Weight** 3. **Enabled:** yes. **Monochrome allowed:** no.
+- **Search:** `/photos/` with `fa=partof:john margolies roadside america photograph archive|online-format:image`
+- **Queries:** `motel sign`, `drive-in`, `diner`, `gas station`, `mini golf`, `neon`, `dinosaur` (each verified to return results on 2026-11-21).
+- **Filters:** `requireIIIF`; `useMasters` (scanned-master IIIF route); `trimScanEdges` (film rebate and mount trimmed; fetched at 1.35x).
+- **Shows:** John Margolies Roadside America photograph archive, 1976-95 Kodachrome slides: motel signs, drive-ins, diners, gas stations, mini golf and dinosaurs, mostly under deep-blue skies.
+- **Measured:** Masters 5000-5330 px (39 of 40 sampled); every scaled request returned 500, so pictures come from `full/full` (0.9-2.1 MB). Slide mount trimmed by `ScanEdgeTrimmer`. Vertical frames lose sign tops to the 3:2 crop.
+- **High-resolution route:** the IIIF `master:` service derived from the result's thumbnail path (`LOCProvider.masterIIIF`); `{service}/full/!T,T/0/default.jpg`, and on HTTP 5xx `{service}/full/full/0/default.jpg` once.
+- **Rights:** `item.rights_advisory`: "No known restrictions on publication" (or "...reproduction") → **No known restrictions**. Anything mentioning "restricted" or "not evaluated" is rejected.
+- **Mood sent to the music:** playful, electric; subject architecture; energy 0.55; warmth 0.5.
+- **Credit:** John Margolies Roadside America photograph archive (1972-2008), Library of Congress. [Collection](https://www.loc.gov/pictures/collection/mrg/)
+
+<details><summary>7 pinned ids</summary>
+
+- `2017703583`
+- `2017703591`
+- `2017703592`
+- `2017702426`
+- `2017702428`
+- `2017709814`
+- `2017702562`
+
+</details>
+
+### loc-photochrom
+
+- **Provider:** `loc` (Library of Congress). **Weight** 1. **Enabled:** yes. **Monochrome allowed:** no.
+- **Search:** Collection slug: `photochrom-prints`.
+- **Queries:** `lake`, `sunset`, `canyon`, `moonlight`, `waterfall` (each verified to return results on 2026-11-21).
+- **Filters:** `requireIIIF`; `useMasters` (scanned-master IIIF route); `trimScanEdges` (film rebate and mount trimmed; fetched at 1.35x); `rejectTitleWords`: `girl`, `woman`, `man`, `types`, `type`, `costume`, `peasant`.
+- **Shows:** Photochrom prints, 1890-1910: lakes, canyons, waterfalls, sunsets and moonlight.
+- **Measured:** 3400-7470 px (53 of 55); about half the masters need the `full/full` fallback (1.5-6 MB). Overlaps the Commons `photochrom-landscapes` copies of the same masters. Costume and type portraits are rejected by title.
+- **High-resolution route:** the IIIF `master:` service derived from the result's thumbnail path (`LOCProvider.masterIIIF`); `{service}/full/!T,T/0/default.jpg`, and on HTTP 5xx `{service}/full/full/0/default.jpg` once.
+- **Rights:** `item.rights_advisory`: "No known restrictions on publication" (or "...reproduction") → **No known restrictions**. Anything mentioning "restricted" or "not evaluated" is rejected.
+- **Mood sent to the music:** serene, majestic; subject landscape; energy 0.3; warmth 0.3.
+- **Credit:** Photochrom Prints, Library of Congress. [Collection](https://www.loc.gov/collections/photochrom-prints/)
+
+<details><summary>6 pinned ids</summary>
+
+- `2008678241`
+- `2017649296`
+- `2017649299`
+- `2001700813`
+- `2008679690`
+- `2017649294`
+
+</details>
+
+### loc-prokudin-gorskii
+
+- **Provider:** `loc` (Library of Congress). **Weight** 1. **Enabled:** yes. **Monochrome allowed:** no.
+- **Search:** Collection slug: `prokudin-gorskii`.
+- **Queries:** `river`, `lake`, `zakat`, `view` (each verified to return results on 2026-11-21).
+- **Filters:** `requireIIIF`; `useMasters` (scanned-master IIIF route); `trimScanEdges` (film rebate and mount trimmed; fetched at 1.35x); `edgeInset` 0.08.
+- **Shows:** Sergei Prokudin-Gorskii's 1905-15 three-colour glass-plate composites: rivers, lakes and views in pink and turquoise.
+- **Measured:** 2900-3780 px, often square (52 of 52); scaled requests all worked. Plate misregistration leaves coloured bands 4-7.5% wide on the sides, removed by `edgeInset` 0.08 after the trim.
+- **High-resolution route:** the IIIF `master:` service derived from the result's thumbnail path (`LOCProvider.masterIIIF`); `{service}/full/!T,T/0/default.jpg`, and on HTTP 5xx `{service}/full/full/0/default.jpg` once.
+- **Rights:** `item.rights_advisory`: "No known restrictions on publication" (or "...reproduction") → **No known restrictions**. Anything mentioning "restricted" or "not evaluated" is rejected.
+- **Mood sent to the music:** serene, eerie; subject landscape; energy 0.3; warmth 0.2.
+- **Credit:** Prokudin-Gorskii Collection, Library of Congress. [Collection](https://www.loc.gov/collections/prokudin-gorskii/)
+
+<details><summary>3 pinned ids</summary>
+
+- `2018679724`
+- `2018680980`
+- `2018679170`
+
+</details>
+
+### loc-detroit-landscapes
+
+- **Provider:** `loc` (Library of Congress). **Weight** 1. **Enabled:** yes. **Monochrome allowed:** yes.
+- **Search:** Collection slug: `detroit-publishing-company`.
+- **Queries:** `canyon`, `falls`, `night`, `lake`, `mountains` (each verified to return results on 2026-11-21).
+- **Filters:** `requireIIIF`; `useMasters` (scanned-master IIIF route); `trimScanEdges` (film rebate and mount trimmed; fetched at 1.35x).
+- **Shows:** Detroit Publishing Company 8x10 glass negatives, 1880-1920: canyons, falls, night views, lakes and mountains. Mostly monochrome.
+- **Measured:** 3600-8060 px (46 of 50; small postcard scans are rejected by the size gate); about 40% scale, the rest use `full/full` (1.3-3.8 MB).
+- **High-resolution route:** the IIIF `master:` service derived from the result's thumbnail path (`LOCProvider.masterIIIF`); `{service}/full/!T,T/0/default.jpg`, and on HTTP 5xx `{service}/full/full/0/default.jpg` once.
+- **Rights:** `item.rights_advisory`: "No known restrictions on publication" (or "...reproduction") → **No known restrictions**. Anything mentioning "restricted" or "not evaluated" is rejected.
+- **Mood sent to the music:** majestic, melancholy; subject landscape; energy 0.25; warmth 0.0.
+- **Credit:** Detroit Publishing Company Collection, Library of Congress. [Collection](https://www.loc.gov/collections/detroit-publishing-company/)
+
+<details><summary>3 pinned ids</summary>
+
+- `2016802650`
+- `2016796971`
+- `2016817416`
+
+</details>
+
+### loc-japanese-prints
+
+- **Provider:** `loc` (Library of Congress). **Weight** 1. **Enabled:** yes. **Monochrome allowed:** no.
+- **Search:** Collection slug: `japanese-fine-prints-pre-1915`.
+- **Queries:** `moon`, `snow`, `rain`, `night`, `mount fuji` (each verified to return results on 2026-11-21).
+- **Filters:** `requireIIIF`; `useMasters` (scanned-master IIIF route); `rejectTitleWords`: `envelope`, `envelopes`.
+- **Shows:** Japanese fine prints before 1915: Hiroshige and Hokusai moon, snow, rain, night and Fuji views.
+- **Measured:** 2360-10000 px (32 of 32); masters over about 5000 px use `full/full` (up to 7.5 MB). Hokusai envelopes are rejected by title.
+- **High-resolution route:** the IIIF `master:` service derived from the result's thumbnail path (`LOCProvider.masterIIIF`); `{service}/full/!T,T/0/default.jpg`, and on HTTP 5xx `{service}/full/full/0/default.jpg` once.
+- **Rights:** `item.rights_advisory`: "No known restrictions on publication" (or "...reproduction") → **No known restrictions**. Anything mentioning "restricted" or "not evaluated" is rejected.
+- **Mood sent to the music:** serene, melancholy; subject landscape; energy 0.25; warmth -0.1.
+- **Credit:** Japanese Fine Prints, pre-1915, Library of Congress. [Collection](https://www.loc.gov/collections/japanese-fine-prints-pre-1915/)
+
+<details><summary>4 pinned ids</summary>
+
+- `2008661032`
+- `2008680225`
+- `2008660526`
+- `2009615043`
+
+</details>
+
+### loc-gottscho-fireworks
+
+- **Provider:** `loc` (Library of Congress). **Weight** 1. **Enabled:** yes. **Monochrome allowed:** no.
+- **Search:** Collection slug: `gottscho-schleisner`.
+- **Queries:** `fireworks` (each verified to return results on 2026-11-21).
+- **Filters:** `requireIIIF`; `useMasters` (scanned-master IIIF route); `trimScanEdges` (film rebate and mount trimmed; fetched at 1.35x).
+- **Shows:** Gottscho-Schleisner colour transparencies of the 1939 World's Fair fireworks: magenta and blue bursts on black.
+- **Measured:** 4390-5210 px for 11 of 12 fireworks items (most of the collection's other masters are 560x420 copies). Rounded transparency mount trimmed.
+- **High-resolution route:** the IIIF `master:` service derived from the result's thumbnail path (`LOCProvider.masterIIIF`); `{service}/full/!T,T/0/default.jpg`, and on HTTP 5xx `{service}/full/full/0/default.jpg` once.
+- **Rights:** `item.rights_advisory`: "No known restrictions on publication" (or "...reproduction") → **No known restrictions**. Anything mentioning "restricted" or "not evaluated" is rejected.
+- **Mood sent to the music:** euphoric, electric; subject celestial; energy 0.7; warmth 0.2.
+- **Credit:** Gottscho-Schleisner Collection, Library of Congress. [Collection](https://www.loc.gov/collections/gottscho-schleisner/)
+
+<details><summary>11 pinned ids</summary>
+
+- `2018750450`
+- `2018750451`
+- `2018750452`
+- `2018750453`
+- `2018750454`
+- `2018750455`
+- `2018750456`
+- `2018750465`
+- `2018750466`
+- `2018750467`
+- `2018750469`
+
+</details>
+
+### loc-fsa-owi-bw-landscapes
+
+- **Provider:** `loc` (Library of Congress). **Weight** 1. **Enabled:** yes. **Monochrome allowed:** yes.
+- **Search:** Collection slug: `fsa-owi-black-and-white-negatives`.
+- **Queries:** `highway`, `dust storm`, `grain elevator`, `desert`, `glacier` (each verified to return results on 2026-11-21).
+- **Filters:** `requireIIIF`; `useMasters` (scanned-master IIIF route); `trimScanEdges` (film rebate and mount trimmed; fetched at 1.35x); `rejectTitleWords`: `portrait`, `family`, `children`, `child`, `woman`, `man`, `boy`, `girl`.
+- **Shows:** FSA/OWI black-and-white negatives, 1935-44: highways, dust storms, grain elevators, desert and glacier roads. Monochrome.
+- **Measured:** 4300-14400 px (38 of 40). 35 mm and 2 1/4 masters scale (1.3-2 MB); 4x5 negatives only serve `full/full` at 10.6-18.1 MB, so about 30% exceed the 12 MB limit and are skipped. About 10% carry "images copied from other sources may be restricted" and are rejected. People-centred titles are rejected.
+- **High-resolution route:** the IIIF `master:` service derived from the result's thumbnail path (`LOCProvider.masterIIIF`); `{service}/full/!T,T/0/default.jpg`, and on HTTP 5xx `{service}/full/full/0/default.jpg` once.
+- **Rights:** `item.rights_advisory`: "No known restrictions on publication" (or "...reproduction") → **No known restrictions**. Anything mentioning "restricted" or "not evaluated" is rejected.
+- **Mood sent to the music:** melancholy, majestic; subject landscape; energy 0.3; warmth 0.0.
+- **Credit:** FSA/OWI Black-and-White Negatives, Library of Congress. [Collection](https://www.loc.gov/collections/fsa-owi-black-and-white-negatives/)
+
+<details><summary>2 pinned ids</summary>
+
+- `2017760354`
+- `2017768823`
+
+</details>
+
+### loc-popular-graphic-arts-moonlight
+
+- **Provider:** `loc` (Library of Congress). **Weight** 1. **Enabled:** yes. **Monochrome allowed:** no.
+- **Search:** Collection slug: `popular-graphic-arts`.
+- **Queries:** `moonlight`, `sunset`, `lake` (each verified to return results on 2026-11-21).
+- **Filters:** `requireIIIF`; `useMasters` (scanned-master IIIF route).
+- **Shows:** Popular Graphic Arts chromolithographs, 1850-1900 (Currier & Ives and others): moonlit lakes and sunsets.
+- **Measured:** 5700-10840 px (20 of 20); scaled requests fail, `full/full` 2.6-9.9 MB. Paper margins and printed captions are left to `BorderTrimmer` and the text and paper gates (unverified in the app).
+- **High-resolution route:** the IIIF `master:` service derived from the result's thumbnail path (`LOCProvider.masterIIIF`); `{service}/full/!T,T/0/default.jpg`, and on HTTP 5xx `{service}/full/full/0/default.jpg` once.
+- **Rights:** `item.rights_advisory`: "No known restrictions on publication" (or "...reproduction") → **No known restrictions**. Anything mentioning "restricted" or "not evaluated" is rejected.
+- **Mood sent to the music:** serene, melancholy; subject landscape; energy 0.25; warmth 0.3.
+- **Credit:** Popular Graphic Arts, Library of Congress. [Collection](https://www.loc.gov/collections/popular-graphic-arts/)
+
+<details><summary>3 pinned ids</summary>
+
+- `2003677746`
+- `2018756622`
+- `2017650239`
+
+</details>
+
+### loc-highsmith-space-fair
+
+- **Provider:** `loc` (Library of Congress). **Weight** 1. **Enabled:** yes. **Monochrome allowed:** no.
+- **Search:** Collection slug: `carol-m-highsmith`.
+- **Queries:** `space center`, `ferris wheel`, `fireworks`, `rocket` (each verified to return results on 2026-11-21).
+- **Filters:** `requireIIIF`; `useMasters` (scanned-master IIIF route).
+- **Shows:** Carol M. Highsmith: space centres and rockets, state-fair Ferris wheels at dusk, fireworks.
+- **Measured:** 4100-11600 px (47 of 47); `service:` items scale, 2018+ `master:` items use `full/full`.
+- **High-resolution route:** the IIIF `master:` service derived from the result's thumbnail path (`LOCProvider.masterIIIF`); `{service}/full/!T,T/0/default.jpg`, and on HTTP 5xx `{service}/full/full/0/default.jpg` once.
+- **Rights:** `item.rights_advisory`: "No known restrictions on publication" (or "...reproduction") → **No known restrictions**. Anything mentioning "restricted" or "not evaluated" is rejected.
+- **Mood sent to the music:** electric, euphoric; subject architecture; energy 0.55; warmth 0.2.
+- **Credit:** Carol M. Highsmith Archive, Library of Congress. [Collection](https://www.loc.gov/collections/carol-m-highsmith/)
+
+<details><summary>4 pinned ids</summary>
+
+- `2015634076`
+- `2017881028`
+- `2011630263`
+- `2017687218`
+
+</details>
+
+### loc-matson-desert
+
+- **Provider:** `loc` (Library of Congress). **Weight** 1. **Enabled:** yes. **Monochrome allowed:** yes.
+- **Search:** `/photos/` with `fa=partof:matson (g. eric and edith) photograph collection|online-format:image`
+- **Queries:** `desert`, `dead sea`, `sand dunes`, `palmyra` (each verified to return results on 2026-11-21).
+- **Filters:** `requireIIIF`; `useMasters` (scanned-master IIIF route); `trimScanEdges` (film rebate and mount trimmed; fetched at 1.35x).
+- **Shows:** G. Eric and Edith Matson glass negatives, 1898-1946: the Sinai, the Dead Sea, Palmyra and sand dunes. Monochrome.
+- **Measured:** 4550-6150 px (24 of 24); scaled requests worked. Glass-negative edges trimmed. The hand-coloured lantern slides are "Publication may be restricted" and rejected.
+- **High-resolution route:** the IIIF `master:` service derived from the result's thumbnail path (`LOCProvider.masterIIIF`); `{service}/full/!T,T/0/default.jpg`, and on HTTP 5xx `{service}/full/full/0/default.jpg` once.
+- **Rights:** `item.rights_advisory`: "No known restrictions on publication" (or "...reproduction") → **No known restrictions**. Anything mentioning "restricted" or "not evaluated" is rejected.
+- **Mood sent to the music:** eerie, majestic; subject landscape; energy 0.25; warmth 0.2.
+- **Credit:** G. Eric and Edith Matson Photograph Collection, Library of Congress. [Collection](https://www.loc.gov/pictures/collection/matpc/)
+
+<details><summary>3 pinned ids</summary>
+
+- `2019695682`
+- `2019706273`
+- `2019700416`
+
+</details>

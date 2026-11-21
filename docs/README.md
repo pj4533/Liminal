@@ -31,6 +31,7 @@
 | [Image API survey](research/image-apis/survey.md) | Which public image APIs work in 2026, their keys, resolution and rights |
 | [Image collections](research/image-apis/collections.md) | The curated collections API mode rotates through, measured sizes, rejections and live ingest results |
 | [More image institutions](research/image-apis/other-institutions.md) | Second research pass outside the Library of Congress: Commons, NASA, Cleveland and Met sources |
+| [Library of Congress collections](research/image-apis/loc-collections.md) | Library of Congress pass: which Prints & Photographs collections reach 2000 px through the scanned-master route, rights per collection, kept and rejected |
 | [Image providers to add](research/image-apis/new-providers.md) | Institutions that need a new provider, ranked; Digital Commonwealth and AIC were implemented |
 | [OpenPics notes](research/image-apis/openpics.md) | Endpoints and lessons from the earlier OpenPics app |
 | [API image mode plan](plans/image-api-mode.md) | The AI vs API source toggle, provider layer, pool, gates and outcome (D36-D44) |

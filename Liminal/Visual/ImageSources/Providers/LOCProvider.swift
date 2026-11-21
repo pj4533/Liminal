@@ -15,11 +15,11 @@ nonisolated struct LOCProvider: ImageProvider {
 
     func search(source: CuratedSource, query: SourceQuery, cursor: String?, perPage: Int,
                 http: ImageHTTP) async throws -> CandidatePage {
-        guard case .search(let q) = query, let collection = source.collection else { return CandidatePage(candidates: [], next: nil) }
+        guard case .search(let q) = query, let url = Self.searchURL(source: source, query: q.q, perPage: perPage,
+                                                                     page: Int(cursor ?? "1") ?? 1) else {
+            return CandidatePage(candidates: [], next: nil)
+        }
         let page = Int(cursor ?? "1") ?? 1
-        guard let url = LooseJSON.query("https://www.loc.gov/collections/\(collection)/", [
-            ("fo", "json"), ("q", q.q), ("c", String(perPage)), ("sp", String(page)), ("fa", "online-format:image"),
-        ]) else { return CandidatePage(candidates: [], next: nil) }
         let result = try Self.parseSearch(try await http.data(url), allowMaster: source.useMasters ?? false)
         let kept = (source.requireIIIF ?? true) ? result.candidates.filter { $0.hint != nil } : result.candidates
         return CandidatePage(candidates: kept, next: result.next == nil ? nil : String(page + 1))
@@ -79,6 +79,18 @@ nonisolated struct LOCProvider: ImageProvider {
             }
         }
         return (service, width, height)
+    }
+
+    /// `/collections/<collection>/`, or `/photos/` with a `partof:` facet for collections that exist
+    /// only as a facet (Margolies, Matson; verified 2026-11-21, same JSON shape).
+    static func searchURL(source: CuratedSource, query: String, perPage: Int, page: Int) -> URL? {
+        let base: String, facet: String
+        if let partof = source.partof {
+            base = "https://www.loc.gov/photos/"; facet = "partof:\(partof)|online-format:image"
+        } else if let collection = source.collection {
+            base = "https://www.loc.gov/collections/\(collection)/"; facet = "online-format:image"
+        } else { return nil }
+        return LooseJSON.query(base, [("fo", "json"), ("q", query), ("c", String(perPage)), ("sp", String(page)), ("fa", facet)])
     }
 
     /// IIIF service of the scanned master behind a 1024 px derivative, the trick from OpenPics' LoC

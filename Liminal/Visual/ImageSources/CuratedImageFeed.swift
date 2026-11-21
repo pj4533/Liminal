@@ -417,7 +417,12 @@ nonisolated final class CuratedImageFeed: Sendable {
         let d = collections.defaults
         var decoded: CGImage
         if source.trimScanEdges ?? false {
-            let trimmed = ScanEdgeTrimmer.trimmed(try Self.decode(file, target: Self.scanFetchTarget(d.targetLongSide)))
+            var trimmed = ScanEdgeTrimmer.trimmed(try Self.decode(file, target: Self.scanFetchTarget(d.targetLongSide)))
+            if let inset = source.edgeInset, inset > 0, inset < 0.25 {
+                let dx = Double(trimmed.width) * inset, dy = Double(trimmed.height) * inset
+                let rect = CGRect(x: dx, y: dy, width: Double(trimmed.width) - 2 * dx, height: Double(trimmed.height) - 2 * dy).integral
+                trimmed = trimmed.cropping(to: rect) ?? trimmed
+            }
             let limit = Self.decodeLongSide(width: trimmed.width, height: trimmed.height, target: d.targetLongSide)
             decoded = Self.scaled(trimmed, maxLongSide: limit) ?? trimmed
         } else {

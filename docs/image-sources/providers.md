@@ -121,7 +121,15 @@ https://tile.loc.gov/storage-services/service/pnp/fsac/1a33000/1a33800/1a33849v.
 - The Yanker posters have 640 px JPEGs only. The Margolies Roadside America items tried had only a thumbnail online.
 - Mid-century `/photos/` searches (`dates=1950/1969`) turn up mostly 1024 px items with restricted or unevaluated rights.
 
-<!-- LOC-BATCH: notes for the upcoming Library of Congress batch (new collections, any new routes or pitfalls) go here. -->
+**Library of Congress batch (D45, 2026-11-21).** Findings from [loc-collections.md](../research/image-apis/loc-collections.md):
+
+- **The `master:` route works across Prints & Photographs**, not only FSA colour: Margolies (`mrg`), Matson (`matpc`), photochrom (`ppmsc`), Prokudin-Gorskii (`prokc`), Detroit (`det`), Japanese prints and popular graphic arts (`cph`, `ppmsca`), FSA B&W (`fsa`). Search results usually carry only `_150px.jpg` or `t.gif` thumbnails; `masterIIIF` accepts both. HABS masters use a `p` suffix (`347223p` → `347223pu`) and also work, but every HABS rights string mentions "may be restricted", so HABS is not used.
+- **`partof` sources.** Collections that exist only as a facet (Margolies, Matson) are searched at `https://www.loc.gov/photos/?fo=json&q=…&fa=partof:<name>|online-format:image`; the JSON has the same shape as a collection search. Set `partof` instead of `collection`.
+- **Scaled requests fail often.** HTTP 500 for every scaled size on Margolies 20 of 20, photochrom 10 of 19, Japanese prints 14 of 21, Detroit 11 of 19 and FSA B&W 11 of 16 (Prokudin-Gorskii 0 of 20). `info.json` does not predict it. The `full/full` fallback handles them.
+- **Bytes.** `full/full` is 0.4-10 MB everywhere except FSA B&W 4x5 negatives (13,600-14,400 px, 10.6-18.1 MB), about 30% of which exceed the 12 MB `maxBytes` and are skipped.
+- **Cold masters.** The first `info.json` of an uncached master can take over 40 s, then answers in about 0.1 s; the 30 s request timeout makes that a provider error and a short backoff, not a rejection.
+- **Prokudin-Gorskii fringes.** Coloured plate-misregistration bands (4-7.5% per side) are not dark, so the source sets `edgeInset` 0.08 on top of `trimScanEdges`.
+- **Rejected on rights:** Look, Horydczak, Matson lantern slides, the Bill Graham/Avalon posters, NYWT&S, HABS/HAER. **Rejected on fit or size:** WPA posters (lettering), Genthe autochromes (masters 300-560 px), panoramas (short side 570-730 px), stereograph cards (two frames per card), Cabinet of American Illustration (1024 px).
 
 ---
 

@@ -113,6 +113,12 @@ nonisolated struct CuratedSource: Codable, Sendable, Equatable {
     var useMasters: Bool?
     /// Trim the film rebate of scanned slides (`ScanEdgeTrimmer`) before the border and openness checks.
     var trimScanEdges: Bool?
+    /// Share of each side cut after the trim (Prokudin-Gorskii's coloured plate-misregistration bands,
+    /// which are not dark enough for `ScanEdgeTrimmer`).
+    var edgeInset: Double?
+    /// LoC: search `/photos/` with the `partof:` facet instead of `/collections/<collection>/`
+    /// (collections that only exist as a facet: Margolies Roadside America, Matson).
+    var partof: String?
     var requiresKey: String?
     var allowClassification: [String]?
     var allowMonochrome: Bool?

@@ -125,7 +125,7 @@ struct ImageCollectionsTests {
     }
 
     /// Library of Congress sources allowed to be monochrome (added with D45).
-    static let locMonochrome: Set<String> = []
+    static let locMonochrome: Set<String> = ["loc-detroit-landscapes", "loc-fsa-owi-bw-landscapes", "loc-matson-desert"]
 
     @Test func enabledSourcesAreComplete() {
         let c = ImageCollections.bundled
@@ -238,6 +238,19 @@ struct ImageProviderParsingTests {
         #expect(c.pageURL == "https://www.artic.edu/artworks/15086")
         #expect(ArticProvider.candidate(["id": 1, "image_id": "x", "is_public_domain": false, "title": "t"])?.rights
                     .flatMap(ImageRights.canonical) == nil)
+    }
+
+    @Test func locPartofSourcesSearchPhotosWithTheFacet() throws {
+        var source = ImageAPIFixtures.source()
+        source.partof = "john margolies roadside america photograph archive"
+        let url = try #require(LOCProvider.searchURL(source: source, query: "motel sign", perPage: 20, page: 2))
+        let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        #expect(url.absoluteString.hasPrefix("https://www.loc.gov/photos/?"))
+        #expect(items.contains(URLQueryItem(name: "fa", value: "partof:john margolies roadside america photograph archive|online-format:image")))
+        #expect(items.contains(URLQueryItem(name: "sp", value: "2")))
+        source.partof = nil
+        let plain = try #require(LOCProvider.searchURL(source: source, query: "q", perPage: 20, page: 1))
+        #expect(plain.absoluteString.hasPrefix("https://www.loc.gov/collections/c/?"))
     }
 
     @Test func locMastersStandInForTheMissingIIIFDerivative() throws {
