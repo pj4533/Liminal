@@ -96,7 +96,6 @@ Because every mids and bass test is an exact assertion on lengths, counts and re
 - D115 (2026-11-20): bass low-band rise aligned to the kick body (lag 10-11 ms -> 1.3-3.9 ms median), landmark-keyed bass duck (4 dB, sqrt strength scaling, kick double fix), space duck released between lead notes, space -1.5 dB, chop chain dip at 650 Hz, master staging -2/+6 dB. Not done by user direction: more lead level, brighter lead, firmer lead compressor ("melody instruments tuck in").
 - D114 (2026-11-19): acoustic melody programs; per-program `levelDB` loudness match; breakdown shells now level-matched to the lead (C-B5 reads +3.05 dB). Mids and lead share these programs, so the "chords" timbre is whichever piano/pluck/guitar the lead is using.
 - D112 (2026-11-19) chops tucked: leaves low mids to bass, keys, melody. D107 film bed.
-- Earlier "pad" decisions D71-D74, D92-D101 belong to the Ambient engine, not Lo-Fi.
 
 ## 7. What constrains a redesign (summary)
 1. Offline, per-phrase, off-audio-thread render; nothing in a realtime path. Each phrase stem is a fixed `n`-frame stereo buffer, sample-accurate, back to back; late-phrase fallback repeats the previous stems. Bass and texture dry stems have no tail: a held pad/bass note ends at the phrase edge (4 ms edge fade) unless the renderer is extended to carry (`Tail` exists only for wet). Notes in score are asserted `beat + length <= 16` (bass) / `<= 14.5` (mids).

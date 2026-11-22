@@ -18,7 +18,7 @@ The instrument rotation now has twelve programs. The earlier eight-program measu
 
 A matched 64-bar capture at 70 BPM (seed 1042) covered all eight acoustic programs over 3 minutes 39 seconds. Both runs used identical drum and film sources. The highest 400 ms stereo RMS of the combined dry instrument, texture and wet return was −13.30 dBFS in an organ phrase. The same phrase now measures −16.88 dBFS. The difference between the loudest and quietest phrase maxima narrowed from 4.59 to 2.50 dB. The final capture measured −18.1 LUFS and −4.63 dBTP. The master compressor settings are identical in both captures.
 
-The main image now exchanges on the same fill as the film. The app reserves the next distinct picture up to six seconds in advance. Both renderers prepare the source texture in advance and read transition progress from the audible downbeat. With an empty queue and no different cached image, the two standby pictures are drawn from the project's existing mushroom and lightning artwork. Ambient keeps its scheduled image interval.
+The main image now exchanges on the same fill as the film. The app reserves the next distinct picture up to six seconds in advance. Both renderers prepare the source texture in advance and read transition progress from the audible downbeat. With an empty queue and no different cached image, the two standby pictures are drawn from the project's existing mushroom and lightning artwork.
 
 ## Eight- and sixteen-bar fills
 

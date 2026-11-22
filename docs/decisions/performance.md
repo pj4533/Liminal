@@ -123,9 +123,8 @@ RealityKit-paced loop. Details in the sections below.
   are for automated A/B runs.
 
 ### Not on the per-frame path
-- MetalFXUpscaler / RealESRGAN (once per new image, about every 30 s) and depth generation
-  (CoreML, once per image) are not instrumented. They are not frame costs, though they can cause
-  hitches when an image changes.
+- Depth generation (Core ML, once per picture) is not instrumented. It is not a frame cost, though it can cause
+  a hitch when a picture changes.
 
 ### Baseline (visionOS simulator, Apple Vision Pro / visionOS 26.2, commit before optimizations)
 `scripts/perf-run.sh --seconds 30` (15 s warm-up), unfrozen, 3 runs:
@@ -173,7 +172,7 @@ Read the whole per-frame path and wrote the ranked plan in `docs/plans/performan
 - **Chosen order**: free wins first (direct-to-drawable render, dead feedback stage, redundant
   crossfade samples), then the two low-res field pre-passes, which remove most of the per-pixel
   math and are the only items with a look risk.
-- **Alternatives rejected**: MetalFX or lower render resolution (violates the 2048² requirement),
+- **Alternatives rejected**: a lower render resolution (violates the 2048² requirement),
   MRT stereo, compute instead of fragment, specialising stages whose amounts never reach zero.
 - **Deferred pending user sign-off**: updating the effects below display rate; it changes how fast
   the bloom shimmer animates.
@@ -247,7 +246,7 @@ Verdict: kept (>=3% GPU improvement, no new errors).
 
 - What: commit 8c61f39 added a separate pass baking hue waves and fractal-hue noise into a low-res field texture, sampled at the final uv.
 - Measured (visionOS simulator, 3 runs): GPU mean 0.362 / 0.693 / 0.796 ms (median 0.693) vs prior best 0.159 ms. fps 74.1 / 30.7 / 26.7 (median 30.7) vs 46.4. Interval p95 median 70.95 ms. The new hue bake pass itself cost 0.11-0.21 ms/frame, which exceeds the whole prior frame.
-- Frozen run: GPU mean 0.362 ms. The frozen screenshot content differs from the baseline because a different generated image was on screen, so a numeric diff is not meaningful. No errors in the logs.
+- Frozen run: GPU mean 0.362 ms. The frozen screenshot content differs from the baseline because a different picture was on screen, so a numeric diff is not meaningful. No errors in the logs.
 - Verdict: NOT kept. The extra pass and texture sampling cost more than the per-pixel noise it removed. Reset to fbf870e.
 - Alternative: none pursued; per-pixel evaluation is already cheap after the half-precision and octave reductions.
 
@@ -288,7 +287,7 @@ section. Nothing was measured in this step; the conclusions below come from the 
 - What: scripts/shader-bench.swift + shader-bench.sh, an offline 2048^2 eye-pass benchmark with PNG parity output.
 - Why measured: workflow step requires every commit to be run through perf-run.sh. The commit touches only scripts/ and docs/ (no app code), so it cannot change app GPU time.
 - Measured (visionOS sim, median of 3): gpu_ms_mean 0.258 (0.261/0.254/0.258), fps 74.15 (74.2/61.5/75.1), interval p95 17.7 ms. Frozen run: gpu 0.264 ms. No errors in logs.
-- Comparison to the "current best" (0.159 ms) is not apples to apples: sim host load and loaded dome image content differ between sessions (frozen screenshots differ because different generated images were loaded: 551 vs 64 in the image counter; mean abs diff 47). Not a shader regression since no shader changed.
+- Comparison to the "current best" (0.159 ms) is not apples to apples: sim host load and loaded dome image content differ between sessions (frozen screenshots differ because different pictures were loaded: 551 vs 64 in the picture counter; mean abs diff 47). Not a shader regression since no shader changed.
 - Verdict: no gain (>=3% threshold not met), so the branch was reset to 173a05a per workflow rules. The harness is a tooling-only change; it can be re-applied from 51ae60c if wanted (git cherry-pick 51ae60c).
 - **Superseded (2026-11-14, feature/integration)**: dropping it was a mistake. A tooling commit cannot be
   judged by app GPU time. It was cherry-picked back and rebuilt; see "Round 2: deterministic bench" at the end.
@@ -463,7 +462,7 @@ Measured (visionOS sim, medians of 3 x 30s runs) vs previous best (MRT stereo, 2
   unbound**, r8 depth at tex 5, linear/clamp sampler, 4-vertex strip. Uniforms are a port of
   `EffectsUniformsComputer.compute` at t=100 (hasSaliencyMap false, as ImmersiveDomeView passes).
   Inputs are procedural (gradients, stripes, checker, grain, 24 bright spots; a second seed for the
-  previous image; a depth map with a near blob). No Gemini cache.
+  previous image; a depth map with a near blob). No picture pool.
 - **Scenarios**: steady, ghost4 (4 active taps), transition (0.5, second image), each at
   stereoOffset -0.008 (L) and +0.008 (R). `--fragment` picks the entry point for later items;
   `--only` limits scenarios.
@@ -507,7 +506,7 @@ Measured (visionOS sim, medians of 3 x 30s runs) vs previous best (MRT stereo, 2
 - **Alternatives considered**: GPU counter stage-boundary timestamps per encoder (rejected: the
   same preemption is inside those spans, and they add API surface); a shared texture target for
   direct readback (rejected: timed targets stay `.private` like a drawable; the PNG pass blits to
-  a buffer); using the real Gemini cache image (rejected: not deterministic, and secrets/cache are
+  a buffer); using a real picture from the pool (rejected: not deterministic, and the pool is
   outside tooling scope).
 - **App runtime**: unchanged by design; visionOS and macOS builds both succeed.
 
@@ -934,7 +933,7 @@ In a Debug Mac build, delay preparation of the second drum take without disturbi
 
 ```sh
 open -n "$DD/Build/Products/Debug/Liminal.app" --args \
-  -audio.musicMode lofi -LiminalAutoPlay YES -LiminalAllowGeneration NO \
+  -LiminalAutoPlay YES \
   -LiminalVideoOffline YES -LiminalMusicSeed 11326529587325209514 \
   -LiminalDelaySecondTake 22
 ```

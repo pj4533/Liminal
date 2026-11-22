@@ -51,7 +51,7 @@ Shared test files (`LofiArrangementTests`, `LofiCompositionTests`, `LofiStemChai
 ### 1.3 Worktrees
 
 - `git worktree add ../Liminal-bass -b pkg/bass main` and `../Liminal-pads -b pkg/pads main`, after the PREP commit.
-- Copy the gitignored inputs into each worktree and never stage them: `Liminal/Secrets.swift`, `Liminal/SlowBurnDrums/`, `Liminal/Audio/Lofi/SlowBurnBeatGrid.json`. Check `git status` shows them ignored before every commit.
+- Copy the gitignored inputs into each worktree and never stage them: `Liminal/SlowBurnDrums/`, `Liminal/Audio/Lofi/SlowBurnBeatGrid.json`. Check `git status` shows them ignored before every commit.
 - One Liminal process at a time across all worktrees. Every `xcodebuild test` and every capture is wrapped in a shared lock: `until mkdir <scratchpad>/liminal-run.lock 2>/dev/null; do sleep 20; done; <command>; rmdir <scratchpad>/liminal-run.lock`. Captures also pass `--wait-lock 3600`.
 - Commit as you go on the package branch. Do not push.
 
@@ -251,7 +251,7 @@ The first seven are the list in `docs/development.md#lo-fi-checks`; the last thr
 
 ### 5.2 Rules for captures
 
-One capture or test process at a time (lock in 1.3). Never press Play; never launch the app flagless; no Gemini generation. Captures stay in the scratchpad, out of git.
+One capture or test process at a time (lock in 1.3). Never press Play; never launch the app flagless; no network image calls. Captures stay in the scratchpad, out of git.
 
 ### 5.3 Capture and analysis (each package once its tests pass, MIX after every rebalance)
 
@@ -332,13 +332,12 @@ Then `scripts/mix-matrix.sh --strict`: no failure in any of the five cases.
 
 ## 8. Rules that hold throughout
 
-- Never commit `Liminal/Secrets.swift`, `Liminal/SlowBurnDrums/`, `Liminal/Audio/Lofi/SlowBurnBeatGrid.json`, captures, or downloaded source libraries. Do not hand-edit `project.pbxproj`; do not change signing.
+- Never commit `Liminal/SlowBurnDrums/`, `Liminal/Audio/Lofi/SlowBurnBeatGrid.json`, captures, or downloaded source libraries. Do not hand-edit `project.pbxproj`; do not change signing.
 - Nothing new on a realtime render path or tap: no allocation, lock or blocking there. All new work is in the offline phrase render; the `lowRiseLead` cache lock is taken only on the render worker.
 - Late-phrase fallback unchanged: every dry stem stays a fixed n-frame buffer on the same grid; no silent rests.
 - Drum takes untouched: same samples, grid, fills and tapers. The drum stem must be identical to the baseline.
 - Film bed stays at least 10 dB under the music and is never a duck key; dialogue chops and their ducks are not retuned except `MusicDuck.midsDB` within the stated bound.
 - Swift concurrency: new types are `nonisolated` and `Sendable`; heavy work stays off the main actor.
-- No Gemini spend: captures use `check-lofi.sh` only.
 
 ## 9. Risks
 

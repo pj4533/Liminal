@@ -376,7 +376,7 @@ Selection (`FootageWeaver.chooseRecipe`, seeded, replaces `chooseLook`):
 `-LiminalVideoLook` keeps working (pins a plain recipe). New DEBUG flag `-LiminalVideoMode <recipe name>`
 pins a recipe; `shader-bench` / `ffx-clip.sh` pin one with `--set` (section 9.1).
 
-Settings: none. The existing "Archive footage" card and "Change speed" are unchanged; Effect intensity
+Settings: none. The existing "Archive footage" card is unchanged; Effect intensity
 scales the modes. If the user wants plain blends only, that is one toggle later ("Footage effects"); not
 built unless asked.
 

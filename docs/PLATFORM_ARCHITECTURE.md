@@ -11,7 +11,6 @@ This document explains the architectural differences between Liminal's macOS and
 | **Frame Rate** | 60fps display link | 90fps RealityKit timeline | Platform requirements differ |
 | **Image Blending** | GPU shader (fragment blend) | GPU shader (fragment blend) | Same approach, platform-optimal delivery |
 | **State Management** | @Published properties | AtomicImageBuffer (lock-free) | 90fps starves MainActor |
-| **Upscaling** | CoreML (RealESRGAN) | MetalFX (GPU scaler) | CoreML competes with RealityKit for GPU |
 | **Coordinate Origin** | View-centered | Floor-centered (y=1.5m for eyes) | visionOS spatial coordinate system |
 
 ---
@@ -100,10 +99,9 @@ Metal renders to the drawable's texture, calls `drawable.present()`, and Reality
 | **Shader code** | `Shaders/EffectsRenderer.metal` | All visual effects (Ken Burns, distortion, hue shifts, feedback) |
 | **Uniform computation** | `Visual/EffectsUniformsComputer.swift` | Deterministic animation math |
 | **Uniform structure** | `EffectsUniforms.swift` | Shader parameter data |
-| **Audio system** | `Audio/*` | Eight-layer generative ambient engine (AudioKit), `MusicState` read by both renderers |
-| **Audio-visual coupling** | `Visual/MusicReactor.swift`, `Visual/MusicModulation.swift`, `Visual/VisualMoodBuilder.swift` | Music -> clamped uniform nudges; image -> mood sent to the music |
-| **Image generation** | `Visual/GeminiClient.swift` | Gemini API client |
-| **Image pipeline** | `Visual/ImageQueue.swift`, `Visual/ImageStore.swift`, `Visual/ImageFraming.swift` | Buffering, disk persistence, 3:2 crop |
+| **Audio system** | `Audio/*` | Lo-Fi engine (sampled instruments, drum takes, archive dialogue chops), `MusicState` read by both renderers |
+| **Audio-visual coupling** | `Visual/MusicReactor.swift`, `Visual/MusicModulation.swift` | Music -> clamped uniform nudges |
+| **Image pipeline** | `Visual/ImageSources/CuratedImageFeed.swift`, `CuratedImagePool.swift`, `Visual/ImageQueue.swift`, `Visual/ImageStore.swift`, `Visual/ImageFraming.swift` | Curated pictures fetched from public APIs, pooled on disk, queued, 3:2 crop |
 | **Settings** | `Services/SettingsService.swift` | UserDefaults persistence (incl. `visual.syncToMusic`) |
 | **Control UI pieces** | `ControlComponents.swift`, `ClearImagesSection.swift` | Sections, value sliders, pickers, toggles used by both UIs |
 | **Platform abstraction** | `PlatformImage.swift` | NSImage/UIImage typealias |
@@ -123,7 +121,7 @@ The actual visual effects are 100% identical on both platforms. The same Metal s
 | `LiminalApp.swift` | App entry point with WindowGroup |
 | `ContentView.swift` | Main UI: scrolling 320 pt control panel plus the 3:2 visual area; "Storage & Settings" sheet |
 | `Visual/EffectsMetalView.swift` | MTKView-based Metal rendering |
-| `Visual/TimerDrivenCrossfade.swift` | Timer-driven transition manager (tracks progress for GPU shader) |
+| `Visual/TimerDrivenCrossfade.swift` | Crossfade progress tracker for the GPU shader |
 
 ### visionOS Only
 
@@ -147,6 +145,8 @@ The actual visual effects are 100% identical on both platforms. The same Metal s
 
 ### macOS Pipeline
 ```
+CuratedImageFeed / CuratedImagePool
+    ↓
 ImageQueue (@Published)
     ↓
 TimerDrivenCrossfade (tracks progress)
@@ -160,6 +160,8 @@ Window Framebuffer
 
 ### visionOS Pipeline
 ```
+CuratedImageFeed / CuratedImagePool
+    ↓
 ImageQueue
     ↓
 AtomicImageBuffer (lock-free)
@@ -257,7 +259,7 @@ The dual-pipeline architecture exists because macOS and visionOS have fundamenta
 - **macOS**: Window-based, 60fps, direct Metal via MTKView
 - **visionOS**: Spatial/immersive, 90fps, RealityKit-based with MainActor constraints
 
-The architecture maximizes code sharing (audio, shaders, uniforms, services) while respecting each platform's native patterns. This is the correct approach - unification would add complexity without benefit.
+The architecture maximizes code sharing (audio, shaders, uniforms, image pipeline, services) while respecting each platform's native patterns. This is the correct approach - unification would add complexity without benefit.
 
 ## visionOS render path (post performance work)
 
@@ -279,12 +281,12 @@ measurements and the DEBUG test-card flags: `docs/decisions/orientation.md`.
 
 ## Audio-visual coupling (both platforms)
 
-`MusicReactor` (one per render loop, smoothing on the effect clock) turns `engine.musicState` snapshots into a `MusicModulation`, which `EffectsUniformsComputer.compute(..., music:)` converts into existing uniforms with hard clamps; `.neutral` reproduces the un-coupled output and no shader or uniform-struct change was needed. Scene changes request a small ghost-tap burst (`OffscreenEffectsRenderer.requestGhostBurst` on visionOS, `EffectsMetalViewRepresentable.ghostBurstSerial` on macOS). In the other direction `VisualMoodBuilder` sends `setVisualMood` and `imageDidChange` at crossfade start and `setVisualActivity` at most twice a second. `-LiminalFreezeTime` bypasses the coupling. Decisions: `decisions/av-coupling.md`.
+`MusicReactor` (one per render loop, smoothing on the effect clock) turns `engine.musicState` snapshots into a `MusicModulation`, which `EffectsUniformsComputer.compute(..., music:)` converts into existing uniforms with hard clamps; `.neutral` reproduces the un-coupled output and no shader or uniform-struct change was needed. Phrase changes request a small ghost-tap burst (`OffscreenEffectsRenderer.requestGhostBurst` on visionOS, `EffectsMetalViewRepresentable.ghostBurstSerial` on macOS). `-LiminalFreezeTime` bypasses the coupling. Decisions: `decisions/av-coupling.md`.
 
 ## Control UI
 
-Both platforms share the same four sections (Playback, Music, Visuals, Images & Storage) built from `ControlComponents.swift`. visionOS opens a 1240x800 window with no settings sheet; macOS has a 320 pt scrolling panel and a "Storage & Settings" sheet. Decisions: `decisions/ui.md`.
+Both platforms share the same sections (Playback, Music, Visuals, Images & Storage, plus Archive Footage) built from `ControlComponents.swift`. visionOS opens a 1240x800 window with no settings sheet; macOS has a 320 pt scrolling panel and a "Storage & Settings" sheet. Decisions: `decisions/ui.md`.
 
 ## Archive footage (both platforms)
 
-`Liminal/Archive/` fetches 1950-69 Prelinger films from the Internet Archive (`ArchiveClient`, polite, no key), caches them (`ArchiveClipStore`), and two `VideoFrameSource`s decode with `AVAssetReader` on their own queues into 960x720 stage textures via a pre-pass compute kernel; the render loops only do lock reads. `FootageWeaver` keeps footage always present while on: a stream of short pieces, the next one's decoder started a few seconds before it crossfades in on the other slot (shader layer A = texture 7, layer B = texture 8). Both renderers (`EffectsMetalView` on macOS, `OffscreenEffectsRenderer` on visionOS) bind a separate footage fragment variant only while `videoMix` or `videoMixB` is above 0, so footage-off frames are identical to before; on visionOS the footage rides the one 2048x2048 render and so appears on the depth-relief shell. The film's sound goes through `ArchiveVoice`, one more strip in the music graph that shares the existing reverb and delay. Platform differences: none beyond the settings card placement. See `docs/decisions/archive-video.md`.
+`Liminal/Archive/` fetches 1950-69 Prelinger films from the Internet Archive (`ArchiveClient`, polite, no key), caches them (`ArchiveClipStore`), and two `VideoFrameSource`s decode with `AVAssetReader` on their own queues into 960x720 stage textures via a pre-pass compute kernel; the render loops only do lock reads. `FootageWeaver` keeps footage always present while on: a stream of short pieces, the next one's decoder started a few seconds before it crossfades in on the other slot (shader layer A = texture 7, layer B = texture 8). Both renderers (`EffectsMetalView` on macOS, `OffscreenEffectsRenderer` on visionOS) bind a separate footage fragment variant only while `videoMix` or `videoMixB` is above 0, so footage-off frames are identical to before; on visionOS the footage rides the one 2048x2048 render and so appears on the depth-relief shell. The film's sound goes through `ArchiveVoice`, one more strip in the Lo-Fi graph (`ArchiveConductor`, `ArchiveMixBus`) with its own reverb and echo. Platform differences: none beyond the settings card placement. See `docs/decisions/archive-video.md`.

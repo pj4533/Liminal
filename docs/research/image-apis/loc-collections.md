@@ -1,4 +1,4 @@
-# Library of Congress high-resolution survey for Liminal API mode
+# Library of Congress high-resolution survey for Liminal
 
 Tested 2026-11-21. All requests were made with `User-Agent: Liminal/1.0 (research)` at about 1 request per second. LoC answered 503 twice during the run, and its search JSON came back truncated three times. Downloads, contact sheets, logs and probe scripts stayed in a scratch folder outside the repository. The sources it led to are in `image-collections.json` (`decisions/images.md` D45); the queries were re-checked and the entries written by the lead after this report.
 

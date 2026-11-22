@@ -1,6 +1,6 @@
-# Image API survey for Liminal's API mode (2026-11-21)
+# Image API survey for Liminal (2026-11-21)
 
-Goal: curated, high-resolution, legally reusable imagery for an "API" image mode (vs "AI" Gemini generation). Vibe: psychedelic, 1950s-70s, old film stills, vintage photography and illustration, mushrooms, trees, landscapes, roadside and cityscapes, cars and driving, space age, surreal. Pictures need roughly 3:2 cover crops at up to 2K, so sources that give 2000+ px on the long side are preferred. Prior art: [openpics.md](openpics.md).
+Goal: curated, high-resolution, legally reusable imagery for the app's picture feed. Vibe: psychedelic, 1950s-70s, old film stills, vintage photography and illustration, mushrooms, trees, landscapes, roadside and cityscapes, cars and driving, space age, surreal. Pictures need roughly 3:2 cover crops at up to 2K, so sources that give 2000+ px on the long side are preferred. Prior art: [openpics.md](openpics.md).
 
 Method: keyless endpoints were called with curl on 2026-11-21 and pixel sizes were measured on real downloads. Items marked "unverified" were not exercised (key needed, or not reached) and come from docs or search results.
 
@@ -82,7 +82,7 @@ Recommended integration order: LOC, NASA, Smithsonian, Met, Wikimedia Commons (c
 | LIFE archive, Reddit subs | Gone or rights unclear. Exclude. |
 
 ## Lessons for the implementation
-- Prefer keyless: LOC, NASA, Wikimedia, Met, Cleveland, Internet Archive. Smithsonian and Europeana are optional with a key; mode must run without them.
+- Prefer keyless: LOC, NASA, Wikimedia, Met, Cleveland, Internet Archive. Smithsonian and Europeana are optional with a key; the feed must run without them.
 - Download the best derivative at or above 2048 px on the long side, avoid TIFF and files above about 12 MB (OpenPics lesson), and cache on disk with the credit record (title, creator, institution, source URL, license).
 - Many 1950s-70s items are portrait or small (posters at 640 px, FSA 1024 px). Gate on a minimum short side and let `ImageFraming` cover-crop to 3:2; reject sources too small to cover 2K.
 - Use curated query lists and collections per theme rather than free text, and filter on the rights field per image.

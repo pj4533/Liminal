@@ -7,7 +7,7 @@ Status: every fail-level criterion passes on every applicable matrix case (`scri
 ## Machine and commands
 
 - Apple M4, macOS 27.2.1 (26B131), Xcode 27.2 (27B52). Debug build, offline manual rendering at 48 kHz.
-- Private AJ Hall takes and the film reel were present for every capture (`--private-drums --film-reel`); no Gemini generation.
+- Private AJ Hall takes and the film reel were present for every capture (`--private-drums --film-reel`); no network image calls.
 
 ```sh
 S=/private/tmp/claude-501/-Users-pj4533-Developer-Liminal/b8f97122-abd8-4cd6-b289-17658fba4b13/scratchpad
@@ -24,7 +24,7 @@ xcodebuild test -scheme Liminal -destination 'platform=macOS' -derivedDataPath $
 xcodebuild -scheme Liminal -destination 'platform=visionOS Simulator,name=Apple Vision Pro' -derivedDataPath $DDP build
 ```
 
-Results: macOS and visionOS simulator builds succeed; the complete `LiminalTests` target passes (355 tests in 41 suites, 691 s, serial); `MusicRenderTests`, `AVCouplingTests`, `LofiMasterCharacterizationTests`, `LofiMasterBusTests` and `LofiMasterKernelTests` pass, and `MusicRenderTests.swift` and `AVCouplingTests.swift` are unchanged from `d6cdb1d`.
+Results: macOS and visionOS simulator builds succeed; the complete `LiminalTests` target passes (355 tests in 41 suites, 691 s, serial); `AVCouplingTests`, `LofiMasterCharacterizationTests`, `LofiMasterBusTests` and `LofiMasterKernelTests` pass, and `AVCouplingTests.swift` is unchanged from `d6cdb1d`.
 
 ## Where the package started
 
@@ -174,7 +174,7 @@ The user's direction of 19 November 2026 asked for chops glued into the beat (fi
 - Music duck under featured chops (`ArchiveVoice.MusicDuck`): lead -2 → -3 dB, mids -3 → -4 dB, space -4 → -5 dB; attack 30 ms, release 300 ms unchanged. Drums and bass are not ducked.
 - Not done in this pass: more frequent reversed pickups and echo throws on most cell endings. These are arrangement changes in `DialogueMotif` cells, not constants (`reversedChance` is not read by the cell code). They were done afterwards; see "Heavier chop effects and the line refresh" below.
 
-### Film bed (`ArchiveVoice`, `MixBus` unchanged)
+### Film bed (`ArchiveVoice`, `ArchiveMixBus` unchanged)
 
 The baseline effected chain is kept as the user directed: sends at 1.18 × the room and echo contours, phaser 0.36 to 0.58 wet, HPF 290 to 205 Hz, two low-pass stages at 2.1 to 3.2 kHz, direct 0.27 to 0.60, tempo-linked delay. Direct minus wet stays -9.9 to -10.6 dB.
 
@@ -207,19 +207,9 @@ Each change follows the binding user direction of 19 November 2026 (top of the p
 | C-B3 bass vs drums 60 to 250 Hz | same | -7.35 dB (aim -6 to +3) | The repeated film case's takes have a heavier kick; the bass is level-matched per voice, not per take. |
 | C-D8 accents 50 ms from kicks | all | 0.56 to 0.70 (aim 0.9) | Motif pieces land on downbeats by design (plan 5.4); a warning only. |
 
-## Ambient safety
+## Fallback chain safety
 
-- `MusicRenderTests`, `AVCouplingTests` and `LofiMasterCharacterizationTests` pass without edits.
-- `--hook masterProfile=ambient`, 16 bars, seed 1042, 70 BPM, captured on `d6cdb1d` (from a `git archive` copy with the private files) and on this branch:
-
-| Capture | Start (`d6cdb1d`) | Final | Difference |
-|---|---|---|---|
-| no footage: master integrated | -18.17 LUFS | -18.33 LUFS | 0.16 LU |
-| no footage: master minus pre-master | -1.72 LU | -1.71 LU | 0.01 LU |
-| film reel: master integrated | -17.13 LUFS | -16.75 LUFS | 0.38 LU |
-| film reel: master minus pre-master | -1.93 LU | -1.99 LU | 0.06 LU |
-
-The no-footage capture is within 0.3 LU. With the film reel the ambient master's transfer is within 0.06 LU, and the 0.38 LU comes from its input: the Lo-Fi chops are louder (stab trim, density levelling) and the bed is 2.5 dB up. Ambient mode itself never plays the Lo-Fi stems or chops.
+- `AVCouplingTests` and `LofiMasterCharacterizationTests` pass without edits. The fallback Apple chain (glue, trim, limiter; used when the finisher AU is unavailable) keeps its original values, apart from the finisher's constant delay.
 
 ## Live smoke
 
@@ -374,5 +364,4 @@ C-M1 every bound 1.5 LU lower, C-M3 and C-M5 upper bounds 1.5 dB higher. Reason:
 - Resolved 2026-11-19 (D113): the return dip no longer relies on the motif plan's block and slot fields. A take that plays no chops (no speech) dips from the transport or the phrase callback.
 - C-B9 audibility (0.13 to 0.21) is close to its new floor on `same`. A brighter or louder film can move it either way; the 10 dB rule has 0.8 dB of margin on `ref`.
 - C-B5 measures short overlaps (0.2 to 0.7 s per phrase), so single notes move it by several dB; the matrix spread is 6.4 to 7.1 dB.
-- The ambient film-reel capture differs by 0.38 LU, from the Lo-Fi input (see Ambient safety).
 - The direction's heavier-effects items that need arrangement changes (reversed pickups, echo throws on most cell endings) were done afterwards; see "Heavier chop effects and the line refresh".

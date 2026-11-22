@@ -5,7 +5,7 @@ Request: old (1950s-60s, mostly black and white, newsreel / trippy / odd) Intern
 the scene now and then, under the same effects as the picture; its sound enters later, very gently.
 
 Status: built and reviewed (A24-A25); scheduling replaced by always-on pieces (A27, supersedes the moment
-timing of A12, the sound timing of A15 and the "Footage amount" setting of A20-A21). Phases 1-5 built: fetch and cache, footage in the shader on both platforms, moments, the film's
+timing of A12 and the sound timing of A15; the amount setting of A20-A21 no longer exists). Footage now changes only on the drum fills (A27) and its sound is always the beat-locked bed plus dialogue chops (A28-A29). Phases 1-5 built: fetch and cache, footage in the shader on both platforms, moments, the film's
 sound (A14-A19) and the "Archive Footage" settings card (A20-A22). Phase 6 (floating screen) is not built
 (A23).
 
@@ -54,17 +54,16 @@ Expected effect on the headset after the next launch: about 0.94 GB of stale dow
   screen (A4); a cold cache skips candidates over 40 MB (A24).
 - Scheduling: seeded director, first moment 90-150 s after Play, 30-80 s long, gaps 2.5-6 min, waits for a
   transition, an image 8+ s old and calm music (A12).
-- Audio chain: slowed 0.6-0.85x, mono, normalised to -26 dBFS, HPF 220 Hz, 2 x LPF 2.4 kHz, strip at -12 dB dry
+- Audio chain (first version; the shipped sound is the beat-locked bed of A28-A29): slowed 0.6-0.85x, mono, normalised to -26 dBFS, HPF 220 Hz, 2 x LPF 2.4 kHz, strip at -12 dB dry
   with full reverb send and 0.6 delay send, 4 s after the picture, 12 s fade in; about -42 dBFS, 19 dB under the
   music, limiter idle (A14-A18).
-- Settings: Archive footage on/off, Footage amount (Rare / Normal / Often), Footage audio (0-100 %, default 50 %),
-  Clear Footage (A20-A21).
+- Settings: Archive footage on/off, Footage audio (0-100 %, default 50 %), Clear Footage (A20-A21).
 
 ## What to check on the headset
 
 - Footage looks right in the depth-relief shell: the film rides the effects, stays readable, no stereo discomfort.
 - 90 Hz pacing and heat with a moment on screen, plus decode cost.
-- The sound level in the real speakers (default 50 %) and that it blends with the ambient and never startles.
+- The sound level in the real speakers (default 50 %) and that it blends with the music and never startles.
 - Look strength: Imprint is faint on busy pictures; cold-start 320x240 files look soft.
 - Whether to exclude "medical" films, and whether the floating screen (A23) is wanted.
 
@@ -190,22 +189,21 @@ Expected effect on the headset after the next launch: about 0.94 GB of stale dow
 - `-LiminalVideoFile <mp4>` (alias `-LiminalVideoClip`): a local clip, no network.
 - `-LiminalVideoMix <0...1>`: one long moment at a constant mix from 2 s (stills).
 - `-LiminalVideoOffline YES`: cache only, no requests. `-LiminalVideoOff YES`: no footage at all.
-- All of them count as automation flags (they block image generation). The other automation flags do not
-  block the archive.
+- All of them count as automation flags. The other automation flags do not block the archive.
 - `scripts/perf-run.sh --extra "<args>"` passes extra launch arguments.
 
 ## Sound
 
 ### A14. One more static strip in the music graph, no new reverb
 - What: `Liminal/Audio/ArchiveVoice.swift`: an `AVAudioPlayerNode` (wrapped as an AudioKit `Node`) ->
-  HPF 220 Hz -> LPF 2.4 kHz -> LPF 2.4 kHz -> `LayerStrip` (dry -12 dB, reverb send 1.0, delay send 0.6, pan
-  walk +-0.4 on a 53 s channel). Built in `GenerativeEngine.init`, added to `MixBus` with the layers' strips,
-  ticked by the conductor at 10 Hz. The three filters are bypassed while nothing plays.
+  HPF 220 Hz -> LPF 2.4 kHz -> LPF 2.4 kHz -> `ArchiveStrip` (dry -12 dB, reverb send 1.0, delay send 0.6, pan
+  walk +-0.4 on a 53 s channel). Built in `GenerativeEngine.init`, added to `ArchiveMixBus`, ticked by the
+  `ArchiveConductor` at 10 Hz. The three filters are bypassed while nothing plays.
 - Why: what is heard is the existing Zita tail and dark tape delay, so the film sits in the music's room;
-  nothing is rewired at run time and nothing is ducked (music.md calm rules). AudioKit's `AudioPlayer` was
+  nothing is rewired at run time and the film never keys a duck. AudioKit's `AudioPlayer` was
   not used: it adds a mixer and file handling for a node that only ever plays one buffer.
-- Control: `MusicControl.archiveBegin(cue)`, `.archiveEnd(fade:)`, `.archiveGain(_)`, applied on the
-  conductor queue like every other control; the fades are the strip's smoothstep `SoftEnv`. A cue that
+- Control: `ArchiveControl.begin(cue)`, `.end(fade:)`, `.gain(_)`, applied on the
+  conductor queue; the fades are the strip's smoothstep `SoftEnv`. A cue that
   arrives while another is audible fades that one out over 0.4 s first. Engine stop fades it with the rest.
 
 ### A15. Timing: 4 s after the picture, out with the picture's fade out
@@ -268,20 +266,18 @@ Expected effect on the headset after the next launch: about 0.94 GB of stale dow
 ## Settings
 
 ### A20. One "Archive Footage" card, the same on both platforms
-- `ArchiveFootageSection` (shared): "Archive footage" toggle (on), "Footage amount" Rare / Normal / Often,
-  "Footage audio" slider (Off ... Louder, 50 %), a status line ("Showing: [Reno Rodeo] (1950)", "3 clips ready",
+- `ArchiveFootageSection` (shared): "Archive footage" toggle (on), "Footage audio" slider (Off ... Louder, 50 %), a status line ("Showing: [Reno Rodeo] (1950)", "3 clips ready",
   "Footage starts with playback", "Archive footage off"), "Clear Footage" with a confirmation (keeps the clip on
   screen), the cache line ("5 films cached, 232.5 MB") and the credit "Films: Prelinger Archives via the
   Internet Archive, public domain." Status and cache are polled every 2 s while the card is visible.
 - Placement: Mac sidebar after Visuals. visionOS: under Music in the three-column layout (the Visuals column
   is already the longest), between Music and Images & Storage in two columns, after Visuals in one.
-- Persisted keys `archive.enabled`, `archive.amount`, `archive.audioLevel`; "Reset All Settings" resets them.
+- Persisted keys `archive.enabled`, `archive.audioLevel`; "Reset All Settings" resets them.
 
 ### A21. Off means fade out, then stop
 - Footage runs while playback wants it and the setting is on. Turning it off during a moment fades picture and
   sound over 2 s, then stops prefetching and decoding (the cache stays); turning it on while playing starts
-  again (a new moment clock, so the first moment is 90-150 s away at Normal). The amount applies from the next
-  gap. Verified with `-LiminalVideoOffAt 30`: setting off at 30.2 s, sound end fade 2.0 s, envelope 1.0 -> 0.13
+  again (a new moment clock, so the first moment is 90-150 s away). Verified with `-LiminalVideoOffAt 30`: setting off at 30.2 s, sound end fade 2.0 s, envelope 1.0 -> 0.13
   in 2 s, "footage stop" 2.5 s after the setting.
 
 ### A22. Layout checked by screenshot
@@ -357,6 +353,7 @@ Expected effect on the headset after the next launch: about 0.94 GB of stale dow
 - Why: on the headset the user loved the footage but saw one or two clips at "Often". Asked for: while footage is on,
   some film should always show, subtly, as small pieces injected often from the cache, with the sound coming and
   going and the effects varying; the setting should be about how fast it changes, not how often it appears.
+- Timing (current): every piece change is planned on the drum grid and completes on a fill boundary's downbeat; the crossfade spans that fill's dissolve (see the weaver's header). The lengths and crossfade times quoted below are from the first, un-gridded version.
 - Model (`Liminal/Archive/FootageWeaver.swift`, pure and seeded, replaces `VideoMomentDirector`): pieces of a few
   seconds from random points of cached clips (LRU-weighted, never a clip already on screen when another is cached).
   Each piece crossfades into the next over a few seconds; the outgoing envelope is the exact complement of the
@@ -364,9 +361,7 @@ Expected effect on the headset after the next launch: about 0.94 GB of stale dow
   0.6-0.85, look (never twice in a row; Emerge only at intensity >= 0.4 and pieces <= 16 s), warp 0.35-0.85 (share of
   the picture's warp the film rides, was a fixed 0.6), level 0.42-0.58 of the look's ceiling, and for 30 % of pieces
   of 14 s or more a slow sin^2 swell of +0.15-0.38 peaking mid-piece.
-- "Change speed" (replaces "Footage amount"): Slow 20-30 s pieces / 5-7 s crossfades, Medium (default) 12-20 / 3.5-5,
-  Fast 8-12 / 2.5-3.5. Key `archive.changeSpeed`; the old `archive.amount` is deleted on launch (it does not map
-  onto a speed). `-LiminalVideoForce` now means Fast.
+- Piece timing: pieces change on the drum fills (see below), so their length is set by the music, and `-LiminalVideoForce` only makes the first fetch quicker.
 - Start: the first piece is prepared as soon as a clip is cached and fades in over 5 s. Prefetch starts 1 s after
   footage starts on an empty cache (5 s otherwise, was 10 s); the cold-start skip threshold is 25 MB (was 40), at
   most 8 skips. Sim cold start: first clip (4.3 MB) cached and first piece prepared 13 s after Play.
@@ -384,15 +379,14 @@ Expected effect on the headset after the next launch: about 0.94 GB of stale dow
   The plain fragments are unchanged. Bench (Apple M4, 2048², 5 trials): footage off vs `main` parity identical
   (max abs diff 0), GPU B/A 0.99-1.02; one layer vs `main` max diff 1/255 (warp now a uniform), B/A 1.00-1.02; two
   layers (crossfade) vs one layer on `main`, mono, B/A 1.06-1.09.
-- Sound: independent of the picture's presence. A piece brings its sound with chance 0.5 / 0.45 / 0.4 (slow /
-  medium / fast) only if the clip has audio, its whole span fits the clip and the previous sound ended 6 s before;
+- Sound: independent of the picture's presence. Every piece may bring its sound, but only if the clip has audio, its whole span fits the clip and the previous sound ended 6 s before;
   so never two at once and always a silent piece between. Begin 1.5 s into the piece's fade in, end 2 s past its
   planned change, smoothstep fades of 42 % of the span (at most 10 s) each, same chain, trim and gain as A14-A17
   (about 19 dB under the pad). Anchored to the piece's origin, so a held piece stays in sync.
 - Cache: unchanged policy (3 fast, then one per 90 s to 12, 1 GB); a full cache replaces one clip every 12 pieces
   (at most one download per 3 minutes); every clip on screen (both slots) is protected from eviction and Clear.
-- Verified: 128 unit tests (weaver over 150 seeds x 3 speeds x 900 s: presence never below the floor after the first
-  fade, lengths and crossfades per speed, complementary crossfades, sound gaps, transition wait, dropped decoder,
+- Verified: 128 unit tests (weaver over 150 seeds x 900 s: presence never below the floor after the first
+  fade, complementary crossfades, sound gaps, transition wait, dropped decoder,
   clip end). visionOS sim, 4 min from an empty cache: 14 pieces from 4 films, presence 0.42-0.72 (mean 0.51) after the
   first fade, render-loop mix 0.14-0.54 and never 0, 4 pieces with sound (fades 6.3-8 s), 79.1 fps mean.
   `perf-run.sh` 120 s with footage on: 79.5 fps, interval p95 13.31 ms, 0.04 dropped per 5 s (one frame, during an

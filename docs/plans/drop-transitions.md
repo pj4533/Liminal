@@ -31,8 +31,7 @@ Image changes happen every 8 bars (beat 32 and beat 64 of each 64-beat take), no
 
 ## 2. Design summary
 
-1. A second transition shape, the **drop**, used by every Lo-Fi drum-timed change. Ambient mode and
-   any change that is not on the drum grid keep the existing surge, swap and settle family unchanged.
+1. A second transition shape, the **drop**, used by every drum-timed change (every image change). The bell family of surge, swap and settle styles stays for forced and debug transitions.
 2. A drop has one clock: `p = (tPresent - tS) / (tD - tS)`, where `tS` is the fill start, `tD` the
    audible downbeat and `tPresent` the time the frame reaches the display. For `p < 1` only the
    outgoing picture is on screen and it breaks up with intensity `a(p)`, which rises monotonically and
@@ -46,7 +45,7 @@ Image changes happen every 8 bars (beat 32 and beat 64 of each 64-beat take), no
    picked from the seeded director, plus six existing warps run as "outs" (surge without the settle).
 5. Both drum boundaries are drops. The turnaround (beat 64, new take) runs at full strength. The
    halfway change (beat 32, same take) runs at 0.7 strength with no finisher flash. An ease-back after
-   any downbeat would bring the old complaint back at half the changes, and `perf-run.sh --lofi` keeps
+   any downbeat would bring the old complaint back at half the changes, and `perf-run.sh` keeps
    its 8-bar reveal count. This is the one design choice the user did not state; it is easy to change
    (section 4.6) after they have watched it.
 
@@ -188,7 +187,7 @@ the footage composite, so a whiteout, blackout or crush covers the footage too.
 | Stop | The scheduling task is cancelled. A drop in flight runs out on the uptime clock and cuts at its planned time. |
 | Route recovery (`recoverStoppedGraph`) | The grid origin changes. Before firing, `scheduleFills` re-reads the grid; if the origin moved by more than 1 ms and it is not the expected next take, the cue is discarded and re-planned. A drop already in flight finishes on its old clock (6 s at most). Output latency is re-read once on re-arm, as today. |
 | Dropped or skipped frame at the cut | The cut is the next submitted frame. |
-| Ambient mode, manual or timer advances | Unchanged bell family and director sequence. The conductor still lands its chord on the swap (T13). |
+| A change that is not on the drum grid (forced or debug) | Unchanged bell family and director sequence. |
 
 ## 4. Styles
 
@@ -282,7 +281,7 @@ nonisolated struct DropPlan: Sendable, Equatable {
 `-LiminalTransitionStyle` accepts the new names. New: `-LiminalDropColour <name>`,
 `-LiminalDropFinisher <name>`, `-LiminalDropLead <ms>` (overrides the display lead),
 `-LiminalDropOff YES` (the T43 behaviour, for A/B). All four join
-`DebugLaunchOptions.blocksImageGeneration` and the flag table in `docs/development.md`.
+`DebugLaunchOptions.isAutomated` and the flag table in `docs/development.md`.
 
 ### 4.6 If the halfway drop is too much
 
@@ -342,7 +341,7 @@ passing constants with `setFragmentBytes`.
 | `Liminal/Utils/DebugLaunchOptions.swift` | Section 4.5. |
 | `scripts/shader-bench.swift`, `shader-bench.sh`, `tx-clip.sh` | `--drop --fill <s> --hits <list> --tx-colour --tx-finisher`; `sequence.json` records `downbeatFrame`; scenarios accept the drop fields. Add `LofiFillDetector.swift` to the compile list only if the bench needs it. |
 | `scripts/tx-check.py` | `score --drop` with the gates in section 8.2. The bell gates are unchanged. |
-| `scripts/perf-run.sh` | `--lofi` also fails on a late cut (section 8.4). |
+| `scripts/perf-run.sh` | also fails on a late cut (section 8.4). |
 | `scripts/drop-sync.py` (new) | Section 8.3. |
 | Tests | Section 8.1. |
 | Docs | `docs/decisions/transitions.md` T44 onward (timing, fill detector with aggregate calibration, library, uniforms, measurements, GPU); `docs/experience.md:45, :77`; `docs/architecture.md:27`; `docs/development.md` flags; `docs/README.md` index; repository maps in `CLAUDE.md` and `AGENTS.md` for the new file. |
@@ -426,8 +425,8 @@ carry the real gate.
 
 | Run | Gate |
 |---|---|
-| macOS: `-LiminalAutoPlay YES -audio.musicMode lofi -LiminalTestImage <dir> -LiminalMusicSeed <n>`, at least 8 drops | "drop cut presented" between 17 ms before and 8 ms after `tD` for at least 90 % of cuts; none later than 25 ms. No "Slow Mac frame" within 0.5 s of a cut. Screenshot one frame at `tD + 50 ms`: clean new picture. |
-| visionOS Simulator: `scripts/perf-run.sh --lofi` | Passes as today (no frame of 100 ms or more, no missed drum or picture change, 8-bar reveal count). New check: no cut whose frame start is more than 1.5 frames after `tD - lead`. |
+| macOS: `-LiminalAutoPlay YES -LiminalTestImage <dir> -LiminalMusicSeed <n>`, at least 8 drops | "drop cut presented" between 17 ms before and 8 ms after `tD` for at least 90 % of cuts; none later than 25 ms. No "Slow Mac frame" within 0.5 s of a cut. Screenshot one frame at `tD + 50 ms`: clean new picture. |
+| visionOS Simulator: `scripts/perf-run.sh` | Passes as today (no frame of 100 ms or more, no missed drum or picture change, 8-bar reveal count). New check: no cut whose frame start is more than 1.5 frames after `tD - lead`. |
 | visionOS device | Not available to automation. The 28 ms lead and device GPU cost are recorded as unverified. |
 
 ### 8.5 GPU (`shader-bench.sh --shader-b NEW --shader REF`, interleaved, 2048 x 2048 MRT stereo)
@@ -467,10 +466,10 @@ audiovisual simultaneity literature; the 20-30 ms figure for percussive transien
 Implemented on branch `transitions-drop` (not pushed, not merged). Measurements, deviations from this plan
 and open items are in `docs/decisions/transitions.md` T44-T50.
 
-- In Lo-Fi every drum-timed image change is a drop: the outgoing picture breaks up from the fill and the
+- Every drum-timed image change is a drop: the outgoing picture breaks up from the fill and the
   downbeat frame is exactly an ordinary frame of the new picture. 19 styles, six colour layers, five
   finishers. `-LiminalDropOff YES` restores the old behaviour.
-- Passed: unit tests, both builds, 38 of 38 offline clips, ambient transitions and non-drop GPU cost
+- Passed: unit tests, both builds, 38 of 38 offline clips, bell transitions and non-drop GPU cost
   unchanged, visionOS and macOS cut timing in the Simulator and live.
 - Changes from the plan: flatter build curve, old framing held until the cut, base effects calm only in the
   last quarter second, per-drop shader variants, dive dropped. A review fix starts the new picture's framing

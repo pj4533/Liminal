@@ -71,9 +71,9 @@ o *= o;
 - Parameters: `fireIntensity`, `fireSpeed`, `firePalette` (warm/cool/rainbow)
 - Could trigger during image transitions (the `transitionBoost` mechanism already exists)
 
-**Why it's high impact:** Fire/plasma overlays on AI-generated surrealist images would be extremely psychedelic. The existing transition boost mechanism could amplify this during crossfades.
+**Why it's high impact:** Fire/plasma overlays on the curated pictures would be extremely psychedelic. The existing transition boost mechanism could amplify this during crossfades.
 
-**Psychedelic score: 9/10** — Fire/plasma flowing across surreal imagery is peak psychedelia.
+**Psychedelic score: 9/10** — Fire/plasma flowing across the pictures is peak psychedelia.
 
 ---
 

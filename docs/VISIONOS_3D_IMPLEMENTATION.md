@@ -47,7 +47,7 @@ DomeVertex (32 bytes):
 
 ## Phase 2: ML Depth Maps
 
-**Goal:** Generate per-pixel depth maps from Gemini images using on-device ML. These depth maps drive Phases 3, 4, and 7.
+**Goal:** Generate per-pixel depth maps from curated pictures using on-device ML. These depth maps drive Phases 3, 4, and 7.
 
 **Model:** `DepthAnythingV2SmallF16.mlpackage` from [apple/coreml-depth-anything-v2-small](https://huggingface.co/apple/coreml-depth-anything-v2-small). ~50MB, Float16 precision, runs on Apple Neural Engine. Input: 518x518 image. Output: 518x396 grayscale depth map (0=far, 1=near). Inference: ~31ms.
 
@@ -122,7 +122,7 @@ Effects Shader → Right UV offset → Right DrawableQueue ┘
 
 ## Phase 5: ImagePresentationComponent (visionOS 26)
 
-**Goal:** Use Apple's on-device ML to turn each Gemini image into a walkable 3D spatial diorama with head-tracked parallax. Separate immersive space from the dome.
+**Goal:** Use Apple's on-device ML to turn each picture into a walkable 3D spatial diorama with head-tracked parallax. Separate immersive space from the dome.
 
 **How it works:** `ImagePresentationComponent.Spatial3DImage` takes an image file, runs `generate()` for ML inference (several seconds), then creates a spatial 3D scene you can lean into and look around. This is a completely separate experience from the dome.
 

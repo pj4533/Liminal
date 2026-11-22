@@ -7,7 +7,7 @@ There are two cases:
 - **A new source for an existing provider** (another LoC collection, Commons category, NASA query or museum search). This is a JSON edit plus verification.
 - **A new institution**, which also needs a provider: one Swift file, a registry line, a provider block, fixtures and tests.
 
-Either way, the work has four steps: research the collection, write the entry, build and test, then verify live without touching the user's pool or spending Gemini budget.
+Either way, the work has four steps: research the collection, write the entry, build and test, then verify live without touching the user's pool.
 
 ## 1. Research the collection
 
@@ -86,7 +86,6 @@ Add an object to `sources` in `Liminal/Visual/ImageSources/image-collections.jso
 | `enabled` | bool | yes | `false` keeps the entry without using it |
 | `weight` | number | yes | Copies in the ingest bag (`round(weight)`, at least 1) and a multiplier on display weight. Most sources are 1-3; the enabled total is 48 (2026-11-21) |
 | `themes` | [string] | yes | Documentation: what the source is for |
-| `mood` | object | yes | `{"moods": [...], "subjectCategory": "...", "energy": 0-1, "warmth": -1-1}`. Becomes the picture's `PromptSpec`, which `VisualMoodBuilder` sends to the music. Moods (1-4): `serene`, `eerie`, `euphoric`, `ominous`, `playful`, `majestic`, `intimate`, `electric`, `melancholy`, `lush`. Subject categories: `creature`, `plant`, `architecture`, `object`, `vehicle`, `landscape`, `food`, `instrument`, `celestial` |
 | `license` | string | yes | Documentation: what the rights should be. The app always judges each item's own record |
 | `collection` | string | LoC, DC | LoC collection slug (`carol-m-highsmith`); Digital Commonwealth host collection facet ("The Tichnor Brothers Collection") |
 | `queries` | [string or object] | one of these three, or pins | Searches. A plain string, or `{"q": "...", "yearStart": 1965, "yearEnd": 1972}` (NASA), `{"q": "...", "type": "Print"}` (Cleveland; AIC with Painting, Photograph, Print, Drawing and Watercolor), `{"q": "...", "departmentId": 19}` (the Met) |
@@ -118,8 +117,7 @@ An example, `dc-tichnor-postcards`:
   "rejectTitleWords": ["Greetings", "views"],
   "license": "Boston Public Library, reuse_allowed_ssi no restrictions",
   "pinned": [],
-  "allowMonochrome": false,
-  "mood": { "moods": ["playful", "melancholy"], "subjectCategory": "architecture", "energy": 0.45, "warmth": 0.6 }
+  "allowMonochrome": false
 }
 ```
 
@@ -134,7 +132,6 @@ Guidance:
 
 - its provider is keyless and has a provider block;
 - the weight is above 0;
-- there are 1-4 moods, energy is in 0...1 and warmth in -1...1;
 - there is something to fetch;
 - `requiresKey` is not set.
 
@@ -152,19 +149,19 @@ It also checks that only listed sources allow monochrome. If a new source sets `
 3. **Add a provider block** to the JSON `providers` map. The app reads `name` and `institution`; the institution goes into every credit. Also write `auth`, `search`, `image`, `notes` and `license` as documentation. All URL templates must be https, which `everyProviderURLIsHTTPS` checks.
 4. **Add `hostGaps`** entries if the institution rate-limits (the Met 5 s, AIC 2 s). The default gap is 1 s.
 5. **Fixtures.** Trim a live response to a few records and save it as `LiminalTests/Fixtures/ImageAPI/<id>-search.json` (and `<id>-object.json` or similar). Keep at least one record that must be rejected (wrong rights, no image) alongside good ones. Do not keep anything personal. The fixtures directory is read with `ImageAPIFixtures.data("<file>")`.
-6. **Tests** (Swift Testing) go in `LiminalTests/ImageAPIModeTests.swift`:
+6. **Tests** (Swift Testing) go in `LiminalTests/CuratedImageTests.swift`:
    - In `ImageProviderParsingTests`: parse the fixture and check the ids, title, creator, rights text, image hint or URL, the declared size, the next cursor, and that bad records are dropped or carry rejectable rights. See `digitalCommonwealthKeepsTheIIIFImageAndTheReuseVerdict` and the AIC test.
    - In `ImageRightsTests`: if the institution's rights wording is new, check that it canonicalises to the intended label and that its restricted values are rejected.
    - Add the provider id to the `keyless` set in `ImageCollectionsTests.enabledSourcesAreComplete`.
-   - Run the API-mode suites:
+   - Run the image suites:
 
      ```sh
      xcodebuild test -scheme Liminal -destination 'platform=macOS' \
        -only-testing:LiminalTests/ImageCollectionsTests -only-testing:LiminalTests/ImageProviderParsingTests \
        -only-testing:LiminalTests/ImageRightsTests -only-testing:LiminalTests/ImageRotationTests \
        -only-testing:LiminalTests/ImageOpennessTests -only-testing:LiminalTests/CuratedImagePoolTests \
-       -only-testing:LiminalTests/CuratedImageFeedTests -only-testing:LiminalTests/ImageQueueAPIModeTests \
-       -only-testing:LiminalTests/ScanEdgeTrimmerTests -only-testing:LiminalTests/ImageSourceSettingsTests
+       -only-testing:LiminalTests/CuratedImageFeedTests -only-testing:LiminalTests/ImageQueueTests \
+       -only-testing:LiminalTests/ScanEdgeTrimmerTests
      ```
 
 7. **Build both platforms**:
@@ -176,27 +173,26 @@ It also checks that only listed sources allow monochrome. If a new source sets `
 
 ## 4. Verify live
 
-API mode calls only free public APIs, so a verification run may use the network. `-LiminalImage*` flags are automation flags, which keeps Gemini off. Run one Liminal at a time, and terminate it afterwards.
+The pipeline calls only free public APIs, so a verification run may use the network. Run one Liminal at a time, and terminate it afterwards.
 
 1. **Run only the new source in a throwaway pool.** Launch the built macOS app with:
 
    ```
-   -LiminalAutoPlay YES -LiminalImageSource api -LiminalImageAPIFresh YES \
-   -LiminalImageProvider <source-id> -LiminalImageInterval 8 -archive.enabled YES -LiminalVideoOffline YES
+   -LiminalAutoPlay YES -LiminalImageAPIFresh YES \
+   -LiminalImageProvider <source-id> -archive.enabled YES -LiminalVideoOffline YES
    ```
 
    `-LiminalImageAPIFresh YES` uses an empty `CuratedImageStore-Verify` folder, which the next normal launch removes. `-LiminalImageProvider` accepts a source id or a provider id, and a comma-separated list.
 2. **Stream the log** (`log stream --predicate 'subsystem == "com.saygoodnight.Liminal"'`) for five minutes or so, and check:
    - `🖼️ [API] feed: 1 sources (<source-id>)`, then `<source-id> <queryKey>: N results, M new` for the searches.
    - `API image stored: … size=… openness=… key=… license=…` with the expected licence and a size near 2528.
-   - `API image rejected: … reason=…`. Tally the reasons. Many `title rejected` lines mean the reject words are too broad. Many `too small` lines mean the route is not the high-resolution one. Many `no room for the film`, `not open enough`, `text covers` or `monochrome` lines mean the source is off-brief for API mode.
+   - `API image rejected: … reason=…`. Tally the reasons. Many `title rejected` lines mean the reject words are too broad. Many `too small` lines mean the route is not the high-resolution one. Many `no room for the film`, `not open enough`, `text covers` or `monochrome` lines mean the source is off-brief.
    - `API image shown: … license=… url=…`, then open a few of the URLs.
    - No `backing off` loops. If there are some, look at the error (429, 5xx, `blocked`) and add a host gap or a fallback.
-   - No `[Gemini]` lines.
 3. **Look at the screen.** Build, terminate the old process, relaunch, and capture with `/opt/homebrew/bin/peekaboo`. Check the 3:2 framing, that the film shows through, and the credit under **Now showing** in Images & Storage.
 4. **Run the whole rotation** without `-LiminalImageProvider` to see the new source in the mix, at its weight.
 5. **Offline reuse.** Run again with `-LiminalImageAPIOffline YES` added: the verify pool is reused and nothing is fetched.
-6. **Performance**, when the provider serves large files or the source is heavy: run `scripts/perf-run.sh --lofi --extra "-LiminalImageSource api -LiminalImageAPIFresh YES -LiminalImageProvider <id>"` and compare it with a plain `--lofi` run (D42).
+6. **Performance**, when the provider serves large files or the source is heavy: run `scripts/perf-run.sh --extra "-LiminalImageAPIFresh YES -LiminalImageProvider <id>"` and compare it with a run without the source (D42).
 7. **visionOS Simulator**, optionally: the launch line in [pipeline.md](pipeline.md#19-debug-flags-and-verification). The text and face checks do not run in the simulator.
 
 ## 5. Document it
@@ -205,6 +201,6 @@ In the same change:
 
 - **[sources.md](sources.md):** a row in the table and a section with the provider, searches, what it shows, measured size, route, rights, weight, monochrome, pins and credit.
 - **[providers.md](providers.md):** a new provider section, or new pitfalls in an existing one.
-- **[`experience.md`](../experience.md#api-image-sources):** a row in the user-facing credits table, naming the institution and linking to the collection.
+- **[`experience.md`](../experience.md#image-sources):** a row in the user-facing credits table, naming the institution and linking to the collection.
 - **[`decisions/images.md`](../decisions/images.md):** a dated entry with what was added and the live-run numbers (stored, rejected by reason, shown).
 - **The research note** from step 1, and a line in [research-history.md](research-history.md).

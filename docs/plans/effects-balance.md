@@ -132,7 +132,7 @@ by 285 s).
 ### 4.2 Fresh-image hold
 
 `age` = seconds on the effect clock since the current image's crossfade began (nil before the first
-crossfade). `k = clamp(imageInterval / 30, 0.33, 1)`.
+crossfade). `k` is 1: images change every 30 s.
 
 ```
 fresh(age) = 1 - smoothstep(0, 1.5, age) * (1 - smoothstep(4.5 k, 11 k, age))      nil -> 1
@@ -173,7 +173,7 @@ Transition boost, additive (today it is a multiple of the base, x10 / x3 / x5), 
 | `logSphereAmount += b *` | 0 | 0.006 | 0.020 | 0.023 |
 | `fractalNoiseAmount += b *` | 0.004 | 0.020 | 0.060 | 0.076 |
 
-Resulting warp over an hour with a 30 s image interval (`fx_model.py`):
+Resulting warp over an hour with a 30 s hold per picture (`fx_model.py`):
 
 | | strain p90: p10 / median / p90 / max | displacement p95: median / max | time strain < 0.4 | time strain > 0.7 |
 |---|---|---|---|---|
@@ -215,7 +215,7 @@ The music factors keep their form and are applied to the new base values:
 | `a_l`, `a_n` | `* (1 + a (0.30 e - 0.15))` | then the strain budget, then 0.020 / 0.036 |
 | chromatic | `* (1 + a (0.30 e - 0.10)) + a * 0.002 * pulseMotion` | 0.02 before the transition boost |
 | feedback mix | `+ a (0.08 e - 0.04)` | base - 0.04 ... min(base + 0.04, 0.34) |
-| bloom | `+ a (0.12 pulseColor + 0.10 shimmer)` | 0.72 * base / 0.5 |
+| bloom | `+ a (0.12 pulseColor)` | 0.72 * base / 0.5 |
 | vibrance, feedback warp, ghost reach, hue shift, Ken Burns lead | as today | as today |
 
 Because the budget runs after the music factors, loud music can raise the water but can never push the
@@ -223,9 +223,6 @@ combined warp past `B`; the radial and the noise shrink to make room. `Caps.logS
 `Caps.fractalNoiseBase`, `Caps.distortionBase` become the absolute caps above; `Caps.feedbackMixLow/High`
 become relative to the base. `AVCouplingTests` and `scripts/av-coupling-check.sh` assert the old caps and
 need the new ones.
-
-`visualActivity` (visuals to music) should follow the drive so that the music calms with the picture:
-`0.15 + 0.6 * d * (0.55 + 0.45 t01) + 0.5 sin(pi tp)`, clamped 0...1, computed without music (as today).
 
 ## 6. Shader edits (three lines, `EffectsRenderer.metal`)
 
@@ -255,7 +252,6 @@ targets):
 nonisolated struct EffectLook: Sendable, Equatable {
     var intensity: Float = EffectLook.defaultIntensity   // the user setting, 0...1
     var imageAge: Float? = nil                           // s since the current crossfade began
-    var imageInterval: Float = 30
     static let defaultIntensity: Float = 0.5
     static func tri(_ i: Float, _ a: Float, _ b: Float, _ c: Float) -> Float
     static func macroWave(time: Float) -> Float
@@ -267,7 +263,7 @@ nonisolated struct EffectLook: Sendable, Equatable {
 ```
 
 `EffectsUniformsComputer.compute(..., music:, look: EffectLook = EffectLook())` implements sections 4 and 5.
-`visualActivity(time:transitionProgress:look:)` likewise. All constants live in one `enum Tuning` so the
+All constants live in one `enum Tuning` so the
 tuning pass edits one place.
 
 Then replace the `fail(...)` at the "WIRE-UP POINT" in `scripts/shader-bench.swift` (`computeUniforms`) by
@@ -290,8 +286,7 @@ change both and regenerate.
 ### 7.3 Renderers
 
 - macOS (`ContentView.currentUniforms`) and visionOS (`ImmersiveDomeView` render loop): keep
-  `transitionStartEffectTime: Float?`, set when a crossfade starts (the same place that calls
-  `music.imageDidChange`); pass `imageAge = effectTime - start`, `imageInterval = Float(settings.imageInterval)`.
+  `transitionStartEffectTime: Float?`, set when a crossfade starts (the same place the crossfade starts); pass `imageAge = effectTime - start`.
   Reset to nil when the effect clock restarts.
 - The second `compute` call that builds the `neutral` uniforms for the sync log must pass the same `look`.
 
@@ -397,4 +392,3 @@ Also run the shipped pipeline (`--mode current`) once through the same judges as
 - The frozen-time renders understate feedback smear on moving content.
 - Strain coefficients (12.8 / 26 / 28) are fits; the measured maximum at I = 0.5 is 0.94 against a budget of
   0.90. The gate allows 1.00.
-- With an image interval under 11 s the fresh-image windows are scaled by the interval, down to a third.

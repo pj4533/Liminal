@@ -84,10 +84,10 @@ After the fix (same check, `--log` with the run's log):
 
 ## Testing
 
-`-LiminalRecordAt <start>,<seconds>` starts a recording `<start>` seconds after playback is ready and stops it `<seconds>` later, keeping the file without the Photos step (no permission prompt during automation). Add `,photos` to include the Photos step. The flag is in `DebugLaunchOptions.blocksImageGeneration`, so it never spends Gemini budget. Example:
+`-LiminalRecordAt <start>,<seconds>` starts a recording `<start>` seconds after playback is ready and stops it `<seconds>` later, keeping the file without the Photos step (no permission prompt during automation). Add `,photos` to include the Photos step. It is an automation flag, so use `-LiminalImageAPIFresh YES` or `-LiminalImageAPIOffline YES` with it. Example:
 
 ```sh
-open Liminal.app --args -LiminalAutoPlay YES -audio.musicMode lofi -archive.enabled YES -LiminalImageSource api -LiminalRecordAt 5,60
+open Liminal.app --args -LiminalAutoPlay YES -archive.enabled YES -LiminalImageAPIFresh YES -LiminalRecordAt 5,60
 ```
 
 Read the `Recording finished:` log line for frame and drop counts. In the visionOS Simulator the file is in the app's data container under `Documents/Recordings`.
@@ -95,7 +95,7 @@ Read the `Recording finished:` log line for frame and drop counts. In the vision
 **Simulator timing checks.** The simulator's software HEVC encoder writes about 35 fps even at 384x256, so a full-size simulator movie drops frames in the encoder queue. `-LiminalRecordSize WxH` and `-LiminalRecordCodec h264` (DEBUG) record smaller and with H.264, which keeps up at 768x512. `-LiminalRecordTrace YES` logs every tap buffer's host time, sample time and track position, and any exact-zero run inside it (`REC mark ...`):
 
 ```sh
-xcrun simctl launch <udid> com.saygoodnight.Liminal -LiminalAutoPlay YES -LiminalOpenDome YES -audio.musicMode lofi \
+xcrun simctl launch <udid> com.saygoodnight.Liminal -LiminalAutoPlay YES -LiminalOpenDome YES \
   -LiminalMusicSeed 7 -LiminalTestImage <dir of jpgs> -LiminalRecordAt 8,90 -LiminalRecordSize 768x512 -LiminalRecordCodec h264
 ```
 

@@ -1,4 +1,4 @@
-# API image mode: more sources outside the Library of Congress (tested 2026-11-21)
+# More sources outside the Library of Congress (tested 2026-11-21)
 
 **Scope:** everything except the Library of Congress. The work had two parts: expand the existing `wikimedia`, `nasa`, `cma` and `met` providers with more in-vibe sources, and re-examine institutions that were skipped before.
 

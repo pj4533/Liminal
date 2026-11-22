@@ -16,7 +16,7 @@ Facets and Solarize), verified in the visionOS 27.2 Simulator and the macOS app 
   simulated at 60 fps with continuous feedback and ghost taps. `scripts/tx-clip.sh` makes the clip, GIF,
   filmstrip and scores.
 - Why: a transition is motion over 1.5 s and happens once per 30 s in the simulator on a random image
-  pair. Offline it is deterministic, repeatable per style and seed, and costs no image generation.
+  pair. Offline it is deterministic, repeatable per style and seed, and needs no network.
 - The image age, vibrance blend and texture bindings follow what both renderers do, so start and end
   seams are in the clip.
 
@@ -102,9 +102,9 @@ Shatter (geometric); Afterimage, Echo (temporal). Table in plan section 6.
 - Why a director object and not a pure function of the image counter: the weights need the effect time
   and the history. It lives in `VisualEngine` so both platforms share one.
 
-### T11. Durations 1.5 to 4.5 s per style, at most 20 % of the image interval
+### T11. Durations 1.5 to 4.5 s per style, at most 20 % of the time a picture is held
 - Why: duration is the cheapest variety there is, and slow styles (Depthwash, Afterimage) need the room.
-  The limit protects short intervals.
+  The limit protects short hold times (pictures now change on drum boundaries).
 - `EffectLook.transitionDuration` anchors the fresh-image hold to the end of the transition (fade
   `min(1.5, 0.4 D)`, hold to `D + 3`, back by `D + 9.5`). For D = 1.5 this is today's 1.5 / 4.5 / 11, so
   the judged look and the golden test do not move.
@@ -113,12 +113,11 @@ Shatter (geometric); Afterimage, Echo (temporal). Table in plan section 6.
 - Why: "subtler at low, wilder at high". Below 0.25 only soft styles are offered; the swap gates are
   relaxed there (a subtle transition may show more of both pictures).
 
-### T13. Music: chord change on the swap, slow swell only, no flashes
-- What: the duration posted to the conductor is twice the swap-centre time, so its existing "chord at
-  half the duration" lands on the exchange for every style. The slow onset follower may swell the
-  envelope by at most 12 %. The swap progress never depends on music.
-- Why: coupling without strobing; nothing in the conductor changes.
-- Deferred: delaying an image change to meet a music scene change (optional, last).
+### T13. Music: slow swell only, no flashes
+- What: the slow onset follower may swell the envelope by at most 12 %. The swap progress never depends on
+  music. (The first version also posted the transition's duration to the music so a chord change landed on
+  the swap; images no longer send anything to the music, and changes now sit on the drum boundaries.)
+- Why: coupling without strobing.
 
 ### T14. Acceptance: objective gates per clip, then blind judges on clips
 - Gates (plan 8.2): swap_vis, double_exposure, pop, seam_in, seam_out, step_max, strobe, resolve, with
@@ -155,7 +154,7 @@ swap fields) and `swapWeight` in stage B. Tests: `LiminalTests/ImageTransitionTe
 ### T18. Fresh hold: fade over max(1.5, 0.4 D), not min
 - The plan's `min(1.5, 0.4 D)` gives 0.6 s at D = 1.5, contradicting its own "today's 1.5 / 4.5 / 11";
   max keeps the judged timings at 1.5 s and lengthens the fade for long transitions. Hold to D + 3,
-  back by D + 9.5, both still scaled for short image intervals (and never before the transition ends).
+  back by D + 9.5, both still scaled for short hold times (and never before the transition ends).
 
 ### T19. Mask fields are computed in stage A, one float crosses into stage B
 - What: Tide, Undertow, Prism (flow), Shatter (crystal), Rainbow (the strongest hue-wave terms),
@@ -221,7 +220,7 @@ swap fields) and `swapWeight` in stage B. Tests: `LiminalTests/ImageTransitionTe
 - Transition frames: each style is 1.02-1.09 x the new classic transition frame (gate 1.05: Dive,
   Echo, Embers, Kaleidoscope, Rainbow and Whirlpool are 1.05-1.09). Against main's transition frame
   they are 1.12-1.22 x: main switched the ghost taps off during a transition, and taps now run through
-  it (T7). Worth a check on device: a transition lasts 2-4 s of every image interval.
+  it (T7). Worth a check on device: a transition lasts 2-4 s of every picture's hold.
 
 ## Tuning round 1
 
@@ -425,18 +424,16 @@ style (axes as in T27); "< 3.5" marks what round 2 had to fix.
 
 ## Final verification
 
-### T38. Debug flags to watch real transitions: `-LiminalTestImage <directory>`, `-LiminalImageInterval <s>`
+### T38. Debug flag to watch real transitions: `-LiminalTestImage <directory>` 
 - What: `-LiminalTestImage` now also takes a directory. Its jpg / jpeg / png files (names ending in
   `-depth` skipped) are shown in name order on the normal image schedule, so the app runs real
-  transitions on known images without the cache and without Gemini. `-LiminalImageInterval <s>`
-  (at least 4 s) replaces the Image interval setting for that launch; it is assigned in
-  `SettingsService.init`, so it is never saved. Both count as automation flags: generation stays off.
+  transitions on known images without the picture pool. The recordings below at 9, 15 and 20 s were made with a since-removed flag that set the time between changes. `-LiminalTestImage` counts as an automation flag.
 - Why: the cache store has sidecars and a format epoch, so copying fixtures into it is fragile; the
   existing test-image hook was the smallest change. DEBUG only, compiled out of Release.
 - macOS note: the app is sandboxed, so it cannot read a scratch directory. The recording used a copy
   built with `ENABLE_APP_SANDBOX=NO` (own derived data, nothing committed). Re-signing the sandboxed app
   with the fixtures inside its bundle does not work: macOS asks the user to confirm the changed app.
-- Transition length follows the interval (`clampDuration`: at most 0.2 x interval). At 9 s every style
+- Transition length follows the hold time (`clampDuration`: at most 0.2 x the hold). At 9 s every style
   ran at 1.8 s; at 15 s at most 3.0 s; at 20 s the styles' own lengths (2.3-3.8 s) came back.
 
 ### T39. visionOS 27.2 Simulator (dome open, intensity 0.5, 16 fixtures, sync on)
@@ -484,9 +481,9 @@ style (axes as in T27); "< 3.5" marks what round 2 had to fix.
 
 ### T43. Lo-Fi drum-timed reveals use the whole family (19 November 2026)
 
-Commit `6dc0999` (18 November) timed Lo-Fi image changes to the 8- and 16-bar drum fills. It also gave every one of those changes a fixed `.classic` spec lasting `dissolveBeats`, which is 0.375–0.75 beats. Because `VisualEngine.nextTransition` returned that spec whenever a reveal was pending, the `TransitionDirector` was bypassed, and in Lo-Fi every change became the same short whole-frame dissolve. Ambient mode was unaffected.
+Commit `6dc0999` (18 November) timed Lo-Fi image changes to the 8- and 16-bar drum fills. It also gave every one of those changes a fixed `.classic` spec lasting `dissolveBeats`, which is 0.375–0.75 beats. Because `VisualEngine.nextTransition` returned that spec whenever a reveal was pending, the `TransitionDirector` was bypassed, and in Lo-Fi every change became the same short whole-frame dissolve. 
 
-The fix: `LofiImageReveal` now asks the director for its spec when the fill is scheduled. It uses the renderers' latest intensity, energy and depth inputs, and an image interval of 32 beats.
+The fix: `LofiImageReveal` now asks the director for its spec when the fill is scheduled. It uses the renderers' latest intensity, energy and depth inputs, and a hold of 32 beats.
 
 The user's timing: the warp builds while the drummer fills, and the new picture is fully in on the downbeat. So the reveal starts at `downbeat - s1 * duration`, where `s1` ends the style's swap window. The lead-in is snapped to a whole number of beats, at least two.
 
@@ -511,11 +508,11 @@ transition. Boom, new drum loop"; many different kinds of transition out. Plan:
   is on screen (Bleed leaks blocks of the new one, at most 0.35); from progress 1 the frame is exactly a
   frame without a transition (`EffectsUniformsComputer.compute(drop:)`, byte-for-byte in
   `DropTransitionTests`).
-- Ambient changes, manual and timer advances keep the bell family and the director's bell sequence (the
-  first 64 picks for seeds 0-3 are identical to main's).
+- The bell family and the director's bell sequence remain for the bell reveal (`-LiminalDropOff`, below) and
+  for any change with no drum grid (the first 64 picks for seeds 0-3 are identical to main's at the time).
 - Both drum boundaries are drops. The turnaround (beat 64, a new take) runs at strength 1; the halfway
   change (beat 32, same take) at 0.7 and never draws the whiteout or the invert. One constant
-  (`DropPlan.halfwayStrength`) and `-LiminalDropOff` bring back the bell for an A/B. Lo-Fi without drum
+  (`DropPlan.halfwayStrength`) and `-LiminalDropOff` brings back the bell reveal as a debug A/B. Lo-Fi without drum
   takes also runs at 0.7, with the default build and no hits.
 - No impact frame after the cut: the finisher is the end of the build.
 
@@ -630,7 +627,7 @@ transition. Boom, new drum loop"; many different kinds of transition out. Plan:
   measured from d + 3 (the trails re-converge on the clean frame in 2 frames, a step of 3-7 x the settled
   step at d + 1), and build_monotonic uses a 9-frame median and 0.10 (the glitches re-hash per step, so
   single frames flicker). Distinctness at p = 0.9: worst SSIM 0.57 / 0.64 (limit 0.85).
-- macOS live (`-LiminalAutoPlay -audio.musicMode lofi -archive.enabled NO -LiminalMusicSeed 7`, cached
+- macOS live (`-LiminalAutoPlay -archive.enabled NO -LiminalMusicSeed 7`, cached
   images): 16 drops in two runs; the cut was drawn 3.7-21.9 ms before the downbeat with the 25 ms lead.
   `addPresentedHandler` reported no presented times, so the measured lead never replaced the default and the
   presentation time of the cut is not measured. No slow frame near a cut after the fix in T48.

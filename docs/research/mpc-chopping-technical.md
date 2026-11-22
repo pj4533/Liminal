@@ -50,7 +50,7 @@ Wrap in a `Task` with a deadline: race against `Task.sleep`; on timeout call `an
 ### 1.4 Authorization, Info.plist, sandbox
 
 - The WWDC session shows only microphone permission for live capture. `SpeechTranscriber` file analysis is not documented as using `SFSpeechRecognizer.requestAuthorization`, so `NSSpeechRecognitionUsageDescription` is likely not required for on-device SpeechAnalyzer on files, whereas legacy `SFSpeechRecognizer` does require it **[verify by running a signed build with the key absent]**. Adding the key is harmless; do not add a microphone key since Liminal does not capture the mic. Do not change signing settings.
-- Sandbox: network only for the one-time asset download (the app already has client network for Gemini/Internet Archive). No extra entitlement is documented for the model [verify].
+- Sandbox: network only for the one-time asset download (the app already has client network for the Internet Archive and the picture APIs). No extra entitlement is documented for the model [verify].
 - Locale: the Archive footage is mostly English; `Locale(identifier: "en_US")` is the safe default. Filter per clip by SoundAnalysis/language guess or skip transcription for non-English.
 
 ### 1.5 visionOS and simulator

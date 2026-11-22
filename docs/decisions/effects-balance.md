@@ -14,7 +14,7 @@ Status: done. Design E1-E14, implementation E15-E22, tuning rounds E23-E30, fina
   against the same frame with all effects off (Ken Burns kept).
 - Why: the simulator shows a random image and cannot switch one effect off. The bench compiles the app's
   own uniform code and the working-tree shader, so the frames are what the app draws.
-- No image was generated. The fixtures are existing photos with known subjects.
+- The fixtures are existing photos with known subjects.
 
 ### E2. Score on luma, and treat HOG as the recognisability proxy
 - What: four metrics (SSIM at 384 px, SSIM at 96 px, edge-map correlation, HOG cosine), all on luma.
@@ -164,8 +164,7 @@ asks twice (macOS evaluates uniforms more than once per tick). It snaps when the
 more than 1 s. With `-LiminalFreezeTime` the target is used directly.
 
 ### E20. DEBUG flag `-LiminalEffectIntensity X` overrides the setting without changing it
-Reason: sim checks and perf runs need a fixed intensity without touching the user's saved value. Like the
-other automation flags, it blocks Gemini generation.
+Reason: sim checks and perf runs need a fixed intensity without touching the user's saved value.
 
 ### E21. The slider sits first in the Visuals section on both platforms
 It is the shared `ValueSlider` with "Subtle"/"Wild" end labels and a caption. `ValueSlider` gained an
@@ -401,7 +400,7 @@ Round 2 (blind judges on 180 frames, `pic-NNN`, seed 9277):
   - 78.3 fps, GPU mean 0.129 ms (p95 0.235 ms), 2.3 dropped frames per 5 s;
   - the reference is about 80 fps and 0.17 ms, so the cost is flat or lower;
   - the 1.0 run's PERF lines show 82-84 fps and 0.10-0.14 ms.
-- **Builds and tests:** both platforms build and `LiminalTests` passes. No launch generated an image: every log shows "Gemini image generation OFF".
+- **Builds and tests:** both platforms build and `LiminalTests` passes. No launch fetched a new picture.
 
 ### How to tune
 - **User:** Visuals → Effect intensity. Subtle (0) keeps the photo clean apart from a gentle water ripple. Wild (1) adds the radial and crystalline noise in wild stretches. Every level breathes over minutes, and each new image stays clear for its first few seconds.

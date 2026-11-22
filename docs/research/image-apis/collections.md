@@ -1,6 +1,6 @@
-# Curated image collections for API mode (2026-11-21)
+# Curated image collections (2026-11-21)
 
-This file records which public collections and queries Liminal's API image mode should rotate through, and why. It follows [survey.md](survey.md), which ranks the APIs, and [openpics.md](openpics.md), which covers the earlier OpenPics project. The machine-readable result is [`Liminal/Visual/ImageSources/image-collections.json`](../../../Liminal/Visual/ImageSources/image-collections.json).
+This file records which public collections and queries Liminal's curated pictures rotate through, and why. It follows [survey.md](survey.md), which ranks the APIs, and [openpics.md](openpics.md), which covers the earlier OpenPics project. The machine-readable result is [`Liminal/Visual/ImageSources/image-collections.json`](../../../Liminal/Visual/ImageSources/image-collections.json).
 
 ## Method
 
@@ -52,7 +52,7 @@ The table lists the sources that were kept. "Long side" is the measured size of 
 - **Scanned masters through IIIF (2026-11-21, after the user asked about high-res FSA photographs).** The OpenPics trick (`/pictures/item/<id>/?fo=json`, `resources[0].larger`) still names the master: for FSA/OWI colour it is a 46 MB TIFF (`storage-services/master/pnp/fsac/.../1a33849u.tif`). The IIIF image service serves that master under a `master:` prefix, not `service:`: `https://tile.loc.gov/image-services/iiif/master:pnp:fsac:1a33000:1a33800:1a33849u/info.json` reports 4698x3280, and `full/2528,/0/default.jpg` returned a 2528x1764 JPEG in 0.7 s. The id is the 1024 px `v.jpg` path with `/` as `:` and `v` replaced by `u`. Measured: 40 of 40 sampled FSA colour items have a master of at least 2000 px; photochrom `ppmsc:07700:07735u` is 2759x3666, Prokudin-Gorskii `prokc:20100:20159u` is 3808x3726, and a 2018 Highsmith item with only a `v.jpg` (`highsm:52000:52077u`) is 7313x4696. The Margolies items tried had only a thumbnail online. Two catches:
   - About half of the FSA masters answer every scaled request (`full/2528,`, `full/!2528,2528`, `pct:50`) with HTTP 500 and the same request again later, while `full/full/0/default.jpg` works (1-5 MB JPEG of the whole master, for example 7366x9175 in 4 MB). The app tries the scaled url and falls back to `full/full` on a 5xx; decode scales it.
   - The scans include the film rebate: black edges of different widths, edge codes, rounded mount corners and sometimes a green or amber film-base tint. `BorderTrimmer` needs four alike edges and leaves them. `ScanEdgeTrimmer` walks each side in while its middle 60% is mostly dark (luma < 0.16, at most 15% per side), adds a 2% inset, and trims at least 3% from every side. Checked on six live FSA masters: all six came out clean.
-- **Previously rejected because they top out at 1024 px** (true of the `service:` derivatives; see the item above for the masters): photochroms (7,500), FSA/OWI colour (1,622), Prokudin-Gorskii (2,609), Detroit Publishing, Japanese fine prints, and the John Margolies Roadside America archive (11,751, an ideal subject, but 1024 only). Their masters are 30-144 MB TIFFs. IIIF `info.json` for the `v` derivative reports 1024, and the master ids return 404. These collections could become an upscale tier with the bundled Real-ESRGAN model.
+- **Previously rejected because they top out at 1024 px** (true of the `service:` derivatives; see the item above for the masters): photochroms (7,500), FSA/OWI colour (1,622), Prokudin-Gorskii (2,609), Detroit Publishing, Japanese fine prints, and the John Margolies Roadside America archive (11,751, an ideal subject, but 1024 only). Their masters are 30-144 MB TIFFs. IIIF `info.json` for the `v` derivative reports 1024, and the master ids return 404. Their masters turned out to be reachable (D44 in `decisions/images.md`).
 - **Mid-century searches.** Searching `/photos/` with `dates=1950/1969` turned up few usable items. Most are 1024 px or smaller, and many are marked "Publication may be restricted" (New York World-Telegram) or "Rights status not evaluated". The 1960s psychedelic rock posters (Bill Graham and Avalon Ballroom) are "not evaluated", so they were rejected.
 
 ### NASA Image and Video Library
@@ -72,7 +72,7 @@ The table lists the sources that were kept. "Long side" is the measured size of 
 - **Rejected categories:**
   - *Marbled paper*: book bindings with colour rulers.
   - *Toadstools, mushrooms, fungi, edible and poisonous*: 1908 px.
-  - The Ansel Adams NARA series and the Zentralbibliothek Zürich photochroms: capped at 2000 px. They are beautiful, so keep them as an upscale-tier candidate.
+  - The Ansel Adams NARA series and the Zentralbibliothek Zürich photochroms: capped at 2000 px. They are beautiful but below the size gate.
   - *Googie architecture*: modern snapshots under mixed licences.
 - **Rate limits.** Quick successive calls sometimes failed. Pace the requests at about 1 per second and send a descriptive User-Agent.
 
@@ -98,7 +98,7 @@ The table lists the sources that were kept. "Long side" is the measured size of 
 
 ### Internet Archive
 
-- Free-text image search mostly returns AI art, band photographs and uploader-asserted CC licences. The query "psychedelic" with a public-domain licenceurl gave 303 hits, mostly modern work. Rejected as a source.
+- Free-text image search mostly returns synthetic images, band photographs and uploader-asserted CC licences. The query "psychedelic" with a public-domain licenceurl gave 303 hits, mostly modern work. Rejected as a source.
 - Its only use is the Met mirror described above.
 
 ### Europeana
@@ -122,7 +122,7 @@ Store the credit record (title, creator, institution, source URL, licence) with 
 
 ## Resolution summary
 
-| Reaches 2K and above | Below 2K (rejected, or upscale tier only) |
+| Reaches 2K and above | Below 2K (rejected) |
 |---|---|
 | LOC Highsmith with IIIF (2048 served; masters 3000-11600) | LOC photochroms, FSA colour, Margolies, Prokudin-Gorskii (1024) |
 | NASA (3000-4400 typical) | Highsmith items from 2018 on (1024) |

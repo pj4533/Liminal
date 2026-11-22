@@ -1,4 +1,4 @@
-# API image sources
+# Sources
 
 [← Image sources](README.md) · [Pipeline](pipeline.md) · [Providers](providers.md) · [Adding a source](adding-a-source.md) · [Research history](research-history.md)
 
@@ -64,7 +64,7 @@ Weight by provider (enabled sources): wikimedia 20, nasa 9, loc 7, cma 4, met 4,
 
 ## Credits by institution
 
-API mode exists because these institutions publish their collections openly. Each stored picture keeps its own title, creator, date, institution, licence and page link, and the control panel shows them under **Now showing**.
+The pictures come from these institutions, which publish their collections openly. Each stored picture keeps its own title, creator, date, institution, licence and page link, and the control panel shows them under **Now showing**.
 
 - **Library of Congress**, Prints and Photographs Division: the Carol M. Highsmith Archive and the FSA/OWI Color Photographs; also the source of the photochroms and Haeckel plates mirrored on Commons.
 - **NASA** (Johnson, Kennedy, Ames, JPL) through the NASA Image and Video Library, and through the Project Apollo Archive on Commons.
@@ -75,7 +75,7 @@ API mode exists because these institutions publish their collections openly. Eac
 - **Art Institute of Chicago** (CC0 public-domain works).
 - **Smithsonian Institution** Open Access (provider coded, source disabled without a key).
 
-The user-facing credits table is in [experience.md](../experience.md#api-image-sources).
+The user-facing credits table is in [experience.md](../experience.md#image-sources).
 
 The ten Library of Congress sources at the end of the table were added with D45; their sections are at the end of this page.
 
@@ -93,7 +93,6 @@ Each section lists the provider, what the source searches, what it shows, the me
 - **Measured:** IIIF masters 3000-11600 px; served at 2528 on the long side. Highsmith items catalogued from 2018 on have only a 1024 px `v.jpg`, and `useMasters` reaches their masters too (for example 7313x4696). Sample of 20 per query at 2048 px or more: neon sign motel 13, drive-in theater 13, route 66 18, vintage car 18, old gas station 14 of 15.
 - **High-resolution route:** IIIF `service:` derivative when the result has one; otherwise the scanned master `https://tile.loc.gov/image-services/iiif/master:pnp:<path>u` derived from the 1024 px `v.jpg` path. Download `{service}/full/!T,T/0/default.jpg`; on HTTP 5xx from a `master:` service, `{service}/full/full/0/default.jpg` once.
 - **Rights:** `item.rights_advisory` (else `rights_information`): "No known restrictions on publication" → **No known restrictions**.
-- **Mood sent to the music:** electric, playful; subject architecture; energy 0.55; warmth 0.4.
 - **Credit:** Carol M. Highsmith Archive, Library of Congress, Prints and Photographs Division (gift to the public). [Collection](https://www.loc.gov/collections/carol-m-highsmith/)
 
 <details><summary>12 pinned ids</summary>
@@ -123,7 +122,6 @@ Each section lists the provider, what the source searches, what it shows, the me
 - **Measured:** IIIF masters 3192-11608 px; served at 2528. Samples: redwood forest 13/13, Monument Valley 15/15, fog 15/15 at 2048 px or more.
 - **High-resolution route:** IIIF `service:` derivative when the result has one; otherwise the scanned master `https://tile.loc.gov/image-services/iiif/master:pnp:<path>u` derived from the 1024 px `v.jpg` path. Download `{service}/full/!T,T/0/default.jpg`; on HTTP 5xx from a `master:` service, `{service}/full/full/0/default.jpg` once.
 - **Rights:** `item.rights_advisory` (else `rights_information`): "No known restrictions on publication" → **No known restrictions**.
-- **Mood sent to the music:** majestic, serene; subject landscape; energy 0.3; warmth 0.1.
 - **Credit:** Carol M. Highsmith Archive, Library of Congress. [Collection](https://www.loc.gov/collections/carol-m-highsmith/)
 
 <details><summary>8 pinned ids</summary>
@@ -149,7 +147,6 @@ Each section lists the provider, what the source searches, what it shows, the me
 - **Measured:** Scanned TIFF masters 4641-7738 px (40 of 40 sampled items had one, 2026-11-21). About half answer every scaled IIIF request with HTTP 500 and serve only `full/full` (1-5 MB JPEG). After `ScanEdgeTrimmer` removes 6-30% of the width, pictures are scaled back to 2528.
 - **High-resolution route:** Scanned master `https://tile.loc.gov/image-services/iiif/master:pnp:fsac:<path>u` derived from the 1024 px `v.jpg` path (size from `info.json`). Download `{service}/full/!3413,3413/0/default.jpg` (1.35 x 2528, room for the rebate trim); on HTTP 5xx, `{service}/full/full/0/default.jpg` once.
 - **Rights:** `item.rights_advisory` (else `rights_information`): "No known restrictions on publication" → **No known restrictions**.
-- **Mood sent to the music:** melancholy, serene; subject landscape; energy 0.3; warmth 0.5.
 - **Credit:** Farm Security Administration / Office of War Information Color Photographs, Library of Congress (US Government work). [Collection](https://www.loc.gov/collections/fsa-owi-color-photographs/)
 - **Notes:** Colour only. The film rebate (black edges, edge codes, rounded mount corners, tinted base) is trimmed by `trimScanEdges` (D44).
 
@@ -162,7 +159,6 @@ Each section lists the provider, what the source searches, what it shows, the me
 - **Measured:** Originals 3000-10479 px; Hasselblad scans are about 4096x4096 and keep 4096x2731 after the 3:2 crop. Median `~orig` 2-4.5 MB. One Ames painting (`AC76-0628`) is 29 MB and is rejected by the 12 MB limit.
 - **High-resolution route:** `https://images-api.nasa.gov/asset/<nasa_id>` lists the files; the `~orig` JPEG or PNG is downloaded (http links upgraded to https) after a HEAD shows it is at most 12 MB. No `~large` fallback: it is only 1920 px.
 - **Rights:** No per-item field: every item is credited as "US Government work (NASA media are generally not copyrighted)" → **Public domain**. Title reject words are the guard against third-party works.
-- **Mood sent to the music:** majestic, eerie; subject celestial; energy 0.4; warmth -0.3.
 - **Credit:** NASA (Johnson Space Center, Ames Research Center). [NASA Image and Video Library](https://images.nasa.gov/)
 - **Notes:** The pinned grey Earthrise `as8-15-2561` was rejected as monochrome in the first live run (D41).
 
@@ -193,7 +189,6 @@ Each section lists the provider, what the source searches, what it shows, the me
 - **Measured:** 2448-7857 px; some results are under 2K and fail the size gate.
 - **High-resolution route:** `https://images-api.nasa.gov/asset/<nasa_id>` lists the files; the `~orig` JPEG or PNG is downloaded (http links upgraded to https) after a HEAD shows it is at most 12 MB. No `~large` fallback: it is only 1920 px.
 - **Rights:** No per-item field: every item is credited as "US Government work (NASA media are generally not copyrighted)" → **Public domain**. Title reject words are the guard against third-party works.
-- **Mood sent to the music:** euphoric, majestic; subject celestial; energy 0.5; warmth 0.0.
 - **Credit:** NASA, ESA, JPL (PIA images). [NASA Image and Video Library](https://images.nasa.gov/)
 
 <details><summary>5 pinned ids</summary>
@@ -216,7 +211,6 @@ Each section lists the provider, what the source searches, what it shows, the me
 - **Measured:** Almost all 3000x2000 (already 3:2). DOCUMERICA sunset and highway traffic searches: 20/20 at 2048 px or more. Some 1974 EPA-lab scans are 2000 px and fail the gate.
 - **High-resolution route:** `imageinfo` with `iiurlwidth=3072`: the original `url` when the file is at most 3072 px wide, otherwise the scaled `thumburl`. JPEG and PNG only.
 - **Rights:** the file's own `extmetadata.LicenseShortName` → **Public domain**, **CC0**, **CC BY x.y** or **CC BY-SA x.y** (CC BY / BY-SA only with a named creator).
-- **Mood sent to the music:** melancholy, intimate; subject landscape; energy 0.4; warmth 0.5.
 - **Credit:** Environmental Protection Agency, DOCUMERICA; scans by the US National Archives (NARA), via Wikimedia Commons. [Category:DOCUMERICA](https://commons.wikimedia.org/wiki/Category:DOCUMERICA)
 - **Notes:** `requireTitleContains: "NARA"` keeps searches on NARA scans (the phrase is checked in the title and in the Commons file name).
 
@@ -242,7 +236,6 @@ Each section lists the provider, what the source searches, what it shows, the me
 - **Measured:** 2306-5184 px.
 - **High-resolution route:** `imageinfo` with `iiurlwidth=3072`: the original `url` when the file is at most 3072 px wide, otherwise the scaled `thumburl`. JPEG and PNG only.
 - **Rights:** the file's own `extmetadata.LicenseShortName` → **Public domain**, **CC0**, **CC BY x.y** or **CC BY-SA x.y** (CC BY / BY-SA only with a named creator).
-- **Mood sent to the music:** lush, eerie; subject plant; energy 0.35; warmth 0.1.
 - **Credit:** Individual Wikimedia Commons photographers, credited by name with their licence. [Featured pictures of fungi](https://commons.wikimedia.org/wiki/Category:Featured_pictures_of_fungi)
 - **Notes:** Mostly CC BY-SA. A file whose record names no creator is rejected (D43). One line (`enabled: false`) turns the source off.
 
@@ -263,7 +256,6 @@ Each section lists the provider, what the source searches, what it shows, the me
 - **Measured:** 2063-3388 px. Some plates are just over 2000 px; the 2% slack in the size gate admits the 2026 px ones.
 - **High-resolution route:** `imageinfo` with `iiurlwidth=3072`: the original `url` when the file is at most 3072 px wide, otherwise the scaled `thumburl`. JPEG and PNG only.
 - **Rights:** the file's own `extmetadata.LicenseShortName` → **Public domain**, **CC0**, **CC BY x.y** or **CC BY-SA x.y** (CC BY / BY-SA only with a named creator).
-- **Mood sent to the music:** eerie, intimate; subject plant; energy 0.25; warmth 0.3.
 - **Credit:** Biodiversity Heritage Library scans via Wikimedia Commons. [Icones Farlowianae](https://commons.wikimedia.org/wiki/Category:Icones_Farlowianae)
 - **Notes:** Paper margins remain on some plates (D42).
 
@@ -276,7 +268,6 @@ Each section lists the provider, what the source searches, what it shows, the me
 - **Measured:** 6000-8952 px, portrait. The 3:2 window is cut from the most open of five offsets.
 - **High-resolution route:** `imageinfo` with `iiurlwidth=3072`: the original `url` when the file is at most 3072 px wide, otherwise the scaled `thumburl`. JPEG and PNG only.
 - **Rights:** the file's own `extmetadata.LicenseShortName` → **Public domain**, **CC0**, **CC BY x.y** or **CC BY-SA x.y** (CC BY / BY-SA only with a named creator).
-- **Mood sent to the music:** euphoric, eerie; subject creature; energy 0.5; warmth 0.0.
 - **Credit:** Library of Congress copies via Wikimedia Commons. [Kunstformen der Natur](https://commons.wikimedia.org/wiki/Category:Kunstformen_der_Natur)
 - **Notes:** Uses the parent category: the *(1899)* subcategory is a full book scan, mostly text pages. Reject words drop title, foreword and contents pages.
 
@@ -297,7 +288,6 @@ Each section lists the provider, what the source searches, what it shows, the me
 - **Measured:** 2015-7193 px. One MSS scene was rejected for too little film key (0.04) when the source was added (D42).
 - **High-resolution route:** `imageinfo` with `iiurlwidth=3072`: the original `url` when the file is at most 3072 px wide, otherwise the scaled `thumburl`. JPEG and PNG only.
 - **Rights:** the file's own `extmetadata.LicenseShortName` → **Public domain**, **CC0**, **CC BY x.y** or **CC BY-SA x.y** (CC BY / BY-SA only with a named creator).
-- **Mood sent to the music:** euphoric, majestic; subject landscape; energy 0.5; warmth 0.2.
 - **Credit:** US Geological Survey and NASA, via Wikimedia Commons. [Landsat images](https://commons.wikimedia.org/wiki/Category:Landsat_images)
 - **Notes:** No categories or searches: the Landsat categories are mostly labelled maps with a median of 1902 px.
 
@@ -323,7 +313,6 @@ Each section lists the provider, what the source searches, what it shows, the me
 - **Measured:** 3300-7300 px. Commons holds copies made from the LoC TIFF masters, which is why this source goes through Commons.
 - **High-resolution route:** `imageinfo` with `iiurlwidth=3072`: the original `url` when the file is at most 3072 px wide, otherwise the scaled `thumburl`. JPEG and PNG only.
 - **Rights:** the file's own `extmetadata.LicenseShortName` → **Public domain**, **CC0**, **CC BY x.y** or **CC BY-SA x.y** (CC BY / BY-SA only with a named creator).
-- **Mood sent to the music:** serene, majestic; subject landscape; energy 0.3; warmth 0.3.
 - **Credit:** Library of Congress Photochrom Prints Collection, via Wikimedia Commons. [Photochrom prints collection](https://commons.wikimedia.org/wiki/Category:Photochrom_prints_collection)
 - **Notes:** Reject words remove the portrait and "type" studies.
 
@@ -343,7 +332,6 @@ Each section lists the provider, what the source searches, what it shows, the me
 - **Measured:** `images.print` 3400 px on the long side (2-4 MB).
 - **High-resolution route:** `images.print.url` from the artwork record (JPEG, about 3400 px on the long side). Never `images.full` (TIFF).
 - **Rights:** `share_license_status` = "CC0" (the search also passes `cc0=1`) → **CC0**.
-- **Mood sent to the music:** serene, melancholy; subject landscape; energy 0.25; warmth -0.1.
 - **Credit:** Cleveland Museum of Art Open Access. [Open Access](https://www.clevelandart.org/open-access)
 - **Notes:** Weight lowered from 2 to 1 in D42, when woodblock prints were 10 of 54 pictures shown.
 
@@ -366,7 +354,6 @@ Each section lists the provider, what the source searches, what it shows, the me
 - **Measured:** 3400 px.
 - **High-resolution route:** `images.print.url` from the artwork record (JPEG, about 3400 px on the long side). Never `images.full` (TIFF).
 - **Rights:** `share_license_status` = "CC0" (the search also passes `cc0=1`) → **CC0**.
-- **Mood sent to the music:** melancholy, serene; subject landscape; energy 0.2; warmth 0.2.
 - **Credit:** Cleveland Museum of Art Open Access. [Open Access](https://www.clevelandart.org/open-access)
 
 <details><summary>6 pinned ids</summary>
@@ -389,7 +376,6 @@ Each section lists the provider, what the source searches, what it shows, the me
 - **Measured:** 2000-4000 px.
 - **High-resolution route:** `primaryImage` from `/public/collection/v1/objects/<objectID>` (the original, up to about 4000 px).
 - **Rights:** `isPublicDomain` = true on the object record (the search's own filter is ignored by the server) → **CC0**.
-- **Mood sent to the music:** serene, majestic; subject landscape; energy 0.25; warmth 0.0.
 - **Credit:** The Metropolitan Museum of Art Open Access. [Open Access](https://www.metmuseum.org/about-the-met/policies-and-documents/open-access)
 - **Notes:** Some Fuji scrolls are mostly blank (D42).
 
@@ -415,7 +401,6 @@ Each section lists the provider, what the source searches, what it shows, the me
 - **Measured:** ids.si.edu delivery measured at 2999x2263.
 - **High-resolution route:** `content.descriptiveNonRepeating.online_media.media[0].content` (ids.si.edu delivery service).
 - **Rights:** `metadata_usage.access` = "CC0" → **CC0**.
-- **Mood sent to the music:** serene, majestic; subject landscape; energy 0.25; warmth 0.1.
 - **Credit:** Smithsonian Institution Open Access.
 - **Notes:** Needs `SMITHSONIAN_API_KEY` in the environment (api.data.gov). `DEMO_KEY` allows 10 requests and was already spent when tested. The source stays `enabled: false` until its sizes are measured with a real key.
 
@@ -429,7 +414,6 @@ Each section lists the provider, what the source searches, what it shows, the me
 - **Measured:** Category samples passed the size gate 36-40 of 40; served 3000x2001 to 3000x2064 (or 2001-2025x3000).
 - **High-resolution route:** `imageinfo` with `iiurlwidth=3072`: the original `url` when the file is at most 3072 px wide, otherwise the scaled `thumburl`. JPEG and PNG only.
 - **Rights:** the file's own `extmetadata.LicenseShortName` → **Public domain**, **CC0**, **CC BY x.y** or **CC BY-SA x.y** (CC BY / BY-SA only with a named creator).
-- **Mood sent to the music:** melancholy, majestic; subject landscape; energy 0.35; warmth 0.55.
 - **Credit:** EPA DOCUMERICA, NARA scans, via Wikimedia Commons. [Category:DOCUMERICA](https://commons.wikimedia.org/wiki/Category:DOCUMERICA)
 - **Notes:** Searches that matched the wrong thing were left out: "Las Vegas" (the EPA laboratory), "rainbow" (trout), "clouds" (White Cloud, Kansas).
 
@@ -462,7 +446,6 @@ Each section lists the provider, what the source searches, what it shows, the me
 - **Measured:** smog 40, neon 30, freeway 32, dusk 21 size-passing results; about 3000x2000.
 - **High-resolution route:** `imageinfo` with `iiurlwidth=3072`: the original `url` when the file is at most 3072 px wide, otherwise the scaled `thumburl`. JPEG and PNG only.
 - **Rights:** the file's own `extmetadata.LicenseShortName` → **Public domain**, **CC0**, **CC BY x.y** or **CC BY-SA x.y** (CC BY / BY-SA only with a named creator).
-- **Mood sent to the music:** electric, eerie; subject landscape; energy 0.55; warmth 0.7.
 - **Credit:** EPA DOCUMERICA, NARA scans, via Wikimedia Commons. [Category:DOCUMERICA](https://commons.wikimedia.org/wiki/Category:DOCUMERICA)
 
 <details><summary>12 pinned ids</summary>
@@ -491,7 +474,6 @@ Each section lists the provider, what the source searches, what it shows, the me
 - **Measured:** Served 3008x1960 to 3072x4608. Very wide panoramas fail: a 9640x3949 file is served at 3072x1258.
 - **High-resolution route:** `imageinfo` with `iiurlwidth=3072`: the original `url` when the file is at most 3072 px wide, otherwise the scaled `thumburl`. JPEG and PNG only.
 - **Rights:** the file's own `extmetadata.LicenseShortName` → **Public domain**, **CC0**, **CC BY x.y** or **CC BY-SA x.y** (CC BY / BY-SA only with a named creator).
-- **Mood sent to the music:** euphoric, eerie; subject celestial; energy 0.45; warmth -0.2.
 - **Credit:** Individual Commons photographers and agencies, credited by name with their licence. [Featured pictures of aurora](https://commons.wikimedia.org/wiki/Category:Featured_pictures_of_aurora)
 
 <details><summary>8 pinned ids</summary>
@@ -516,7 +498,6 @@ Each section lists the provider, what the source searches, what it shows, the me
 - **Measured:** Served 3072x1523 to 3072x3114; the Webb Crab Nebula pin is a PNG at 3072x2675. Featured galaxies: 37 of 37 pass size.
 - **High-resolution route:** `imageinfo` with `iiurlwidth=3072`: the original `url` when the file is at most 3072 px wide, otherwise the scaled `thumburl`. JPEG and PNG only.
 - **Rights:** the file's own `extmetadata.LicenseShortName` → **Public domain**, **CC0**, **CC BY x.y** or **CC BY-SA x.y** (CC BY / BY-SA only with a named creator).
-- **Mood sent to the music:** euphoric, majestic; subject celestial; energy 0.5; warmth 0.0.
 - **Credit:** NASA, ESA, CSA, STScI and other agencies via Wikimedia Commons (PD, CC BY 4.0 for ESA/Webb). [Featured pictures of galaxies](https://commons.wikimedia.org/wiki/Category:Featured_pictures_of_galaxies)
 - **Notes:** The Webb and Hubble categories themselves were rejected (charts, calendar covers, light curves, median 1920 px), so only featured pictures and pins are used.
 
@@ -541,7 +522,6 @@ Each section lists the provider, what the source searches, what it shows, the me
 - **Measured:** Served 2736x3648 to 3072x4096; 40 of 40 sampled passed size.
 - **High-resolution route:** `imageinfo` with `iiurlwidth=3072`: the original `url` when the file is at most 3072 px wide, otherwise the scaled `thumburl`. JPEG and PNG only.
 - **Rights:** the file's own `extmetadata.LicenseShortName` → **Public domain**, **CC0**, **CC BY x.y** or **CC BY-SA x.y** (CC BY / BY-SA only with a named creator).
-- **Mood sent to the music:** lush, serene; subject plant; energy 0.3; warmth 0.2.
 - **Credit:** Individual Commons photographers (mostly CC BY-SA 4.0). [Featured pictures of forests](https://commons.wikimedia.org/wiki/Category:Featured_pictures_of_forests)
 
 <details><summary>4 pinned ids</summary>
@@ -562,7 +542,6 @@ Each section lists the provider, what the source searches, what it shows, the me
 - **Measured:** 2880-3072 px served; 38 of 40 sampled passed size.
 - **High-resolution route:** `imageinfo` with `iiurlwidth=3072`: the original `url` when the file is at most 3072 px wide, otherwise the scaled `thumburl`. JPEG and PNG only.
 - **Rights:** the file's own `extmetadata.LicenseShortName` → **Public domain**, **CC0**, **CC BY x.y** or **CC BY-SA x.y** (CC BY / BY-SA only with a named creator).
-- **Mood sent to the music:** majestic, eerie; subject celestial; energy 0.45; warmth -0.2.
 - **Credit:** NASA, via the Project Apollo Archive Flickr stream on Wikimedia Commons. [Category](https://commons.wikimedia.org/wiki/Category:Files_from_Project_Apollo_Archive_Flickr_Stream)
 
 <details><summary>3 pinned ids</summary>
@@ -582,7 +561,6 @@ Each section lists the provider, what the source searches, what it shows, the me
 - **Measured:** Served 3001-3072 px; Bierstadt 26 of 27 and Moran 9 of 9 pass size.
 - **High-resolution route:** `imageinfo` with `iiurlwidth=3072`: the original `url` when the file is at most 3072 px wide, otherwise the scaled `thumburl`. JPEG and PNG only.
 - **Rights:** the file's own `extmetadata.LicenseShortName` → **Public domain**, **CC0**, **CC BY x.y** or **CC BY-SA x.y** (CC BY / BY-SA only with a named creator).
-- **Mood sent to the music:** majestic, serene; subject landscape; energy 0.35; warmth 0.3.
 - **Credit:** Museum paintings photographed for the Google Art Project, via Wikimedia Commons (19th-century, public domain).
 
 <details><summary>7 pinned ids</summary>
@@ -605,7 +583,6 @@ Each section lists the provider, what the source searches, what it shows, the me
 - **Measured:** Served 1780x2480 to 3072x4613. A narrow portrait such as the 1780 px one crops to under 2000 px wide and is rejected by the size gate.
 - **High-resolution route:** `imageinfo` with `iiurlwidth=3072`: the original `url` when the file is at most 3072 px wide, otherwise the scaled `thumburl`. JPEG and PNG only.
 - **Rights:** the file's own `extmetadata.LicenseShortName` → **Public domain**, **CC0**, **CC BY x.y** or **CC BY-SA x.y** (CC BY / BY-SA only with a named creator).
-- **Mood sent to the music:** serene, melancholy; subject landscape; energy 0.25; warmth -0.1.
 - **Credit:** Museum scans (Rijksmuseum, Google Art Project and others) via Wikimedia Commons.
 - **Notes:** **Copyright trap.** Commons marks these artists' prints "Public domain" whatever their date, but prints published after 1930 are probably still under US copyright (URAA restoration). Only prints dated 1930 or earlier are pinned (checked through `DateTimeOriginal`), and the categories must never be added.
 
@@ -629,7 +606,6 @@ Each section lists the provider, what the source searches, what it shows, the me
 - **Measured:** Mercury 3000-5298 px; Gemini 3600-6837; Apollo 9 4062-5771; Apollo 7 4078-4146; Skylab 2971-4124 square (2.9-4.4 MB).
 - **High-resolution route:** `https://images-api.nasa.gov/asset/<nasa_id>` lists the files; the `~orig` JPEG or PNG is downloaded (http links upgraded to https) after a HEAD shows it is at most 12 MB. No `~large` fallback: it is only 1920 px.
 - **Rights:** No per-item field: every item is credited as "US Government work (NASA media are generally not copyrighted)" → **Public domain**. Title reject words are the guard against third-party works.
-- **Mood sent to the music:** majestic, serene; subject celestial; energy 0.4; warmth -0.2.
 - **Credit:** NASA. [NASA Image and Video Library](https://images.nasa.gov/)
 - **Notes:** Overlaps `nasa-space-age` on Gemini and Skylab; kept separate for weight.
 
@@ -667,7 +643,6 @@ Each section lists the provider, what the source searches, what it shows, the me
 - **Measured:** About 4095 px square (farside 3249-4112).
 - **High-resolution route:** `https://images-api.nasa.gov/asset/<nasa_id>` lists the files; the `~orig` JPEG or PNG is downloaded (http links upgraded to https) after a HEAD shows it is at most 12 MB. No `~large` fallback: it is only 1920 px.
 - **Rights:** No per-item field: every item is credited as "US Government work (NASA media are generally not copyrighted)" → **Public domain**. Title reject words are the guard against third-party works.
-- **Mood sent to the music:** eerie, majestic; subject celestial; energy 0.3; warmth -0.4.
 - **Credit:** NASA. [NASA Image and Video Library](https://images.nasa.gov/)
 
 <details><summary>4 pinned ids</summary>
@@ -688,7 +663,6 @@ Each section lists the provider, what the source searches, what it shows, the me
 - **Measured:** 4256-8256 px, 1-10.4 MB.
 - **High-resolution route:** `https://images-api.nasa.gov/asset/<nasa_id>` lists the files; the `~orig` JPEG or PNG is downloaded (http links upgraded to https) after a HEAD shows it is at most 12 MB. No `~large` fallback: it is only 1920 px.
 - **Rights:** No per-item field: every item is credited as "US Government work (NASA media are generally not copyrighted)" → **Public domain**. Title reject words are the guard against third-party works.
-- **Mood sent to the music:** eerie, euphoric; subject celestial; energy 0.45; warmth -0.3.
 - **Credit:** NASA (ISS crew photographs). [NASA Image and Video Library](https://images.nasa.gov/)
 
 <details><summary>5 pinned ids</summary>
@@ -710,7 +684,6 @@ Each section lists the provider, what the source searches, what it shows, the me
 - **Measured:** 3000-4661 px.
 - **High-resolution route:** `https://images-api.nasa.gov/asset/<nasa_id>` lists the files; the `~orig` JPEG or PNG is downloaded (http links upgraded to https) after a HEAD shows it is at most 12 MB. No `~large` fallback: it is only 1920 px.
 - **Rights:** No per-item field: every item is credited as "US Government work (NASA media are generally not copyrighted)" → **Public domain**. Title reject words are the guard against third-party works.
-- **Mood sent to the music:** majestic, playful; subject architecture; energy 0.4; warmth 0.2.
 - **Credit:** NASA (Kennedy Space Center). [NASA Image and Video Library](https://images.nasa.gov/)
 
 <details><summary>3 pinned ids</summary>
@@ -729,7 +702,6 @@ Each section lists the provider, what the source searches, what it shows, the me
 - **Measured:** 3400 px.
 - **High-resolution route:** `images.print.url` from the artwork record (JPEG, about 3400 px on the long side). Never `images.full` (TIFF).
 - **Rights:** `share_license_status` = "CC0" (the search also passes `cc0=1`) → **CC0**.
-- **Mood sent to the music:** majestic, serene; subject landscape; energy 0.3; warmth 0.3.
 - **Credit:** Cleveland Museum of Art Open Access. [Open Access](https://www.clevelandart.org/open-access)
 - **Notes:** Plain keywords with `type=Painting` (landscape, moonlight, forest) drift to Chinese and Japanese scrolls and Mughal miniatures; "American landscape" returns 33 US paintings.
 
@@ -761,7 +733,6 @@ Each section lists the provider, what the source searches, what it shows, the me
 - **Measured:** rain 27 of 27, Hiroshige snow 23 of 25, Hiroshige moon 19 of 19 at 3400 px.
 - **High-resolution route:** `images.print.url` from the artwork record (JPEG, about 3400 px on the long side). Never `images.full` (TIFF).
 - **Rights:** `share_license_status` = "CC0" (the search also passes `cc0=1`) → **CC0**.
-- **Mood sent to the music:** melancholy, serene; subject landscape; energy 0.25; warmth -0.2.
 - **Credit:** Cleveland Museum of Art Open Access. [Open Access](https://www.clevelandart.org/open-access)
 
 <details><summary>6 pinned ids</summary>
@@ -784,7 +755,6 @@ Each section lists the provider, what the source searches, what it shows, the me
 - **Measured:** 2211-3811 px.
 - **High-resolution route:** `primaryImage` from `/public/collection/v1/objects/<objectID>` (the original, up to about 4000 px).
 - **Rights:** `isPublicDomain` = true on the object record (the search's own filter is ignored by the server) → **CC0**.
-- **Mood sent to the music:** eerie, melancholy; subject landscape; energy 0.2; warmth 0.1.
 - **Credit:** The Metropolitan Museum of Art, American Wing. [Open Access](https://www.metmuseum.org/about-the-met/policies-and-documents/open-access)
 - **Notes:** American Wing paintings have an empty `classification`, so the allowlist includes "". That would also admit unclassified decorative objects, so the source keeps to one query plus pins.
 
@@ -807,7 +777,6 @@ Each section lists the provider, what the source searches, what it shows, the me
 - **Measured:** Le Gray 3811-3934 px; Yosemite 2335-3601; waterfall 2001-4000 (half of the waterfall results are not public domain and are rejected).
 - **High-resolution route:** `primaryImage` from `/public/collection/v1/objects/<objectID>` (the original, up to about 4000 px).
 - **Rights:** `isPublicDomain` = true on the object record (the search's own filter is ignored by the server) → **CC0**.
-- **Mood sent to the music:** melancholy, serene; subject landscape; energy 0.2; warmth 0.3.
 - **Credit:** The Metropolitan Museum of Art, Photographs. [Open Access](https://www.metmuseum.org/about-the-met/policies-and-documents/open-access)
 
 <details><summary>8 pinned ids</summary>
@@ -832,7 +801,6 @@ Each section lists the provider, what the source searches, what it shows, the me
 - **Measured:** 3797-3939 px (2 of 18 results under 2000).
 - **High-resolution route:** `primaryImage` from `/public/collection/v1/objects/<objectID>` (the original, up to about 4000 px).
 - **Rights:** `isPublicDomain` = true on the object record (the search's own filter is ignored by the server) → **CC0**.
-- **Mood sent to the music:** serene, melancholy; subject landscape; energy 0.25; warmth -0.1.
 - **Credit:** The Metropolitan Museum of Art, Asian Art. [Open Access](https://www.metmuseum.org/about-the-met/policies-and-documents/open-access)
 
 <details><summary>4 pinned ids</summary>
@@ -854,7 +822,6 @@ Each section lists the provider, what the source searches, what it shows, the me
 - **Measured:** Native 3295-3336 x 2088-2181; served 2528x1616 by `!2528,2528` (1.3 MB). Totals inside the collection: motel 2,684, highway 1,031, night 495, skyline 180, desert 99, diner 70.
 - **High-resolution route:** `https://iiif.digitalcommonwealth.org/iiif/2/<exemplary_image_ssi>/full/!2528,2528/0/default.jpg`.
 - **Rights:** `reuse_allowed_ssi` = "no restrictions" (else `license_ss`) → **No restrictions**.
-- **Mood sent to the music:** playful, melancholy; subject architecture; energy 0.45; warmth 0.6.
 - **Credit:** The Tichnor Brothers Collection, Boston Public Library, via Digital Commonwealth. [Collection](https://www.digitalcommonwealth.org/search?f%5Brelated_item_host_ssim%5D%5B%5D=The+Tichnor+Brothers+Collection)
 - **Notes:** Each card has a printed caption strip and an accession number in a corner; the text rule and border trim handle most of them. Multi-view "Greetings" cards are rejected by title.
 
@@ -866,7 +833,6 @@ Each section lists the provider, what the source searches, what it shows, the me
 - **Measured:** 3000 px on the long side (or native when smaller): 3000x2235, 2971x2250, 3000x2324 from a 10490 px master, 2350x3000 for a portrait.
 - **High-resolution route:** `https://www.artic.edu/iiif/2/<image_id>/full/3000,/0/default.jpg` (3000 px on the long side, or native when smaller; the only large width the server allows).
 - **Rights:** `is_public_domain` = true → **CC0** (AIC's open-access terms).
-- **Mood sent to the music:** serene, majestic; subject landscape; energy 0.25; warmth 0.2.
 - **Credit:** Art Institute of Chicago (CC0 public-domain works). [Collection](https://www.artic.edu/collection)
 
 ## Rejected sources
@@ -882,9 +848,9 @@ The JSON also keeps a `rejected` list so nobody re-adds them by accident. It is 
 | Wikimedia Category:Kunstformen der Natur (1899) | Full-book BHL scans, mostly text pages; use the parent category plates |
 | Wikimedia Category:Marbled paper | Book bindings with colour rulers and spines |
 | Wikimedia Category:Toadstools, mushrooms, fungi, edible and poisonous | Lovely plates, but 1908 px long side |
-| Wikimedia Ansel Adams NARA series, Photochrom Zentralbibliothek Zuerich | Capped at 2000 px; candidate for a later upscale tier |
+| Wikimedia Ansel Adams NARA series, Photochrom Zentralbibliothek Zuerich | Capped at 2000 px; below the size gate |
 | Wikimedia Category:Googie architecture | Modern snapshots, mixed sizes and licences; Highsmith covers the subject better |
-| Internet Archive free-text (psychedelic, kodachrome) | AI art, music covers and uploader-asserted licences |
+| Internet Archive free-text (psychedelic, kodachrome) | Synthetic images, music covers and uploader-asserted licences |
 | Europeana | Mostly 400-1000 px previews; production key needed |
 | Met Walker Evans and 1950s photographs | Not public domain |
 | CMA mushroom query | Returns decorative objects (lamps, boxes); restrict CMA to Print/Photograph types |
@@ -905,7 +871,6 @@ Research: [loc-collections.md](../research/image-apis/loc-collections.md).
 - **Measured:** Masters 5000-5330 px (39 of 40 sampled); every scaled request returned 500, so pictures come from `full/full` (0.9-2.1 MB). Slide mount trimmed by `ScanEdgeTrimmer`. Vertical frames lose sign tops to the 3:2 crop.
 - **High-resolution route:** the IIIF `master:` service derived from the result's thumbnail path (`LOCProvider.masterIIIF`); `{service}/full/!T,T/0/default.jpg`, and on HTTP 5xx `{service}/full/full/0/default.jpg` once.
 - **Rights:** `item.rights_advisory`: "No known restrictions on publication" (or "...reproduction") → **No known restrictions**. Anything mentioning "restricted" or "not evaluated" is rejected.
-- **Mood sent to the music:** playful, electric; subject architecture; energy 0.55; warmth 0.5.
 - **Credit:** John Margolies Roadside America photograph archive (1972-2008), Library of Congress. [Collection](https://www.loc.gov/pictures/collection/mrg/)
 
 <details><summary>7 pinned ids</summary>
@@ -930,7 +895,6 @@ Research: [loc-collections.md](../research/image-apis/loc-collections.md).
 - **Measured:** 3400-7470 px (53 of 55); about half the masters need the `full/full` fallback (1.5-6 MB). Overlaps the Commons `photochrom-landscapes` copies of the same masters. Costume and type portraits are rejected by title.
 - **High-resolution route:** the IIIF `master:` service derived from the result's thumbnail path (`LOCProvider.masterIIIF`); `{service}/full/!T,T/0/default.jpg`, and on HTTP 5xx `{service}/full/full/0/default.jpg` once.
 - **Rights:** `item.rights_advisory`: "No known restrictions on publication" (or "...reproduction") → **No known restrictions**. Anything mentioning "restricted" or "not evaluated" is rejected.
-- **Mood sent to the music:** serene, majestic; subject landscape; energy 0.3; warmth 0.3.
 - **Credit:** Photochrom Prints, Library of Congress. [Collection](https://www.loc.gov/collections/photochrom-prints/)
 
 <details><summary>6 pinned ids</summary>
@@ -954,7 +918,6 @@ Research: [loc-collections.md](../research/image-apis/loc-collections.md).
 - **Measured:** 2900-3780 px, often square (52 of 52); scaled requests all worked. Plate misregistration leaves coloured bands 4-7.5% wide on the sides, removed by `edgeInset` 0.08 after the trim.
 - **High-resolution route:** the IIIF `master:` service derived from the result's thumbnail path (`LOCProvider.masterIIIF`); `{service}/full/!T,T/0/default.jpg`, and on HTTP 5xx `{service}/full/full/0/default.jpg` once.
 - **Rights:** `item.rights_advisory`: "No known restrictions on publication" (or "...reproduction") → **No known restrictions**. Anything mentioning "restricted" or "not evaluated" is rejected.
-- **Mood sent to the music:** serene, eerie; subject landscape; energy 0.3; warmth 0.2.
 - **Credit:** Prokudin-Gorskii Collection, Library of Congress. [Collection](https://www.loc.gov/collections/prokudin-gorskii/)
 
 <details><summary>3 pinned ids</summary>
@@ -975,7 +938,6 @@ Research: [loc-collections.md](../research/image-apis/loc-collections.md).
 - **Measured:** 3600-8060 px (46 of 50; small postcard scans are rejected by the size gate); about 40% scale, the rest use `full/full` (1.3-3.8 MB).
 - **High-resolution route:** the IIIF `master:` service derived from the result's thumbnail path (`LOCProvider.masterIIIF`); `{service}/full/!T,T/0/default.jpg`, and on HTTP 5xx `{service}/full/full/0/default.jpg` once.
 - **Rights:** `item.rights_advisory`: "No known restrictions on publication" (or "...reproduction") → **No known restrictions**. Anything mentioning "restricted" or "not evaluated" is rejected.
-- **Mood sent to the music:** majestic, melancholy; subject landscape; energy 0.25; warmth 0.0.
 - **Credit:** Detroit Publishing Company Collection, Library of Congress. [Collection](https://www.loc.gov/collections/detroit-publishing-company/)
 
 <details><summary>3 pinned ids</summary>
@@ -996,7 +958,6 @@ Research: [loc-collections.md](../research/image-apis/loc-collections.md).
 - **Measured:** 2360-10000 px (32 of 32); masters over about 5000 px use `full/full` (up to 7.5 MB). Hokusai envelopes are rejected by title.
 - **High-resolution route:** the IIIF `master:` service derived from the result's thumbnail path (`LOCProvider.masterIIIF`); `{service}/full/!T,T/0/default.jpg`, and on HTTP 5xx `{service}/full/full/0/default.jpg` once.
 - **Rights:** `item.rights_advisory`: "No known restrictions on publication" (or "...reproduction") → **No known restrictions**. Anything mentioning "restricted" or "not evaluated" is rejected.
-- **Mood sent to the music:** serene, melancholy; subject landscape; energy 0.25; warmth -0.1.
 - **Credit:** Japanese Fine Prints, pre-1915, Library of Congress. [Collection](https://www.loc.gov/collections/japanese-fine-prints-pre-1915/)
 
 <details><summary>4 pinned ids</summary>
@@ -1018,7 +979,6 @@ Research: [loc-collections.md](../research/image-apis/loc-collections.md).
 - **Measured:** 4390-5210 px for 11 of 12 fireworks items (most of the collection's other masters are 560x420 copies). Rounded transparency mount trimmed.
 - **High-resolution route:** the IIIF `master:` service derived from the result's thumbnail path (`LOCProvider.masterIIIF`); `{service}/full/!T,T/0/default.jpg`, and on HTTP 5xx `{service}/full/full/0/default.jpg` once.
 - **Rights:** `item.rights_advisory`: "No known restrictions on publication" (or "...reproduction") → **No known restrictions**. Anything mentioning "restricted" or "not evaluated" is rejected.
-- **Mood sent to the music:** euphoric, electric; subject celestial; energy 0.7; warmth 0.2.
 - **Credit:** Gottscho-Schleisner Collection, Library of Congress. [Collection](https://www.loc.gov/collections/gottscho-schleisner/)
 
 <details><summary>11 pinned ids</summary>
@@ -1047,7 +1007,6 @@ Research: [loc-collections.md](../research/image-apis/loc-collections.md).
 - **Measured:** 4300-14400 px (38 of 40). 35 mm and 2 1/4 masters scale (1.3-2 MB); 4x5 negatives only serve `full/full` at 10.6-18.1 MB, so about 30% exceed the 12 MB limit and are skipped. About 10% carry "images copied from other sources may be restricted" and are rejected. People-centred titles are rejected.
 - **High-resolution route:** the IIIF `master:` service derived from the result's thumbnail path (`LOCProvider.masterIIIF`); `{service}/full/!T,T/0/default.jpg`, and on HTTP 5xx `{service}/full/full/0/default.jpg` once.
 - **Rights:** `item.rights_advisory`: "No known restrictions on publication" (or "...reproduction") → **No known restrictions**. Anything mentioning "restricted" or "not evaluated" is rejected.
-- **Mood sent to the music:** melancholy, majestic; subject landscape; energy 0.3; warmth 0.0.
 - **Credit:** FSA/OWI Black-and-White Negatives, Library of Congress. [Collection](https://www.loc.gov/collections/fsa-owi-black-and-white-negatives/)
 
 <details><summary>2 pinned ids</summary>
@@ -1067,7 +1026,6 @@ Research: [loc-collections.md](../research/image-apis/loc-collections.md).
 - **Measured:** 5700-10840 px (20 of 20); scaled requests fail, `full/full` 2.6-9.9 MB. Paper margins and printed captions are left to `BorderTrimmer` and the text and paper gates (unverified in the app).
 - **High-resolution route:** the IIIF `master:` service derived from the result's thumbnail path (`LOCProvider.masterIIIF`); `{service}/full/!T,T/0/default.jpg`, and on HTTP 5xx `{service}/full/full/0/default.jpg` once.
 - **Rights:** `item.rights_advisory`: "No known restrictions on publication" (or "...reproduction") → **No known restrictions**. Anything mentioning "restricted" or "not evaluated" is rejected.
-- **Mood sent to the music:** serene, melancholy; subject landscape; energy 0.25; warmth 0.3.
 - **Credit:** Popular Graphic Arts, Library of Congress. [Collection](https://www.loc.gov/collections/popular-graphic-arts/)
 
 <details><summary>3 pinned ids</summary>
@@ -1088,7 +1046,6 @@ Research: [loc-collections.md](../research/image-apis/loc-collections.md).
 - **Measured:** 4100-11600 px (47 of 47); `service:` items scale, 2018+ `master:` items use `full/full`.
 - **High-resolution route:** the IIIF `master:` service derived from the result's thumbnail path (`LOCProvider.masterIIIF`); `{service}/full/!T,T/0/default.jpg`, and on HTTP 5xx `{service}/full/full/0/default.jpg` once.
 - **Rights:** `item.rights_advisory`: "No known restrictions on publication" (or "...reproduction") → **No known restrictions**. Anything mentioning "restricted" or "not evaluated" is rejected.
-- **Mood sent to the music:** electric, euphoric; subject architecture; energy 0.55; warmth 0.2.
 - **Credit:** Carol M. Highsmith Archive, Library of Congress. [Collection](https://www.loc.gov/collections/carol-m-highsmith/)
 
 <details><summary>4 pinned ids</summary>
@@ -1110,7 +1067,6 @@ Research: [loc-collections.md](../research/image-apis/loc-collections.md).
 - **Measured:** 4550-6150 px (24 of 24); scaled requests worked. Glass-negative edges trimmed. The hand-coloured lantern slides are "Publication may be restricted" and rejected.
 - **High-resolution route:** the IIIF `master:` service derived from the result's thumbnail path (`LOCProvider.masterIIIF`); `{service}/full/!T,T/0/default.jpg`, and on HTTP 5xx `{service}/full/full/0/default.jpg` once.
 - **Rights:** `item.rights_advisory`: "No known restrictions on publication" (or "...reproduction") → **No known restrictions**. Anything mentioning "restricted" or "not evaluated" is rejected.
-- **Mood sent to the music:** eerie, majestic; subject landscape; energy 0.25; warmth 0.2.
 - **Credit:** G. Eric and Edith Matson Photograph Collection, Library of Congress. [Collection](https://www.loc.gov/pictures/collection/matpc/)
 
 <details><summary>3 pinned ids</summary>

@@ -2,19 +2,19 @@
 
 [← Image sources](README.md) · [Pipeline](pipeline.md) · [Sources](sources.md) · [Providers](providers.md) · [Adding a source](adding-a-source.md)
 
-This page is the timeline of the research behind API mode. It links to the detailed reports in [`docs/research/image-apis/`](../research/image-apis/) and the decisions in [`decisions/images.md`](../decisions/images.md). The research reports are snapshots: where they disagree with later findings, the later finding is noted here. The research ran in session scratchpads (probe scripts, raw JSON, contact sheets), which are not in the repository; the reports and the JSON are what was kept.
+This page is the timeline of the research behind the curated picture feed. It links to the detailed reports in [`docs/research/image-apis/`](../research/image-apis/) and the decisions in [`decisions/images.md`](../decisions/images.md). The research reports are snapshots: where they disagree with later findings, the later finding is noted here. The research ran in session scratchpads (probe scripts, raw JSON, contact sheets), which are not in the repository; the reports and the JSON are what was kept.
 
 ## Timeline
 
 | Date | Step | Outcome | Details |
 |---|---|---|---|
 | 2013-2016 | **OpenPics**, the user's earlier iOS app, browsed remote image collections | Prior art: provider list and the LoC "largest / larger / large" resource trick | [openpics.md](../research/image-apis/openpics.md) |
-| 2026-11-20/21 | **The request.** The user asked for a mode that finds imagery online instead of generating it, as a toggle like Ambient / Lo-Fi | Brief: psychedelic, old films and imagery, 1950s-70s, mushrooms, trees, landscapes, retro views, cityscapes, driving; open enough for the footage; high resolution | D36 |
+| 2026-11-20/21 | **The request.** The user asked for imagery found online from approved collections | Brief: psychedelic, old films and imagery, 1950s-70s, mushrooms, trees, landscapes, retro views, cityscapes, driving; open enough for the footage; high resolution | D36 |
 | 2026-11-21 | **API survey.** Keyless endpoints called with curl, pixel sizes measured on real downloads | Ranked: LoC, NASA, Commons, Smithsonian (key), the Met, Cleveland, Internet Archive, Europeana (key) | [survey.md](../research/image-apis/survey.md) |
 | 2026-11-21 | **Collections pass.** A Python probe made about 80 searches over about 900 records, reading sizes from headers or `info.json`. About 400 thumbnails were judged on 3:2 review sheets | 12 enabled sources plus a disabled Smithsonian one, and the first version of `image-collections.json` | [collections.md](../research/image-apis/collections.md), D37 |
 | 2026-11-21 | **Gate tuning** on the 409 probe thumbnails | The plan's "key share > 0.75" reject would have removed night neon, dusk skylines and nebulae. Shipped gates: openness ≥ 0.2, key ≥ 0.04, document, monochrome < 0.025, text and face rules | D38 |
 | 2026-11-21 | **First live ingest** on macOS and in the visionOS Simulator | 95 pictures stored from all 12 sources and 14 rejected. The size gate gained 2% slack and the text rule was relaxed for signs | D41 |
-| 2026-11-21 | **Independent verification** | Target 3072 → 2528 (render stalls with 3072); no upscaling of pool pictures; Vision compiled out of the simulator; Cleveland ukiyo-e weight 2 → 1; `landsat-earth-as-art` added for psychedelic colour | D40, D42 |
+| 2026-11-21 | **Independent verification** | Target 3072 → 2528 (render stalls with 3072); no upscaling of pictures; Vision compiled out of the simulator; Cleveland ukiyo-e weight 2 → 1; `landsat-earth-as-art` added for psychedelic colour | D40, D42 |
 | 2026-11-21 | **Code review** | CC BY needs a creator; ledger writes versioned; clear-while-fetching fixed; reservations expire; cancellation is not a failure; 150 MP decode bound | D43 |
 | 2026-11-21 | **FSA/OWI masters.** The user remembered high-resolution FSA photographs in OpenPics and asked whether the OpenPics trick had been tried | It had not been followed far enough. The TIFF master path maps onto a IIIF `master:` service, giving 4641-7738 px. About half need the `full/full` fallback; `ScanEdgeTrimmer` removes the film rebate. `loc-fsa-owi-color` added, and Highsmith gained `useMasters` | D44, [collections.md](../research/image-apis/collections.md#library-of-congress) |
 | 2026-11-21 | **Second pass outside the LoC.** Expand Commons, NASA, Cleveland and the Met, and re-test institutions that were skipped | 17 new sources. Digital Commonwealth (Tichnor postcards) and Art Institute of Chicago providers added (commit "Add Digital Commonwealth and Art Institute of Chicago providers and 19 more curated sources") | [other-institutions.md](../research/image-apis/other-institutions.md), [new-providers.md](../research/image-apis/new-providers.md) |
@@ -100,7 +100,7 @@ Where something was rejected, the reason is recorded so nobody repeats the probe
 | Source | Reason | Status |
 |---|---|---|
 | Europeana | Mostly 400-1000 px previews (2 of 31 at 2048 px or more); production key needed | Rejected |
-| Internet Archive free-text image search | AI art, music covers and uploader-asserted licences; many CC BY-NC-ND | Rejected (its Met mirror and GeoDIL thin sections remain candidates) |
+| Internet Archive free-text image search | Synthetic images, music covers and uploader-asserted licences; many CC BY-NC-ND | Rejected (its Met mirror and GeoDIL thin sections remain candidates) |
 | NYPL Digital Collections | Token needed for search; the masters tested were 760x588 | Re-test with a token |
 | NARA Catalog v2 | Needs an `x-api-key` | Use the Commons DOCUMERICA mirror |
 | Smithsonian Open Access | api.data.gov key needed; `DEMO_KEY` quota spent | Provider coded, source disabled |
@@ -124,7 +124,7 @@ Where something was rejected, the reason is recorded so nobody repeats the probe
 | Commons *Kunstformen der Natur (1899)* subcategory | Full book scan, mostly text pages | The parent category is used instead |
 | Commons *Marbled paper* | Book bindings with colour rulers | Rejected |
 | Commons *Toadstools, mushrooms, fungi, edible and poisonous*; *Herbier de la France* | 1908 px; 1646 px median | Rejected |
-| Commons Ansel Adams NARA series; Zentralbibliothek Zürich photochroms | Capped at 2000 px | Candidates for an upscale tier |
+| Commons Ansel Adams NARA series; Zentralbibliothek Zürich photochroms | Capped at 2000 px | Below the size gate |
 | Commons *Googie architecture*, *1950s automobiles*, *Psychedelic art*, *Autochromes*, *Mushrooms in art*, *Moonlight in art* | Modern snapshots, documents, portraits, mixed licences | Rejected |
 | Commons Hubble and Webb image categories | Charts, light curves, calendar covers; median 1920 px; TIFF, PDF and OGG | Featured galaxies and pins used instead |
 | Commons WPA and See America posters, space posters | Small, or large title text | Rejected |
@@ -143,4 +143,3 @@ Where something was rejected, the reason is recorded so nobody repeats the probe
 
 - **Through existing providers:** LoC photochroms and Prokudin-Gorskii through the `master:` route; the Commons NOAA stream with strict reject words; O'Sullivan and Jackson survey photographs (monochrome).
 - **New providers, ranked in [new-providers.md](../research/image-apis/new-providers.md):** the Minneapolis Institute of Art (keyless, about 3000 px), GeoDIL thin sections (CC0, very psychedelic, 68 items), the Rijksmuseum (keyless Linked Art, 5140 px), the Getty (SPARQL), the National Gallery of Art (no search API; pinned list) and the Yale Center for British Art (pinned list).
-- **An upscale tier**, using the bundled Real-ESRGAN model, for beautiful collections capped near 2000 px.

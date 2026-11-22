@@ -15,7 +15,7 @@ Status: plan. Numbers marked *start* are tuning hypotheses exposed as named cons
 >   - dark band-limiting (high-pass about 205–290 Hz, two low-pass stages at 2.1–3.2 kHz);
 >   - tempo-linked delay.
 >
->   Do **not** apply 8.6's "clarity" changes: no reduced sends, no opened second low-pass, no 10 kHz `MixBus` low-pass, no drier direct level. Tempo-synced effects may be added but never removed. The bed must stay audible, but it sits well under the beat: in gaps between chops it is at least 10 dB under the music plus chops (*start*).
+>   Do **not** apply 8.6's "clarity" changes: no reduced sends, no opened second low-pass, no 10 kHz `ArchiveMixBus` low-pass, no drier direct level. Tempo-synced effects may be added but never removed. The bed must stay audible, but it sits well under the beat: in gaps between chops it is at least 10 dB under the music plus chops (*start*).
 > - **The bed never drives ducking.** Nothing is sidechained to or ducked by the film bed. Chops may still duck the bed, and the music may stay on top of it, but the bed is never a key signal.
 > - **Criteria changes.** C-B9's "bed direct to wet at least +3 dB" and "roll-off at least 3 kHz" are dropped. They are replaced by "bed effects chain matches the baseline character (wet at least equal to direct)" and "bed at least 10 dB under the music plus chops in gaps, audibility index in gaps still at least 0.20". In C-B6, theme-return salience may be judged against mids, space and bed only. The chops are a featured layer, so failing to clear them is not a defect if the return's first bar is chop-free.
 
@@ -74,13 +74,13 @@ Goals
 6. Every section (drums, bass, mids, lead, dialogue chops, film bed) has its own effect chain and spectral slot. The master is loud and competitive, true-peak safe, with controlled crest and gain reduction and no pumping or distortion.
 7. Verification that does not need ears: per-bus stems, multi-resolution spectrograms, band energy and masking, low-band mono and correlation, kick and bass windows, crest, LUFS, true peak, limiter gain reduction, intelligibility proxies and chop cadence, produced by one command and documented.
 
-Non-goals: new user-facing style controls, cloud inference, handpicked dialogue, replacing AJ Hall's takes with reconstructed hits, an iOS target, changes to Ambient mode's sound.
+Non-goals: new user-facing style controls, cloud inference, handpicked dialogue, replacing AJ Hall's takes with reconstructed hits, an iOS target.
 
 ## 2. Architecture
 
 ```text
-footage piece (8 bars in Lo-Fi) ── decode ──► film bed cue (posted at its due time, never waits)
-        │                                      └► ArchiveVoice bed chain ► MixBus ► master
+footage piece (8 bars) ── decode ──► film bed cue (posted at its due time, never waits)
+        │                                      └► ArchiveVoice bed chain ► ArchiveMixBus ► master
         └─ DialogueCueCoordinator (utility task, cancellable, token + transport revision)
              native-rate source PCM ► DialogueAnalyzer ► DialogueHierarchy ► DialogueBankBuilder
              (+ SoundAnalysis speech windows, + optional transcript at a later block)
@@ -92,7 +92,7 @@ footage piece (8 bars in Lo-Fi) ── decode ──► film bed cue (posted at 
 drum take (64 beats) ► LofiDrumLandmarks ► LofiTimingField ─► LofiScore (bass accents, mid answers)
                      ► drum bus chain (offline)              └► dialogue stress placement
 LofiScore ► LofiRenderer ► per-stem chains (offline: bass, lead, mids, space) ► LofiBus players
-LofiBus + film path ► LofiMasterBus: [ambient: Apple glue + limiter] / [lofi: LofiMasterFinisher]
+LofiBus + film path ► LofiMasterBus: LofiMasterFinisher (fallback: Apple glue + limiter when the finisher AU is unavailable)
 ```
 
 Design rules
@@ -100,7 +100,7 @@ Design rules
 - Music stems, drum takes and dialogue chops are rendered to buffers off the audio thread. Their effect chains run there in plain Swift (deterministic, testable, no realtime limits). Only the film bed chain, the chop echo and room, the bus duck faders and the master run in the live graph.
 - The master finisher is the only custom realtime DSP. It is an in-process `AUAudioUnit` whose kernel owns preallocated memory and uses Accelerate block operations. No allocation, lock, I/O or inference on the render thread.
 - New pure types are `nonisolated` and `Sendable` (the project default isolation is `MainActor`). New files are picked up by the file-system-synchronized Xcode groups; `project.pbxproj` is not edited.
-- Ambient mode keeps its present master path bit for bit apart from a constant delay.
+- The fallback Apple chain keeps its original values apart from a constant delay.
 
 ## 3. Frozen interfaces between work packages
 
@@ -131,7 +131,7 @@ nonisolated enum LofiCaptureHooks {
 
 Lock-guarded, never touched on the render thread. Components register taps and reports in their initializers or offline code paths. The harness never needs editing to add a tap.
 
-Options in use: `masterProfile` (`lofi` default in captures, `ambient`), `transcription` (`off` default, `fixture`, `apple`), `dialogue` (`engine` default from wave 2, `legacy`).
+Options in use: `transcription` (`off` default, `fixture`, `apple`), `dialogue` (`engine` default from wave 2, `legacy`).
 
 ### 3.2 Capture manifest v2
 
@@ -311,12 +311,7 @@ extension MusicStateBus { func setTransport(_ info: LofiTransportInfo?); func tr
 
 ### 3.7 Master bus (wave 2, package `master-bus`)
 
-```swift
-extension LofiMasterBus { enum Profile: String, Sendable { case ambient, lofi }
-    func setProfile(_ profile: Profile, ramp: Double); var profile: Profile { get }; var finisher: LofiMasterFinisher { get } }
-```
-
-Default profile is `ambient` (legacy behavior). The engine selects `lofi` before Lo-Fi starts. Captures select it through the `masterProfile` hook option.
+`LofiMasterBus` picks its chain once at init: `.finisher` (`LofiMasterFinisher`) or `.fallback` (the Apple glue and limiter, used when the finisher AU cannot be created). The manifest records it as `profile` (`lofi` or `fallback`).
 
 ## 4. Dialogue: source to pad bank
 
@@ -539,9 +534,9 @@ All of this runs at utility priority. Loops check cancellation. Nothing here run
 
 ### 6.3 ArchiveVoice scheduling
 
-- The chop player keeps one sample timeline per Lo-Fi session (started lazily, anchored once to the host clock; offline it starts at conductor time). It is stopped only on beat-lock off, reset or power down.
+- The chop player keeps one sample timeline per Lo-Fi session (started lazily, anchored once to the host clock; offline it starts at conductor time). It is stopped only on reset or power down.
 - A plan is stored, not queued whole. Every conductor tick schedules chops whose start is within the next 1.0 s and not yet queued, at `sampleTime = (start - anchor) x rate`. Replacing a plan from `replaceFrom` only swaps unscheduled chops.
-- Chop gain follows the Footage audio setting and beat lock, with its own 50 ms ramp. It no longer follows the bed's fade-in.
+- Chop gain follows the Footage audio setting, with its own 50 ms ramp. It no longer follows the bed's fade-in.
 - Drop windows for bed ducking and music ducking are derived from queued chops.
 
 ### 6.4 Transport revision
@@ -611,15 +606,15 @@ Live in `ArchiveVoice`: dry mono centre; tempo echo (0.75 beat, feedback 0.25) r
 
 Ducking under a featured chop (0.5 s or longer): lead -2 dB, mids -3 dB, space -4 dB on the `LofiBus` faders; bed -3 dB. Attack 30 ms, release 300 ms. Drums and bass are not ducked.
 
-### 8.6 Film bed (live, `ArchiveVoice` and `MixBus`, Lo-Fi only)
+### 8.6 Film bed (live, `ArchiveVoice` and `ArchiveMixBus`)
 
-HPF 120 Hz; one LPF stage at 6.5 kHz (the second stage opened); static dip -2.5 dB at 2.2 kHz Q 0.7; phaser mix 0.10 to 0.18; dry gain -3 to 0 dB; reverb and echo sends 0.25 to 0.45 (about 10 to 20 percent wet); `MixBus` Lo-Fi voicing raises its master low-pass from 5.4 kHz to 10 kHz. The Footage audio control stays monotonic and zero stays silent. Ambient values are unchanged.
+HPF 120 Hz; one LPF stage at 6.5 kHz (the second stage opened); static dip -2.5 dB at 2.2 kHz Q 0.7; phaser mix 0.10 to 0.18; dry gain -3 to 0 dB; reverb and echo sends 0.25 to 0.45 (about 10 to 20 percent wet); the plan raised the master low-pass from 5.4 kHz to 10 kHz. The Footage audio control stays monotonic and zero stays silent.
 
 ### 8.7 Master
 
-Graph: `input -> glue (Apple, ambient only) -> trim -> limiter (Apple, ambient only) -> LofiMasterFinisher -> output`.
+Graph: `input -> glue (Apple, fallback only) -> trim -> limiter (Apple, fallback only) -> LofiMasterFinisher -> output`.
 
-`ambient` profile: today's values, finisher in passthrough. `lofi` profile: the two Apple units are bypassed, the output fader is 0 dB, and the finisher runs (*start*): input gain about +6 dB (calibrated in wave 4); HPF 25 Hz; glue 1.7:1, knee 6 dB, attack 30 ms, release 180 ms, sidechain HPF 100 Hz, 1 to 2 dB on peaks; soft clip, 4x oversampled, at most 2 dB; true-peak limiter with 3 ms lookahead, 4x oversampled detection, min-hold and FIR-smoothed attack, dual release 80 and 350 ms, ceiling -1.0 dBTP with a 0.15 dB internal margin and a final clamp that should never engage.
+Chain choice: the bus picks once at init. Fallback chain: today's values, finisher in passthrough. Finisher chain: the two Apple units are bypassed, the output fader is 0 dB, and the finisher runs (*start*): input gain about +6 dB (calibrated in wave 4); HPF 25 Hz; glue 1.7:1, knee 6 dB, attack 30 ms, release 180 ms, sidechain HPF 100 Hz, 1 to 2 dB on peaks; soft clip, 4x oversampled, at most 2 dB; true-peak limiter with 3 ms lookahead, 4x oversampled detection, min-hold and FIR-smoothed attack, dual release 80 and 350 ms, ceiling -1.0 dBTP with a 0.15 dB internal margin and a final clamp that should never engage.
 
 Slow calibration aims at -12 LUFS, moves at most 1 dB per 16 bars inside -3 to +2 dB, and does not move up while the limiter's mean reduction exceeds 2.5 dB.
 
@@ -733,7 +728,7 @@ A spectrogram cannot prove intelligibility or punch and a waveform match cannot 
 | `LofiRhythmTests` | landmark timing within 2 ms on synthetic takes; ghosts and close doubles; kick, snare, hat classes; private takes required when present; timing field interpolation; bass voice loudness match, tuning, click-free edges, attack lead |
 | `LofiArrangementTests`, `LofiCompositionTests` | bass alignment and unchanged other parts; one voice per phrase; mid answers lie in melody rests; return presentation equals the theme's notes with the planned accents |
 | `LofiStemChainTests` | each chain's response and reduction bounds; drums attack preserved; low band mono; no nonfinite output; preparation time bound |
-| `LofiMasterBusTests`, `LofiMasterCharacterizationTests` | ambient profile unchanged; Lo-Fi profile ceiling and loudness on a stress program; profile switch without discontinuity |
+| `LofiMasterBusTests`, `LofiMasterCharacterizationTests` | fallback chain unchanged; finisher ceiling and loudness on a stress program |
 | `ArchiveVoiceRenderTests`, `LofiLiveBusTests` | incremental chop scheduling at sample accuracy; chop gain independent of the bed fade; ducking depth and timing; bed chain bandwidth and direct level; zero setting is silent |
 
 Private drums: suites that measure real takes use an enabled-if trait on installed assets, and the acceptance commands confirm from the log that they ran.
@@ -751,7 +746,7 @@ Private drums: suites that measure real takes use an enabled-if trait on install
 | 2 | `transcription` | opus | Apple provider, assets, setting, qualification |
 | 2 | `master-bus` | opus | profiles, finisher integration, calibration, meters |
 | 3 | `stem-chains` | opus | offline chains for drums, bass, lead, mids, space |
-| 3 | `live-bus-chains` | opus | bed chain, chop chain and returns, ducking, MixBus voicing |
+| 3 | `live-bus-chains` | opus | bed chain, chop chain and returns, ducking, ArchiveMixBus voicing |
 | 3 | `dialogue-tuning` | opus | real-footage tuning, transcript path end to end, cadence and timing acceptance |
 | 3 | `verify-extensions` | sonnet | analysis aligned with the real diagnostics, music metrics, matrix runner polish |
 | 4 | `mix-calibration` | opus | joint balance to the criteria across the matrix, measurements record |
@@ -763,7 +758,7 @@ Every package builds for macOS and the visionOS simulator with an explicit desti
 
 | Risk | Mitigation |
 |---|---|
-| Pure Swift realtime unit is slow in Debug or unsafe on the render thread | Accelerate block operations; preallocated memory; realtime-factor test; fallback to the ambient chain if the unit cannot be created |
+| Pure Swift realtime unit is slow in Debug or unsafe on the render thread | Accelerate block operations; preallocated memory; realtime-factor test; fallback to the Apple chain if the unit cannot be created |
 | Loudness target unreachable without audible limiting | crest is reduced at the source (drum bus, bass, levels) before the master; C-M6 and C-M8 gate; the target range may be lowered with a written reason |
 | Offline chains make take or phrase preparation late | Accelerate biquads; timing test; the existing repeat-stems fallback stays |
 | New analysis misjudges real film audio | real-footage probe in wave 1, tuning package in wave 3, rejection reasons logged |

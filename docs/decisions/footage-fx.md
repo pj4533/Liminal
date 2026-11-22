@@ -389,16 +389,15 @@ and the headset (plan 9.5).
 
 ### F27. The app with the weaver choosing: visionOS Simulator and macOS
 - visionOS 27.2 Simulator (Apple Vision Pro), `scripts/perf-run.sh` 180 s after a 15 s warm-up with
-  `-LiminalVideoForce YES -LiminalVideoFile <WhatsIt clip> -LiminalTestImage <fixtures> -LiminalImageInterval 15
+  `-LiminalVideoForce YES -LiminalVideoFile <WhatsIt clip> -LiminalTestImage <fixtures>
   -LiminalHideControls YES`, 60 s of it recorded (`simctl io recordVideo`). The weaver's sequence from the log
   (19 pieces, 17 retired): undertow, phantom, relief, window, poster, backdrop, window, glow, undertow, glow,
   facets, solar, window, undertow, glow, wake, imprint, poster, backdrop. 11 of the 17 recipes in 3.3 min,
   no recipe twice in a row, plain looks 5 of 19 (26 %, inside the weaver's 22-42 % band).
 - PERF, footage on: 79.4 fps mean, interval p95 13.28 ms, 0.39 slow frames per 5 s. Footage off, same flags,
-  90 s: 79.1 fps, p95 13.29 ms, 0.28 per 5 s. Every slow frame in both runs falls on the 15 s image change
+  90 s: 79.1 fps, p95 13.29 ms, 0.28 per 5 s. Every slow frame in both runs falls on a picture change
   (01:19:07, :22, :37, :52 ...; the pre-existing image-change frame of T39), none at any of the 17 piece
-  changes. The on run also carried the screen recording for 60 s. A27's 79.5 fps (120 s, default image
-  interval) is matched; the extra slow frames against A27's 0.04 come from the 15 s image interval.
+  changes. The on run also carried the screen recording for 60 s. A27's 79.5 fps (120 s) is matched; the extra slow frames against A27's 0.04 come from the picture changes of that run (a 15 s test interval, a flag since removed).
 - The recording shows the film reading as a figure (a man in a suit, hands) through Backdrop, Window and
   Glow over the hummingbird and ferris wheel pictures, Facets' shards and Solar's folded colour over the
   romanesco; the picture is the anchor throughout. Nothing new in the log's errors and faults.

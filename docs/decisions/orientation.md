@@ -12,7 +12,7 @@
   centre-cropped ("cover") to 3:2 once. The 2048x2048 render target is kept and stores the 3:2 frame
   anisotropically. The dome is now **112.5° x 75°** (was 110°), which is exactly 3:2 in view angle,
   so the image shows undistorted. macOS letterboxes to 3:2 (O5-O7).
-- Verified upright and consistent with a generated test card on all five paths: simulator mono,
+- Verified upright and consistent with a test card on all five paths: simulator mono,
   simulator stereo (flat depth and ML depth), effects off and on, and macOS effects off and on.
   Also checked with a real image and with the offline harness (O9).
 - New DEBUG launch flags: `-LiminalTestPattern YES`, `-LiminalForceStereoFlatDepth YES`,
@@ -67,10 +67,9 @@ Format: decision, why, alternatives, numbers.
 ## O5 Aspect: centre-crop to 3:2, keep the square 2048² target
 - Decision: `ImageFraming.coverCrop` centre-crops any source to 3:2. Within 0.5% it is an identity.
   It uses `CGImage.cropping`, so nothing is copied. visionOS applies it once per new image in
-  `ImmersiveDomeView`, and depth is generated from the cropped image, so depth stays registered. The
+  `ImmersiveDomeView`, and depth is computed from the cropped image, so depth stays registered. The
   framed 3:2 image is then stretched into the 2048x2048 drawable as before.
-- Why: Gemini 3.1 returns 3:2 (for example 2528x1696 = 1.491). BorderTrimmer and the fallback models
-  can return other aspects. Before, any aspect was stretched to the square and then to a 1.467 dome.
+- Why: the curated sources return many aspects (a 2528x1696 picture is 1.491; others are portrait, square or panoramic), and `BorderTrimmer` can change a source's aspect. Before, any aspect was stretched to the square and then to a 1.467 dome.
   A 3:2 image was squeezed about 2%; a square fallback image was stretched 47%. The square target
   stretched by 1.5 horizontally and the 3:2 dome stretched it back. Net result: no distortion.
   Horizontal texel density is 2048 / 1.5 = 1365 px per image height versus 2048 vertically. The
@@ -108,7 +107,7 @@ Format: decision, why, alternatives, numbers.
 
 ## O8 DEBUG flags (Liminal/Utils/DebugLaunchOptions.swift; compiled out of Release)
 - `-LiminalTestPattern YES`: `TestPatternGenerator` makes a 1536x1024 (3:2) card. It replaces the source
-  image and turns generation off. Contents:
+  picture. Contents:
   - a big up arrow and "TOP" at the top, "BOTTOM" at the bottom
   - corners TL red, TR green, BL blue, BR yellow, labelled
   - "L" and "R" labels
@@ -133,7 +132,7 @@ Format: decision, why, alternatives, numbers.
 | macOS, no effects / effects on | TestPattern (+NoEffects) | upright, circle round, letterboxed |
 | visionOS sim, real image (glass artichoke) | NoEffects | upright: stem at bottom, matches the stored JPEG |
 | VibranceHarness (visionos mode) on the same JPEG | — | passthrough and full output upright |
-- Real Gemini image 2528x1696 → cropped to 2528x1685 (log: "Downsampling source 2528x1685 → 2048x2048").
+- Real picture 2528x1696 → cropped to 2528x1685 (log: "Downsampling source 2528x1685 → 2048x2048").
 - Before the fix (`probe-*.png`, with the upload fixed but the old UVs), both materials showed the card
   upside down. This confirms O1 and O3 were a cancelling pair.
 - Earlier vibrance harness PNGs (docs/plans/vibrance-measurements.md) were upside down. Their colour

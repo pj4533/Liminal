@@ -2,7 +2,7 @@
 
 Old Internet Archive film (1950s-60s, mostly black and white) fades into the scene every few minutes,
 composited with the current image inside the existing effect pipeline, with its own sound entering the
-generative music through heavy reverb and echo. Branch `feature/archive-video`.
+Lo-Fi music through heavy reverb and echo. Branch `feature/archive-video`.
 
 Decisions taken while building go in `docs/decisions/archive-video.md` (prefix `A`, created in phase 1).
 This plan fixes the design; numbers marked *(tune)* are starting points to be tuned by eye and ear.
@@ -16,7 +16,7 @@ This plan fixes the design; numbers marked *(tune)* are starting points to be tu
 | Prelinger holds many 30-60 s newsreel items next to 8-20 min films; files are 2-70 MB h.264 at 480p, plus a `_512kb.mp4` at 240p. Range requests and redirects work. | Download whole files (small), keep them, cut random segments locally. No HTTP streaming at play time. |
 | The fragment shader takes textures 0, 2, 3, 4, 5, 6; uniforms are a flat float struct mirrored in Swift, appended with defaults of 0. Transition code sits in uniform branches so it costs nothing outside a transition. | Video is texture 7 plus appended uniforms, in one uniform branch on `videoMix > 0`. |
 | visionOS renders in a `@MainActor` loop that must never wait; images get a new texture built off the main actor (`SourceTextureUploader`) and the loop only swaps references. | Video frames are produced on their own queue into their own textures; the loop reads the latest one through a lock. The image path is not touched. |
-| The audio graph is built once (`MixBus`, `LayerStrip` with dry / reverb / delay sends) and driven from the conductor queue; `renderOffline` advances the conductor in 20 ms steps. | The archive voice is one more static strip fed by a player node; buffers are scheduled at run time, the graph never changes. Offline render works unchanged. |
+| The audio graph is built once (`ArchiveMixBus`, `ArchiveStrip` with dry / reverb / delay sends) and driven from the conductor queue (`ArchiveConductor`); `renderOffline` advances the conductor in 20 ms steps. | The archive voice is one more static strip fed by a player node; buffers are scheduled at run time, the graph never changes. Offline render works unchanged. |
 | The project uses file-system synchronized groups; the Mac target is sandboxed with outgoing network allowed. | New files under `Liminal/Archive/` build with no project edits. |
 
 ## 1. Fetch and cache
@@ -188,19 +188,18 @@ evaluates `plan.envelope(now)` each frame: no scheduling work on the main actor.
 - DEBUG flags in `DebugLaunchOptions`: `-LiminalVideoForce YES` (first moment at 5 s, 10 s gaps),
   `-LiminalVideoLook phantom|imprint|window|emerge`, `-LiminalVideoFile <mp4>` (local file, no network),
   `-LiminalVideoMix <0...1>` (constant mix, for frozen-time stills), `-LiminalVideoSeed <n>`,
-  `-LiminalVideoOffline YES` (no requests), `-LiminalVideoOff YES`. The automation flags that block image
-  generation do not block the archive.
+  `-LiminalVideoOffline YES` (no requests), `-LiminalVideoOff YES`. The automation flags do not block the archive.
 
 ## 4. Audio
 
-`Liminal/Audio/ArchiveVoice.swift`, built in `GenerativeEngine.init` with the other strips:
+`Liminal/Audio/ArchiveVoice.swift`, built in `GenerativeEngine.init` with the other audio nodes:
 
 ```
-AudioPlayer (buffer) -> VariSpeed -> HPF 220 Hz -> LPF 2.4 kHz -> LPF 2.4 kHz -> LayerStrip
-LayerStrip: dry fader -12 dB, reverb send 1.0, delay send 0.6, slow pan walk +-0.4
+AudioPlayer (buffer) -> VariSpeed -> HPF 220 Hz -> LPF 2.4 kHz -> LPF 2.4 kHz -> ArchiveStrip
+ArchiveStrip: dry fader -12 dB, reverb send 1.0, delay send 0.6, slow pan walk +-0.4
 ```
 
-- Mostly wet: what is heard is the Zita tail (8 s) and the dark tape delay of the existing `MixBus`, so the
+- Mostly wet: what is heard is the Zita tail (8 s) and the dark tape delay of the `ArchiveMixBus`, so the
   voice shares the room of the music. No new reverb, no ducking of anything.
 - Source: `ArchiveAudioDecoder` reads the segment's audio track with `AVAssetReader` into one
   `AVAudioPCMBuffer` in the engine's format, off the main actor (at most 80 s). Gain normalises the

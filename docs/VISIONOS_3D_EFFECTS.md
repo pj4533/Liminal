@@ -10,9 +10,9 @@
 3. **Derived from content** - extrapolated from images or existing effects
 
 ## Current Direction
-- **Depth approach:** visionOS 26 Spatial Scenes (Apple's generative AI)
+- **Depth approach:** visionOS 26 Spatial Scenes (Apple's on-device ML)
 - **Audio reactivity:** Not needed - keep audio/visuals separate
-- **Interaction:** Fully passive - ambient, meditative experience
+- **Interaction:** Fully passive, a meditative experience
 - **First target:** Panel Breathing - mesh vertex animation
 
 ---
@@ -34,7 +34,7 @@
 ### 1. **Depth-Extruded Parallax Layers** ★★★★★
 *The image floats in space with real depth*
 
-**Concept:** Split AI image into 2-3 depth layers on concentric curved panels. Head movement creates natural parallax - foreground floats toward you, background recedes.
+**Concept:** Split the picture into 2-3 depth layers on concentric curved panels. Head movement creates natural parallax - foreground floats toward you, background recedes.
 
 **Why it's subtle:** No added objects - just the image itself gains dimensionality. Combined with fBM, creates "breathing underwater in 3D" effect.
 
@@ -92,7 +92,7 @@
 ### 4. **visionOS 26 Spatial Scenes Integration** ★★★★
 *Use Apple's AI to add perspective*
 
-**Concept:** Feed AI images to visionOS 26's Spatial Scenes API. Apple's generative AI adds depth and multiple perspectives - you can lean in and look around.
+**Concept:** Feed pictures to visionOS 26's Spatial Scenes API. Apple's ML adds depth and multiple perspectives - you can lean in and look around.
 
 **Why it's subtle:** Apple's system is designed for photos - creates convincing depth without explicit 3D modeling.
 

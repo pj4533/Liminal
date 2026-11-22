@@ -24,19 +24,18 @@ Decisions and their reasons: `docs/decisions/transitions.md`. Status: implemente
 | `scripts/tx-clip.sh --a A --b B --out DIR [--style S --seed N --intensity I --start T --duration D]` | One call: frames, both references, `clip.mp4`, `clip.gif`, `filmstrip.png` (18 labelled frames), `plot.png`, `metrics.csv`, `check.json`. |
 | `scripts/tx-check.py score / sheet / plot` | Objective checks of a rendered transition (section 8.2), contact sheet, visibility plot. |
 
-No image is generated and the app is not launched by any of these.
+These run offline from the given pictures: they fetch nothing and do not launch the app.
 
 ## 2. How the transition works today
 
 End to end, both platforms:
 
-1. `VisualEngine` publishes a new image every image interval (default 30 s).
+1. `VisualEngine` publishes a new image every 30 s (a drum-grid change in Lo-Fi).
 2. macOS: `TimerDrivenCrossfade.transitionTo` sets `previousFrame` to the old image and `currentFrame` to
    the new one at once, and a 30 Hz timer moves `transitionProgress` linearly from 0 to 1 over
-   `VisualMoodBuilder.crossfadeDuration` = 1.5 s. visionOS: `CGImageTransitionState` in
+   a constant 1.5 s. visionOS: `CGImageTransitionState` in
    `ImmersiveDomeView` does the same from a start date. The duration is a constant on both.
-3. `music.imageDidChange(transitionDuration:)` is posted when the crossfade starts; the conductor swells
-   the air layer and lands the next chord change on the midpoint.
+3. In Lo-Fi the drum transport's downbeat decides when the pictures change.
 4. `EffectsUniformsComputer.compute` adds a boost `sin(pi * tp)` on top of the live amounts: water
    +0.16 (0.05 / 0.40 at intensity 0 / 1), radial +0.006, crystalline noise +0.020, chromatic x4.
    `EffectLook.fresh()` takes the live amounts to their clear values over the first 1.5 s of the image's
@@ -229,20 +228,13 @@ hasDepth:)` is called once when a crossfade starts.
 ### 7.2 Duration
 
 `duration = lerp(range, seed2) * (1.15 - 0.30 * energy)`, limited to 1.5...4.5 s and to at most 20 % of
-the image interval (a 10 s interval gets at most 2 s). Longer when the music is calm. The platform's
+the 30 s hold (at most 6 s). Longer when the music is calm. The platform's
 crossfade timer uses `spec.duration` instead of the constant.
 
 ### 7.3 Music coupling
 
-- `imageDidChange(transitionDuration:)` is posted with twice the time of the swap centre, so the chord
-  change the conductor already schedules at "half the duration" lands on the moment the pictures
-  exchange, for every style.
 - The envelope swells with the slow onset follower by at most +12 % (section 4). No per-onset flashes:
   the fast follower is not used, bloom and brightness boosts are envelope-only.
-- `visualActivity` uses E instead of `sin(pi * tp)`.
-- Optional, last: let a due image change wait up to 2 s for the next music scene change, so that the
-  scene change and the swap coincide. Only if it can be done in `VisualEngine` without touching the
-  conductor; otherwise dropped.
 
 ## 8. Evaluation
 
@@ -333,10 +325,10 @@ mix and warp, Ken Burns scale, ghost travel.
 | File | Change |
 |---|---|
 | `Liminal/Visual/ImageTransition.swift` (new) | `TransitionStyle`, `TransitionSpec`, per-style table (p, h, window, duration range, boosts as intensity anchors), `envelope`, `swap`, `TransitionDirector` |
-| `Liminal/Visual/EffectsUniformsComputer.swift` | `transition:` parameter; boosts from the style table times E; fills the six uniforms; `visualActivity` uses E |
+| `Liminal/Visual/EffectsUniformsComputer.swift` | `transition:` parameter; boosts from the style table times E; fills the six uniforms |
 | `Liminal/Visual/EffectLook.swift` | `transitionDuration`; fresh windows anchored to it; boost constants move to the style table |
 | `Liminal/EffectsUniforms.swift`, `Liminal/Shaders/EffectsRenderer.metal` | uniform block; mask switch and per-channel mix in `shadeEye`; fold and swirl in `distortedUV` inside one `txEnv > 0` branch; `distortedUV` also returns the flow and crystal fields; bloom and ghost taps sample the showing picture; tap gate removed |
-| `Liminal/Visual/TimerDrivenCrossfade.swift`, `Liminal/ContentView.swift` | macOS: ask the director for a spec at `startCrossfade`, use `spec.duration`, pass the spec to `compute`, post the swap-centred duration to the music |
+| `Liminal/Visual/TimerDrivenCrossfade.swift`, `Liminal/ContentView.swift` | macOS: ask the director for a spec at `startCrossfade`, use `spec.duration`, pass the spec to `compute` |
 | `Liminal/Visual/VisualEngine.swift` | owns the `TransitionDirector` (one per session) |
 | plumbing: `Liminal/visionOS/ImmersiveDomeView.swift` | `CGImageTransitionState` stores a `TransitionSpec` and uses its duration (about 6 lines); `compute` gets `transition:`; the music post uses the swap-centred duration. If the spatial rebuild has replaced this file, the same three hooks go wherever `transitionProgress` is produced |
 | plumbing: `Liminal/visionOS/OffscreenEffectsRenderer.swift`, `EffectsMetalView.swift` | nothing for the uniforms (the struct is copied whole); a ghost burst request for Echo; optional stereo-offset factor for Depthwash |

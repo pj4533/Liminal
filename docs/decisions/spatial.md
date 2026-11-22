@@ -37,15 +37,14 @@ it has the wrong sign in mirrored tiles. Rendering the effects once and showing 
 to both eyes keeps 2048x2048 per eye and roughly halves the effects GPU cost, which pays for the
 larger shell on the M2. The stereo path stays behind a DEBUG flag for an A/B on device.
 
-## S5. Coverage by mirrored continuation of the 3:2 image, not wide generation
+## S5. Coverage by mirrored continuation of the 3:2 image, not wide pictures
 
-Options considered: wide (4:1 or 8:1) generation, multi-image stitching, edge blur extension,
-mirror tiling. Mirror tiling was chosen because it needs no new assets or API spend, works with
-every cached image, costs no extra effect rendering, keeps the hero framing and angular
-resolution identical to today, and fits the kaleidoscopic look. Wide generation would spread
+Options considered: wide (4:1 or 8:1) pictures, multi-image stitching, edge blur extension,
+mirror tiling. Mirror tiling was chosen because it needs no new assets, works with
+every curated picture, costs no extra effect rendering, keeps the hero framing and angular
+resolution identical to today, and fits the kaleidoscopic look. Wide pictures would spread
 2048 px over two to three times the angle (or need a larger render target and effect-math changes
-owned by the transitions workstream), cost more per image, and invalidate the cache; no true
-panorama mode is documented for the model. It is left as later work. No Gemini calls were made.
+owned by the transitions workstream), and the curated sources offer few true panoramas. It is left as later work.
 
 Three tiles of 112.5 degrees leave a 22.5 degree gap behind the viewer, faded to black. Four
 90 degree tiles would close the circle but shrink the image to 90 x 60 degrees and put seams
@@ -95,7 +94,7 @@ unobstructed.
 - The slope limit is the mean of the lower and upper Lipschitz envelopes (two-pass L1 chamfer),
   not an iterative relaxation: it is exact (every neighbour step <= 0.035 1/m / 0.458 = 0.076 in q),
   deterministic, stays inside the input range and leaves already-smooth fields untouched.
-- The depth map is generated from the cover-cropped image, so it already spans the image; no
+- The depth map is computed from the cover-cropped image, so it already spans the image; no
   second crop is applied.
 - `ReliefBlend` keeps previous/current fields by image generation. The new field morphs in with
   the crossfade's progress; a late field is held at the old one and eases in over 0.6 s; a field
@@ -217,7 +216,7 @@ standing, seams and rear fade in a headset, progressive versus full immersion.
 **Open risks.** (1) If depth relief is uncomfortable, lower the Depth default. (2) If RealityKit cannot
 hold 90 Hz on the M2, CompositorServices stays the fallback (S2). (3) Image-change hitch of 65-90 ms
 on the main actor predates this branch. (4) Mirrored continuations repeat the image, not new
-content; wider generation was not tried and no Gemini calls were made.
+content; wider images were not tried.
 
 **What to check on the headset.** Enter Liminal and look around: effects on all sides; lean and
 walk 0.3 m to see parallax; set Depth 0, 0.6, 1.0 and judge comfort; exit with the Digital Crown and

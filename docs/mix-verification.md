@@ -6,7 +6,7 @@ Contents: [what it verifies](#what-this-verifies-and-what-it-cannot) · [prerequ
 
 ## What this verifies and what it cannot
 
-A capture renders the Lo-Fi graph offline on the sample clock (no audio device, no app launch, no network, no Gemini) and writes every stem and several internal taps as float WAV files. The analysis then measures them against thresholds in `scripts/mix-criteria.json`.
+A capture renders the Lo-Fi graph offline on the sample clock (no audio device, no app launch, no network) and writes every stem and several internal taps as float WAV files. The analysis then measures them against thresholds in `scripts/mix-criteria.json`.
 
 It checks:
 
@@ -31,7 +31,6 @@ The [audition files](#before-and-after) exist for that listening step. They are 
 - macOS with Xcode (the capture is a unit test, `LiminalTests/LofiMixRenderTests`, run with an explicit `platform=macOS` destination inside `scripts/check-lofi.sh`). Never run it for iOS.
 - `ffmpeg` on the `PATH`, the independent loudness and true-peak meter. The capture checker (`scripts/analyze-lofi.py`, run at the end of `check-lofi.sh`) stops without it (`FFmpeg is required for independent loudness and true peak`). `mix-report.py` alone still runs on an existing capture without it: `loudness.ffmpeg` then carries an error, the ffmpeg half of C-M2 is skipped, and the 16x reconstruction is used.
 - Python 3 with NumPy, SciPy and Matplotlib (checked here with NumPy 2.2, SciPy 1.16, Matplotlib 3.10).
-- `Liminal/Secrets.swift` (git-ignored). Copy `Secrets.swift.template` if it is missing. The placeholder is enough, because a capture never calls Gemini.
 - The private drum pack (`Liminal/SlowBurnDrums/` and `Liminal/Audio/Lofi/SlowBurnBeatGrid.json`, both git-ignored) for every command below that passes `--private-drums`. In a git worktree these files are absent; clone them in from the main checkout with `cp -c` (APFS clone, instant). Never commit them.
 - Cached archive footage for `--film-reel`, `--same-film` and `--cached-footage`. The captures use audio-bearing clips already in the app's archive cache (`ArchiveClipStore`, under Application Support). With none cached the test stops with `No cached film reel with audio`. `--no-footage` needs no cache.
 - Disk: one 32-bar capture is about 0.9 GB (about 23 WAV files of 42 MB each at 109 s, 48 kHz float stereo), a 64-bar capture about twice that, and `--auditions` adds about 0.4 GB. Captures live outside the repository: the harness refuses an output directory inside the checkout.
@@ -112,7 +111,6 @@ To capture a new baseline from another commit, check that commit out in its own 
 
 ```sh
 git worktree add $S/wt-baseline caa36b1
-cp -c Liminal/Secrets.swift $S/wt-baseline/Liminal/
 cp -cR Liminal/SlowBurnDrums $S/wt-baseline/Liminal/
 cp -c Liminal/Audio/Lofi/SlowBurnBeatGrid.json $S/wt-baseline/Liminal/Audio/Lofi/
 cd $S/wt-baseline
@@ -142,7 +140,7 @@ ArchiveVoice  chops: chopDry ........................................ [dialogue-
                                                                                                            |
 ArchiveVoice  bed:  film source -> Fader [film-soundtrack]                                                  |
                     -> high-pass -> low-pass x2 -> presence dip -> phaser [bed-post] -> strip (level,        |
-                    reverb and delay sends, pan) -> MixBus: direct [footage-dry], tape delay                 |
+                    reverb and delay sends, pan) -> ArchiveMixBus: direct [footage-dry], tape delay                 |
                     [footage-delay], room [footage-room] -> output [footage] ------------------------------+
                                                                                                            |
 pre-master = staging x (lofi + footage)   [pre-master] -> glue (Apple, bypassed in the lofi profile) [glue]
@@ -228,19 +226,17 @@ Plots and matrices use the order drums, bass, mids, lead, space, dialogue, bed, 
 
 ### Capture hook options
 
-`--hook KEY=VALUE` (repeatable) is stored in `manifest.hooks` and read with `LofiCaptureHooks.option(KEY)`. `check-lofi.sh` always sets `masterProfile=lofi`. Options in use:
+`--hook KEY=VALUE` (repeatable) is stored in `manifest.hooks` and read with `LofiCaptureHooks.option(KEY)`. Options in use:
 
 | Option | Values | Effect |
 |---|---|---|
-| `masterProfile` | `lofi` (capture default), `ambient` | the master chain to apply |
 | `dialogue` | `engine` (default), `legacy` | `legacy` keeps the old chop sampler, for A/B captures against the new performer |
 | `transcription` | `off` (default), `fixture`, `apple` | `apple` uses an installed on-device model only (a capture never downloads one); `fixture` uses the test provider; `off` is the acoustic path |
 | `masterInputGainDb`, `masterGlueThresholdDb`, `masterGlueRatio`, `masterClipThresholdDb` | numbers | override the finisher drive while choosing the master settings |
 
-Example, an Ambient master comparison and a legacy chop capture:
+Example, a legacy chop capture:
 
 ```sh
-DD=$S/dd-docs scripts/mix-report.sh --out $S/docs-ambient --private-drums --film-reel --bars 16 --seed 1042 --bpm 70 --hook masterProfile=ambient
 DD=$S/dd-docs scripts/mix-report.sh --out $S/docs-legacy --private-drums --film-reel --bars 32 --seed 1042 --bpm 70 --hook dialogue=legacy --case ref
 ```
 
@@ -430,7 +426,7 @@ Note: the table is a snapshot; `scripts/mix-criteria.json` and the command are a
 | C-B6 | The theme's return must be exposed and recognisable | Placement: what plays in the return's first two notes (mids, space, bed, dialogue), the lead program, and `leadGain` |
 | C-B7 | The reverb and delay return must support the lead, not wash it | Space chain level and the lead duck (`LofiStemChains.spaceDuck`) |
 | C-B8 | The chopped voice must be understandable against everything else | Chop chain EQ and level (`ChopBus` constants in `ArchiveVoice`), what else sits in 1 to 4 kHz (read `masking-during-chops`), the ducking of lead, mids and space under chops (`LofiBus.duckTargets`) |
-| C-B9 | The bed should be a background that is still audible and does not mask the voice | Bed chain: high-pass, the two low-passes, `presenceDip`, phaser, sends (`ArchiveVoice`); footage bus (`MixBus`); chop-over-bed ducking. Read the note under the criteria table first: the bed's required character changed in the plan |
+| C-B9 | The bed should be a background that is still audible and does not mask the voice | Bed chain: high-pass, the two low-passes, `presenceDip`, phaser, sends (`ArchiveVoice`); footage bus (`ArchiveMixBus`); chop-over-bed ducking. Read the note under the criteria table first: the bed's required character changed in the plan |
 | C-B11 | The melody should be heard in every phrase, not only at the return | `bySection` and `loudestRivalCounts`: the section where the lead is lowest and what covers it (usually the dialogue in 1 to 4 kHz); then the chop level and the lead and mid ducks under chops (`LofiBus.duckTargets`), `leadGain` |
 | C-B10 | Every stem must add up to its bus, or the other measurements mean nothing | A tap placed on the wrong node, or a source missing from `LofiBus`; look at `analysis.json` `firstMusicFrameOutsideTolerance` |
 | C-D1 | The performance must change at least every 16 bars | The dialogue performer's cadence rule (`DialoguePerformer`) and bank rotation; a cue that planned nothing new (see `dialoguePlans` blocks) |
@@ -687,9 +683,8 @@ Then read it in Python through `Capture` (`scripts/mixlib/audio.py`): `cap.diagn
 |---|---|
 | `Waiting for another Lo-Fi capture to release /private/tmp/liminal-lofi-audio-config-<uid>.json` | Another capture holds the lock. Wait, or raise `--wait-lock`. If no capture is running (a killed run left the file) and the wait ends with `another Lo-Fi capture owns ...`, check `pgrep -fl xcodebuild`, then delete that file. |
 | `use an empty output directory outside the repository` | `--out` must be a new or empty directory not under the checkout. |
-| `No cached film reel with audio` / `No playable audio in the local archive clip cache` | The app's clip cache has no audio-bearing film. Run the app once with archive footage enabled in a no-generation launch (a flagged launch such as `-LiminalAutoPlay YES -LiminalVideoOffline YES` never calls Gemini), or use `--no-footage` (and expect footage criteria to skip). |
+| `No cached film reel with audio` / `No playable audio in the local archive clip cache` | The app's clip cache has no audio-bearing film. Run the app once with archive footage enabled, or use `--no-footage` (and expect footage criteria to skip). |
 | Private drums missing (`--private-drums` stops, or a missing resource error) | `Liminal/SlowBurnDrums/` and `Liminal/Audio/Lofi/SlowBurnBeatGrid.json` are git-ignored and absent from a new worktree or clone. Clone them from the main checkout with `cp -c` / `cp -cR`. Never commit them. |
-| `Secrets.swift` missing, build fails | Copy `Liminal/Secrets.swift.template` to `Liminal/Secrets.swift`. |
 | Upload errors such as `422`/`413` or `incomplete capture upload` in `xcodebuild.log` | The sandboxed test host uploads its WAVs to a loopback receiver the script starts; a failure means the capture directory is full (disk), not writable, or the receiver was stopped. Check free disk space (captures are about 0.9 GB) and that `--out` is outside protected folders, then run again. |
 | `skippedTapFrames` in the log | A tap fell behind and dropped a block under load. `check-lofi.sh` captures again automatically (up to `--capture-attempts`, default 4, after the load falls). Run on a quieter machine if it keeps happening. |
 | `FFmpeg is required for independent loudness and true peak`, or `ffmpeg not found` in `loudness.ffmpeg` | Install ffmpeg (`brew install ffmpeg`). Without it a capture cannot finish, and a re-analysis skips the ffmpeg meter. |

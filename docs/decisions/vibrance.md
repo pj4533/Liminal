@@ -206,7 +206,7 @@ GPU (simulator, frozen t=100, 2 runs each, relative only): 0.135/0.141 → 0.142
 
 - **Test card:** grey columns at mid-height (left 0.18 / 0.46 / 0.50 / 0.735, right 0 / 0.25 / 0.75 / 1.0),
   readable in simulator screenshots.
-- **`-LiminalTestImage <path>`:** shows one fixed image file and turns generation off, for before/after
+- **`-LiminalTestImage <path>`:** shows one fixed image file, for before/after
   captures. The simulator can read host paths. The sandboxed macOS app cannot read `/private/tmp`, so
   use `-LiminalTestPattern` there.
 

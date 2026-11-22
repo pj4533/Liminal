@@ -217,9 +217,9 @@ All on the reference capture (seed 2077, 72 BPM, 32 bars, private drums, film re
 - Pads tucked (peak ceilings, pad duck), lead levelling, space chain, `boundedWet`, wet tape colour, chop chain and MPC motif, chop soft clip.
 - The film bed: at least 10 dB under the music, never a duck key, same staging gain as the music.
 - The finisher's design: HPF 25 Hz, glue 1.7:1 at -12 dB, 4x soft clip, 4x true-peak limiter, -1 dBTP ceiling with 0.15 dB margin, 200-frame latency. The -2 dB staging.
-- The Ambient profile and its -18 LUFS target.
+- The fallback Apple chain and its -18 LUFS target.
 - No shared-state, locking or allocation on the render path for the new clip meter or dumps. No storage or playback budgets.
-- Never commit captures, WAVs, the private drum recordings or `Secrets.swift`. Never launch the app without an automation flag.
+- Never commit captures, WAVs or the private drum recordings. Never launch the app without an automation flag.
 
 ## 6. Limits of this plan
 

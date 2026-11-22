@@ -28,7 +28,7 @@ Chosen architecture: the **mirror-wrap depth-relief shell**, in RealityKit.
 
 Rejected or deferred (details in the decisions file): CompositorServices rewrite, LowLevelRenderer,
 `ImagePresentationComponent` (cannot take effects), Gaussian splats, layered depth planes, and wide
-(4:1) image generation.
+(4:1) pictures.
 
 ## 2. Geometry
 
@@ -152,7 +152,7 @@ New files:
 | `Liminal/visionOS/HeadPoseProvider.swift` | entry pose and re-centre |
 | `LiminalTests/SpatialShellTests.swift` | layout and relief tests |
 
-New DEBUG flags (all block generation like the others): `-LiminalShellYaw <deg>`,
+New DEBUG flags (all automation flags like the others): `-LiminalShellYaw <deg>`,
 `-LiminalShellPitch <deg>`, `-LiminalShellHeadOffset "x,y,z"` (moves the shell to imitate head
 translation, shows parallax in the fixed-camera simulator), `-LiminalShellDepth <0...1>`,
 `-LiminalShellTextureStereo YES`.

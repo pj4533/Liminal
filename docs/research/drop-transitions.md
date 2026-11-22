@@ -87,8 +87,7 @@ float tstep(float t, float rate){ return floor(t*rate); }   // stepped time
 ## 7. Defaults suggested for the implementation
 
 - Pure-visual "cut frame": the swap happens at p=1; before that, `a` from the exponential curve (k=5) for geometry glitches, linear for flash/darkening.
-- Build window: from the fill landmark to tD; if the fill start is unknown use 1 bar (about 2 s at the Lo-Fi tempo) or the final 8 beats; clamp to [0.75 s, 4 s]; if shorter than 0.5 s (e.g. user skip, ambient mode with no drum), use a short 0.4-0.6 s burst and swap at its end (a symmetrical `a` ramp up, hard cut, no ramp down).
-- Ambient mode (no drum transport): same system with a fixed T and the swap at p=1 followed by a gentler 150-250 ms de-glitch is acceptable, since there is no "boom" to protect; a flag selects hard vs soft release.
+- Build window: from the fill landmark to tD; if the fill start is unknown use 1 bar (about 2 s at the Lo-Fi tempo) or the final 8 beats; clamp to [0.75 s, 4 s]; if shorter than 0.5 s (e.g. user skip, a change with no drum transport), use a short 0.4-0.6 s burst and swap at its end (a symmetrical `a` ramp up, hard cut, no ramp down).
 - Keep seeds deterministic per transition (seed from a counter) so debug flags can reproduce a look; expose a "type" debug override for review clips.
 - Perf: all of the above fit in the existing staged fragment shader with function constants per transition type (tap counts N <= 12, no loops over big radii), keeping the visionOS 2048x2048 render size.
 - Archive footage: apply the same UV-space distortions to both the still and the video layer by distorting the composite UV before sampling either, so footage glitches with the image.
