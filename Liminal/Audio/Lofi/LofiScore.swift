@@ -203,11 +203,12 @@ nonisolated struct LofiScore: Sendable, Equatable {
 
     /// `timing`, when present, is the drum take's timing field and the source of truth for bass
     /// placement; `timingStartBeat` is this phrase's first beat in that take and `beatSeconds` the
-    /// take's beat length. Without it, `kickBeats` keeps the original 0.075 beat snap.
+    /// take's beat length. Without it, `kickBeats` keeps the original 0.075 beat snap. `audition`
+    /// forces programs for offline A/B captures (`.none` in the app).
     static func make(seed: UInt64, section: Section, drift: LofiDrift, startBeat: Double,
                      pinnedScale: ScaleType? = nil, kickBeats: [Double] = [],
                      timing: LofiTimingField? = nil, timingStartBeat: Int = 0,
-                     beatSeconds: Double = 60 / LofiOptions().safeTempo) -> Self {
+                     beatSeconds: Double = 60 / LofiOptions().safeTempo, audition: Audition = .none) -> Self {
         let phrase = Int(startBeat / LofiClock.beats)
         let position = phrase % phrasesPerForm
         let record = position / 4
@@ -216,7 +217,7 @@ nonisolated struct LofiScore: Sendable, Equatable {
         let tonic = pinnedScale == nil ? harmonyRandom.pick([0, 2, 3, 5, 7, 9]) : 0
         let scale = pinnedScale ?? harmonyRandom.pick([.minor, .minor, .dorian, .pentatonicMinor])
         let harmony = Harmony(tonic: tonic, scale: scale)
-        let preset = LofiPreset.selection(seed: drift.seed, phrase: phrase)
+        let preset = LofiPreset.selection(seed: drift.seed, phrase: phrase, audition: audition)
         let motifRandom = root.fork(UInt64(record) + 206)
         let theme = motif(harmony: harmony, random: motifRandom)
         let phraseRandom = root.fork(UInt64(position) + 618)

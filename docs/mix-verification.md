@@ -232,6 +232,9 @@ Plots and matrices use the order drums, bass, mids, lead, space, dialogue, bed, 
 |---|---|---|
 | `transcription` | `off` (default), `fixture`, `apple` | `apple` uses an installed on-device model only (a capture never downloads one); `fixture` uses the test provider; `off` is the acoustic path |
 | `masterInputGainDb`, `masterGlueThresholdDb`, `masterGlueRatio`, `masterClipThresholdDb` | numbers | override the finisher drive while choosing the master settings |
+| `guitarProgram`, `pluckProgram` | a program name, case and spaces ignored (`nylonstrum`, `concertharp`) | force every take's guitar or plucked-string program (D128); the harness passes a `LofiScore.Audition` to `LofiRenderer.render`, so the score never reads the hooks. An unknown name fails the capture. `manifest.diagnostics.audition` records the values |
+| `guitarSlot` | `1` or `2` | play the guitar in take phrase 1 (bars 5-8) or 2 (bars 9-12, the breakdown); the plucked string takes the other |
+| `strumHook` | `off` | turn off the strummed hook line (D128; stored now, used once the hook line exists) |
 
 Example, a capture with on-device transcription:
 
@@ -650,6 +653,10 @@ DD=$S/dd-docs scripts/mix-matrix.sh --out $S/docs-matrix --baseline $S/baseline 
 8. `--bass-samples` (no capture): the body-band content of every bundled long bass sample, off exact harmonics and off the tracked (stretched) partials, with the partial offsets in cents.
 
 Reference figures, 20 November 2026 (seed 2077, 72 BPM, 32 bars, private drums, film reel; D121): before the master re-stage the clip fired in 185 bursts, reached its 2 dB cap and left a -18.9 dB residual in 1-4 kHz while engaged; after it (`lofiSettings`: +2 dB net drive, clip from -2 dBFS) 6 bursts, 0.29 dB maximum, -51.5 dB while reducing. The drum tape stage reads -27.5 dB overall and -20.8 dB in 1-4 kHz (G8 open). The upright bass reads -20.2 dB inharmonic in the gate (-20.6 in the per-sample audit, a different metric; G6 open): the recordings' own content, not the chain.
+
+## Strum report
+
+`scripts/strum-report.py CAPTURE [--baseline DIR] [--off DIR] [--json OUT]` measures the guitar and harp phrases (D128, `docs/decisions/music.md`). Per phrase: program, section, take position, lead, ornament and `strum` note counts, melody-attached ornament strums (two or more ornaments within 120 ms under a lead note), strum events (`strum` notes grouped by onsets within 120 ms) with their strings, bars, distance to the nearest confident kick and full snare landmark, site, nearest chop onset and overlap with dry chops, the dry and wet loudness of the phrase (wet over the phrase plus two beats), the dry stem's 2-5 kHz share, the lead gain from `musicLevels`, and each event's first echo under its dry stab in the wet stem (a lower bound for plain stabs, since the wet stem also carries the melody's echo). With `--baseline` (the before capture with the same seed and forced program) and `--off` (the same build with `--hook strumHook=off`) it prints a PASS, FAIL, WARN or N/A line for each of the plan's capture criteria C2 to C10, reading C-B1, C-B5 to C-B11, C-M2, C-M6 and C-M9 from each capture's `report/mix-report.json`. It exits 1 when a criterion fails.
 
 ## Solo stems for listening
 

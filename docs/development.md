@@ -56,9 +56,14 @@ Two commands capture Lo-Fi audio offline and measure it. Both need FFmpeg, Pytho
 DD=$S/dd-name scripts/mix-report.sh --out DIR [--baseline DIR] [--strict] [--no-plots] [--case NAME] \
     [check-lofi.sh options: --private-drums --film-reel --bars 32 --seed 1042 --bpm 70 --hook k=v ...]
     (--hook bassTone=round|upright|synth pins one bass tone for the whole capture; without it the tone rotates every 16 bars, D120)
+    (--hook guitarProgram=nylonstrum, pluckProgram=concertharp and guitarSlot=1|2 force the take's guitar or
+     plucked-string program and the guitar's middle phrase for A/B captures; strumHook=off turns off the strummed hook, D128)
 
 # The five-case matrix (ref, long, fast, same, nofilm), run one after another
 DD=$S/dd-name scripts/mix-matrix.sh --out DIR [--baseline DIR] [--cases ref,long,fast,same,nofilm] [--strict] [--prune-wavs]
+
+# Guitar and harp strum measures of one capture, against a before and a hook-off capture (D128)
+python3 scripts/strum-report.py DIR [--baseline DIR] [--off DIR] [--json OUT]
 ```
 
 `python3 scripts/mix-report.py CAPTURE_DIR` re-measures an existing capture without capturing again.

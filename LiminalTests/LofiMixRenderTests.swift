@@ -184,6 +184,7 @@ struct LofiMixRenderTests {
         let scoreFrames = phrases * clock.frameCount
         let postroll = clock.frame(at: Double(config.postrollBeats ?? 0))
         let frames = scoreFrames + postroll
+        let audition = try Self.audition()
         var tail: LofiRenderer.Tail?
         var score: [[String: Any]] = []
         var auxiliary = try ["echo", "room", "color"].map {
@@ -214,7 +215,7 @@ struct LofiMixRenderTests {
                                                  options: request.options, sampleRate: format.sampleRate,
                                                  drift: .init(seed: request.seed), startBeat: Double(i) * LofiClock.beats,
                                                  drums: drums, drumStartBeat: request.drumStartBeat, carry: tail,
-                                                 captureEffects: true)
+                                                 captureEffects: true, audition: audition)
             tail = phrase.tail
             bus.schedule(phrase)
             if i == phrases - 1, postroll > 0 {
@@ -585,6 +586,26 @@ struct LofiMixRenderTests {
             }
         }
         return result
+    }
+
+    /// The program audition from the capture hooks `guitarProgram`, `pluckProgram`, `guitarSlot`
+    /// (1 or 2) and `strumHook` (`off`). An unknown program or slot fails the capture.
+    private static func audition() throws -> LofiScore.Audition {
+        let guitar = LofiCaptureHooks.option("guitarProgram")
+        let pluck = LofiCaptureHooks.option("pluckProgram")
+        if let guitar { try #require(LofiPreset.guitar(named: guitar) != nil, "Unknown guitar program \(guitar)") }
+        if let pluck { try #require(LofiPreset.pluck(named: pluck) != nil, "Unknown plucked program \(pluck)") }
+        let slot = try LofiCaptureHooks.option("guitarSlot").map { value -> Int in
+            let slot = try #require(Int(value), "guitarSlot must be 1 or 2")
+            try #require((1...2).contains(slot), "guitarSlot must be 1 or 2")
+            return slot
+        }
+        let hook = LofiCaptureHooks.option("strumHook")?.lowercased() != "off"
+        let audition = LofiScore.Audition(guitarProgram: guitar, pluckProgram: pluck, guitarSlot: slot, hook: hook)
+        LofiCaptureHooks.report("audition", ["guitarProgram": guitar.map { $0 as Any } ?? NSNull(),
+                                             "pluckProgram": pluck.map { $0 as Any } ?? NSNull(),
+                                             "guitarSlot": slot.map { $0 as Any } ?? NSNull(), "strumHook": hook])
+        return audition
     }
 
     /// `diagnostics.landmarks[]` (plan 3.2): one take's kick and snare attacks in capture frames.

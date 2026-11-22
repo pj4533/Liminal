@@ -33,15 +33,32 @@ nonisolated struct LofiPreset: Equatable, Sendable {
     /// per-program loudness match (integrated level of dry, mids and effects against the Steinway Grand), -6 to +2 dB.
     let levelDB: Float
 
-    static func selection(seed: UInt64, phrase: Int) -> Self {
+    /// `audition` forces a guitar or plucked-string program and the guitar's middle phrase for A/B
+    /// captures; with `.none` the draw is the seed's own. Phrases 0 and 3 of a take never change.
+    static func selection(seed: UInt64, phrase: Int, audition: LofiScore.Audition = .none) -> Self {
         let root = MusicRNG(seed: seed).fork(253)
         let record = phrase / 4
         let piano = root.fork(100).shuffledCycle(keys, index: record)
-        let strings = root.fork(101).shuffledCycle(plucks, index: record)
-        let answer = root.fork(102).shuffledCycle(guitars, index: record)
+        let strings = audition.pluckProgram.flatMap { program(named: $0, in: plucks) }
+            ?? root.fork(101).shuffledCycle(plucks, index: record)
+        let answer = audition.guitarProgram.flatMap { program(named: $0, in: guitars) }
+            ?? root.fork(102).shuffledCycle(guitars, index: record)
         var order = root.fork(UInt64(record) + 615)
-        let voices = order.chance(0.60) ? [piano, strings, answer, piano] : [piano, answer, strings, piano]
+        let drawnStringsFirst = order.chance(0.60)
+        let stringsFirst = audition.guitarSlot.map { $0 == 2 } ?? drawnStringsFirst
+        let voices = stringsFirst ? [piano, strings, answer, piano] : [piano, answer, strings, piano]
         return voices[phrase % 4]
+    }
+
+    /// The guitar program called `name`, matched as `LofiScore.Audition.key` does ("nylonstrum").
+    static func guitar(named name: String) -> Self? { program(named: name, in: guitars) }
+
+    /// The plucked-string program called `name`, matched as `LofiScore.Audition.key` does.
+    static func pluck(named name: String) -> Self? { program(named: name, in: plucks) }
+
+    private static func program(named name: String, in table: [Self]) -> Self? {
+        let key = LofiScore.Audition.key(name)
+        return table.first { LofiScore.Audition.key($0.name) == key }
     }
 
     private init(_ name: String, _ sampleGroup: String, _ family: Family, _ brightness: Double, _ movement: Double,
@@ -68,7 +85,7 @@ nonisolated struct LofiPreset: Equatable, Sendable {
     // guitar's fingerstyle lean and the loudness-match trim.
     // Acoustic and lo-fi pianos only. "Felt" and "tape" rows are darker, softer at the hammer,
     // wobblier and wetter; "close" rows are drier; the rest sit in between (D114).
-    private static let keys: [Self] = [
+    static let keys: [Self] = [
         .init("Steinway Grand", "grand", .piano, 0.62, 0.32, 0.003, 0.27, 0.49, (0.75, 1.5), 0.52, 1.04, 0.84, 0.42),
         .init("Felt Steinway", "grand", .piano, 0.30, 0.46, 0.013, 0.34, 0.49, (1, 1.75), 0.56, 1.22, 0.96, 0.55),
         .init("Kawai Grand", "kawai", .piano, 0.52, 0.22, 0.004, 0.30, 0.49, (1, 1.5), 0.50, 1.18, 0.86, 0.50,
@@ -88,7 +105,7 @@ nonisolated struct LofiPreset: Equatable, Sendable {
               level: 0.5)
     ]
 
-    private static let plucks: [Self] = [
+    static let plucks: [Self] = [
         .init("Pizzicato Viola", "pizz", .strings, 0.61, 0.26, 0.004, 0.22, 0.54, (0.75, 1.75), 0.61, 1.06, 0.87, 0.73,
               level: 1.9),
         .init("Pizzicato Cello", "cellopluck", .strings, 0.50, 0.19, 0.006, 0.29, 0.55, (0.75, 1.5), 0.53, 1.12, 0.86, 0.60,
@@ -100,7 +117,7 @@ nonisolated struct LofiPreset: Equatable, Sendable {
     ]
 
     /// Clean guitars only, never distorted. They play guitar figures, not keyboard lines.
-    private static let guitars: [Self] = [
+    static let guitars: [Self] = [
         .init("Nylon Fingerstyle", "nylon", .guitar, 0.42, 0.18, 0.004, 0.30, 0.50, (0.75, 1.5), 0.50, 1.08, 0.82, 0.55,
               fingerstyle: 0.8, level: 1.5),
         .init("Nylon Strum", "nylon", .guitar, 0.36, 0.26, 0.005, 0.32, 0.50, (1, 1.75), 0.53, 1.20, 0.90, 0.60,

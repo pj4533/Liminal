@@ -65,13 +65,14 @@ nonisolated enum LofiRenderer {
     static func render(seed: UInt64, section: LofiScore.Section, options: LofiOptions, sampleRate: Double,
                        drift: LofiDrift, startBeat: Double, drums: LofiDrumTake? = nil,
                        drumStartBeat: Int = 0, carry: Tail? = nil, samples: LofiSampleBank = .bundled,
-                       captureEffects: Bool = false) throws -> Phrase {
+                       captureEffects: Bool = false, audition: LofiScore.Audition = .none) throws -> Phrase {
         let clock = drums?.clock ?? LofiClock(tempo: options.safeTempo, sampleRate: sampleRate)
         // A take with landmarks drives bass placement through its timing field; otherwise the old kicks.
         let timing = drums.flatMap { $0.landmarks.isEmpty ? nil : $0.timing }
         let score = LofiScore.make(seed: seed, section: section, drift: drift, startBeat: startBeat,
                                    pinnedScale: options.scale, kickBeats: drums?.bassAnchors(startBeat: drumStartBeat) ?? [],
-                                   timing: timing, timingStartBeat: drumStartBeat, beatSeconds: clock.beatDuration)
+                                   timing: timing, timingStartBeat: drumStartBeat, beatSeconds: clock.beatDuration,
+                                   audition: audition)
         let n = clock.frameCount
         let bass = try stereoBuffer(clock: clock)
         let dry = try stereoBuffer(clock: clock)
