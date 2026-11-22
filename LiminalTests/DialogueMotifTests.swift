@@ -393,13 +393,22 @@ struct DialogueMotifTests {
                       motif.pieces.count >= 2 else { continue }
                 #expect(!motif.reorderAllowed, "'\(motif.text ?? "-")'")
                 checked += 1
+                // D127: each run of a bar up to and including a signature hit (the signature or its halves)
+                // plays its new pieces in source order (before, the whole bar), so the line's words lead into
+                // the signature and a negation is never heard reversed.
+                let hook = try #require(motif.hook)
+                let signature = Set([hook.signature] + (motif.halves[hook.signature] ?? []))
                 for cell in motif.cells where cell.kind == .chopBeat {
                     for bar in 0..<2 {
                         // New source positions only: a repeat of a piece already heard (or of its half) is a stutter.
-                        var order: [Int] = []
+                        var order: [Int] = [], heard = Set<Int>()
                         for item in cell.items.sorted(by: { $0.slot < $1.slot }) where item.slot / 16 == bar {
                             let o = motif.fragments[item.fragment].order
-                            if !order.contains(o) { order.append(o) }
+                            if heard.insert(o).inserted { order.append(o) }
+                            if signature.contains(item.fragment) {
+                                #expect(order == order.sorted(), "'\(motif.text ?? "-")' bar \(bar): \(order)")
+                                order = []
+                            }
                         }
                         #expect(order == order.sorted(), "'\(motif.text ?? "-")' bar \(bar): \(order)")
                     }

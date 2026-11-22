@@ -187,16 +187,24 @@ struct DialogueChopVarietyTests {
                                                      memory: DialoguePerformanceMemory(), seed: seed, beatDuration: 60 / 78.0, drums: drums),
                       !motif.reorderAllowed else { continue }
                 checked += 1
+                let hook = try #require(motif.hook)
+                let signature = Set([hook.signature] + (motif.halves[hook.signature] ?? []))
                 for cell in motif.cells where cell.kind == .chopBeat {
                     #expect(cell.items.allSatisfy { motif.fragments.indices.contains($0.fragment) })
                     for bar in 0..<2 {
-                        var order: [Int] = []
+                        var order: [Int] = [], heard = Set<Int>()
                         for item in cell.items.sorted(by: { $0.slot < $1.slot }) where item.slot / 16 == bar && item.slot < 28 {
                             let o = motif.fragments[item.fragment].order
-                            if !order.contains(o) { order.append(o) }
+                            if heard.insert(o).inserted { order.append(o) }
+                            if signature.contains(item.fragment) {
+                                #expect(order == order.sorted(), "'\(motif.text ?? "-")' bar \(bar): \(order)")
+                                order = []
+                            }
                         }
-                        #expect(order == order.sorted(), "'\(motif.text ?? "-")' bar \(bar): \(order)")
+                        #expect(order == order.sorted(), "'\(motif.text ?? "-")' bar \(bar): \(order) S \(hook.signature) R \(hook.response) T \(hook.third) halves \(motif.halves) items \(cell.items.map { [$0.slot, $0.fragment, $0.skeleton ? 1 : 0, motif.fragments[$0.fragment].order] })")
                     }
+                    // The fill uses the line's other words: never one piece for the whole cell when there are more.
+                    if motif.pieces.count >= 2 { #expect(Set(cell.items.map(\.fragment)).count >= 2, "'\(motif.text ?? "-")'") }
                 }
             }
         }
@@ -221,6 +229,27 @@ struct DialogueChopVarietyTests {
                     #expect(items.filter(\.skeleton).count == template.count)
                     #expect(items.allSatisfy { $0.fragment == 1 })
                 }
+            }
+        }
+    }
+
+    /// The live case of 22 November 2026: "we can't call them brains." may not be reordered, and its
+    /// roles all fall on its last word. The chop beat leads into the signature with the line's earlier
+    /// words instead of playing "brains." twelve times in a row.
+    @Test func aGuardedLineWhoseSignatureEndsItStillMixesItsWords() {
+        func fragment(_ id: Int, _ order: Int, _ frames: Range<Int>, _ kind: DialogueMotifFragment.Kind = .piece) -> DialogueMotifFragment {
+            DialogueMotifFragment(id: id, kind: kind, order: order, parent: nil, frames: frames, accentFrame: frames.lowerBound,
+                                  fadeIn: 0, fadeOut: 0, text: nil)
+        }
+        let fragments = [fragment(0, -1, 0..<60_000, .line), fragment(1, 0, 0..<15_000), fragment(2, 1, 15_000..<35_000), fragment(3, 2, 35_000..<60_000)]
+        let v = DialogueMotif.GrooveVocabulary(s: 3, r: 3, t: 3, sa: 3, ra: 3, pieces: [1, 2, 3], halves: [:])
+        for (k, template) in DialogueMotifTuning.hookTemplates.enumerated() {
+            for seed: UInt64 in 1...6 {
+                let items = DialogueMotif.groove(template: template, vocabulary: v, drums: .boomBap, reorderAllowed: false,
+                                                 fragments: fragments, sampleRate: 48_000, seed: seed).sorted { $0.slot < $1.slot }
+                let same = zip(items, items.dropFirst()).filter { $0.fragment == $1.fragment }.count
+                #expect(Set(items.map(\.fragment)) == [1, 2, 3], "template \(k) seed \(seed): \(items.map { [$0.slot, $0.fragment] })")
+                #expect(Double(same) <= 0.5 * Double(items.count - 1), "template \(k) seed \(seed): \(items.map { [$0.slot, $0.fragment] })")
             }
         }
     }

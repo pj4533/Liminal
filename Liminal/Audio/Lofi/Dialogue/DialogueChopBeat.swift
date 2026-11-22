@@ -126,7 +126,8 @@ nonisolated extension DialogueMotif {
     /// drums (`FillSite`), then each stab given the cut its site prefers that differs from the hits on
     /// either side. At most `grooveRun` onsets on consecutive sixteenths, a beat without an onset in
     /// every bar, at most `grooveOffEighths` stabs on odd sixteenths per cell (one swung pickup and one
-    /// ghost pocket). A line that may not be reordered keeps each bar's new pieces in source order.
+    /// ghost pocket). A line that may not be reordered keeps the new pieces of each run into a signature
+    /// hit in source order.
     /// Skeleton hits hold 1/8 (less when the next hit is nearer), one signature hit per cell holds three
     /// sixteenths (a word and a syllable) and the cell's last response plays out.
     static func groove(template: [(DialogueMotifTuning.HookRole, Int)], vocabulary v: GrooveVocabulary,
@@ -218,15 +219,27 @@ nonisolated extension DialogueMotif {
         // A site no cut fits (a line that may not be reordered) is dropped; it stays out of every later
         // lookup (an app run of 22 November 2026 crashed on a removed site still in `steps`).
         var dropped = Set<Int>()
+        // A line that may not be reordered (D127): each run of a bar's hits up to and including a
+        // signature hit, and the run after the bar's last one, plays its new pieces in source order,
+        // so the line's words lead into its signature ("we can't | call them | brains.") and a negation
+        // is never heard reversed. Before D127 the whole bar had to be in order, which left a line whose
+        // signature is its last word with nothing but the signature (a live run of 22 November 2026:
+        // "brains." twelve times in a row).
+        let signature: Set<Int> = [v.s, v.sa, v.sb]
         func orderOK(_ step: Int, _ fragment: Int) -> Bool {
             guard !reorderAllowed else { return true }
             let bar = (step / 16) * 16
-            var orders: [Int] = []
+            var orders: [Int] = [], heard = Set<Int>()
             for k in steps where k >= bar && k < bar + 16 && !dropped.contains(k) {
                 let f = k == step ? fragment : hits[k]!.fragment
                 guard f >= 0 else { continue }
+                // Only a piece new to the bar counts; a repeat of one already heard is a stutter.
                 let o = fragments[f].order
-                if !orders.contains(o) { orders.append(o) }
+                if heard.insert(o).inserted { orders.append(o) }
+                if signature.contains(f) {
+                    guard orders == orders.sorted() else { return false }
+                    orders = []
+                }
             }
             return orders == orders.sorted()
         }
