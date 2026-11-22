@@ -38,10 +38,12 @@ nonisolated extension LofiRenderer {
     }
 
     /// Mono chain on the rendered voice, then the headroom guard, edge envelope and the split kick duck,
-    /// copied to R. Returns the chain's stats with the deepest kick duck.
+    /// copied to R. Returns the chain's stats with the deepest kick duck. `settings` is the phrase's bass
+    /// chain (`LofiRenderTuning.bass`, the standard chain outside capture experiments).
     static func finishBass(left: UnsafeMutableBufferPointer<Float>, right: UnsafeMutableBufferPointer<Float>,
                            frames n: Int, sampleRate: Double, envelope: [Float], drums: LofiDrumTake?,
-                           drumOffset: Int, anchoredKicks: [Int], kickDuck: inout LofiKickDuck) -> LofiStemChains.Stats {
+                           drumOffset: Int, anchoredKicks: [Int], kickDuck: inout LofiKickDuck,
+                           settings: LofiStemChains.Bass = .standard) -> LofiStemChains.Stats {
         let drumChannels = drums?.buffer.floatChannelData
         guard let bassL = left.baseAddress, let bassR = right.baseAddress else { return LofiStemChains.Stats() }
         // Bass: mono chain on the rendered voice, before the edge envelope and the kick duck.
@@ -52,7 +54,7 @@ nonisolated extension LofiRenderer {
         // kick and the bass hit together and sum (C-B2), and a duck would put the note's onset 4 dB under its
         // own body. Taken from the score, not the audio, so a downbeat kick at frame 0 counts too.
         let struck = drums.map { LofiKickDuck.anchoredKicks($0.landmarks, near: anchoredKicks, sampleRate: sampleRate) } ?? []
-        var bassStats = LofiStemChains.applyBass(bassL, count: n, sampleRate: sampleRate)
+        var bassStats = LofiStemChains.applyBass(bassL, count: n, sampleRate: sampleRate, settings: settings)
 
         // Headroom guard after the chain, then the kick duck (mono), keyed by the take's kick landmarks when
         // it has confident kicks, else by the level detector, then the edge envelope last: the split duck's

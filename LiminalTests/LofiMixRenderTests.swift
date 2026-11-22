@@ -185,6 +185,7 @@ struct LofiMixRenderTests {
         let postroll = clock.frame(at: Double(config.postrollBeats ?? 0))
         let frames = scoreFrames + postroll
         let audition = try Self.audition()
+        try Self.renderTuning()
         var tail: LofiRenderer.Tail?
         var score: [[String: Any]] = []
         var auxiliary = try ["echo", "room", "color"].map {
@@ -614,6 +615,20 @@ struct LofiMixRenderTests {
                                              "pluckProgram": pluck.map { $0 as Any } ?? NSNull(),
                                              "guitarSlot": slot.map { $0 as Any } ?? NSNull(), "strumHook": hook])
         return audition
+    }
+
+    /// The capture-only render tuning from the `tune.*` hooks (`LofiRenderTuning`), reported as
+    /// `diagnostics.renderTuning`. An unknown `tune.*` key or an unparsable value fails the capture.
+    private static func renderTuning() throws {
+        let tuning: LofiRenderTuning
+        do {
+            tuning = try LofiRenderTuning.parse(LofiCaptureHooks.options)
+        } catch {
+            try #require(Bool(false), "\(error)")
+            return
+        }
+        try #require(LofiRenderTuning.capture() == tuning, "The renderer must resolve the same tuning")
+        LofiCaptureHooks.report("renderTuning", tuning.report)
     }
 
     /// `diagnostics.landmarks[]` (plan 3.2): one take's kick and snare attacks in capture frames.

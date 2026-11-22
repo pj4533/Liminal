@@ -80,6 +80,9 @@ nonisolated enum LofiRenderer {
                                    audition: audition)
         // `revise` is a test seam (a hand-made strum on a scored phrase); nil in the app.
         let score = revise?(made) ?? made
+        // Capture-only render tuning (`tune.*` hooks), resolved once per phrase here on the render worker;
+        // `.standard` in the app.
+        let tuning = LofiRenderTuning.capture()
         let n = clock.frameCount
         let bass = try stereoBuffer(clock: clock)
         let dry = try stereoBuffer(clock: clock)
@@ -382,7 +385,7 @@ nonisolated enum LofiRenderer {
         var bassStats = finishBass(left: left, right: right, frames: n, sampleRate: sampleRate, envelope: envelope,
                                    drums: drums, drumOffset: drumOffset,
                                    anchoredKicks: score.bassAnchors.map { drumOffset + clock.frame(at: $0.kickBeat) },
-                                   kickDuck: &kickDuck)
+                                   kickDuck: &kickDuck, settings: tuning.bass)
         // The program's loudness-match trim (D114) follows the balance, which only turns phrases down:
         // a plucked program held under the 400 ms and peak ceilings can still come up to the grand.
         let programTrim = powf(10, score.preset.levelDB / 20)

@@ -42,6 +42,11 @@ nonisolated enum LofiCaptureHooks {
         state.withLockUnchecked { $0.enabled ? $0.options[key] : nil }
     }
 
+    /// Every option of the running capture (empty when disabled).
+    static var options: [String: String] {
+        state.withLockUnchecked { $0.enabled ? $0.options : [:] }
+    }
+
     /// Names match `^[a-z0-9][a-z0-9-]*$`; they become `<name>.wav` in the capture.
     static func tap(_ name: String, _ node: AVAudioNode) {
         guard isEnabled else { return }
