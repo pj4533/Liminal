@@ -103,13 +103,16 @@ nonisolated enum DialogueMotifTuning {
     /// Hook templates (D125): (role, step) in the 2-bar hook cell, bar B = steps 16 to 31. Roles are
     /// `s` the signature (the line's strongest word), `r` the response and `t` a third piece. One
     /// template holds for `hookLoops` loops (the words change every loop, the trigger rhythm with
-    /// them less often), then the next one in a seeded rotation.
+    /// them less often), then the next one in a seeded rotation. Every template answers on the
+    /// backbeat: the response sounds on a snare step (4, 12, 20 or 28) at least once per cell, the
+    /// boom-bap call and response (docs/research/mpc-chopping-craft.md section 4, "reserve one
+    /// anchor to land on the snare"; verification pass of 21 November 2026).
     enum HookRole: String, Sendable { case s, r, t }
     static let hookTemplates: [[(HookRole, Int)]] = [
-        // Push: the signature twice, answered.
-        [(.s, 0), (.s, 3), (.r, 6), (.s, 16), (.s, 19), (.t, 22), (.r, 26)],
-        // Offbeat.
-        [(.s, 2), (.r, 8), (.s, 18), (.r, 24), (.t, 28)],
+        // Push: the signature twice, answered on the bar's last backbeat.
+        [(.s, 0), (.s, 3), (.r, 6), (.s, 16), (.s, 19), (.t, 22), (.r, 28)],
+        // Offbeat: the call on the "and", the answer on the fourth beat.
+        [(.s, 2), (.r, 8), (.s, 18), (.t, 24), (.r, 28)],
         // Snare answer.
         [(.s, 0), (.r, 4), (.t, 12), (.s, 16), (.r, 20), (.s, 24)],
         // Late.
@@ -117,7 +120,13 @@ nonisolated enum DialogueMotifTuning {
     ]
     static let hookLoops = 2
     /// Echo tails end this long before the section's end.
-    static let sectionTailLead = 0.15
+    static let sectionTailLead = 0.3
+    /// A section's pieces may start this long before its first downbeat when the cue window allows
+    /// it (a piece's start sits its accent offset before the step it lands on).
+    static let sectionPreRollSeconds = 0.28
+    /// No piece starts this soon after its cue's window opens (the bed's start): the voice queues a
+    /// cue's chops on its 0.1 s tick once the bed has begun, and drops any already past.
+    static let bedStartLeadSeconds = 0.2
     /// The signature prefers a piece of this length (a word, not a syllable nor a clause).
     static let signatureSeconds: ClosedRange<Double> = 0.18...0.75
     /// The response is the next-strongest piece when its word weight is above this, else the line's ending.
@@ -321,12 +330,12 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
         return nil
     }
 
-    /// The same line and pieces, arranged for another loop.
+    /// The same line and pieces, arranged for another loop on another hook template.
     func carried(to loop: Int, seed: UInt64, memory: DialoguePerformanceMemory) -> DialogueMotif {
         let loopSeed = seed ^ UInt64(bitPattern: Int64(loop)) &* 0x9E37_79B9
         let arranged = Self.arrange(fragments: fragments, pieces: pieces, halves: halves, reorderAllowed: reorderAllowed,
                                     seed: loopSeed, lineSeconds: seconds(0), sampleRate: sampleRate,
-                                    hookSeed: memory.cycleSeed ?? seed, loop: loop)
+                                    hookSeed: memory.cycleSeed ?? seed, loop: loop, avoidTemplate: hook?.template)
         return DialogueMotif(loop: loop, source: source, analysis: analysis, lineUnit: lineUnit, lineKey: lineKey,
                              fragments: fragments, pieces: pieces, halves: halves, bank: bank, usedTranscript: usedTranscript,
                              reorderAllowed: reorderAllowed, cells: arranged.cells, carried: true, seed: loopSeed, interest: interest,
@@ -548,6 +557,33 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
     }
 
     var text: String? { line.text }
+
+    /// One log line: the line and its interest, the hook template and its S, R and T pieces, and per
+    /// bar of the loop the steps and roles of `events` (`S`, `R`, `T`, `L` the line, `.` any other
+    /// piece), e.g. `b3:0S,4R,8S`.
+    func hookSummary(events: [DialogueEvent]) -> String {
+        func quote(_ id: Int) -> String { "\"\(fragments.indices.contains(id) ? (fragments[id].text ?? "#\(id)") : "#\(id)")\"" }
+        var out = "interest=\(String(format: "%.2f", interest)) line=\"\(text ?? "-")\""
+        if let hook {
+            out += " template=\(hook.template) S=\(quote(hook.signature)) R=\(quote(hook.response)) T=\(quote(hook.third))"
+        }
+        func role(_ piece: Int?) -> String {
+            guard let piece else { return "?" }
+            if piece == 0 { return "L" }
+            if piece == hook?.signature { return "S" }
+            if piece == hook?.response { return "R" }
+            if piece == hook?.third { return "T" }
+            return "."
+        }
+        var bars: [Int: [String]] = [:]
+        for e in events.sorted(by: { ($0.block, $0.slot) < ($1.block, $1.slot) }) {
+            let s = (e.block - loop * 4) * 64 + e.slot
+            guard s >= 0, s < 256 else { continue }
+            bars[s / 16, default: []].append("\(s % 16)\(role(e.piece))")
+        }
+        out += " bars=" + bars.keys.sorted().map { "b\($0 + 1):" + bars[$0]!.joined(separator: ",") }.joined(separator: " ")
+        return out
+    }
 }
 
 // MARK: - Cutting
@@ -775,11 +811,21 @@ nonisolated extension DialogueMotif {
         let n = pieces.count
         var s: Int
         var r: Int
-        if anchors.count == 2, let a = best(pieces, by: { Double(overlap($0, anchors[0])) }), overlap(a, anchors[0]) > 0 {
+        let weighted = pieces.contains { fragments[$0].weight > 0 }
+        // A re-cut keeps the old signature's words, unless they are only function words while the
+        // line has a real word ("I you" in "I you know, the usual subject ..." of a 21 November 2026
+        // run, where the acoustic first piece became 12 bars of "I you").
+        let anchored = anchors.count == 2 ? best(pieces, by: { Double(overlap($0, anchors[0])) }).flatMap { a in
+            overlap(a, anchors[0]) > 0 && (!weighted || fragments[a].weight > 0) ? a : nil
+        } : nil
+        if let a = anchored {
             s = a
             r = best(pieces.filter { $0 != a }, by: { Double(overlap($0, anchors[1])) }) ?? a
+            if weighted, fragments[r].weight == 0, let other = best(pieces.filter { $0 != a }, by: { Double(fragments[$0].weight) }),
+               fragments[other].weight > 0 {
+                r = other
+            }
         } else {
-            let weighted = pieces.contains { fragments[$0].weight > 0 }
             if weighted {
                 // Ties go to the later piece: English puts the sentence stress on its last content
                 // word ("a large dose of LSD").
@@ -792,11 +838,24 @@ nonisolated extension DialogueMotif {
             let others = pieces.filter { $0 != s }
             if let next = best(others, by: { Double(fragments[$0].weight) }), fragments[next].weight > DialogueMotifTuning.responseWeight {
                 r = next
+            } else if weighted {
+                // The line's ending when it carries a word, else the strongest other piece; a line whose
+                // other pieces are only function words answers with the signature itself ("than
+                // marijuana." answered "marijuana.", not "than").
+                let ending = pieces[n - 1]
+                if ending != s, fragments[ending].weight > 0 {
+                    r = ending
+                } else if let next = best(others, by: { Double(fragments[$0].weight) }), fragments[next].weight > 0 {
+                    r = next
+                } else {
+                    r = s
+                }
             } else {
                 r = pieces[n - 1] == s ? pieces[0] : pieces[n - 1]
             }
         }
-        if r == s, n > 1 { r = pieces.first { $0 != s }! }
+        // Acoustic lines (no word weights) always answer with another piece.
+        if r == s, n > 1, !weighted || anchored != nil { r = pieces.first { $0 != s }! }
         if !reorderAllowed, fragments[r].order < fragments[s].order { swap(&s, &r) }
         let sa = headHalf(s, fragments: fragments, halves: halves)
         // A line that may not be reordered takes the signature's head half as its third piece, so
@@ -804,7 +863,9 @@ nonisolated extension DialogueMotif {
         // Otherwise the third is the strongest remaining piece (source order without text), so a
         // connective piece ("to the") is the third only when nothing else is left.
         let rest = pieces.filter { $0 != s && $0 != r }
-        let t = reorderAllowed ? (best(rest, by: { Double(fragments[$0].weight) }) ?? (sa != s ? sa : r)) : (sa != s ? sa : r)
+        var t = reorderAllowed ? (best(rest, by: { Double(fragments[$0].weight) }) ?? (sa != s ? sa : r)) : (sa != s ? sa : r)
+        // Nor a function-word third when the signature's head can stutter instead.
+        if weighted, fragments[t].weight == 0, sa != s { t = sa }
         return (s, r, t)
     }
 
@@ -823,7 +884,7 @@ nonisolated extension DialogueMotif {
     /// (rotating every `hookLoops` loops from `hookSeed`) and the breakdown cell are seeded.
     static func arrange(fragments: [DialogueMotifFragment], pieces: [Int], halves: [Int: [Int]], reorderAllowed: Bool,
                         seed: UInt64, lineSeconds: Double, sampleRate: Double, hookSeed: UInt64, loop: Int,
-                        anchors: [Range<Int>] = []) -> (cells: [DialogueMotifCell], hook: DialogueMotifHook) {
+                        anchors: [Range<Int>] = [], avoidTemplate: Int? = nil) -> (cells: [DialogueMotifCell], hook: DialogueMotifHook) {
         var rng = MusicRNG(seed: seed ^ 0x4D07_1F00)
         func seconds(_ id: Int) -> Double { Double(fragments[id].frames.count) / sampleRate }
         let roles = hookRoles(fragments: fragments, pieces: pieces, halves: halves, reorderAllowed: reorderAllowed,
@@ -843,7 +904,10 @@ nonisolated extension DialogueMotif {
 
         var mix = MusicRNG(seed: hookSeed ^ 0x600C_ED00)
         let offset = mix.int(0...(DialogueMotifTuning.hookTemplates.count - 1))
-        let template = (offset + max(0, loop) / DialogueMotifTuning.hookLoops) % DialogueMotifTuning.hookTemplates.count
+        var template = (offset + max(0, loop) / DialogueMotifTuning.hookLoops) % DialogueMotifTuning.hookTemplates.count
+        // A carried loop (the same line again: the films have no fresh one) never keeps the trigger
+        // rhythm too, or 16 bars repeat exactly (C-D1; the `same` matrix case read 0.04 difference).
+        if template == avoidTemplate { template = (template + 1) % DialogueMotifTuning.hookTemplates.count }
         let hook = DialogueMotifTuning.hookTemplates[template].map { role, step in
             at(role == .s ? s : (role == .r ? r : t), step)
         }
@@ -1000,7 +1064,8 @@ nonisolated enum DialogueMotifPerformer {
                             budget: DialogueMotifTuning.maximumSectionOccupancyWithEcho * (boundary - snapshot.time(beat: owned.lowerBound)))
 
         // Blocks touching the window, as the grammar logs them; each block is named by its first cell.
-        let firstBeat = snapshot.beat(time: window.lowerBound)
+        // Not before the owned section: a window may open `sectionPreRollSeconds` before it.
+        let firstBeat = max(snapshot.beat(time: window.lowerBound), owned.lowerBound)
         let lastBeat = snapshot.beat(time: window.upperBound)
         let firstBlock = Int((firstBeat / 16 + 1e-9).rounded(.down))
         let lastBlock = max(firstBlock, Int((lastBeat / 16 - 1e-9).rounded(.up)) - 1)
@@ -1223,7 +1288,16 @@ nonisolated extension DialogueMotif {
         var trial = memory
         var parts: [(plan: DialoguePerformancePlan, motif: DialogueMotif)] = []
         for section in sections(window, snapshot: snapshot) {
-            let lower = max(window.lowerBound, snapshot.time(beat: section.lowerBound))
+            // A section's first piece may start a little before its downbeat (its consonant before the
+            // accent on step 0) when the window opens earlier: the cue's bed starts before bar 9, and the
+            // previous plan's pieces end by the boundary (its echo tails `sectionTailLead` before it).
+            // Without this the hook's downbeat hit in bar 9 and the statement on bar 1 were dropped or
+            // pushed late every loop (verification pass of 21 November 2026).
+            // Nor in the bed's first `bedStartLeadSeconds`: a cue's chops queue only once its bed has begun
+            // (`ArchiveVoice.queueDueChops`, a 0.1 s tick plus the route margin), so a piece right at the
+            // bed's start was planned but silently dropped (the `long` capture's bar-9 hook hit, -200 LUFS).
+            let lower = max(window.lowerBound + DialogueMotifTuning.bedStartLeadSeconds,
+                            snapshot.time(beat: section.lowerBound) - DialogueMotifTuning.sectionPreRollSeconds)
             let upper = min(window.upperBound, snapshot.time(beat: section.upperBound))
             guard upper > lower else { continue }
             let loop = loopIndex(beat: section.lowerBound, snapshot: snapshot)

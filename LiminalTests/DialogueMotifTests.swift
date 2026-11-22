@@ -61,7 +61,7 @@ private func grooved(_ snapshot: DialogueTransportSnapshot, seed: UInt64) -> Dia
 
 /// Plays `takes` loops in 8-bar cues against carried memory, as the coordinator does.
 private func run(_ shape: MotifShape, seed: UInt64, takes: Int = 2,
-                 earliest: ((DialogueTransportSnapshot, Int) -> Double)? = nil) -> MotifRun {
+                 earliest: ((DialogueTransportSnapshot, Int) -> Double)? = nil, preRoll: Double = 0) -> MotifRun {
     var memory = DialoguePerformanceMemory()
     var result = MotifRun()
     let beat = 60 / shape.bpm
@@ -72,7 +72,8 @@ private func run(_ shape: MotifShape, seed: UInt64, takes: Int = 2,
         for half in 0..<2 {
             let cue = take * 2 + half
             let film = shape.films[cue % shape.films.count]
-            let window = snapshot.time(beat: Double(32 * half))..<snapshot.time(beat: Double(32 * (half + 1)))
+            // `preRoll`: the second cue's bed starts this long before bar 9, as live cues do.
+            let window = (snapshot.time(beat: Double(32 * half)) - (half == 1 ? preRoll : 0))..<snapshot.time(beat: Double(32 * (half + 1)))
             guard let planned = DialogueMotif.plan(source: film.source, analysis: film.analysis, bank: film.bank,
                                                    transcript: film.transcript, snapshot: snapshot, window: window,
                                                    earliestStart: earliest?(snapshot, half) ?? window.lowerBound,
@@ -223,6 +224,101 @@ struct DialogueMotifTests {
                 #expect(steps[1] != steps[2], "\(shape) seed \(seed): the template never rotates")
             }
         }
+    }
+
+    /// The response answers on the backbeat (a snare step, 4 or 12 of a bar) in every hook cell, the
+    /// boom-bap call and response (docs/research/mpc-chopping-craft.md section 4).
+    @Test(arguments: MotifShape.all) fileprivate func theResponseAnswersOnTheBackbeat(_ shape: MotifShape) throws {
+        for template in DialogueMotifTuning.hookTemplates {
+            #expect(template.contains { $0.0 == .r && $0.1 % 4 == 0 && ($0.1 / 4) % 2 == 1 }, "\(template.map { "\($0.0)@\($0.1)" })")
+        }
+        for seed in Self.seeds {
+            for (k, loop) in run(shape, seed: seed).loops.enumerated() {
+                let motif = try #require(loop.motif)
+                let hook = try #require(motif.hook)
+                guard hook.response != hook.signature else { continue }
+                let phrase = loop.snapshot.phraseAtOrigin
+                var answered: [Int: Bool] = [:]
+                for e in loop.events where e.cell == .hook {
+                    let s = (e.block - phrase) * 64 + e.slot
+                    answered[s / 32, default: false] = answered[s / 32, default: false]
+                        || (e.piece == hook.response && [4, 12].contains(s % 16))
+                }
+                #expect(!answered.isEmpty && answered.values.allSatisfy { $0 }, "\(shape) seed \(seed) loop \(k): \(answered)")
+            }
+        }
+    }
+
+    /// A cue whose bed starts before bar 9 (live windows open about 0.7 s early) plays the hook's
+    /// downbeat hit on bar 9's step 0: the section's first piece may start before its downbeat.
+    @Test(arguments: MotifShape.all) fileprivate func aCueOpeningBeforeBarNinePlaysTheDownbeatHit(_ shape: MotifShape) throws {
+        var checked = 0
+        for seed in Self.seeds {
+            let r = run(shape, seed: seed, preRoll: 0.7)
+            // The second cue logs only its own blocks, never the first cue's (bars 5-8).
+            for (k, plan) in r.plans.enumerated() where k % 2 == 1 {
+                #expect(plan.blocks.allSatisfy { $0.phrase % 4 >= 2 }, "\(shape) seed \(seed) plan \(k): \(plan.blocks.map(\.phrase))")
+            }
+            for (k, loop) in r.loops.enumerated() {
+                let motif = try #require(loop.motif)
+                let hook = try #require(motif.hook)
+                guard motif.cells[4].kind == .hook, let down = hook.items.first(where: { $0.slot == 0 }) else { continue }
+                let bars = DialogueHookMetrics.loopHits(loop.events, loop: loop.snapshot.phraseAtOrigin / 4)
+                #expect(bars[8].contains(DialogueHookMetrics.Hit(step: 0, fragment: down.fragment)),
+                        "\(shape) seed \(seed) loop \(k): bar 9 \(bars[8]), hook \(hook.items.map { [$0.fragment, $0.slot] })")
+                checked += 1
+            }
+        }
+        #expect(checked > 0)
+    }
+
+    /// A loop that carries the previous line (no film has a fresh one) changes the trigger rhythm, so
+    /// 16 bars never repeat exactly (C-D1; the `same` matrix case read a 0.04 difference before).
+    @Test func aCarriedLoopChangesItsTriggerRhythm() throws {
+        let film = MotifShape.all[0].films[0]
+        for seed: UInt64 in [1, 2, 3, 5] {
+            var memory = DialoguePerformanceMemory()
+            memory.cycleSeed = seed
+            // Loops 2 and 3 share a template (`hookLoops` = 2) when each has its own line.
+            let motif = try #require(DialogueMotif.make(loop: 2, source: film.source, analysis: film.analysis, transcript: film.transcript,
+                                                        memory: memory, seed: seed, beatDuration: 60 / 72.0))
+            let carried = motif.carried(to: 3, seed: seed, memory: memory)
+            #expect(carried.carried && carried.lineKey == motif.lineKey)
+            #expect(carried.hook?.template != motif.hook?.template, "seed \(seed): template \(motif.hook?.template ?? -1)")
+        }
+    }
+
+    /// The hook's roles never settle on function words while the line has a real word: a re-cut drops
+    /// an acoustic signature that became "I you", and a line whose other piece is "than" answers with
+    /// its signature.
+    @Test func hookRolesAvoidFunctionWords() throws {
+        func fragment(_ id: Int, _ frames: Range<Int>, _ text: String?, _ weight: Float, kind: DialogueMotifFragment.Kind = .piece,
+                      order: Int = 0, parent: Int? = nil) -> DialogueMotifFragment {
+            DialogueMotifFragment(id: id, kind: kind, order: order, parent: parent, frames: frames, accentFrame: frames.lowerBound,
+                                  fadeIn: 0, fadeOut: 0, text: text, weight: weight)
+        }
+        let rate = 48_000.0
+        // "I you | know, the usual | subject about | what happened"
+        let a = [fragment(0, 0..<96_000, "I you know, the usual subject about what happened", 0.25, kind: .line, order: -1),
+                 fragment(1, 0..<14_000, "I you", 0, order: 0), fragment(2, 14_000..<40_000, "know, the usual", 0.25, order: 1),
+                 fragment(3, 40_000..<70_000, "subject about", 0.25, order: 2), fragment(4, 70_000..<96_000, "what happened", 0.25, order: 3)]
+        let recut = DialogueMotif.hookRoles(fragments: a, pieces: [1, 2, 3, 4], halves: [:], reorderAllowed: true, sampleRate: rate,
+                                            anchors: [0..<12_000, 80_000..<96_000])
+        #expect(recut.s != 1 && a[recut.s].weight > 0 && a[recut.r].weight > 0, "\(recut)")
+        // An anchor on a real word is kept.
+        let kept = DialogueMotif.hookRoles(fragments: a, pieces: [1, 2, 3, 4], halves: [:], reorderAllowed: true, sampleRate: rate,
+                                           anchors: [42_000..<60_000, 80_000..<96_000])
+        #expect(kept.s == 3 && kept.r == 4, "\(kept)")
+        // "than | marijuana." with halves "mariju-" | "-ana."
+        let b = [fragment(0, 0..<40_000, "than marijuana.", 1, kind: .line, order: -1), fragment(1, 0..<8_000, "than", 0, order: 0),
+                 fragment(2, 8_000..<40_000, "marijuana.", 1, order: 1), fragment(3, 8_000..<22_000, "mariju-", 0, kind: .half, order: 1, parent: 2),
+                 fragment(4, 22_000..<40_000, "-ana.", 1, kind: .half, order: 1, parent: 2)]
+        let short = DialogueMotif.hookRoles(fragments: b, pieces: [1, 2], halves: [2: [3, 4]], reorderAllowed: true, sampleRate: rate)
+        #expect(short.s == 2 && short.r == 2 && short.t == 3, "\(short)")
+        // Without words (acoustic) the response is still another piece: the line's ending.
+        let c = b.map { fragment($0.id, $0.frames, nil, 0, kind: $0.kind, order: $0.order, parent: $0.parent) }
+        let acoustic = DialogueMotif.hookRoles(fragments: c, pieces: [1, 2], halves: [2: [3, 4]], reorderAllowed: true, sampleRate: rate)
+        #expect(acoustic.s == 1 && acoustic.r == 2, "\(acoustic)")
     }
 
     /// A line with a negation keeps its pieces in source order inside every hook bar.

@@ -272,6 +272,9 @@ nonisolated enum DialogueCueCoordinator {
         if let motif = built.motif {
             let line = motif.line.frames
             LMLog.audio.info("Lo-Fi dialogue motif cue=\(cue) loop=\(motif.loop) line=\(String(motif.lineKey, radix: 16), privacy: .public) film=\(motif.source.contentID, privacy: .public) at=\(motif.source.sourceSeconds(frame: line.lowerBound), format: .fixed(precision: 1))s carried=\(motif.carried) transcript=\(motif.usedTranscript) window=\(built.window.lowerBound, format: .fixed(precision: 1))..<\(built.window.upperBound, format: .fixed(precision: 1))")
+            // The line, its interest, the hook's role pieces and the trigger steps per bar (D125), so a
+            // live run shows what the loop chops without a capture. Archive film text only.
+            LMLog.audio.info("Lo-Fi dialogue hook cue=\(cue) loop=\(motif.loop) \(motif.hookSummary(events: built.plan.events), privacy: .public)")
         }
         if LofiCaptureHooks.isEnabled {
             var log = built.log
@@ -363,9 +366,10 @@ nonisolated final class DialogueDirector: @unchecked Sendable {
         /// line is chosen by its words (D124). 0 keeps the acoustic-first, refine-later flow.
         var transcriptFirstWait = 1.2
         /// Lines played across sessions (D123). The app's file ledger, or an in-memory one under
-        /// XCTest so unit tests neither read nor consume the user's played lines.
+        /// XCTest and in automated DEBUG launches (any automation flag, `DebugLaunchOptions.blocksImageGeneration`),
+        /// so tests and verification runs neither read nor consume the user's played lines.
         var ledger: DialogueLineLedger = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil
-            ? .shared : DialogueLineLedger()
+            && !DebugLaunchOptions.blocksImageGeneration ? .shared : DialogueLineLedger()
         var now: @Sendable () -> Double = { Double(DispatchTime.now().uptimeNanoseconds) / 1e9 }
         /// Bounded SoundAnalysis classification (buffer, seconds, budget). Tests may inject fixed windows.
         var classify: @Sendable (AVAudioPCMBuffer, Double, Double) async -> [LofiSpeechFocus.Window] = {
