@@ -144,24 +144,29 @@ nonisolated final class CuratedImageFeed: Sendable {
         return pool.store.entry(id: item.id, url: item.url)
     }
 
-    /// A random stored picture (first frame at launch).
+    /// The first frame at launch: the rotation's pick (a never-shown picture when there is one, else the
+    /// least recently shown), not a random stored one (D48).
     func anyPicture() -> ImageStore.Entry? {
-        pool.loadIfNeeded()
-        guard let item = pool.items.filter({ sourceWeights[$0.sourceID] != nil }).randomElement() else { return nil }
-        return pool.store.entry(id: item.id, url: item.url)
+        nextDisplay(current: nil)
     }
 
     /// A picture became the one on screen.
     func markShown(_ metadata: ImageMetadata) {
         guard let credit = metadata.source else { return }
-        state.withLock { _ = $0.reserved.removeValue(forKey: metadata.id) }
-        pool.markShown(metadata.id)
+        // Recorded as shown before it is unreserved (a pick in between must not see it as new and free),
+        // and unreserved before the ledger file is written.
+        pool.markShown(metadata.id) { self.release(metadata.id) }
         LMLog.visual.info("🖼️ API image shown: source=\(credit.sourceID, privacy: .public) item=\(credit.itemID, privacy: .public) title=\(credit.title, privacy: .public) creator=\(credit.creator ?? "-", privacy: .public) license=\(credit.license, privacy: .public) url=\(credit.sourceURL, privacy: .public)")
     }
 
     /// Frees picks that were never shown (dropped stages), so they can be picked again.
     func expireReservations(olderThan lifetime: TimeInterval, now: Date = Date()) {
         state.withLock { s in s.reserved = s.reserved.filter { now.timeIntervalSince($0.value) < lifetime } }
+    }
+
+    /// A pick that will not be shown (the launch frame lost to another picture).
+    func release(_ id: UUID) {
+        state.withLock { _ = $0.reserved.removeValue(forKey: id) }
     }
 
     /// The display queue was drained (source switch, clear, stop).
@@ -195,6 +200,8 @@ nonisolated final class CuratedImageFeed: Sendable {
 
     private func ingestLoop() async {
         pool.loadIfNeeded()
+        // Pictures stored before fingerprints existed get one, and copies found twice are removed (D48).
+        pool.backfillFingerprints()
         LMLog.visual.info("🖼️ [API] ingest starting: \(self.pool.count) pictures, \(self.pool.unseenCount) never shown")
         let d = collections.defaults
         while !Task.isCancelled {
@@ -321,7 +328,8 @@ nonisolated final class CuratedImageFeed: Sendable {
 
     /// Pinned ids first, then each query's cached page, then the next page of a query.
     private func nextCandidate(source: CuratedSource, provider: any ImageProvider) async throws -> ImageCandidate? {
-        let seen = pool.seenKeys
+        // Candidate keys plus the catalogue aliases of stored pictures (D48).
+        let seen = pool.knownIdentities
         if !source.pinnedIDs.isEmpty {
             let key = "\(source.id)|pinned"
             var list = pool.list(key)?.candidates
@@ -341,13 +349,13 @@ nonisolated final class CuratedImageFeed: Sendable {
             let key = "\(source.id)|\(query.key)"
             if let cached = pool.list(key) {
                 oldestFetch = min(oldestFetch, cached.fetched)
-                if let c = cached.candidates.first(where: { !seen.contains($0.key) }) { return c }
+                if let c = cached.candidates.first(where: { !ImageIdentity.isKnown($0, in: seen) }) { return c }
             }
             let cursor = pool.cursor(key)
             if cursor == .some("") { continue }   // no more pages
             let page = try await provider.search(source: source, query: query, cursor: cursor ?? nil,
                                                  perPage: Self.perPage, http: http)
-            let fresh = page.candidates.filter { !seen.contains($0.key) }
+            let fresh = page.candidates.filter { !ImageIdentity.isKnown($0, in: seen) }
             pool.setList(key, fresh)
             pool.setCursor(key, page.next)
             LMLog.visual.info("🖼️ [API] \(source.id, privacy: .public) \(query.key, privacy: .public): \(page.candidates.count) results, \(fresh.count) new")
@@ -442,6 +450,11 @@ nonisolated final class CuratedImageFeed: Sendable {
         }
         if let reason = Self.visionRejection(image, paperShare: score.paperShare, thresholds: d.openness) { throw CandidateRejected(reason: reason) }
 
+        // The same picture already in the pool under another id or source (D48).
+        let fingerprint = ImageFingerprint.of(image)
+        if let fingerprint, let copy = pool.duplicate(of: fingerprint) {
+            throw CandidateRejected(reason: "duplicate of \(copy.candidateKey)")
+        }
         let analysis = DominantColorExtractor.analyze(image)
         let metadata = ImageMetadata(
             id: UUID(), createdAt: Date(), spec: source.promptSpec, model: "api.\(source.provider)",
@@ -449,7 +462,9 @@ nonisolated final class CuratedImageFeed: Sendable {
             dominantColors: analysis.colors, measuredBrightness: analysis.brightness,
             measuredSaturation: analysis.saturation, archiveReference: nil, source: resolved.credit, openness: score)
         guard let jpeg = ImageStore.encodeJPEG(image, quality: 0.9) else { throw CandidateRejected(reason: "encode failed") }
-        try pool.add(jpeg: jpeg, metadata: metadata, budget: d.storeBudgetBytes, clearGeneration: clearGeneration)
+        try pool.add(jpeg: jpeg, metadata: metadata, budget: d.storeBudgetBytes, clearGeneration: clearGeneration,
+                     fingerprint: fingerprint, aliases: ImageIdentity.aliases(providerID: resolved.credit.providerID,
+                                                                             itemID: resolved.credit.itemID))
         return metadata
     }
 

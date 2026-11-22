@@ -17,7 +17,7 @@ This folder documents API mode completely: how a picture travels from an institu
 | [adding-a-source.md](adding-a-source.md) | How to research a collection, write its JSON entry (every field), write a provider, test it with fixtures, and verify it live without touching the user's pool |
 | [research-history.md](research-history.md) | How the sources were found, from OpenPics to the 2026-11-21 research passes, and what was rejected and why |
 
-Decisions and measurements: [`decisions/images.md`](../decisions/images.md) D36-D44. The original plan: [`plans/image-api-mode.md`](../plans/image-api-mode.md) (implemented; parts have changed since, see the decisions).
+Decisions and measurements: [`decisions/images.md`](../decisions/images.md) D36-D45 and D48. The original plan: [`plans/image-api-mode.md`](../plans/image-api-mode.md) (implemented; parts have changed since, see the decisions).
 
 ## What the user sees
 
@@ -54,7 +54,7 @@ flowchart TD
     end
     subgraph Display["Display (disk only)"]
         H --> I[CuratedImagePool]
-        I --> J[ImageRotation.nextDisplay:<br/>recency, openness, source alternation,<br/>monochrome cap, reservations]
+        I --> J[ImageRotation.nextDisplay:<br/>new pictures first, openness, source alternation,<br/>monochrome cap, reservations]
         J --> K[ImageQueue: buffer, Lo-Fi reserve,<br/>3:2 crop, saliency, depth, mood, footage]
         K --> L[Screen + credit line<br/>markShown -> ledger]
     end

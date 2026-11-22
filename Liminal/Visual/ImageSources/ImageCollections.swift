@@ -70,7 +70,7 @@ nonisolated struct ImageCollections: Codable, Sendable {
         version: 0,
         defaults: Defaults(minLongSide: 2048, minShortSide: 1365, targetLongSide: 2528, maxBytes: 12_000_000,
                            allowedMime: ["image/jpeg", "image/png"], userAgent: "Liminal/1.0",
-                           storeBudgetBytes: 3_000_000_000, minFreeBytes: 1_000_000_000, unseenAhead: 12,
+                           storeBudgetBytes: 3_000_000_000, minFreeBytes: 1_000_000_000, unseenAhead: 36,
                            ingestInterval: 4, recencyWindow: 24, monochromeEvery: 6, candidateRefreshDays: 7,
                            hostGaps: [:], defaultHostGap: 1, openness: .standard),
         providers: [:], licenseAllowlist: [], sources: [])

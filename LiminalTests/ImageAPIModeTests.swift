@@ -50,10 +50,11 @@ enum ImageAPIFixtures {
                           licenseURL: nil, sourceURL: "https://www.loc.gov/item/x/", imageURL: "https://tile.loc.gov/x.jpg")
     }
 
-    static func metadata(source: String = "test-source", openness: Double = 0.7, saturation: Double = 0.4) -> ImageMetadata {
+    static func metadata(source: String = "test-source", openness: Double = 0.7, saturation: Double = 0.4,
+                         createdAt: Date = Date()) -> ImageMetadata {
         let score = OpennessScore(shadowShare: 0.3, highlightShare: 0.1, keyShare: 0.3, calmShare: 0.4, edgeDensity: 0.03,
                                   paperShare: 0, saturation: saturation, openness: openness)
-        return ImageMetadata(id: UUID(), createdAt: Date(), spec: Self.source(id: source).promptSpec, model: "api.loc",
+        return ImageMetadata(id: UUID(), createdAt: createdAt, spec: Self.source(id: source).promptSpec, model: "api.loc",
                              pixelWidth: 60, pixelHeight: 40, mimeType: "image/jpeg", dominantColors: [],
                              measuredBrightness: 0.4, measuredSaturation: saturation, archiveReference: nil,
                              source: credit(source: source), openness: score)
@@ -66,6 +67,26 @@ enum ImageAPIFixtures {
         }
         return ImageStore.encodeJPEG(img)!
     }()
+
+    /// A structured picture: coloured blocks laid out by `seed`, so pictures of different seeds are
+    /// different pictures to the duplicate fingerprint (D48). `shift` moves the blocks right.
+    static func pattern(seed: UInt64, width: Int = 600, height: Int = 400, shift: Double = 0) -> CGImage {
+        var rng = SeededRNG(seed: seed)
+        return image(width: width, height: height) { ctx in
+            ctx.setFillColor(CGColor(gray: 0.5, alpha: 1))
+            ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
+            for _ in 0..<14 {
+                let g = Double.random(in: 0...1, using: &rng)
+                let x = Double.random(in: 0..<0.8, using: &rng), y = Double.random(in: 0..<0.8, using: &rng)
+                let w = Double.random(in: 0.1...0.4, using: &rng), h = Double.random(in: 0.1...0.4, using: &rng)
+                ctx.setFillColor(CGColor(red: g, green: 1 - g, blue: g * 0.5, alpha: 1))
+                ctx.fill(CGRect(x: (x + shift) * Double(width), y: y * Double(height),
+                                width: w * Double(width), height: h * Double(height)))
+            }
+        }
+    }
+
+    static func patternJPEG(_ seed: UInt64) -> Data { ImageStore.encodeJPEG(pattern(seed: seed), quality: 0.8)! }
 
     static func tempRoot() -> (URL, UserDefaults) {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("ImageAPITests-\(UUID().uuidString)")
@@ -552,7 +573,9 @@ struct ImageRotationTests {
     }
 
     @Test func monochromeCapHolds() {
-        let shown = run(pool(60, monochromeEvery: 2), steps: 300)
+        // Holds while new colour pictures remain. With only new monochrome ones left, a new monochrome
+        // comes before a repeat (D48, ImageRepeatRotationTests.aShownPictureNeverBeatsANewOne).
+        let shown = run(pool(300, monochromeEvery: 4), steps: 200)
         for i in 0..<shown.count where shown[i].monochrome {
             let previous = shown[max(0, i - 5)..<i]
             #expect(!previous.contains { $0.monochrome }, "two monochrome within 6 at \(i)")
@@ -592,7 +615,7 @@ struct ImageRotationTests {
         for _ in 0..<1000 where ImageRotation.nextDisplay(pool: items + [fresh], history: history, current: nil, using: &rng)?.id == fresh.id {
             hits += 1
         }
-        #expect(hits > 60)   // x3 boost: about 3/33 of draws
+        #expect(hits == 1000)   // a never-shown picture always comes before a shown one (D48)
     }
 }
 
@@ -829,8 +852,9 @@ struct ImageQueueAPIModeTests {
         defer { try? FileManager.default.removeItem(at: root) }
         pool.loadIfNeeded()
         let source = try #require(ImageCollections.bundled.sources.first { $0.enabled })
-        for _ in 0..<3 {
-            try pool.add(jpeg: ImageAPIFixtures.jpeg, metadata: ImageAPIFixtures.metadata(source: source.id), budget: 1 << 40)
+        // Three different pictures: the ingest task's duplicate backfill keeps one copy of identical ones.
+        for seed in 0..<3 {
+            try pool.add(jpeg: ImageAPIFixtures.patternJPEG(UInt64(seed)), metadata: ImageAPIFixtures.metadata(source: source.id), budget: 1 << 40)
         }
         let before = UserDefaults.standard.data(forKey: GenerationBudget.Keys.ledger)
         queue.start()
@@ -850,8 +874,9 @@ struct ImageQueueAPIModeTests {
         defer { try? FileManager.default.removeItem(at: root) }
         pool.loadIfNeeded()
         let source = try #require(ImageCollections.bundled.sources.first { $0.enabled })
-        for _ in 0..<3 {
-            try pool.add(jpeg: ImageAPIFixtures.jpeg, metadata: ImageAPIFixtures.metadata(source: source.id), budget: 1 << 40)
+        // Three different pictures: the ingest task's duplicate backfill keeps one copy of identical ones.
+        for seed in 0..<3 {
+            try pool.add(jpeg: ImageAPIFixtures.patternJPEG(UInt64(seed)), metadata: ImageAPIFixtures.metadata(source: source.id), budget: 1 << 40)
         }
         let before = UserDefaults.standard.data(forKey: GenerationBudget.Keys.ledger)
         queue.start()

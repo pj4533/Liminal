@@ -2,11 +2,11 @@
 
 [← Image sources](README.md) · [Sources](sources.md) · [Providers](providers.md) · [Adding a source](adding-a-source.md) · [Research history](research-history.md)
 
-This page follows one picture from an institution's API to the screen and back into the rotation. Types are named rather than cited by line. Numbers are the shipped defaults in `image-collections.json` (`defaults`) or constants in the code, as of 2026-11-21. Rationale and measurements are in [`decisions/images.md`](../decisions/images.md) D36-D44.
+This page follows one picture from an institution's API to the screen and back into the rotation. Types are named rather than cited by line. Numbers are the shipped defaults in `image-collections.json` (`defaults`) or constants in the code, as of 2026-11-21. Rationale and measurements are in [`decisions/images.md`](../decisions/images.md) D36-D45 and D48.
 
 API mode has two halves that never wait on each other:
 
-- **Ingest** (`CuratedImageFeed`, background task) fetches one picture at a time and stores it in the pool on disk. It runs only while fewer than `unseenAhead` (12) never-shown pictures are waiting.
+- **Ingest** (`CuratedImageFeed`, background task) fetches one picture at a time and stores it in the pool on disk. It runs only while fewer than `unseenAhead` (36) never-shown pictures are waiting.
 - **Display** (`CuratedImageFeed.nextDisplay`, called by `ImageQueue`) picks the next stored picture. It reads only from disk.
 
 Contents:
@@ -56,16 +56,28 @@ The ingest loop (`CuratedImageFeed.ingestLoop`) runs on a detached background-pr
 | Condition | What happens |
 |---|---|
 | `-LiminalImageAPIOffline YES` | Ingest stops: `ingest off (-LiminalImageAPIOffline)` |
-| At least `unseenAhead` (12) never-shown pictures in the pool | Sleep 5 s and check again |
+| At least `unseenAhead` (36) never-shown pictures in the pool | Sleep 5 s and check again |
 | Less than `minFreeBytes` (1 GB) free on the volume | Sleep 60 s: `ingest paused: N bytes free` |
 | No usable source | Sleep 10 s |
 | Otherwise | Fetch one candidate from the next source, then sleep `ingestInterval` (4 s) |
 
-So the network only ever adds to the pool on disk, at most one download every 4 seconds plus the per-host gaps, and the pool stops growing once 12 unseen pictures are waiting.
+Before the first step, `CuratedImagePool.backfillFingerprints` fingerprints any pool picture stored before D48 and removes the later copy of a picture found twice (section 12). It also runs under `-LiminalImageAPIOffline`.
+
+So the network only ever adds to the pool on disk, at most one download every 4 seconds plus the per-host gaps, and the pool stops growing once 36 unseen pictures are waiting. Measured 2026-11-21 on macOS: about one stored picture every 6 s while it fills, against one shown every 28 s in Lo-Fi, so new pictures arrive four to five times faster than they are shown. 36 waiting pictures cover about 17 minutes of Lo-Fi without network (D48).
 
 ## 2. Which candidate is next: pins, search pages and the ledger
 
 `CuratedImageFeed.nextCandidate` looks for an item that the ledger has never seen. A **candidate key** is `provider:itemID` (for example `loc:2013631471` or `wikimedia:File:SUNSET - NARA - 544071.jpg`). Every key the ledger records is skipped, whether it was stored or rejected. Nothing is downloaded twice, and a rejected item is never retried.
+
+**The same picture under another id** (`ImageIdentity`, D48). A candidate is also skipped when one of its catalogue aliases belongs to a stored picture. Aliases start with `~` so they never collide with a key:
+
+| Provider | Aliases |
+|---|---|
+| `loc` | `~lccn:<id>` when the item id is an LCCN (8-12 digits) |
+| `nasa` | `~nasa:<ID>` (upper case), plus any NASA frame number in the id |
+| `wikimedia` | `~commons:<title>` (underscores as spaces, lower case); `~lccn:<n>` from `LCCN<n>` in the title (Commons copies of LoC scans); `~nara:<n>` from `NARA - <n>` (DOCUMERICA prints uploaded twice); NASA frame numbers (`AS08-14-2383`, `S65-34661`, `SL4-…`, `ISS…-E-…`, `PIA12345`, `GPN-…`) |
+
+Aliases of rejected candidates are not recorded, so a copy of a picture rejected elsewhere (for example too small on Commons) can still come from its own institution. A copy that no catalogue number links is caught after decode by the fingerprint gate (section 11).
 
 1. **Pins first.** The first time a source with `pinned` ids is used, `provider.pinned` is called. Most providers return stubs that `resolve` looks up later; Commons fetches the pinned files 50 titles per request. The list is cached in the ledger under `<sourceID>|pinned`, and a random unseen pin is taken.
 2. **Then searches**, in a fresh shuffled order each time. A source's searches (`CuratedSource.allQueries`) are its `queries`, then its `searches` (Commons free text), then its `categories` (Commons). For each one:
@@ -217,7 +229,8 @@ Notes on these gates:
   - `spec`: the source's synthesized `PromptSpec`. Its moods, subject category, energy and warmth come from the source's `mood` block, its style id is `api.<sourceID>` and its family is photographic. `VisualMoodBuilder` reads this spec, so API pictures still send mood words to the music.
   - `model`: `api.<provider>`.
   - The pixel size, `source` (the `ImageSourceCredit`) and `openness` (the full `OpennessScore`).
-- The image is encoded as JPEG at quality 0.9 and saved with `CuratedImagePool.add`.
+- **Duplicate gate** (D48). `ImageFingerprint` of the framed picture (a 64-bit row and a 64-bit column difference hash of a 9 x 9 grey thumbnail, and a 3 x 3 colour thumbnail) is compared with every stored picture. Within 8 bits on both hashes and 24 levels of mean colour difference it is the same picture (another scan, size or JPEG of it), and the candidate is rejected as `duplicate of <candidate key>`. Unrelated pictures differ in about half the bits; the colour check keeps two pictures with the same layout apart (a red and a teal nebula centred on black).
+- The image is encoded as JPEG at quality 0.9 and saved with `CuratedImagePool.add`, with its fingerprint and aliases.
 
 Log: `🖼️ API image stored: source=… item=… size=2528x1685 openness=0.62 key=0.31 license=… url=…`.
 
@@ -239,9 +252,11 @@ Application Support/Liminal/CuratedImageStore/   (inside the app's sandbox conta
   - `lists`: cached unseen candidates per search, with the date fetched.
   - `shown`: each picture's last display serial and how often it was shown.
   - `history`: the display serial and the last 32 shown, with source and monochrome flag.
+  - `aliases`: catalogue aliases of stored pictures (section 2), and `fingerprints`: each stored picture's `ImageFingerprint` (D48). Both are dropped when the picture leaves the pool. Every ledger field is optional on disk, so an older ledger loads with its shown history.
 
   Every change bumps a version, and a writer lock skips any snapshot older than the one on disk. The ingest task and the "shown" task write from different threads, and a lost candidate record would let an item be downloaded again (D43).
 - **Budget.** `storeBudgetBytes` is 3 GB, roughly 1,200-2,500 pictures at 1-2.5 MB each. Right after each save, if the pool is over budget, the least recently shown pictures are removed. Never-shown pictures go last, oldest first, and the new picture is never removed. An evicted picture's candidate record is cleared, so the item can be fetched again later. Nothing that can play is otherwise capped (A31). Log: `pool over budget: removed N least recently shown`.
+- **Fingerprint backfill** (D48). The ingest task fingerprints pictures stored before fingerprints existed, from their JPEGs decoded at 288 px. If two stored pictures match, the later one is removed, its candidate is recorded as `duplicate of …` so it is not fetched again, and the kept copy takes the later "last shown". Log: `fingerprinted N pool pictures, removed M duplicate copies`.
 - **Launch sweep** (`CuratedPoolPolicy.sweep`). It removes only junk: images without a sidecar, sidecars without an image, names that are not `<UUID>.jpg` or `.json`, and temp files older than an hour. Loading the pool also forgets candidate records whose picture file is gone, so those items can return.
 - **Free space.** Ingest pauses while the volume has less than 1 GB free (`volumeAvailableCapacityForImportantUsage`).
 - **Clear Curated Pictures** stops ingest and the display loop, releases reservations, and deletes every picture and the ledger. This is done under the writer lock, so a ledger write already under way cannot bring the old file back. The clear bumps the store's clear generation. Ingest reads that generation before it resolves a candidate, so a picture that was in flight during the clear is refused when saved. Fetching then restarts from scratch. The AI cache is untouched.
@@ -252,21 +267,22 @@ Application Support/Liminal/CuratedImageStore/   (inside the app's sandbox conta
 `CuratedImageFeed.nextDisplay(current:)` calls `ImageRotation.nextDisplay`, which is pure and seeded:
 
 - **Candidates** are the stored pictures from active sources, so `-LiminalImageProvider` restricts display too. The picture on screen is excluded, and so are pictures already picked and waiting in the queue (**reservations**). A reservation that was never shown, such as a Lo-Fi stage that missed its reveal, expires after 600 s (D43). A source switch, Stop or Clear releases all reservations.
-- **Weight** = source weight x (0.5 + openness) x recency, and x 3 for a picture that has never been shown.
-  - Recency is 0 for a picture shown within the last `recencyWindow` (24) displays. It then rises linearly back to 1 over another 24 displays.
-- **Hard rules.** Each rule gives way rather than return nothing:
+- **New pictures first** (D48). While any never-shown picture is a candidate, only never-shown pictures are drawn, with weight = source weight x (0.5 + openness). A picture already shown is never picked while a new one waits. Because ingest keeps up to 36 new pictures waiting and fetches four to five times faster than Lo-Fi shows them, an online session shows no picture twice.
+- **Nothing new** (offline, every provider backing off, or every source dry). The pick is from the least recently shown quarter of the pool (`reshowShare`, at least one picture), with the same weights, and never one shown within the last `recencyWindow` (24) displays when an older one exists. An offline pool of n pictures therefore cycles with no picture back sooner than about 3n/4 displays.
+- **Hard rules.** Each rule gives way rather than return nothing, and chooses only within the set above, so neither lets a shown picture in ahead of a new one:
   - Not the previous picture's source, when the pool spans three or more sources.
   - At most one monochrome picture in any `monochromeEvery` (6): if one of the last 5 shown was monochrome, colour pictures are preferred.
-- **Small pools.** When every picture is inside the recency window, the least recently shown one wins.
 
-When the picture actually reaches the screen, `markShown` records it in the history and the `shown` table on a detached task. Log: `🖼️ API image shown: source=… item=… title=… creator=… license=… url=…`.
+Before D48 the weight mixed both: shown pictures came back at weight 1 once 24 to 48 displays had passed, against x 3 for a new one. With ingest holding 12 new pictures, every picture shown more than 48 displays ago competed with them, so the share of repeats grew with the pool: about 33% in the first hour of a new pool, 68% in the second session and 85% by the sixth (a port of the old rule over six one-hour Lo-Fi sessions; 51% and 89% for two-hour sessions). The launch frame was a random stored picture, which could be the last one seen.
+
+When the picture actually reaches the screen, `markShown` records it in the history and the `shown` table on a detached task, and only then releases its reservation, so a pick in between can never take it as new. Log: `🖼️ API image shown: source=… item=… title=… creator=… license=… url=…`.
 
 ## 14. How API pictures reach the screen, and Lo-Fi timing
 
 `ImageQueue` connects API mode to the rest of the visual pipeline. After the queue, both sources are the same: buffer, 3:2 crop, saliency, depth, mood, footage, effects and renderers. `EffectsUniforms`, the shaders and the 2048 visionOS render size are not touched.
 
 - **Start** (`ImageQueue.start`, source API). This calls `startAPIFeed`, which starts ingest and a display loop. Every second, the loop tops the queue up to `targetPendingCount` (2) pictures from `feed.nextDisplay`, using the disk only. It also publishes the status message, the status line and the picture count to the UI.
-- **First frame.** `loadInitialAPIImage` shows a random stored picture (`feed.anyPicture`). If the pool is empty, Lo-Fi shows the bundled standby art, and Ambient shows the first picture fetched. The AI cache and the test card are never used.
+- **First frame.** `loadInitialAPIImage` shows the rotation's pick (`feed.anyPicture` calls `nextDisplay`): a never-shown picture when there is one, else one of the least recently shown, never a random one (D48). If the pool is empty, Lo-Fi shows the bundled standby art, and Ambient shows the first picture fetched. The AI cache and the test card are never used.
 - **Decoding for display** (`makeDisplayItem`). Pool pictures **skip the upscaler**. The ingest gate already guarantees 2000 x 1333. The visionOS MetalFX path would otherwise upscale a 2000-2047 px picture 4x, and the macOS RealESRGAN path stretched any input to 512 x 512 (D40).
 - **Ambient.** The image timer takes the next queued picture.
 - **Lo-Fi.** The drum transport's audible downbeat is the clock. For each image change, `VisualEngine` waits until 6 s before the drop starts. It then records the active store and its clear generation, and calls `ImageQueue.reserveForFill`. That takes the next queued picture, or in API mode up to three tries of `feed.nextDisplay` straight from disk, with no network wait. The staged picture is kept only if the same store is still active with the same clear generation, and if it is ready at least 2 s before the drop. It is revealed on the downbeat; the film's piece change and the dialogue hits use the same clock. If no different picture is ready, two bundled standby pictures can alternate. Because display never waits for the network, the Lo-Fi reserve deadline and offline use behave exactly as with the AI cache.
@@ -338,6 +354,8 @@ All lines are in subsystem `com.saygoodnight.Liminal`, category `Visual`. Stream
 | `🖼️ [API] <provider> backing off N min: <error>` | Provider backoff |
 | `🖼️ [API] dropped <item>: the pool was cleared while it was fetched` | Clear during a fetch |
 | `🖼️ [API] pool over budget: removed N least recently shown` | 3 GB eviction |
+| `🖼️ [API] fingerprinted N pool pictures, removed M duplicate copies` | Fingerprint backfill of an older pool (D48) |
+| `🖼️ API image rejected: … reason=duplicate of <key>` | The same picture is already in the pool (D48) |
 | `🖼️ [API] Vision checks skipped: …` | Vision failed; text and face checks passed by default |
 | `🖼️ [API] image-collections.json missing from the bundle` / `failed to decode` | JSON problem; API mode shows standby art |
 | `ImageQueue starting (source=api)`, `🖼️ [ImageQueue] API feed starting` / `stopped` | Display loop |
@@ -376,8 +394,13 @@ Standard checks, from `development.md` and D41-D44:
     -only-testing:LiminalTests/ImageProviderParsingTests -only-testing:LiminalTests/ImageRightsTests \
     -only-testing:LiminalTests/ImageRotationTests -only-testing:LiminalTests/ImageOpennessTests \
     -only-testing:LiminalTests/CuratedImagePoolTests -only-testing:LiminalTests/CuratedImageFeedTests \
-    -only-testing:LiminalTests/ImageQueueAPIModeTests -only-testing:LiminalTests/ScanEdgeTrimmerTests
+    -only-testing:LiminalTests/ImageQueueAPIModeTests -only-testing:LiminalTests/ScanEdgeTrimmerTests \
+    -only-testing:LiminalTests/ImageRepeatRotationTests -only-testing:LiminalTests/ImageIdentityTests \
+    -only-testing:LiminalTests/ImageFingerprintTests -only-testing:LiminalTests/ImageRepeatPoolTests \
+    -only-testing:LiminalTests/ImageRepeatFeedTests
   ```
+
+- **Repeats.** In a live log, `grep "API image shown" run.log | sed 's/.*item=\([^ ]*\) title.*/\1/' | sort | uniq -d` must print nothing while ingest is online.
 
 - **macOS live run.** Launch the built app with `-LiminalAutoPlay YES -LiminalImageSource api -LiminalImageAPIFresh YES -LiminalImageInterval 8 -archive.enabled YES -LiminalVideoOffline YES`, stream the log, and look at the screen with Peekaboo. Expect at least six shown pictures from three sources in five minutes, credits in the panel, and no `[Gemini]` lines. Add `-LiminalImageProvider <source-id>` to test one source.
 - **Offline reuse.** Run again with `-LiminalImageAPIOffline YES` added. Pictures keep changing, the log shows `ingest off`, and no network requests are made.

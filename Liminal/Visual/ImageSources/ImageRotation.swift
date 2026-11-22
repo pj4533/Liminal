@@ -62,11 +62,12 @@ nonisolated enum ImageRotation {
         return s
     }
 
-    /// Pinned ids first (shuffled), then search results in order; keys in `seen` are skipped.
+    /// Pinned ids first (shuffled), then search results in order; candidates whose key or catalogue
+    /// alias (ImageIdentity) is in `seen` are skipped.
     static func nextCandidate(pinned: [ImageCandidate], searched: [ImageCandidate], seen: Set<String>,
                               using rng: inout some RandomNumberGenerator) -> ImageCandidate? {
-        if let p = pinned.filter({ !seen.contains($0.key) }).randomElement(using: &rng) { return p }
-        return searched.first { !seen.contains($0.key) }
+        if let p = pinned.filter({ !ImageIdentity.isKnown($0, in: seen) }).randomElement(using: &rng) { return p }
+        return searched.first { !ImageIdentity.isKnown($0, in: seen) }
     }
 
     // MARK: - Display
@@ -99,36 +100,38 @@ nonisolated enum ImageRotation {
     }
 
     struct DisplayRules: Sendable, Equatable {
+        /// A picture already shown never comes back within this many displays while another is available.
         var recencyWindow = 24
         var monochromeEvery = 6
-        var unseenBoost = 3.0
+        /// When every picture has been shown, the next comes from this least recently shown share.
+        var reshowShare = 0.25
     }
 
-    /// Weight = source weight x recency x (0.5 + openness), never-shown x3. Hard rules: not the picture
-    /// on screen, not the previous picture's source when the pool spans three or more sources, at
-    /// most one monochrome in any `monochromeEvery`. Each rule yields rather than return nothing.
+    /// Never-shown pictures always come first (D48): a picture already shown is picked only when the
+    /// pool, minus the one on screen, has nothing new. Among new pictures the weight is source weight x
+    /// (0.5 + openness). With nothing new, the pick is from the least recently shown quarter
+    /// (`reshowShare`) and never inside the recency window when anything is outside it, so a cycle
+    /// through an offline pool of n pictures repeats no picture sooner than about 3n/4 displays.
+    /// Hard rules: not the picture on screen, not the previous picture's source when the candidates
+    /// span three or more sources, at most one monochrome in any `monochromeEvery`. The source and
+    /// monochrome rules yield rather than return nothing, and never let a shown picture in ahead of a
+    /// new one.
     static func nextDisplay(pool: [DisplayItem], history: DisplayHistory, current: UUID?, rules: DisplayRules = .init(),
                             using rng: inout some RandomNumberGenerator) -> DisplayItem? {
         let notCurrent = pool.filter { $0.id != current }
         guard !notCurrent.isEmpty else { return pool.first }
 
-        func weight(_ item: DisplayItem) -> Double {
-            var w = max(0.01, item.sourceWeight) * (0.5 + item.openness)
-            if let shown = item.lastShown {
-                let since = history.serial - shown
-                // 0 inside the window, then rising back to 1 over another window.
-                if since < rules.recencyWindow { w *= 0 }
-                else { w *= min(1, Double(since - rules.recencyWindow + 1) / Double(rules.recencyWindow)) }
-            } else {
-                w *= rules.unseenBoost
-            }
-            return w
+        let unseen = notCurrent.filter { $0.lastShown == nil }
+        var candidates: [DisplayItem]
+        if !unseen.isEmpty {
+            candidates = unseen
+        } else {
+            let oldestFirst = notCurrent.sorted { ($0.lastShown ?? 0) < ($1.lastShown ?? 0) }
+            let share = max(1, Int((Double(oldestFirst.count) * rules.reshowShare).rounded(.down)))
+            candidates = Array(oldestFirst.prefix(share))
+            let rested = candidates.filter { history.serial - ($0.lastShown ?? 0) >= rules.recencyWindow }
+            if !rested.isEmpty { candidates = rested }
         }
-
-        // Pictures outside the recency window; when there are none (a pool smaller than the window),
-        // every picture, and the least recently shown one wins below.
-        let rested = notCurrent.filter { weight($0) > 0 }
-        var candidates = rested.isEmpty ? notCurrent : rested
         let sources = Set(pool.map(\.sourceID))
         if sources.count >= 3, let last = history.recent.last?.sourceID {
             let other = candidates.filter { $0.sourceID != last }
@@ -139,10 +142,7 @@ nonisolated enum ImageRotation {
             let colour = candidates.filter { !$0.monochrome }
             if !colour.isEmpty { candidates = colour }
         }
-        if rested.isEmpty {
-            return candidates.max { (history.serial - ($0.lastShown ?? 0)) < (history.serial - ($1.lastShown ?? 0)) }
-        }
-        let weights = candidates.map(weight)
+        let weights = candidates.map { max(0.01, $0.sourceWeight) * (0.5 + $0.openness) }
         let total = weights.reduce(0, +)
         var r = Double.random(in: 0..<total, using: &rng)
         for (item, w) in zip(candidates, weights) {

@@ -41,7 +41,7 @@ If Gemini reports a billing error, Liminal cycles through cached images while it
 
 ## API image sources
 
-API mode rotates through these collections (`Liminal/Visual/ImageSources/image-collections.json`; every source, with its searches, sizes and rights, is in [image-sources/sources.md](image-sources/sources.md)). A picture is kept only when its own record is public domain, CC0, carries no known restrictions, or is CC BY / CC BY-SA, and only when it reaches 2K in a 3:2 crop and leaves room for the film. Pictures are fetched one at a time and kept on the device (up to 3 GB, the least recently shown removed beyond that), so the rotation keeps going offline. API mode never generates with Gemini.
+API mode rotates through these collections (`Liminal/Visual/ImageSources/image-collections.json`; every source, with its searches, sizes and rights, is in [image-sources/sources.md](image-sources/sources.md)). A picture is kept only when its own record is public domain, CC0, carries no known restrictions, or is CC BY / CC BY-SA, and only when it reaches 2K in a 3:2 crop and leaves room for the film. Pictures are fetched one at a time and kept on the device (up to 3 GB, the least recently shown removed beyond that), so the rotation keeps going offline. A picture is not shown twice while a new one is waiting: new pictures always come first, and the same picture reached through two collections (a Library of Congress scan and its Commons copy, a NASA frame on Commons) is kept once. Only offline, once every saved picture has been shown, do pictures return, least recently shown first (D48). API mode never generates with Gemini.
 
 | Collection | Institution | Licence | Source |
 | --- | --- | --- | --- |
