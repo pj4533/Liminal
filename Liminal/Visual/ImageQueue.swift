@@ -230,9 +230,13 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
         feed.pool.loadIfNeeded()
         await publishCachedCount(feed.pool.count)
         LMLog.visual.info("📂 [ImageQueue] API pool: \(feed.pool.count) pictures")
-        guard !imageBuffer.hasCurrent(), let entry = feed.anyPicture(),
-              let item = await makeDisplayItem(entry, from: feed.pool.store) else { return }
-        guard !imageBuffer.hasCurrent(), activeSource == .api else { return }
+        guard !imageBuffer.hasCurrent(), let entry = feed.anyPicture() else { return }
+        // The pick is reserved; a launch frame that is not shown after all goes back to the rotation.
+        guard let item = await makeDisplayItem(entry, from: feed.pool.store),
+              !imageBuffer.hasCurrent(), activeSource == .api else {
+            feed.release(entry.id)
+            return
+        }
         imageBuffer.storeCurrent(item.cgImage, metadata: item.metadata, id: item.id)
         await state.noteShown(item.id)
         didShow(item.metadata)

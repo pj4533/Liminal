@@ -43,8 +43,35 @@ nonisolated struct CuratedLedger: Codable, Sendable, Equatable {
     /// Picture uuid -> when it was last shown (display serial) and how often.
     var shown: [UUID: ShownRecord] = [:]
     var history = ImageRotation.DisplayHistory()
+    /// Catalogue aliases of stored pictures (ImageIdentity, "~lccn:..." -> candidate key), D48.
+    var aliases: [String: String] = [:]
+    /// Perceptual fingerprint of each stored picture, D48.
+    var fingerprints: [UUID: ImageFingerprint] = [:]
 
     var seenKeys: Set<String> { Set(candidates.keys) }
+    /// Candidate keys and stored aliases: what `ImageIdentity.isKnown` checks a new candidate against.
+    var knownIdentities: Set<String> { seenKeys.union(aliases.keys) }
+
+    init() {}
+
+    /// Every field is optional on disk, so a ledger written before a field existed still loads with
+    /// its shown history (a failed decode would start the rotation over).
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        candidates = try c.decodeIfPresent([String: CandidateRecord].self, forKey: .candidates) ?? [:]
+        cursors = try c.decodeIfPresent([String: String].self, forKey: .cursors) ?? [:]
+        lists = try c.decodeIfPresent([String: CachedList].self, forKey: .lists) ?? [:]
+        shown = try c.decodeIfPresent([UUID: ShownRecord].self, forKey: .shown) ?? [:]
+        history = try c.decodeIfPresent(ImageRotation.DisplayHistory.self, forKey: .history) ?? .init()
+        aliases = try c.decodeIfPresent([String: String].self, forKey: .aliases) ?? [:]
+        fingerprints = try c.decodeIfPresent([UUID: ImageFingerprint].self, forKey: .fingerprints) ?? [:]
+    }
+
+    /// Drops the aliases and fingerprint of a picture that left the pool.
+    mutating func forgetStored(id: UUID, candidateKey: String) {
+        fingerprints[id] = nil
+        aliases = aliases.filter { $0.value != candidateKey }
+    }
 }
 
 /// What the display rotation needs about one stored picture.
@@ -179,6 +206,9 @@ nonisolated final class CuratedImagePool: Sendable {
                 if let id = record.stored, items[id] == nil { s.ledger.candidates[key] = nil }
             }
             s.ledger.shown = s.ledger.shown.filter { items[$0.key] != nil }
+            s.ledger.fingerprints = s.ledger.fingerprints.filter { items[$0.key] != nil }
+            let storedKeys = Set(items.values.map(\.candidateKey))
+            s.ledger.aliases = s.ledger.aliases.filter { storedKeys.contains($0.value) }
             s.loaded = true
         }
         LMLog.visual.info("🖼️ [API] pool: \(items.count) pictures in \(self.store.directory.lastPathComponent, privacy: .public)")
@@ -230,17 +260,71 @@ nonisolated final class CuratedImagePool: Sendable {
         }
     }
 
-    private func mutateLedger(_ body: (inout CuratedLedger) -> Void) {
+    /// `recorded` runs once the change is visible in memory, before the file is written.
+    private func mutateLedger(_ body: (inout CuratedLedger) -> Void, recorded: (() -> Void)? = nil) {
         let (snapshot, version) = state.withLock { s -> (CuratedLedger, UInt64) in
             body(&s.ledger)
             s.ledgerVersion &+= 1
             return (s.ledger, s.ledgerVersion)
         }
+        recorded?()
         persist(snapshot, version: version)
     }
 
     var ledger: CuratedLedger { state.withLock { $0.ledger } }
     var seenKeys: Set<String> { state.withLock { $0.ledger.seenKeys } }
+    var knownIdentities: Set<String> { state.withLock { $0.ledger.knownIdentities } }
+
+    /// A stored picture that `fingerprint` matches (the same picture under another id or source).
+    func duplicate(of fingerprint: ImageFingerprint) -> PoolItem? {
+        state.withLock { s in
+            s.ledger.fingerprints.first { s.items[$0.key] != nil && $0.value.matches(fingerprint) }.flatMap { s.items[$0.key] }
+        }
+    }
+
+    /// Fingerprints pool pictures stored before D48 from their JPEGs, and removes the later copy of any
+    /// picture found twice (its candidate is recorded as a duplicate, so it is not fetched again; the
+    /// kept copy inherits the later "last shown"). Run by the ingest task, off the main actor.
+    @discardableResult
+    func backfillFingerprints() -> [UUID] {
+        let missing = state.withLock { s in s.items.values.filter { s.ledger.fingerprints[$0.id] == nil } }
+        guard !missing.isEmpty else { return [] }
+        var computed: [UUID: ImageFingerprint] = [:]
+        for item in missing {
+            if Task.isCancelled { return [] }
+            if let fp = ImageFingerprint.of(fileAt: item.url) { computed[item.id] = fp }
+        }
+        let (removed, snapshot, version) = state.withLock { s -> ([UUID], CuratedLedger, UInt64) in
+            for (id, fp) in computed where s.items[id] != nil { s.ledger.fingerprints[id] = fp }
+            var removed: [UUID] = []
+            // Oldest first: the first copy stored stays.
+            let ordered = s.items.values.sorted { ($0.createdAt, $0.id.uuidString) < ($1.createdAt, $1.id.uuidString) }
+            var kept: [(PoolItem, ImageFingerprint)] = []
+            for item in ordered {
+                guard let fp = s.ledger.fingerprints[item.id] else { continue }
+                if let original = kept.first(where: { $0.1.matches(fp) })?.0 {
+                    if let later = s.ledger.shown[item.id] {
+                        let earlier = s.ledger.shown[original.id]
+                        s.ledger.shown[original.id] = .init(lastShown: max(later.lastShown, earlier?.lastShown ?? 0),
+                                                           count: later.count + (earlier?.count ?? 0))
+                    }
+                    s.items[item.id] = nil
+                    s.ledger.shown[item.id] = nil
+                    s.ledger.forgetStored(id: item.id, candidateKey: item.candidateKey)
+                    s.ledger.candidates[item.candidateKey] = .init(stored: nil, rejected: "duplicate of \(original.candidateKey)", date: Date())
+                    removed.append(item.id)
+                } else {
+                    kept.append((item, fp))
+                }
+            }
+            s.ledgerVersion &+= 1
+            return (removed, s.ledger, s.ledgerVersion)
+        }
+        for id in removed { store.remove(id: id) }
+        persist(snapshot, version: version)
+        LMLog.visual.info("🖼️ [API] fingerprinted \(computed.count) pool pictures, removed \(removed.count) duplicate copies")
+        return removed
+    }
 
     func recordRejected(_ key: String, reason: String) {
         mutateLedger { $0.candidates[key] = .init(stored: nil, rejected: reason, date: Date()) }
@@ -290,18 +374,25 @@ nonisolated final class CuratedImagePool: Sendable {
     /// Saves a new picture and applies the budget. Returns the ids evicted to make room.
     /// `clearGeneration` is the store's generation when the picture's ingest began: a picture that was
     /// in flight during "Clear Curated Pictures" is refused instead of outliving the clear.
+    /// `fingerprint` and `aliases` (ImageIdentity) keep other copies of the picture out while it is stored.
     @discardableResult
-    func add(jpeg: Data, metadata: ImageMetadata, budget: Int64, clearGeneration: UInt64? = nil) throws -> [UUID] {
+    func add(jpeg: Data, metadata: ImageMetadata, budget: Int64, clearGeneration: UInt64? = nil,
+             fingerprint: ImageFingerprint? = nil, aliases: Set<String> = []) throws -> [UUID] {
         let clear = clearGeneration ?? store.clearGeneration
         let entry = try store.save(jpeg: jpeg, metadata: metadata, clearGeneration: clear)
         guard let item = Self.poolItem(entry) else { return [] }
         let (evict, snapshot, version) = state.withLock { s -> ([UUID], CuratedLedger, UInt64) in
             s.items[item.id] = item
             s.ledger.candidates[item.candidateKey] = .init(stored: item.id, rejected: nil, date: Date())
+            if let fingerprint { s.ledger.fingerprints[item.id] = fingerprint }
+            for alias in aliases { s.ledger.aliases[alias] = item.candidateKey }
             let evict = CuratedPoolPolicy.evictions(items: Array(s.items.values), shown: s.ledger.shown,
                                                     budget: budget, keep: item.id)
             for id in evict {
-                if let gone = s.items.removeValue(forKey: id) { s.ledger.candidates[gone.candidateKey] = nil }
+                if let gone = s.items.removeValue(forKey: id) {
+                    s.ledger.candidates[gone.candidateKey] = nil
+                    s.ledger.forgetStored(id: id, candidateKey: gone.candidateKey)
+                }
                 s.ledger.shown[id] = nil
             }
             s.ledgerVersion &+= 1
@@ -329,13 +420,14 @@ nonisolated final class CuratedImagePool: Sendable {
     func item(_ id: UUID) -> PoolItem? { state.withLock { $0.items[id] } }
 
     /// Records that a picture became the one on screen.
-    func markShown(_ id: UUID) {
-        guard let item = item(id) else { return }
-        mutateLedger { l in
+    /// `recorded` runs as soon as the rotation can see the picture as shown, before the ledger write.
+    func markShown(_ id: UUID, recorded: (() -> Void)? = nil) {
+        guard let item = item(id) else { recorded?(); return }
+        mutateLedger({ l in
             l.history.record(sourceID: item.sourceID, monochrome: item.monochrome)
             let count = (l.shown[id]?.count ?? 0) + 1
             l.shown[id] = .init(lastShown: l.history.serial, count: count)
-        }
+        }, recorded: recorded)
     }
 
     /// Deletes every picture and the ledger ("Clear images" in API mode).
