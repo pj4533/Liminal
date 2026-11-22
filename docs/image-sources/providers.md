@@ -374,7 +374,7 @@ limit=20&page=<n>
 | Request | Result |
 |---|---|
 | `full/843,`, `full/1686,` | 200 (too small) |
-| `full/3000,` | 200: 3000 px on the long side, or native when smaller; portraits fitted by height; never upscaled |
+| `full/3000,` | 200: 3000 px on the long side, or native when smaller; portraits fitted by height; never enlarged |
 | Widths listed in `info.json` `sizes` | 200 |
 | `full/2000,`, `full/2528,`, `full/full`, `full/max`, `full/!2528,2528`, `full/pct:50`, tiles | 403 |
 

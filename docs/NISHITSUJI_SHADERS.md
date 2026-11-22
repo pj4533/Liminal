@@ -20,7 +20,6 @@ Before implementing, understand how Liminal's pipeline works:
 | File | Purpose |
 |------|---------|
 | `Shaders/EffectsRenderer.metal` | Main single-pass fragment shader — 9 sequential effect stages |
-| `Shaders/DreamyEffects.metal` | SwiftUI `[[stitchable]]` shaders (distortion, hue) |
 | `Shaders/DomeCompute.metal` | visionOS dome vertex deformation compute shader |
 
 ### Available Textures (in `effectsFragment`)
@@ -52,9 +51,9 @@ struct EffectsUniforms {
 - Compute parameters in `EffectsUniformsComputer.swift`
 - Single-pass, access to all textures and feedback
 
-**Path B: `[[stitchable]]` function in `DreamyEffects.metal`**
+**Path B: a new `[[stitchable]]` function in its own `.metal` file**
 - Used with SwiftUI's `.distortionEffect()` or `.colorEffect()`
-- Simpler to prototype, but runs as separate pass
+- Simpler to prototype, but runs as separate pass (the app ships no stitchable shaders today)
 
 ### GLSL → Metal Translation Reference
 | GLSL | Metal |

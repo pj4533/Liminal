@@ -199,10 +199,10 @@ moves far faster: the water boost changes up to 0.009 per frame.
   - End to end (shipped uniforms with the shipped shader, against the new ones), median over the same
     scenarios: 3.77 ms shipped, 3.56 ms new (0.94). In clear stretches both warp branches are skipped
     (t260: 2.90 ms).
-- `scripts/av-coupling-check.sh` fails on the bloom 3–30 Hz band (0.0579 against 0.05). **Main fails
-  with the identical value**, so this is unrelated to this work: bloom at the default is unchanged, and the
-  failure predates it, probably from the calm-music redesign. It is left for a separate fix. Every other
-  coupling check passes: distortion slew 0.00017, correlation 0.999, toggle off with 0 mismatches.
+- The one-off coupling check of the time failed on the bloom 3–30 Hz band (0.0579 against 0.05). **Main
+  failed with the identical value**, so this is unrelated to this work: bloom at the default is unchanged,
+  and the failure predates it. Every other coupling check passed: distortion slew 0.00017, correlation 0.999,
+  toggle off with 0 mismatches.
 
 ## Tuning round 1 (after the round-0 blind judges)
 

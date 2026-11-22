@@ -13,7 +13,7 @@ xcodebuild test -scheme Liminal -destination 'platform=macOS' \
   -only-testing:LiminalTests/LofiGuitarPhrasingTests \
   -only-testing:LiminalTests/LofiProductionTests \
   -only-testing:LiminalTests/ArchiveVoiceRenderTests \
-  -only-testing:LiminalTests/LofiDialogueSamplerTests \
+  -only-testing:LiminalTests/DialogueClipGainTests \
   -only-testing:LiminalTests/ArchiveCachePolicyTests
 ```
 
@@ -142,7 +142,7 @@ The pipeline fetches from free public APIs, so its verification runs may use the
 - macOS: launch the built app with `-LiminalAutoPlay YES -LiminalImageAPIFresh YES -archive.enabled YES -LiminalVideoOffline YES` and stream the log. Every stored, rejected and shown picture logs one line (`API image stored: ...`, `API image rejected: ... reason=...`, `API image shown: source=... license=... url=...`). Expect shown pictures from several sources over a few minutes.
 - Offline reuse: add `-LiminalImageAPIOffline YES` to the same flags.
 - visionOS Simulator: `xcrun simctl launch <udid> com.saygoodnight.Liminal -LiminalAutoPlay YES -LiminalOpenDome YES -LiminalImageAPIFresh YES -LiminalControlsScroll images` (the control window then shows the credit). Vision's text and face checks cannot run in the simulator and are skipped with a log line.
-- Perf: `scripts/perf-run.sh --extra "-LiminalImageAPIFresh YES"` (ingest live) and with `-LiminalImageAPIOffline YES`. A fresh pool's first picture arrives inside the measurement window with the depth model cold, so for a like-for-like check run once to fill the pool and measure with the pool kept (in the simulator, copy `CuratedImageStore-Verify` to `CuratedImageStore` in the app container and add `-images.api.cacheEpoch 1`). Results in `docs/decisions/images.md` D42.
+- Perf: `scripts/perf-run.sh --extra "-LiminalImageAPIFresh YES"` (ingest live) and with `-LiminalImageAPIOffline YES`. A fresh pool's first picture arrives inside the measurement window with the depth model cold, so for a like-for-like check run once to fill the pool and measure with the pool kept (in the simulator, copy `CuratedImageStore-Verify` to `CuratedImageStore` in the app container). Results in `docs/decisions/images.md` D42.
 
 
 ## Scripts (`scripts/`)

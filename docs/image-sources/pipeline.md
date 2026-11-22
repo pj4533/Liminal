@@ -240,12 +240,12 @@ Log: `🖼️ API image stored: source=… item=… size=2528x1685 openness=0.62
 
 ```
 Application Support/Liminal/CuratedImageStore/   (inside the app's sandbox container)
-    <uuid>.jpg + <uuid>.json    picture and sidecar (an ImageStore with its own epoch key, no count cap)
+    <uuid>.jpg + <uuid>.json    picture and sidecar (an ImageStore with no count cap)
     ledger.json                 candidates, cursors, cached search pages, shown history
     tmp/                        downloads in progress
 ```
 
-- **Own folder and epoch key.** The pool's `ImageStore` uses `images.api.cacheEpoch` at epoch 1; a lower stored epoch purges only this folder at launch. It is excluded from backups.
+- **Own folder.** The pool's `ImageStore` keeps everything in `CuratedImageStore/`, excluded from backups. Nothing purges it at launch; only the sweep of junk files below runs.
 - **The ledger** (`CuratedLedger`) holds:
   - `candidates`: each key, with the stored picture's UUID or the rejection reason, and a date.
   - `cursors`: a missing cursor means start from page 1; `""` means there are no more pages.
@@ -260,7 +260,7 @@ Application Support/Liminal/CuratedImageStore/   (inside the app's sandbox conta
 - **Launch sweep** (`CuratedPoolPolicy.sweep`). It removes only junk: images without a sidecar, sidecars without an image, names that are not `<UUID>.jpg` or `.json`, and temp files older than an hour. Loading the pool also forgets candidate records whose picture file is gone, so those items can return.
 - **Free space.** Ingest pauses while the volume has less than 1 GB free (`volumeAvailableCapacityForImportantUsage`).
 - **Clear Curated Pictures** stops ingest and the display loop, releases reservations, and deletes every picture and the ledger. This is done under the writer lock, so a ledger write already under way cannot bring the old file back. The clear bumps the store's clear generation. Ingest reads that generation before it resolves a candidate, so a picture that was in flight during the clear is refused when saved. Fetching then restarts from scratch.
-- **Verify pool.** `-LiminalImageAPIFresh YES` uses an empty `CuratedImageStore-Verify` folder with the epoch key `images.api.cacheEpoch.verify`, so a test run never touches the user's pool. Combined with `-LiminalImageAPIOffline YES`, it reuses the previous verify pool. The next normal launch deletes the verify folder.
+- **Verify pool.** `-LiminalImageAPIFresh YES` uses an empty `CuratedImageStore-Verify` folder, so a test run never touches the user's pool. Combined with `-LiminalImageAPIOffline YES`, it reuses the previous verify pool. The next normal launch deletes the verify folder.
 
 ## 13. Display rotation
 
@@ -283,7 +283,7 @@ When the picture actually reaches the screen, `markShown` records it in the hist
 
 - **Start** (`ImageQueue.start`). This calls `startFeed`, which starts ingest and a display loop. Every second, the loop tops the queue up to `pendingTarget` (2) pictures from `feed.nextDisplay`, using the disk only. It also publishes the status message, the status line and the picture count to the UI.
 - **First frame.** `loadInitialImage` shows the rotation's pick (`feed.anyPicture` calls `nextDisplay`): a never-shown picture when there is one, else one of the least recently shown, never a random one (D48). If the pool is empty, the first reveal shows the bundled standby art.
-- **Decoding for display** (`makeDisplayItem`). Pictures are never upscaled; the ingest gate already guarantees 2000 x 1333 (D40).
+- **Decoding for display** (`makeDisplayItem`). Pictures are never enlarged; the ingest gate already guarantees 2000 x 1333 (D40).
 - **Timing.** The drum transport's audible downbeat is the clock. For each image change, `VisualEngine` waits until 6 s before the drop starts. It then records the pool's clear generation, and calls `ImageQueue.reserveForFill`. That takes the next queued picture, or up to three tries of `feed.nextDisplay` straight from disk, with no network wait. The staged picture is kept only if the pool still has the same clear generation, and if it is ready at least 2 s before the drop. It is revealed on the downbeat; the film's piece change and the dialogue hits use the same clock. If no different picture is ready, two bundled standby pictures can alternate. Because display never waits for the network, the reserve deadline is met offline as well.
 
 ## 15. Credits

@@ -76,7 +76,7 @@ always above 0.001 in `EffectsUniformsComputer`, so no stage is ever skipped.
 | 10 | Pace the loop from a display-linked source instead of `Task.sleep`; move encoding off the MainActor | CPU and jitter only | low | later |
 
 ### Rejected or deferred
-- **MetalFX / rendering below 2048²**: violates the resolution constraint.
+- **Rendering below 2048²**: violates the resolution constraint.
 - **Rendering only when content changes**: the effects animate every frame.
 - **Both eyes in one MRT pass**: after item 4 the shared work is already hoisted; the per-eye part
   differs from the parallax onward, so MRT would save only rasterisation of one quad.
@@ -162,7 +162,7 @@ Items 2, 5 and 6 edit the same shader and stack. Items 3, 4, 7 and 8 are indepen
 - **Skip-previous-samples, low-res displacement pre-pass, hue bake, single command buffer**:
   already attempted. The two extra-pass designs should stay rejected unless a device measurement
   shows that a pass is cheap there. Skip-previous-samples deserves a re-measurement with item 1.
-- **MetalFX or any render size below 2048²**: violates the resolution requirement.
+- **Any render size below 2048²**: violates the resolution requirement.
 
 ### Verdict rule for this round
 Compare candidate and reference **in the same session, interleaved** (A B A B A B), never against

@@ -37,7 +37,7 @@ xcrun simctl spawn $UDID log stream --style compact --predicate 'eventMessage CO
 
 ### 2.2 Project change A: DEBUG control channel (highest value)
 
-Today `EnvironmentService.swift` only reads `ProcessInfo` environment. The repo has no launch-arg handling and no `onOpenURL`, and the immersive spaces open from button actions in `ControlsView.swift` (lines 73 and 99). Add a `#if DEBUG` `TestHooks` type that:
+At the time of this research the app read only the process environment. The repo had no launch-arg handling (it now has `DebugLaunchOptions`) and no `onOpenURL`, and the immersive spaces open from button actions in `ControlsView.swift` (lines 73 and 99). Add a `#if DEBUG` `TestHooks` type that:
 
 - reads launch args or env vars: `-autoPlay`, `-autoEnterDome` / `-autoEnterDiorama`, `-param <name>=<value>`, `-freezeTime <t>` (fixed oscillator time so screenshots are deterministic), `-perfLogInterval 1`;
 - registers a `liminal` URL scheme with `.onOpenURL` for runtime commands such as `liminal://play`, `liminal://enter-dome`, `liminal://exit-dome`, `liminal://set?param=hueShift&value=0.3`, `liminal://spatial?on=1`;

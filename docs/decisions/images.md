@@ -36,7 +36,7 @@ The network only adds to the pool. When the pool is empty or not ready, the bund
 
 ## D39 (2026-11-21): The API pool on disk
 
-- `Application Support/Liminal/CuratedImageStore/`, an `ImageStore` with its own folder, epoch key (`images.api.cacheEpoch`) and no count cap, so neither store's migration can purge the other (unit tested). `ledger.json` beside it records every candidate (stored or rejected with a reason, so nothing is downloaded twice), search cursors, cached search pages and when each picture was last shown.
+- `Application Support/Liminal/CuratedImageStore/`, an `ImageStore` with its own folder and no count cap. (Its per-store epoch key, `images.api.cacheEpoch`, was removed on 2026-11-22: with one store there was nothing to purge on upgrade.) `ledger.json` beside it records every candidate (stored or rejected with a reason, so nothing is downloaded twice), search cursors, cached search pages and when each picture was last shown.
 - **Budget 3 GB** (plan 13.3, about 1,200-2,500 pictures at 1-2.5 MB). Nothing that can play is capped (A31): only past the budget, right after a save, is the least recently shown picture removed, and its ledger entry cleared so it can come back. Ingest pauses with under 1 GB free. Launch cleanup removes only images without sidecars, sidecars without images, names that are not `<UUID>.jpg|json`, and temp downloads older than an hour.
 - "Clear Curated Pictures" clears this pool and its ledger.
 
@@ -44,7 +44,7 @@ The network only adds to the pool. When the pool is empty or not ready, the bund
 
 - Requested long side 2528 (2K at 3:2), where the server scales (LOC IIIF `full/!2528,2528`, Commons thumbnails, which come back at Commons' 3840 step or as the original when that is smaller), originals from NASA, Cleveland (`images.print`, 3400 px) and the Met. Decoding uses `CGImageSourceCreateThumbnailAtIndex` sized so the 3:2 crop is about 2528 wide (at most 5056 on the long side), so a large master never expands fully in memory. Stored as JPEG quality 0.9.
 - **2528, not 3072 (changed 2026-11-21 in the independent verification, D42):** both renderers draw at most 2048 px wide, so 3072 bought nothing on screen. With 3072 pictures, two Lo-Fi perf runs with ingest live failed with 118-324 ms stalls and 45-175 ms frames at reveals; the same pool scaled to 2528 brought reveals back to the pool-only range.
-- **Size gate:** the 3:2 cover crop must be at least 2000 x 1333, 2% under 2048 x 1365. The first live run rejected *Icones Farlowianae* plates at 2026 px; the difference is invisible under the effects. No enabled source needs it. Pictures are never upscaled and the app has no upscaler: a 2000-2047 px picture is shown as stored.
+- **Size gate:** the 3:2 cover crop must be at least 2000 x 1333, 2% under 2048 x 1365. The first live run rejected *Icones Farlowianae* plates at 2026 px; the difference is invisible under the effects. No enabled source needs it. Pictures are never enlarged: a 2000-2047 px picture is shown as stored.
 - **NASA:** `~large` is only 1920 px (measured 2026-11-21), below the gate, so an original over 12 MB is rejected rather than replaced (one Ames space-colony painting, 29 MB).
 - **Pacing:** one HTTPS client (`ImageHTTP`, ephemeral session, generic User-Agent, no Low Data Mode downloads, https only with NASA's http links upgraded), 1 s minimum per host and 5 s for the Met's two hosts, one download every 4 s at most, ingest only while fewer than 12 never-shown pictures wait. A provider error backs that provider off 1 / 2 / 5 / 15 / 30 min; the Met's HTML bot wall (`.blocked`) goes straight to 30 min; 401/403/404/410 on one item rejects only that item.
 - **Main-actor rule:** the ledger write for "picture shown" happens on a detached task. Written inline from `showReserved` (main actor, at the Lo-Fi reveal) it cost a 107 ms frame in the simulator perf run with ingest live; ingest also runs at background priority.
@@ -66,7 +66,7 @@ Re-checked by a second pass on branch `image-api-mode`: builds (macOS, visionOS 
 - **Fixes:**
   - Several quick changes of the picture setting ran as unordered detached tasks and could interleave and start two feed loops. Loop starts and stops are now serialized.
   - The Lo-Fi prefetch and reveal could still show a picture staged before "Clear Curated Pictures". They now check the store the picture came from and its clear generation.
-  - Target size 3072 -> 2528 and pictures are not upscaled (D40); Vision compiled out of simulator builds (D38).
+  - Target size 3072 -> 2528 and pictures are never enlarged (D40); Vision compiled out of simulator builds (D38).
 - **Simulator Lo-Fi perf** (`perf-run.sh --seconds 120`, host under load from other apps). An offline run (pool only, no ingest) passed, which isolated the stalls to live ingest:
 
 | Run | Result | Max frame | Frames over 40 ms (whole run) |

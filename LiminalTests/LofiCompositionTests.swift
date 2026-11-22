@@ -252,10 +252,4 @@ struct LofiCompositionTests {
         #expect(earlyAmplitude[.reverse, default: 0] > earlyAmplitude[.replay, default: 0])
         #expect(earlyAmplitude[.replay, default: 0] > earlyAmplitude[.halfSpeed, default: 0])
     }
-
-    @Test func oldTempoOnlySettingsStillDecode() throws {
-        let options = try JSONDecoder().decode(LofiOptions.self, from: Data(#"{"tempo":71}"#.utf8))
-        #expect(options.tempo == 71)
-        #expect(options.scale == nil)
-    }
 }

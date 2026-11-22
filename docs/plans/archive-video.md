@@ -210,9 +210,8 @@ ArchiveStrip: dry fader -12 dB, reverb send 1.0, delay send 0.6, slow pan walk +
 - Level: stem mean RMS -42 dBFS at the default setting (the music's mean is about -25), ceiling -36 dBFS at
   the top of the slider, stem peak at or below -24 dBFS. Fade in 12 s, starting 4 s after the picture
   starts to appear; fade out 10 s, finishing before the picture is gone. The reverb tail outlasts it.
-- Control: `MusicControl.archiveBegin(buffer, rate, level, fadeIn)` and `.archiveEnd(fadeOut)`, applied on
-  the conductor queue with `SoftEnv` and `ParamRamp` like every other strip. Silent clips and
-  "Footage audio" at 0 simply never post.
+- Control: `ArchiveControl.begin(cue)` and `.end(fade:)`, applied by `ArchiveConductor` to `ArchiveVoice`.
+  Silent clips and "Footage audio" at 0 simply never post.
 - Works the same on macOS and visionOS (plain AVAudioEngine nodes, the existing audio session).
 
 ## 5. Optional 3D: a floating screen on visionOS
@@ -257,7 +256,7 @@ Recommendation: **do not ship it in the default experience; build it last, behin
 | Fetch and cache | Mac and simulator launch with the automation flags; poll the log for `📼` lines | 3 clips ready within 3 minutes; relaunch with `-LiminalVideoOffline YES` plays from the cache with no request |
 | Moments in the simulator | `-LiminalVideoForce YES`, `simctl recordVideo` 90 s and screenshots at fade in, peak, fade out, for each `-LiminalVideoLook` | footage visible, fades smooth, no rectangle |
 | Frame pacing | `scripts/perf-run.sh` with and without `-LiminalVideoForce` | no new long frames; the image-change hitch check unchanged |
-| Audio | `scripts/render-music.sh` gains `ARCHIVE=<mp4> ARCHIVE_AT=<s>`; render 180 s with and without, same seed; `scripts/analyze-archive-audio.py` on the difference and on the `ONLY=archive` stem | stem RMS -45...-39 dBFS, stem peak at most -24 dBFS, nothing above 3 kHz over -60 dBFS, fade in at least 8 s to 90 %, mix true peak unchanged within 0.5 dB, every `analyze-calm.py` gate still passes |
+| Audio | an offline render of 180 s with and without the film, same seed (today `scripts/mix-report.sh`, whose `footage` stem is the film bed) | stem RMS -45...-39 dBFS, stem peak at most -24 dBFS, nothing above 3 kHz over -60 dBFS, fade in at least 8 s to 90 %, mix true peak unchanged within 0.5 dB |
 | Fixtures | `scripts/archive-fetch-fixture.sh` downloads one known public-domain Prelinger clip into the scratchpad (one request, cached); one 640 x 480 frame is committed as `tools/ShaderBench/fixtures/video-01.png` | no video binary in the repository |
 
 Not checkable without the device: 90 Hz pacing on Vision Pro hardware and how the levels sit in the
@@ -280,8 +279,8 @@ and leaves the app behaving as before when the feature is off.
    transitions and loud music, `-LiminalVideoForce` and `-LiminalVideoLook`, tests. *Accept:* schedule
    tests; a recorded forced run shows fade in, hold and fade out for each look; nothing in the first 60 s
    of a normal run.
-4. **Audio.** `ArchiveVoice`, `ArchiveAudioDecoder`, the two `MusicControl` cases, the offline render
-   option, `scripts/analyze-archive-audio.py`. *Accept:* the audio row of section 7; a forced run on the
+4. **Audio.** `ArchiveVoice`, `ArchiveAudioDecoder`, the `ArchiveControl` begin and end cases and the
+   offline render option. *Accept:* the audio row of section 7; a forced run on the
    Mac is audibly gentle (the user's ear is the final check).
 5. **Settings, credit, documents, final check.** The settings and the section on both platforms, the
    status line, clear button, `docs/decisions/archive-video.md` complete, README and architecture notes

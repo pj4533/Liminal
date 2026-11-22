@@ -110,7 +110,7 @@
 ### 5. **Audio-Reactive Volumetric Haze** ★★★★
 *The music becomes visible atmosphere*
 
-**Concept:** Spawn subtle fog layer between user and display (~1.5m). Density responds to audio amplitude. Shimmer notes create luminous wisps. Color matched to current image.
+**Concept:** Spawn subtle fog layer between user and display (~1.5m). Density responds to audio amplitude. Drum hits create luminous wisps. Color matched to current image.
 
 **Why it's subtle:** Not a visualizer - just felt atmospheric presence. Like experiencing music as weather.
 
@@ -118,7 +118,7 @@
 - Secondary quad with animated alpha shader
 - Sample dominant colors from image for tinting
 - Connect audio amplitude to density uniform
-- Particle wisps on `shimmerNotePlayed` events
+- Particle wisps on drum hits or dialogue chops
 
 **Performance:** Single extra quad (~1ms)
 
@@ -144,7 +144,7 @@
 ### 7. **Spatial Audio Orbs** ★★★
 *Sound has physical location*
 
-**Concept:** 3 small glowing spheres around user - bass (below/behind), mid (sides), shimmer (above/front). Pulse with audio. Use `SpatialAudioComponent` so actual sound emanates from positions.
+**Concept:** 3 small glowing spheres around user - bass (below/behind), keys and pad (sides), lead (above/front). Pulse with audio. Use `SpatialAudioComponent` so actual sound emanates from positions.
 
 **Why it's subtle:** Tiny, glowing presences. The music surrounds you spatially rather than coming from everywhere.
 

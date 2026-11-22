@@ -189,9 +189,9 @@ struct ImageRepeatPoolTests {
     private func patternJPEG(_ seed: UInt64) -> Data { ImageAPIFixtures.patternJPEG(seed) }
 
     @Test func storedFingerprintsAndAliasesKeepCopiesOut() throws {
-        let (root, defaults) = ImageAPIFixtures.tempRoot()
+        let root = ImageAPIFixtures.tempRoot()
         defer { try? FileManager.default.removeItem(at: root) }
-        let pool = CuratedImagePool(root: root, defaults: defaults)
+        let pool = CuratedImagePool(root: root)
         pool.loadIfNeeded()
         let fp = try #require(ImageFingerprint.of(pattern(seed: 5)))
         let meta = ImageAPIFixtures.metadata()
@@ -200,16 +200,16 @@ struct ImageRepeatPoolTests {
         #expect(pool.duplicate(of: try #require(ImageFingerprint.of(pattern(seed: 6)))) == nil)
         #expect(pool.knownIdentities.contains("~lccn:2017657809"))
         // Read back from disk.
-        let again = CuratedImagePool(root: root, defaults: defaults)
+        let again = CuratedImagePool(root: root)
         again.loadIfNeeded()
         #expect(again.knownIdentities.contains("~lccn:2017657809"))
         #expect(again.duplicate(of: fp)?.id == meta.id)
     }
 
     @Test func evictionForgetsAliasesAndFingerprints() throws {
-        let (root, defaults) = ImageAPIFixtures.tempRoot()
+        let root = ImageAPIFixtures.tempRoot()
         defer { try? FileManager.default.removeItem(at: root) }
-        let pool = CuratedImagePool(root: root, defaults: defaults)
+        let pool = CuratedImagePool(root: root)
         pool.loadIfNeeded()
         let jpeg = patternJPEG(7)
         let size = Int64(jpeg.count)
@@ -227,9 +227,9 @@ struct ImageRepeatPoolTests {
     /// A pool stored before D48: the backfill fingerprints it from its JPEGs and keeps one copy of a
     /// picture stored twice, with the later "last shown".
     @Test func backfillRemovesTheLaterCopyOfAPictureStoredTwice() throws {
-        let (root, defaults) = ImageAPIFixtures.tempRoot()
+        let root = ImageAPIFixtures.tempRoot()
         defer { try? FileManager.default.removeItem(at: root) }
-        let pool = CuratedImagePool(root: root, defaults: defaults)
+        let pool = CuratedImagePool(root: root)
         pool.loadIfNeeded()
         let t = Date()
         let original = ImageAPIFixtures.metadata(createdAt: t)
@@ -272,9 +272,9 @@ struct ImageRepeatPoolTests {
 struct ImageRepeatFeedTests {
     /// The launch frame is the rotation's pick: a never-shown picture, not a random (possibly just seen) one.
     @Test func theFirstFrameIsANewPicture() throws {
-        let (root, defaults) = ImageAPIFixtures.tempRoot()
+        let root = ImageAPIFixtures.tempRoot()
         defer { try? FileManager.default.removeItem(at: root) }
-        let pool = CuratedImagePool(root: root, defaults: defaults)
+        let pool = CuratedImagePool(root: root)
         pool.loadIfNeeded()
         let feed = CuratedImageFeed(collections: .bundled, pool: pool, providers: ImageProviders.all(environment: [:]),
                                     offline: true, filter: nil, seed: 2)
@@ -291,9 +291,9 @@ struct ImageRepeatFeedTests {
 
     /// Showing a picture records it before it is released, so the next pick never takes it as new.
     @Test func aShownPictureIsNotPickedAgainNext() throws {
-        let (root, defaults) = ImageAPIFixtures.tempRoot()
+        let root = ImageAPIFixtures.tempRoot()
         defer { try? FileManager.default.removeItem(at: root) }
-        let pool = CuratedImagePool(root: root, defaults: defaults)
+        let pool = CuratedImagePool(root: root)
         pool.loadIfNeeded()
         let feed = CuratedImageFeed(collections: .bundled, pool: pool, providers: ImageProviders.all(environment: [:]),
                                     offline: true, filter: nil, seed: 4)

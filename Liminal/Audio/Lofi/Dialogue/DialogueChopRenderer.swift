@@ -195,8 +195,7 @@ nonisolated enum DialogueChopRenderer {
             levelling = cached
         } else {
             levelling = out.withUnsafeBufferPointer {
-                LofiDialogueSampler.clipGain($0.baseAddress!, count: full, rate: sr, level: DialogueChopChain.levelTarget,
-                                             peak: DialogueChopChain.rawPeakLimit, maxGain: DialogueChopChain.maxLevelGain)
+                DialogueChopChain.clipGain($0.baseAddress!, count: full, rate: sr)
             }
             if levelling.isFinite, levelling > 0 {
                 levelling *= DialogueChopChain.densityGain(out, gain: levelling, sampleRate: sr)
@@ -385,7 +384,7 @@ nonisolated enum DialogueChopChain {
     static let delayFrames = 2
 
     /// Levelling after the chain (the renderer's `clipGain` call). The K-weighted level of the loud
-    /// syllables is the target; the legacy sampler's 0.132 with a hard 0.44 peak cap left featured lines
+    /// syllables is the target; the first chop sampler's 0.132 with a hard 0.44 peak cap left featured lines
     /// 2 dB under the drums in 1 to 4 kHz, and the cap, not the level, set most gains (spread 2.2 LU).
     /// 0.28 is about 7 dB above that. Peaks are 9 to 12 dB over the level after the compressor, so the
     /// loudest fraction of a percent of samples meets a soft shoulder from `peakKnee` to `peakCeiling`
@@ -399,6 +398,36 @@ nonisolated enum DialogueChopChain {
     static let peakCeiling: Float = 1.0
     static let rawPeakLimit: Float = 2.2
     static let maxLevelGain: Float = 40
+
+    /// The levelling gain for one piece: K-weighted, from the louder of its 80th-percentile 50 ms power
+    /// and its loudest 400 ms, so quiet spaces between words never turn a shout up. Short pieces use their
+    /// actual duration, without zero padding. The gain is capped by `maxGain` and by `peak` over the raw peak.
+    static func clipGain(_ samples: UnsafePointer<Float>, count: Int, rate: Double, level target: Float = levelTarget,
+                         peak ceiling: Float = rawPeakLimit, maxGain: Float = maxLevelGain) -> Float {
+        guard count > 0 else { return 0 }
+        let hop = max(1, Int(rate * 0.05))
+        var weighting = LofiKWeighting(sampleRate: rate)
+        var powers: [Double] = []
+        var peak: Float = 0
+        for start in stride(from: 0, to: count, by: hop) {
+            let end = min(start + hop, count)
+            var power = 0.0
+            for i in start..<end {
+                let weighted = weighting.process(Double(samples[i]))
+                power += weighted * weighted
+                peak = max(peak, abs(samples[i]))
+            }
+            powers.append(power / Double(end - start))
+        }
+        let loud = powers.sorted()[powers.count * 4 / 5]
+        let width = min(8, powers.count)
+        var momentary = 0.0
+        for i in width...powers.count {
+            momentary = max(momentary, powers[(i-width)..<i].reduce(0, +) / Double(width))
+        }
+        let level = Float(sqrt(max(1e-9, loud, momentary)))
+        return min(maxGain, target / level, ceiling / max(0.001, peak))
+    }
 
     /// Peak limiter before the levelling (user direction of 19 November 2026: a peak limiter for a consistent
     /// chop level). Samples more than `maxCrestDB` over the piece's RMS are held down with a 1.5 ms

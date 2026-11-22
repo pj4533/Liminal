@@ -188,7 +188,7 @@ float satBoost = 1.4 + float(saliency) * 0.2;  // 1.4 to 1.6
 
 ### Notes
 - Saliency analysis is async (~50-100ms per image)
-- Map is generated when images arrive in MorphPlayer
+- Map is built when a picture arrives (`DepthAnalyzer`)
 - If no map available, effect gracefully degrades to spatial-only hue shift
 
 ---
@@ -293,7 +293,7 @@ We tried VTFrameProcessor (Apple's ML frame interpolation) but it produced block
 
 ## Effect Controller
 
-**File:** `VisualEffects.swift` → `EffectController`
+**File:** `Visual/EffectController.swift`
 
 Manages the shared `time` value that drives all effects.
 
@@ -319,7 +319,7 @@ Custom `MTKView` subclass that renders all effects in a single GPU pass with fee
 
 | Component | Purpose |
 |-----------|---------|
-| `sourceTexture` | Current image from MorphPlayer |
+| `sourceTexture` | Current picture |
 | `saliencyTexture` | Grayscale saliency map |
 | `feedbackTextures[2]` | Double-buffered for trail effect |
 | `uniformBuffer` | All effect parameters |
@@ -354,8 +354,7 @@ override func draw(_ dirtyRect: NSRect) {
 | `ContentView.swift` | Ken Burns properties, effect parameters, distortion boost logic |
 | `EffectsMetalView.swift` | MTKView with double-buffered feedback, texture management |
 | `EffectsRenderer.metal` | All effects in single fragment shader |
-| `DreamyEffects.metal` | Legacy SwiftUI shader wrappers (unused) |
-| `VisualEffects.swift` | EffectController (time driver), legacy SwiftUI extensions |
+| `EffectController.swift` | EffectController (time driver) |
 | `TimerDrivenCrossfade.swift` | Crossfade progress (macOS); saliency maps come from `DepthAnalyzer` |
 | `DepthAnalyzer.swift` | Vision framework saliency analysis |
 
@@ -395,7 +394,6 @@ struct EffectsUniforms {
 
 - **Ripple burst** - Expanding circle on transitions
 - **Chromatic aberration** - RGB channel separation (have shader in JuceyTV)
-- **Breathing wave** - Shader exists in DreamyEffects.metal (`breathingWave`), not currently used
 
 ---
 

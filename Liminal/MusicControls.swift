@@ -16,10 +16,10 @@ struct MusicControls: View {
             HStack {
                 Text("Tempo")
                 Spacer()
-                Text("\(Int(settings.lofi.safeTempo.rounded())) BPM")
+                Text("\(Int(settings.lofiOptions.safeTempo.rounded())) BPM")
                     .monospacedDigit().foregroundStyle(.secondary)
             }
-            Slider(value: $settings.lofi.tempo, in: LofiOptions.tempos, step: 1) { Text("Tempo") }
+            Slider(value: $settings.tempo, in: LofiOptions.tempos, step: 1) { Text("Tempo") }
                 .labelsHidden().accessibilityLabel("Tempo")
             ScalePicker(selection: settings.scaleSelection)
         }

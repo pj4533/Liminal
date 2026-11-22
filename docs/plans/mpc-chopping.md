@@ -86,7 +86,7 @@ footage piece (8 bars) ── decode ──► film bed cue (posted at its due t
              (+ SoundAnalysis speech windows, + optional transcript at a later block)
              LofiTransportInfo (revision, phrase, timing field, arrangement key)
              ► DialoguePerformer (grammar, cadence memory) ► DialogueChopRenderer
-             ► MusicControl.archiveChops(plan) ► ArchiveVoice incremental sample-time scheduling
+             ► ArchiveControl.chops(plan)    ► ArchiveVoice incremental sample-time scheduling
                                                  ► chop FX ► LofiBus ► master
 
 drum take (64 beats) ► LofiDrumLandmarks ► LofiTimingField ─► LofiScore (bass accents, mid answers)
@@ -131,7 +131,7 @@ nonisolated enum LofiCaptureHooks {
 
 Lock-guarded, never touched on the render thread. Components register taps and reports in their initializers or offline code paths. The harness never needs editing to add a tap.
 
-Options in use: `transcription` (`off` default, `fixture`, `apple`), `dialogue` (`engine` default from wave 2, `legacy`).
+Options in use: `transcription` (`off` default, `fixture`, `apple`).
 
 ### 3.2 Capture manifest v2
 
@@ -301,7 +301,7 @@ nonisolated enum LofiBassVoice: Int, CaseIterable, Sendable { case classic, roun
 
 ```swift
 extension ArchiveVoice { struct ChopPlan: @unchecked Sendable { let token: Int, revision: Int, replaceFrom: Double, chops: [DialogueChop], bedDuck: Bool } }
-enum MusicControl { ... case archiveChops(ArchiveVoice.ChopPlan) }
+enum ArchiveControl { ... case chops(ArchiveVoice.ChopPlan) }
 nonisolated struct LofiTransportInfo: Sendable {   // published through MusicStateBus side channel, not inside MusicState
     let revision: UInt32, takeIndex: Int, phraseAtTakeStart: Int, origin: Double, beatDuration: Double, nextBeatDuration: Double?
     let seed: UInt64, options: LofiOptions, timing: LofiTimingField?

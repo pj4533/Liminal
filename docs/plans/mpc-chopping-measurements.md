@@ -213,7 +213,7 @@ Each change follows the binding user direction of 19 November 2026 (top of the p
 
 ## Live smoke
 
-`open -n …/Liminal.app --args -audio.musicMode lofi -LiminalAutoPlay YES -LiminalVideoOffline YES -LiminalAllowGeneration NO`, 120 s on the Mac speakers. The brief's `log stream` command needs `--level info` to show the app's info lines (`log stream --style compact --level info --predicate 'process == "Liminal" AND subsystem == "com.saygoodnight.Liminal"'`).
+`open -n …/Liminal.app --args -LiminalAutoPlay YES -LiminalVideoOffline YES`, 120 s on the Mac speakers. The brief's `log stream` command needs `--level info` to show the app's info lines (`log stream --style compact --level info --predicate 'process == "Liminal" AND subsystem == "com.saygoodnight.Liminal"'`).
 
 - Master epochs: "estimated -12.9 LUFS … limiter mean 0.05 dB, trim change 0.00 dB" (the first 64 beats, including the start) and "-12.1 LUFS … limiter mean 0.09 dB, trim change 0.00 dB". Both are within 1.5 LU of the `ref` capture's -11.9 LUFS.
 - No "sound started … late" warning (no bed later than its due time), no repeated-stems or late-phrase warning, no dropped chops. Phrase preparation took 1.25 to 3.17 s, the longest being the first phrase of each take.

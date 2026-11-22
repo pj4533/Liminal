@@ -241,7 +241,7 @@ xcodebuild -scheme Liminal -destination 'platform=macOS' build
 xcodebuild test -scheme Liminal -destination 'platform=macOS' \
   -only-testing:LiminalTests/LofiTests -only-testing:LiminalTests/LofiCompositionTests \
   -only-testing:LiminalTests/LofiGuitarPhrasingTests -only-testing:LiminalTests/LofiProductionTests \
-  -only-testing:LiminalTests/ArchiveVoiceRenderTests -only-testing:LiminalTests/LofiDialogueSamplerTests \
+  -only-testing:LiminalTests/ArchiveVoiceRenderTests -only-testing:LiminalTests/DialogueClipGainTests \
   -only-testing:LiminalTests/ArchiveCachePolicyTests \
   -only-testing:LiminalTests/LofiRhythmTests -only-testing:LiminalTests/LofiArrangementTests \
   -only-testing:LiminalTests/LofiStemChainTests

@@ -53,7 +53,7 @@ Expected effect on the headset after the next launch: about 0.94 GB of stale dow
 - Cache: 1 GB cap, up to 12 clips, 3 fast then one per 90 s, turnover every third moment, LRU, never the clip on
   screen (A4); a cold cache skips candidates over 40 MB (A24).
 - Scheduling: seeded director, first moment 90-150 s after Play, 30-80 s long, gaps 2.5-6 min, waits for a
-  transition, an image 8+ s old and calm music (A12).
+  transition and an image 8+ s old (A12).
 - Audio chain (first version; the shipped sound is the beat-locked bed of A28-A29): slowed 0.6-0.85x, mono, normalised to -26 dBFS, HPF 220 Hz, 2 x LPF 2.4 kHz, strip at -12 dB dry
   with full reverb send and 0.6 delay send, 4 s after the picture, 12 s fade in; about -42 dBFS, 19 dB under the
   music, limiter idle (A14-A18).
@@ -230,16 +230,13 @@ Expected effect on the headset after the next launch: about 0.94 GB of stale dow
   0.25 = -6 dB. A change during a moment is applied at once (`archiveGain`), 0 fades it out over 2 s.
 
 ### A18. Verified offline (build 2)
-- `render-music.sh` gained `ARCHIVE=<mp4>` (+ `ARCHIVE_AT/LEN/RATE/START/LEVEL`), `ONLY=archive`,
-  `MUTE=archive`; `MusicRenderTests` builds a moment like the app's (picture fade 11 s in, 13 s out), decodes
-  with the app's decoder and posts the cue at render time (`renderOffline(onStep:)`), writing
-  `<label>.archive.json`. `scripts/analyze-archive-audio.py` reads the mix, the stem, the bypassed twin, the
-  base render without the archive and the pad stem.
+- An offline render built a moment like the app's (picture fade 11 s in, 13 s out), decoded with the app's
+  decoder and posted the cue at render time (`renderOffline(onStep:)`). The render tooling of that build has
+  since been replaced by `scripts/check-lofi.sh` and `scripts/mix-report.sh`.
 - Render: 300 s, seed 1, `NewsMaga1957` (a 1957 newsreel with narration and music), picture 90-165 s, sound
   94-162 s, rate 0.72. Results:
-  - stem over the hold -42.0 dBFS RMS (loudest second -41.4), true peak -26.5 dBFS; pad stem -23.3 dBFS and
-    whole mix -22.6 dBFS over the same window: the film is 18.7 dB under the pad, 19.4 dB under the mix.
-    The mix RMS over the moment rises 0.04 dB.
+  - stem over the hold -42.0 dBFS RMS (loudest second -41.4), true peak -26.5 dBFS; the whole mix -22.6 dBFS
+    over the same window: the film is 19.4 dB under the mix. The mix RMS over the moment rises 0.04 dB.
   - spectrum: centroid 502 Hz, 95 % roll-off 1.1 kHz, share above 2 kHz -25 dB, above 3 kHz -44 dB, above
     5 kHz -96 dB; the loudest 50 ms above 3 kHz is -70.9 dBFS (gate -60). The mix's power above 3 kHz
     over the moment rises 0.8 dB, above 5 kHz 0.0 dB.
@@ -247,11 +244,8 @@ Expected effect on the headset after the next launch: about 0.94 GB of stale dow
     -20 dB 9.2 s and -40 dB 13.8 s after the fade starts (picture fade out 13 s).
   - limiter: the bypassed twin peaks at -8.3 dBFS, and equals the limited mix within 2.6e-4 once aligned (the
     bypass removes the limiter's 480-sample look-ahead delay): idle. Mix true peak -8.3 dBFS with and without
-    the archive.
-  - `check-music.py --pass 2`: the same gates pass with and without the archive (55); the one failure,
-    `chroma_novelty` 0.465 (max 0.45), is in both (seed 1 at 300 s). Calm metrics move by at most 0.6 dB or
-    2 attacks per minute; offline render speed 7.2x -> 7.0x real time.
-  - top of the slider (`ARCHIVE_LEVEL=1`): -36.0 dBFS over the hold, true peak -20.4 dBFS.
+    the archive. Offline render speed 7.2x -> 7.0x real time.
+  - top of the slider (level 1): -36.0 dBFS over the hold, true peak -20.4 dBFS.
 - Demo: `audio-demo.m4a`, 90 s (84-174 s of the render): music alone, the film's sound coming in from 10 s,
   holding, fading out from 68 s, tail to 78 s.
 

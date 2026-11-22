@@ -2,7 +2,7 @@
 //  ImagePipelineTests.swift
 //  LiminalTests
 //
-//  The drum-timed picture reveals, ImageStore save/clear/epoch behaviour, and the border
+//  The drum-timed picture reveals, ImageStore save/clear behaviour, and the border
 //  trimmer / saturation meter.
 //
 
@@ -97,14 +97,9 @@ struct LofiImageRevealTests {
 
 struct ImageStoreTests {
 
-    private static let epochKey = "test.epoch"
-
-    private func makeStore() -> (ImageStore, URL, UserDefaults) {
+    private func makeStore() -> (ImageStore, URL) {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("LiminalStoreTests-\(UUID().uuidString)")
-        let suite = "LiminalStoreTests-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        return (ImageStore(root: root, defaults: defaults, directoryName: "TestStore", epochKey: Self.epochKey, epoch: 2),
-                root, defaults)
+        return (ImageStore(root: root, directoryName: "TestStore"), root)
     }
 
     private func jpeg() -> Data {
@@ -121,7 +116,7 @@ struct ImageStoreTests {
     }
 
     @Test func saveListAndLoad() throws {
-        let (store, root, _) = makeStore()
+        let (store, root) = makeStore()
         defer { try? FileManager.default.removeItem(at: root) }
         let md = metadata()
         try store.save(jpeg: jpeg(), metadata: md, clearGeneration: store.clearGeneration)
@@ -136,7 +131,7 @@ struct ImageStoreTests {
     }
 
     @Test func clearEverythingRemovesPicturesAndSidecars() throws {
-        let (store, root, _) = makeStore()
+        let (store, root) = makeStore()
         defer { try? FileManager.default.removeItem(at: root) }
         let fm = FileManager.default
         try store.save(jpeg: jpeg(), metadata: metadata(), clearGeneration: store.clearGeneration)
@@ -150,7 +145,7 @@ struct ImageStoreTests {
     }
 
     @Test func staleClearGenerationIsRefused() throws {
-        let (store, root, _) = makeStore()
+        let (store, root) = makeStore()
         defer { try? FileManager.default.removeItem(at: root) }
         let captured = store.clearGeneration
         store.clearEverything()
@@ -158,22 +153,6 @@ struct ImageStoreTests {
             try store.save(jpeg: jpeg(), metadata: metadata(), clearGeneration: captured)
         }
         #expect(store.entries().isEmpty)
-    }
-
-    @Test func epochBumpPurges() throws {
-        let (store, root, defaults) = makeStore()
-        defer { try? FileManager.default.removeItem(at: root) }
-        try store.save(jpeg: jpeg(), metadata: metadata(), clearGeneration: store.clearGeneration)
-
-        // Missing epoch (an old install): everything goes.
-        store.migrateIfNeeded()
-        #expect(store.entries().isEmpty)
-        #expect(defaults.integer(forKey: Self.epochKey) == 2)
-
-        // Same epoch: nothing is touched.
-        try store.save(jpeg: jpeg(), metadata: metadata(), clearGeneration: store.clearGeneration)
-        store.migrateIfNeeded()
-        #expect(store.entries().count == 1)
     }
 }
 

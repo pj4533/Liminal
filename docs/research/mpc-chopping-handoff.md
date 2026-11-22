@@ -495,6 +495,6 @@ Additional craft access exclusions: Sound On Sound's Premier interview and sampl
 
 ## Companion evidence and handoff boundary
 
-Permanent working evidence is available at [MPC practice evidence](liminal-evidence/2026-11-19-mpc-practice-evidence.md) and [local speech/audio evidence](liminal-evidence/2026-11-19-local-audio-evidence.md). The main handoff includes their actionable findings and annotated sources so a single downloaded Markdown file remains usable without those siblings. The companion reports retain more intermediate reasoning; implementation decisions above supersede any different ordering proposed there.
+The working evidence files (MPC practice evidence and local speech/audio evidence, 2026-11-19) were not kept in the repository. The main handoff includes their actionable findings and annotated sources so a single downloaded Markdown file remains usable without those siblings. The companion reports retain more intermediate reasoning; implementation decisions above supersede any different ordering proposed there.
 
 The coding session should finish the acoustic bank/grammar increment and its acceptance comparisons before expanding semantic or DSP complexity. Its deliverable is a working extension to this engine with explicit fallback and device evidence, preserving the existing controls and the drummer's performance. This research handoff changes no application code, assets or deployed runtime.

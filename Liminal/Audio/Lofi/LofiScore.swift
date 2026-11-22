@@ -1,6 +1,6 @@
 import Foundation
 
-nonisolated struct LofiOptions: Codable, Equatable, Sendable {
+nonisolated struct LofiOptions: Equatable, Sendable {
     var tempo = 69.0
     var scale: ScaleType? = nil
 

@@ -221,8 +221,7 @@ The music factors keep their form and are applied to the new base values:
 Because the budget runs after the music factors, loud music can raise the water but can never push the
 combined warp past `B`; the radial and the noise shrink to make room. `Caps.logSphereBase`,
 `Caps.fractalNoiseBase`, `Caps.distortionBase` become the absolute caps above; `Caps.feedbackMixLow/High`
-become relative to the base. `AVCouplingTests` and `scripts/av-coupling-check.sh` assert the old caps and
-need the new ones.
+become relative to the base. `AVCouplingTests` assert the old caps and need the new ones.
 
 ## 6. Shader edits (three lines, `EffectsRenderer.metal`)
 

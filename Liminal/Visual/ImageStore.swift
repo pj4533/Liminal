@@ -8,8 +8,6 @@
 //        <uuid>.jpg             the picture
 //        <uuid>.json            ImageMetadata sidecar
 //
-//  Each store has its own epoch key: a stored epoch below `epoch` purges the folder at launch.
-//
 //  ARCHITECTURE NOTE: Not an actor and not MainActor (the 90fps visionOS render
 //  loop starves MainActor). A lock guards the in-memory counters; FileManager
 //  is thread-safe.
@@ -47,10 +45,6 @@ nonisolated final class ImageStore: @unchecked Sendable {
 
     let root: URL                     // .../Liminal
     let directory: URL                // .../Liminal/<directoryName>
-    private let defaults: UserDefaults
-    /// Epoch bookkeeping of this store.
-    let epochKey: String
-    let epoch: Int
     private let lock = OSAllocatedUnfairLock()
     nonisolated(unsafe) private var _clearGeneration: UInt64 = 0
 
@@ -59,13 +53,10 @@ nonisolated final class ImageStore: @unchecked Sendable {
         return appSupport.appendingPathComponent("Liminal", isDirectory: true)
     }
 
-    /// Injectable for tests (temporary directory, private defaults suite).
-    init(root: URL, defaults: UserDefaults, directoryName: String, epochKey: String, epoch: Int) {
+    /// Injectable for tests (temporary directory).
+    init(root: URL, directoryName: String) {
         self.root = root
         self.directory = root.appendingPathComponent(directoryName, isDirectory: true)
-        self.defaults = defaults
-        self.epochKey = epochKey
-        self.epoch = epoch
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     }
 
@@ -75,18 +66,6 @@ nonisolated final class ImageStore: @unchecked Sendable {
     /// picture that was in flight when the user tapped Clear never reappears.
     var clearGeneration: UInt64 {
         lock.withLock { _clearGeneration }
-    }
-
-    // MARK: - Migration
-
-    /// Runs once at launch before anything is loaded. A lower or missing stored epoch
-    /// deletes this store's directory.
-    func migrateIfNeeded() {
-        let stored = defaults.integer(forKey: epochKey)   // 0 when missing
-        guard stored < epoch else { return }
-        LMLog.visual.info("🗄️ [ImageStore] \(self.directory.lastPathComponent, privacy: .public) epoch \(stored) < \(self.epoch): purging its images")
-        removeAllFiles()
-        defaults.set(epoch, forKey: epochKey)
     }
 
     // MARK: - Listing and loading

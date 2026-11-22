@@ -154,7 +154,7 @@ picture shown.
   the pool picked by `nextDisplay`, else nothing (the standby art covers the first Lo-Fi reveal).
 - `reserveForFill(excluding:)` and `showReserved` hand the prefetched picture to the Lo-Fi transport at the drum
   boundary.
-- Pictures are never upscaled; a picture is shown at the size it was stored.
+- Pictures are never enlarged; a picture is shown at the size it was stored.
 
 ## 5. The pool on disk
 

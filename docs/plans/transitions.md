@@ -228,7 +228,7 @@ hasDepth:)` is called once when a crossfade starts.
 ### 7.2 Duration
 
 `duration = lerp(range, seed2) * (1.15 - 0.30 * energy)`, limited to 1.5...4.5 s and to at most 20 % of
-the 30 s hold (at most 6 s). Longer when the music is calm. The platform's
+the 30 s hold (at most 6 s). Longer when the music's energy is low. The platform's
 crossfade timer uses `spec.duration` instead of the constant.
 
 ### 7.3 Music coupling

@@ -19,8 +19,6 @@ nonisolated final class ArchiveVoice {
         /// Seeded by the footage piece so successive cues vary in how clearly they emerge.
         var claritySeed: Float = 0.75
         var activity: [Float] = []
-        /// Legacy sampler hits (absolute transport seconds), converted to the same scheduled-chop list as plans.
-        var chops: [LofiDialogueSampler.Hit] = []
         /// The footage service's cue token. Plans with this token belong to this cue. Nil means a new one.
         var token: Int? = nil
         /// The transport when the bed was posted: places the theme return's bed dip without any
@@ -490,8 +488,6 @@ nonisolated final class ArchiveVoice {
 
     // MARK: Chop timeline (plan 6.3)
 
-    /// A new bed adopts its token: older cues' unqueued chops are dropped (the old bed is fading out),
-    /// and legacy sampler hits join the same scheduled list as plan chops.
     /// Makes `requested` (or a fresh token) the current cue's: only its chops are queued from now on,
     /// and older cues' unqueued chops, revisions and cancellations go.
     private func adoptChopToken(_ requested: Int?) -> Int {
@@ -505,14 +501,9 @@ nonisolated final class ArchiveVoice {
 
     private func beginChops(for cue: Cue, now: Double, seconds: Double) {
         lastTime = now
-        let token = adoptChopToken(cue.token)
+        _ = adoptChopToken(cue.token)
         chopsUntil = now + seconds + Self.chopTailSeconds
         if let info = cue.transport { noteReturnStarts(info) }
-        if !cue.chops.isEmpty, !cancelledTokens.contains(token) {
-            planRevisions[token] = max(planRevisions[token] ?? 0, 0)
-            store(cue.chops.map { ScheduledChop(token: token, start: $0.time, buffer: $0.buffer, duck: true) })
-            LMLog.audio.info("Lo-Fi film sampler stored \(cue.chops.count) hits for this picture")
-        }
         blendSoundtrack(at: now)
         updateChopGain(at: now)
     }

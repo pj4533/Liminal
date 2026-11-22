@@ -275,11 +275,6 @@ nonisolated enum DebugLaunchOptions {
         return (v[0], v[1])
     }()
 
-    /// True when any picture flag is set.
-    static var anyImageFlag: Bool {
-        imageProviders != nil || imageAPIOffline || imageAPISeed != nil || imageAPIFresh
-    }
-
     /// True when any shell harness flag is set (they are automation flags too).
     static var anyShellFlag: Bool {
         defaults.object(forKey: "LiminalShellYaw") != nil || defaults.object(forKey: "LiminalShellPitch") != nil
@@ -299,7 +294,8 @@ nonisolated enum DebugLaunchOptions {
             || videoOffline || videoOff || controlsScroll != nil || controlsWidth != nil || videoOffAt != nil
             || dialogueTranscription != nil
             || dropColour != nil || dropFinisher != nil || dropLead != nil || dropOff
-            || anyImageFlag || recordAt != nil || recordSize != nil || recordH264 || recordTrace
+            || imageProviders != nil || imageAPIOffline || imageAPISeed != nil || imageAPIFresh
+            || recordAt != nil || recordSize != nil || recordH264 || recordTrace
     }
 #else
     static let isAutomated = false

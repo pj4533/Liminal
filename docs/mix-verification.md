@@ -230,14 +230,13 @@ Plots and matrices use the order drums, bass, mids, lead, space, dialogue, bed, 
 
 | Option | Values | Effect |
 |---|---|---|
-| `dialogue` | `engine` (default), `legacy` | `legacy` keeps the old chop sampler, for A/B captures against the new performer |
 | `transcription` | `off` (default), `fixture`, `apple` | `apple` uses an installed on-device model only (a capture never downloads one); `fixture` uses the test provider; `off` is the acoustic path |
 | `masterInputGainDb`, `masterGlueThresholdDb`, `masterGlueRatio`, `masterClipThresholdDb` | numbers | override the finisher drive while choosing the master settings |
 
-Example, a legacy chop capture:
+Example, a capture with on-device transcription:
 
 ```sh
-DD=$S/dd-docs scripts/mix-report.sh --out $S/docs-legacy --private-drums --film-reel --bars 32 --seed 1042 --bpm 70 --hook dialogue=legacy --case ref
+DD=$S/dd-docs scripts/mix-report.sh --out $S/docs-apple --private-drums --film-reel --bars 32 --seed 1042 --bpm 70 --hook transcription=apple --case ref
 ```
 
 The `--case ref` is needed because the directory is not named after a case; without it the report guesses `ref` for a capture with footage and `nofilm` without.

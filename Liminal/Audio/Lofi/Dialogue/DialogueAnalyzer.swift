@@ -24,7 +24,7 @@ nonisolated struct DialogueFeatures: Sendable {
     /// Mean square per hop in the three speech bands (corners 145, 820, 3900 Hz).
     let bands: [SIMD3<Float>]
     let floor: SIMD3<Float>
-    /// Floor-subtracted speech energy, as `LofiDialogueSampler` computes it.
+    /// Floor-subtracted speech energy.
     let energy: [Float]
     let gate: Float
     /// 300 to 3000 Hz intensity contour in dBFS, lightly smoothed.

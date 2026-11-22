@@ -14,14 +14,12 @@ final class SettingsService: ObservableObject {
 
     private enum Keys {
         static let scale = "audio.scale"
-        static let lofi = "audio.lofi"
+        static let tempo = "audio.tempo"
         static let scaleAuto = "audio.scaleAuto"
         static let syncVisualsToMusic = "visual.syncToMusic"
         static let effectIntensity = "visual.effectIntensity"
         static let depthStrength = "visual.depthStrength"
         static let archiveEnabled = "archive.enabled"
-        /// Removed in A27 ("Footage amount" Rare / Normal / Often): deleted on launch.
-        static let legacyArchiveAmount = "archive.amount"
         static let archiveAudioLevel = "archive.audioLevel"
         static let dialogueTranscription = DialogueTranscriptionMode.defaultsKey
     }
@@ -46,8 +44,9 @@ final class SettingsService: ObservableObject {
         didSet { defaults.set(currentScale.rawValue, forKey: Keys.scale) }
     }
 
-    @Published var lofi: LofiOptions {
-        didSet { defaults.set(try? JSONEncoder().encode(lofi), forKey: Keys.lofi) }
+    /// Beats per minute, within `LofiOptions.tempos`.
+    @Published var tempo: Double {
+        didSet { defaults.set(tempo, forKey: Keys.tempo) }
     }
 
     /// true = "Auto": the transport chooses the scale; false = `currentScale` is pinned.
@@ -59,7 +58,7 @@ final class SettingsService: ObservableObject {
     var pinnedScale: ScaleType? { scaleAuto ? nil : currentScale }
 
     /// What the engine plays: the saved tempo and the pinned scale.
-    var lofiOptions: LofiOptions { LofiOptions(tempo: lofi.tempo, scale: pinnedScale) }
+    var lofiOptions: LofiOptions { LofiOptions(tempo: tempo, scale: pinnedScale) }
 
     /// Picker binding: nil = "Auto", otherwise the pinned scale.
     var scaleSelection: Binding<ScaleType?> {
@@ -115,7 +114,7 @@ final class SettingsService: ObservableObject {
         let savedScaleName = defaults.string(forKey: Keys.scale) ?? Self.defaultScale.rawValue
         self.currentScale = ScaleType.allCases.first { $0.rawValue == savedScaleName } ?? Self.defaultScale
 
-        self.lofi = defaults.data(forKey: Keys.lofi).flatMap { try? JSONDecoder().decode(LofiOptions.self, from: $0) } ?? LofiOptions()
+        self.tempo = defaults.object(forKey: Keys.tempo) as? Double ?? LofiOptions().tempo
         self.scaleAuto = defaults.object(forKey: Keys.scaleAuto) as? Bool ?? Self.defaultScaleAuto
 
         self.syncVisualsToMusic = defaults.object(forKey: Keys.syncVisualsToMusic) as? Bool ?? Self.defaultSyncVisualsToMusic
@@ -124,21 +123,19 @@ final class SettingsService: ObservableObject {
         self.depthStrength = min(max(defaults.object(forKey: Keys.depthStrength) as? Float ?? Self.defaultDepthStrength, 0), 1)
 
         self.archiveEnabled = defaults.object(forKey: Keys.archiveEnabled) as? Bool ?? Self.defaultArchiveEnabled
-        // "Footage amount" no longer exists (footage is always present while on).
-        defaults.removeObject(forKey: Keys.legacyArchiveAmount)
         self.archiveAudioLevel = min(max(defaults.object(forKey: Keys.archiveAudioLevel) as? Float ?? Self.defaultArchiveAudioLevel, 0), 1)
 
         self.dialogueTranscription = DialogueTranscriptionMode(rawValue: defaults.string(forKey: Keys.dialogueTranscription) ?? "")
             ?? DialogueTranscriptionMode.defaultMode
 
-        LMLog.state.info("Settings loaded: tempo=\(self.lofi.tempo, format: .fixed(precision: 0)) scale=\(self.scaleAuto ? "auto" : self.currentScale.rawValue, privacy: .public) sync=\(self.syncVisualsToMusic) intensity=\(self.effectIntensity, format: .fixed(precision: 2)) depth=\(self.depthStrength, format: .fixed(precision: 2)) footage=\(self.archiveEnabled) footageAudio=\(self.archiveAudioLevel, format: .fixed(precision: 2)) dialogue=\(self.dialogueTranscription.rawValue, privacy: .public)")
+        LMLog.state.info("Settings loaded: tempo=\(self.tempo, format: .fixed(precision: 0)) scale=\(self.scaleAuto ? "auto" : self.currentScale.rawValue, privacy: .public) sync=\(self.syncVisualsToMusic) intensity=\(self.effectIntensity, format: .fixed(precision: 2)) depth=\(self.depthStrength, format: .fixed(precision: 2)) footage=\(self.archiveEnabled) footageAudio=\(self.archiveAudioLevel, format: .fixed(precision: 2)) dialogue=\(self.dialogueTranscription.rawValue, privacy: .public)")
     }
 
     // MARK: - Reset
 
     func resetToDefaults() {
         currentScale = Self.defaultScale
-        lofi = LofiOptions()
+        tempo = LofiOptions().tempo
         scaleAuto = Self.defaultScaleAuto
         syncVisualsToMusic = Self.defaultSyncVisualsToMusic
         effectIntensity = Self.defaultEffectIntensity

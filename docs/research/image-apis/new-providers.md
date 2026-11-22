@@ -67,7 +67,7 @@ Not usable without a key or a browser: NYPL, NARA, Smithsonian (DEMO_KEY), Harva
   | Widths listed in `info.json` `sizes` (2949 tested) | 200 |
   | `full/2000,`, `full/2528,`, `full/full`, `full/max`, `full/!2528,2528`, `full/pct:50` and tiles | 403 |
 
-  `full/3000,` serves the image at 3000 px on the long side, or at native size when the image is smaller. It never upscales, and portraits are fitted by height:
+  `full/3000,` serves the image at 3000 px on the long side, or at native size when the image is smaller. It never enlarges, and portraits are fitted by height:
 
   | `image_id` | Native | Served by `full/3000,` |
   |---|---|---|

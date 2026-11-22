@@ -84,10 +84,8 @@ enum ImageAPIFixtures {
 
     static func patternJPEG(_ seed: UInt64) -> Data { ImageStore.encodeJPEG(pattern(seed: seed), quality: 0.8)! }
 
-    static func tempRoot() -> (URL, UserDefaults) {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("ImageAPITests-\(UUID().uuidString)")
-        let defaults = UserDefaults(suiteName: "ImageAPITests-\(UUID().uuidString)")!
-        return (root, defaults)
+    static func tempRoot() -> URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("ImageAPITests-\(UUID().uuidString)")
     }
 }
 
@@ -648,32 +646,28 @@ struct ImageOpennessTests {
 // MARK: - Pool
 
 struct CuratedImagePoolTests {
-    /// The real pool and a -LiminalImageAPIFresh verify pool live in their own folders with their own
-    /// epoch keys: purging one leaves the other.
-    @Test func poolsKeepSeparateFoldersAndEpochs() throws {
-        let (root, defaults) = ImageAPIFixtures.tempRoot()
+    /// The real pool and a -LiminalImageAPIFresh verify pool live in their own folders: clearing one
+    /// leaves the other.
+    @Test func poolsKeepSeparateFolders() throws {
+        let root = ImageAPIFixtures.tempRoot()
         defer { try? FileManager.default.removeItem(at: root) }
-        let pool = CuratedImagePool(root: root, defaults: defaults)
-        let verify = CuratedImagePool(root: root, defaults: defaults, directoryName: CuratedImagePool.verifyDirectoryName,
-                                      epochKey: CuratedImagePool.epochKey + ".verify")
+        let pool = CuratedImagePool(root: root)
+        let verify = CuratedImagePool(root: root, directoryName: CuratedImagePool.verifyDirectoryName)
         #expect(pool.store.directory.lastPathComponent == CuratedImagePool.directoryName)
         #expect(pool.store.directory != verify.store.directory)
         pool.loadIfNeeded()
         verify.loadIfNeeded()
         try pool.add(jpeg: ImageAPIFixtures.jpeg, metadata: ImageAPIFixtures.metadata(), budget: 1 << 40)
         try verify.add(jpeg: ImageAPIFixtures.jpeg, metadata: ImageAPIFixtures.metadata(), budget: 1 << 40)
-        // A lower stored epoch purges that pool's folder only.
-        defaults.set(0, forKey: CuratedImagePool.epochKey)
-        pool.store.migrateIfNeeded()
+        pool.store.clearEverything()
         #expect(pool.store.entries().isEmpty)
         #expect(verify.store.entries().count == 1)
-        #expect(defaults.integer(forKey: CuratedImagePool.epochKey) == CuratedImagePool.epoch)
     }
 
     @Test func sidecarRoundTripWithCreditAndOldSidecarsDecode() throws {
-        let (root, defaults) = ImageAPIFixtures.tempRoot()
+        let root = ImageAPIFixtures.tempRoot()
         defer { try? FileManager.default.removeItem(at: root) }
-        let pool = CuratedImagePool(root: root, defaults: defaults)
+        let pool = CuratedImagePool(root: root)
         pool.loadIfNeeded()
         let meta = ImageAPIFixtures.metadata()
         try pool.add(jpeg: ImageAPIFixtures.jpeg, metadata: meta, budget: 1 << 40)
@@ -681,7 +675,7 @@ struct CuratedImagePoolTests {
         #expect(entry.metadata?.source == meta.source)
         #expect(entry.metadata?.openness == meta.openness)
         // A second pool instance reads it back from disk with its ledger record.
-        let again = CuratedImagePool(root: root, defaults: defaults)
+        let again = CuratedImagePool(root: root)
         again.loadIfNeeded()
         #expect(again.count == 1)
         #expect(again.seenKeys.contains(meta.source!.candidateKey))
@@ -712,9 +706,9 @@ struct CuratedImagePoolTests {
     }
 
     @Test func evictionOnlyOverBudgetLeastRecentlyShownFirst() throws {
-        let (root, defaults) = ImageAPIFixtures.tempRoot()
+        let root = ImageAPIFixtures.tempRoot()
         defer { try? FileManager.default.removeItem(at: root) }
-        let pool = CuratedImagePool(root: root, defaults: defaults)
+        let pool = CuratedImagePool(root: root)
         pool.loadIfNeeded()
         let size = Int64(ImageAPIFixtures.jpeg.count)
         var ids: [UUID] = []
@@ -736,9 +730,9 @@ struct CuratedImagePoolTests {
     }
 
     @Test func clearRemovesPicturesAndLedger() throws {
-        let (root, defaults) = ImageAPIFixtures.tempRoot()
+        let root = ImageAPIFixtures.tempRoot()
         defer { try? FileManager.default.removeItem(at: root) }
-        let pool = CuratedImagePool(root: root, defaults: defaults)
+        let pool = CuratedImagePool(root: root)
         pool.loadIfNeeded()
         try pool.add(jpeg: ImageAPIFixtures.jpeg, metadata: ImageAPIFixtures.metadata(), budget: 1 << 40)
         pool.recordRejected("loc:x", reason: "test")
@@ -748,9 +742,9 @@ struct CuratedImagePoolTests {
 
     /// A picture whose ingest began before Clear is refused, and the cleared ledger stays cleared on disk.
     @Test func pictureInFlightDuringClearIsRefused() throws {
-        let (root, defaults) = ImageAPIFixtures.tempRoot()
+        let root = ImageAPIFixtures.tempRoot()
         defer { try? FileManager.default.removeItem(at: root) }
-        let pool = CuratedImagePool(root: root, defaults: defaults)
+        let pool = CuratedImagePool(root: root)
         pool.loadIfNeeded()
         pool.recordRejected("loc:before", reason: "test")
         let generation = pool.store.clearGeneration
@@ -761,7 +755,7 @@ struct CuratedImagePoolTests {
         }
         #expect(pool.count == 0 && pool.store.entries().isEmpty)
         pool.recordRejected("loc:after", reason: "test")
-        let again = CuratedImagePool(root: root, defaults: defaults)
+        let again = CuratedImagePool(root: root)
         again.loadIfNeeded()
         #expect(again.seenKeys == ["loc:after"])
     }
@@ -772,9 +766,9 @@ struct CuratedImagePoolTests {
 struct CuratedImageFeedTests {
     /// A picture picked for display but never shown is not held back forever.
     @Test func droppedReservationsExpire() throws {
-        let (root, defaults) = ImageAPIFixtures.tempRoot()
+        let root = ImageAPIFixtures.tempRoot()
         defer { try? FileManager.default.removeItem(at: root) }
-        let pool = CuratedImagePool(root: root, defaults: defaults)
+        let pool = CuratedImagePool(root: root)
         pool.loadIfNeeded()
         let feed = CuratedImageFeed(collections: .bundled, pool: pool, providers: ImageProviders.all(environment: [:]),
                                     offline: true, filter: nil, seed: 1)
@@ -793,8 +787,8 @@ struct CuratedImageFeedTests {
 @MainActor
 struct ImageQueueTests {
     private func makeQueue() -> (ImageQueue, CuratedImagePool, URL) {
-        let (root, defaults) = ImageAPIFixtures.tempRoot()
-        let pool = CuratedImagePool(root: root, defaults: defaults)
+        let root = ImageAPIFixtures.tempRoot()
+        let pool = CuratedImagePool(root: root)
         let feed = CuratedImageFeed(collections: .bundled, pool: pool, providers: ImageProviders.all(environment: [:]),
                                     offline: true, filter: nil, seed: 1)
         return (ImageQueue(feed: feed), pool, root)

@@ -191,11 +191,11 @@ struct LofiLiveBusTests {
             let film = try noise(format, seconds: 4, amplitude: 0.1, seed: 5)
             let line = try noise(format, seconds: 0.6, amplitude: 0.1, seed: 6)
             let gain = ArchiveAudioCuePlan.gain(level: level) ?? 0
-            let cue = ArchiveVoice.Cue(buffer: film, gain: gain, fadeIn: 0.1, label: "control",
-                chops: [1.0, 2.2].map { .init(articulation: .phrase, time: $0, source: 0..<Int(line.frameLength), speed: 1, buffer: line) })
+            let cue = ArchiveVoice.Cue(buffer: film, gain: gain, fadeIn: 0.1, label: "control", token: 1)
+            let plan = ArchiveVoice.ChopPlan(token: 1, revision: 0, chops: [1.0, 2.2].map { playing(line, at: $0) })
             var begun = false
             let x = try render(engine, seconds: 3.2, beat: 0.8, taps: [engine.archiveMix.dryBus, engine.archive.chopOutput]) { t in
-                if !begun, t >= 0.2 { begun = true; engine.post(.begin(cue)) }
+                if !begun, t >= 0.2 { begun = true; engine.post(.begin(cue)); engine.post(.chops(plan)) }
             }
             bed.append(rmsDB(x[0], 0.6, 3.2, rate: rate))
             chops.append(rmsDB(x[1], 0.6, 3.2, rate: rate))
@@ -209,6 +209,14 @@ struct LofiLiveBusTests {
     }
 
     // MARK: Music ducking (plan 8.5)
+
+    /// `buffer` as a featured chop starting at `start` (transport seconds).
+    private func playing(_ buffer: AVAudioPCMBuffer, at start: Double) -> DialogueChop {
+        let event = DialogueEvent(padID: 0, role: .head, block: 0, slot: 0, accentTime: start, startTime: start,
+                                  duration: Double(buffer.frameLength) / buffer.format.sampleRate, gainDB: 0,
+                                  protected: false, chokeAt: nil, text: nil, transform: .native, padKey: 1, snareLanded: false)
+        return DialogueChop(event: event, buffer: buffer)
+    }
 
     private func chop(_ start: Double, seconds: Double, role: DialoguePad.Role, format: AVAudioFormat) throws -> DialogueChop {
         let quiet = try buffer(format, seconds: seconds) { _, _ in 0 }
@@ -344,12 +352,12 @@ struct LofiLiveBusTests {
             let probe = try buffer(format, seconds: 0.4) { _, t in
                 0.2 * Float(sin(2 * .pi * hz * t)) * Float(min(1, min(t, 0.4 - t) / 0.01))
             }
-            let cue = ArchiveVoice.Cue(buffer: film, gain: 1, fadeIn: 0.1, label: "probe",
-                chops: [.init(articulation: .phrase, time: 0.6, source: 0..<Int(probe.frameLength), speed: 1, buffer: probe)])
+            let cue = ArchiveVoice.Cue(buffer: film, gain: 1, fadeIn: 0.1, label: "probe", token: 1)
+            let plan = ArchiveVoice.ChopPlan(token: 1, revision: 0, chops: [playing(probe, at: 0.6)])
             var begun = false
             let archive = engine.archive
             let x = try render(engine, seconds: 3.4, beat: 0.8, taps: [archive.chopDry, archive.chopEchoReturn, archive.chopRoomReturn]) { t in
-                if !begun, t >= 0.2 { begun = true; engine.post(.begin(cue)) }
+                if !begun, t >= 0.2 { begun = true; engine.post(.begin(cue)); engine.post(.chops(plan)) }
             }
             // Energies over the whole render (dB re the same reference).
             dry[hz] = rmsDB(x[0], 0, 3.4, rate: rate)
@@ -480,8 +488,7 @@ struct LofiLiveBusTests {
         /// Decibels the statement sits from the target, by the levelling's own measure with its caps opened.
         func offTarget(_ y: [Float]) -> Float {
             let gain = y.withUnsafeBufferPointer {
-                LofiDialogueSampler.clipGain($0.baseAddress!, count: y.count, rate: rate, level: DialogueChopChain.levelTarget,
-                                             peak: 100, maxGain: 100)
+                DialogueChopChain.clipGain($0.baseAddress!, count: y.count, rate: rate, peak: 100, maxGain: 100)
             }
             return -20 * log10(gain)
         }

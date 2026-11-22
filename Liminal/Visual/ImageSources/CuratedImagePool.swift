@@ -5,7 +5,7 @@
 //  The curated pictures on disk (docs/plans/image-api-mode.md 5, decision D39):
 //
 //    Application Support/Liminal/CuratedImageStore/
-//        <uuid>.jpg + <uuid>.json   an ImageStore with its own epoch key and no count cap
+//        <uuid>.jpg + <uuid>.json   an ImageStore with no count cap
 //        ledger.json                every candidate seen (stored or rejected), search cursors,
 //                                   cached search pages, when each picture was last shown
 //        tmp/                       downloads in progress
@@ -137,8 +137,6 @@ nonisolated enum CuratedPoolPolicy {
 nonisolated final class CuratedImagePool: Sendable {
     static let directoryName = "CuratedImageStore"
     static let verifyDirectoryName = "CuratedImageStore-Verify"
-    static let epochKey = "images.api.cacheEpoch"
-    static let epoch = 1
 
     let store: ImageStore
     private let ledgerURL: URL
@@ -165,18 +163,15 @@ nonisolated final class CuratedImagePool: Sendable {
             // With -LiminalImageAPIOffline the verify pool of the previous fresh run is reused
             // (offline-reuse check); otherwise it starts empty.
             if !DebugLaunchOptions.imageAPIOffline { try? fm.removeItem(at: verify) }
-            return CuratedImagePool(root: root, defaults: .standard, directoryName: verifyDirectoryName,
-                                    epochKey: epochKey + ".verify")
+            return CuratedImagePool(root: root, directoryName: verifyDirectoryName)
         }
         // A verify folder left by an earlier -LiminalImageAPIFresh run is junk now.
         if fm.fileExists(atPath: verify.path) { try? fm.removeItem(at: verify) }
-        return CuratedImagePool(root: root, defaults: .standard)
+        return CuratedImagePool(root: root)
     }
 
-    init(root: URL, defaults: UserDefaults, directoryName: String = CuratedImagePool.directoryName,
-         epochKey: String = CuratedImagePool.epochKey) {
-        store = ImageStore(root: root, defaults: defaults, directoryName: directoryName, epochKey: epochKey,
-                           epoch: Self.epoch)
+    init(root: URL, directoryName: String = CuratedImagePool.directoryName) {
+        store = ImageStore(root: root, directoryName: directoryName)
         ledgerURL = store.directory.appendingPathComponent("ledger.json")
         tmpDirectory = store.directory.appendingPathComponent("tmp", isDirectory: true)
         var excluded = URLResourceValues()
@@ -187,10 +182,9 @@ nonisolated final class CuratedImagePool: Sendable {
 
     // MARK: - Loading
 
-    /// Migrates, sweeps junk, reads the ledger and every sidecar once. Idempotent.
+    /// Sweeps junk, reads the ledger and every sidecar once. Idempotent.
     func loadIfNeeded() {
         if state.withLock({ $0.loaded }) { return }
-        store.migrateIfNeeded()
         sweep()
         let ledger = readLedger()
         var items: [UUID: PoolItem] = [:]
