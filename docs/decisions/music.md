@@ -485,28 +485,28 @@ The level L, the colours, the site scores and the guitar's position-1 chance (0.
 
 **Measuring the hook alone.** `scripts/strum-report.py --off` subtracts the hook-off capture of the same build. The drums and chops of such a pair are sample-identical. The echo cannot be read from the wet stem's difference: the stab keys the space duck, and the duck's few dB on the melody's echo is louder than a plain stab's own echo (a plain stab first read 3 dB "under" that way). So the echo is the hook's part of the raw returns, scaled by the wet stem's gain over the returns at that moment (`docs/mix-verification.md`, strum report).
 
-**Score level** (`LofiStrumTests`, seeds 0..<48 by 16 phrases; no timing / synthetic boom-bap with ghosts and 0.08-beat swing; every installed take is also tested): all of S1-S12 pass in all three conditions. S13: `LofiGuitarPhrasingTests` and `preparationStaysInsideItsBudget` pass. Distribution (`LofiStrumProbeTests/hookDistribution`, after the tuning):
+**Score level** (`LofiStrumTests`, seeds 0..<48 by 16 phrases; no timing / synthetic boom-bap with ghosts and 0.08-beat swing; every installed take is also tested): all of S1-S12 pass in all three conditions. S13: `LofiGuitarPhrasingTests` and `preparationStaysInsideItsBudget` pass. Distribution (`LofiStrumProbeTests/hookDistribution`, on the final build 991855a; the verification fix below changed the strings per event and the statements, not the share of bars):
 
 | | No timing | Boom-bap |
 |---|---|---|
 | Share of all bars with a hook event (S4, 8-22 %) | 11.9 % | 10.9 % |
 | Hook phrases: guitar position 1, position 2, harp | 21/71, 121/121, 24/96 | 5/71, 121/121, 24/96 |
 | Events per hook phrase | 2: 125, 3: 34, 4: 5, 5: 2 | 2: 109, 3: 34, 4: 5, 5: 2 |
-| Events of 3 or more strings (S5, at least 60 %), mean strings | 78 %, 3.29 | 83 %, 3.36 |
+| Events of 3 or more strings (S5, at least 60 %), mean strings | 75 %, 3.25 | 80 %, 3.32 |
 | Sites | answer 275, push 65, gap 32, with kick 10 | answer 275, push 65, with kick 10 |
 | Archetypes A/B/C/D/E | 49/22/13/53/29 | 45/22/13/53/17 |
 | Phrases with a throw | 115 of 166 | 94 of 150 |
 
-**Capture level** (private drums; forced programs as in stage 1; "before" is 1359ae5, "off" the final build with `strumHook=off`):
+**Capture level** (private drums; forced programs as in stage 1; "before" is 1359ae5, "off" the build with `strumHook=off`; this table is from stage 5 at ea2c6ad, and the rows for g4 and n1 were updated for the fix in 991855a; the other rows moved by at most 0.1 dB in the re-run, see the verification section):
 
 | Capture | Hook phrases, events | Lead gain on - off | Dry / wet vs off, LU | Master vs before | C-B5 | C-B6 min before → after | C-B7 | C-B11 before → after | Thrown / plain echo under stab | Chops over hook 1-4 kHz |
 |---|---|---|---|---|---|---|---|---|---|---|
 | g1 Nylon Strum, position 1 | p1: 2 | 0.000 dB | -0.71 / -0.06 | +0.04 | 5.30 | 18.67 → 18.67 | 3.76 | -2.15 → -2.03 | 7.5 / ≥21.7 | median 12.2, p10 4.7 |
 | g2 Nylon Strum, breakdown | p2: 3, p6: 2 | 0.000 | ≤ 0.00 / ≤ -0.02 | +0.00 | 5.88 | 16.35 → 16.33 | 3.47 | -2.16 → -2.16 | 10.7 / ≥24.9 | no overlap |
 | g3 Flatwound Tape, breakdown | p2: 3, p6: 2 | 0.000 | ≤ -0.08 / ≤ -0.07 | +0.00 | 6.51 | 9.41 → 9.48 | 3.29 | -5.17 → -4.86 | 8.4 / ≥21.1 | no overlap |
-| g4 Archtop Jazz, no film | p2: 3 | 0.000 | -1.21 / -1.15 | -0.06 | 6.23 | 19.62 → 19.71 | 1.25 (warn before: 1.03) | 1.61 → 1.61 | none / ≥20.9 | no chops |
+| g4 Archtop Jazz, no film | p2: 3 | 0.000 | -0.09 (-1.21 before the fix) | +0.01 | 6.23 | 19.62 → 19.71 | 1.25 (warn before: 1.03) | 1.61 → 1.61 | none / ≥20.9 | no chops |
 | h1 Concert Harp (+ Archtop Acoustic in p1) | p1: 2, p6: 2 | 0.000 | ≤ -0.15 / ≤ -0.05 | -0.01 | 5.35 | 17.59 → 17.75 | 3.74 | -1.54 → -0.95 | 9.1, 7.8 / ≥21.4 | median 8.8, p10 4.0 |
-| n1 Hollowbody Soul, breakdown | p2: 3, p6: 2 | 0.000 | p2 -3.29, p6 -0.02 / p2 -2.95, p6 -0.15 | (no before) | 6.01 | n/a | 2.66 warn, the same with the hook off | n/a | 6.6 / ≥20.6 | no overlap |
+| n1 Hollowbody Soul, breakdown | p2: 3, p6: 2 | 0.000 | p2 -0.14, p6 -0.05 (p2 was -3.29 and p6 -0.02 before the verification fix) | (no before) | 6.01 | n/a | 2.66 warn, the same with the hook off | n/a | 6.6 / ≥20.6 | no overlap |
 
 Negative dry and wet deltas come from the gating of the integrated loudness: the short stabs add quiet blocks. No hook onset fell within 60 ms of a chop onset in any capture (C6), none within 40 ms of a snare, and all sat on answer or with-kick sites (C7). The dry stem's 2-5 kHz share rose at most 0.72 dB (C8, limit 1.5). C-B1, C-M2, C-M6 and C-M9 pass as before. The next phrase's first two beats of wet were -1.90 to +0.02 dB against off (C9, limit +1.5). The dialogue's C-B8 SII mean and p10 are within 0.001 of before, the 1-4 kHz SNR within 0.03 dB, and C-B9 keeps its state in every film case (C5). In g1 and h1 every position-1 event meets a dry chop (warn above 50 percent). That is expected on the chop beat, and the 1-4 kHz margin above covers it.
 
@@ -526,3 +526,24 @@ The pad test's dip at seed 2077 phrase 6 is now 6.20 dB with the hook on or off 
 **Left open.** `LofiPadTests/phraseBoundaryBreathIsBridgedByTheTail` fails at seed 2077 phrase 6 with a 6.20 dB dip (limit 6; 6.73 before the verification fix above). It has failed since the Hollowbody Soul row was added: the longer guitar list moves seed 2077 to a Folk Harp phrase followed by a Flatwound Tape breakdown. It read 6.74 dB before stage 5. Neither of those rows is the new one, and stage 5 may not change existing rows' space values. `LofiStemChainTests/installedTakesLandInsideTheDrumBusTargets` fails as before.
 
 **Not heard.** Nobody has listened to any of this, on the Mac or on the device. Every verdict above is a measurement. Whether the stabs sit "just right", whether the throw's echo is the moment the user liked, whether the hollowbody fits the vibe and whether position 1 reads as clutter is for the user's ear. If position 1 is too much, `LofiStrumHook.Tuning.variationChance` switches it off without touching the breakdown hook.
+
+**Final state (991855a, 2026-11-22).**
+
+- **Tests.** Full `-only-testing:LiminalTests` on macOS: 616 passed, 3 failed. Two are the known `LofiRhythmTests/installedTakesHaveSaneLandmarks` and `LofiStemChainTests/installedTakesLandInsideTheDrumBusTargets`; the third is the pad test under "Left open". LofiStrumTests (including installed takes and `theCallAndAnswerHookAnswersWithAnotherVoicing`), LofiStrumProbeTests, LofiGuitarPhrasingTests, LofiArrangementTests, LofiCompositionTests and LofiAuditionTests: 53 of 53. The macOS and visionOS Simulator builds succeed.
+- **Strum rendering.** `.strum` notes render into their own accent buffer (`LofiStemChains.applyLead(strum:)`): the instrument balance measures the phrase without them, and the mids level match, its lead mask and the pad duck respond to the melody alone. The space duck still reacts to the stab, as tuned in stage 5. Trim against hook-off is -0.05 to +0.13 dB, and the mids and pad gains are unchanged. The hook-off renders stayed sample-identical to the stage 5 ones.
+- **Call and answer.** Statements of archetype B: 28 of 44 answered with the call's own shape before the fix. g2 now plays the call [50, 58, 63] and answers with [51, 58, 62].
+- **Captures after the fix** (g1, g2, g3, g4, h1, n1): C2 lead gain 0.000 dB on against off; C3 dry within -0.71 to +0.01 LU, wet -0.12 to +0.07 LU, master within 0.04 LU; C-B5 5.17-6.34 dB; C-B8 within 0.001 and C-B9 in the same state; no hook onset within 60 ms of a chop, and where they overlap the chops are 12.2 dB over the hook in 1-4 kHz (median, p10 4.7); no event within 40 ms of a snare; thrown echoes 6.4-10.7 dB under their stab and plain echoes at least 20.7 dB under; the next phrase's wet -0.12 to +0.10 dB. Hook events are in 9.4-18.8 % of the bars of the forced captures.
+- **Event grids.** The event grids printed under the drum rows show minimal stabs off the drums. In g2's call-and-answer phrase the hook stabs on step 14 of bars 0, 1 and 2 (the sixteenth after the snare on step 12), the last bar is empty, and only one echo throw plays in the phrase. Under the chop beat (take bars 5-8) there are only two stabs, each with a kick and about 10 dB under the melody.
+- **Matrix.** `mix-matrix.sh --strict`: ref C-B8, C-B9; long C-B8; fast C-B2, C-B8; same C-B9; nofilm none. No fail-level criterion that passed before fails now. nofilm C-B7 went 3.25 to 2.94 dB (warn) and ref C-B7 3.34 to 3.03 dB (pass); the hook-off twin of nofilm reads 3.26, so the cause is the four-string melody strums. long C-B7 went 2.45 to 2.64 dB (warn before and after).
+- **Audition.** Listening clips of the final code (master mixes, AAC) are kept outside the repository: a Hollowbody Soul breakdown with a held chord and a thrown stab, a Nylon Strum call and answer, a Concert Harp breakdown with rolls, an Archtop Acoustic under the chop beat, and the Nylon Strum window with the hook off for A/B listening. The stage 5 listening files for n1 and g4 predate the fix and still contain the whole-phrase level drop.
+
+**Risks for the ear** (all unheard):
+
+1. **Density is at the low end of the target.** About 11-12 % of bars carry an event. In a three-minute app run only the three breakdowns played a hook. If it is not enough "more", the levers are `variationChance` (0.60) and `harpChance` (0.70).
+2. **Statements repeat across seeds.** In the forced captures every breakdown used a call-and-answer on step 14 or a held chord on step 6 with a stab after it. Across many takes this could turn formulaic.
+3. **The half-beat answer is the loudest stroke** (2.3-3.9 dB under the median melody note against the 3-6 dB of the craft research).
+4. **Take bars 5-8 under the chops** is the likeliest place for clutter. The measurements are clean, but every event there overlaps a chop in time.
+5. **Hollowbody Soul** passed the gate on measurements only. It plays 0.2-1.3 LU quieter than the other guitars in the loudness probe and n1 still warns on C-B7 (2.66 dB, the same with the hook off).
+6. **The four-string melody strums** (stage 3) may make the echo on guitar phrases feel washier (nofilm C-B7).
+7. **The pad boundary test** is still red; its 6.2 dB dip may be an audible level step into a Flatwound Tape breakdown.
+8. **The fix changes the sound upward.** Hook phrases that were turned down by up to 3 dB are now at full level with the hook added.

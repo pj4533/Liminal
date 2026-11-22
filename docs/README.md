@@ -16,8 +16,10 @@
 | [MPC chopping plan](plans/mpc-chopping.md) | Work packages, acceptance criteria and deferred items |
 | [MPC chopping measurements](plans/mpc-chopping-measurements.md) | Baseline and final matrix results, criteria changes and listening checks |
 | [Lo-Fi instrument qualification](research/lofi-instrument-qualification.md) | Sampler comparison, articulation, pitch, and phrase memory |
-| [Lo-Fi instrument recordings](lofi-samples.md) | Sources for the twenty piano, plucked string and guitar programs |
+| [Lo-Fi instrument recordings](lofi-samples.md) | Sources for the twenty-one piano, plucked string and guitar programs |
 | [Instrument source survey](research/instrument-sources.md) | Redistributable piano, guitar and string recordings, licences, and the ones rejected |
+| [Strummed hook craft research](research/lofi-strums-craft.md) | How RZA-era Wu-Tang and lo-fi producers used guitar stabs, strum mechanics, chord vocabulary, density caps and pattern archetypes (input to D128) |
+| [Strummed instrument survey](research/lofi-strum-instruments.md) | Guitar, harp and zither recordings considered for strums, measurements, licences, and what was added or rejected (D128) |
 | [Bass and pad research](research/bass-and-pads/README.md) | Boom bap and dub bass, pad chords under a lead, CC0 bass samples, and the plan for the 2026-11-20 rework |
 | [Mix distortion research](research/mix-distortion/README.md) | How distortion was detected by measurement, gain staging, and the drive sweep behind D121 |
 | [Bass tone redo plan](plans/bass-tone-redo.md) | The warm sustained sub with a short strike on the kick, its gates and measurements (D119; rotation D120) |

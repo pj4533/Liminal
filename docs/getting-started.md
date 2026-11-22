@@ -24,7 +24,7 @@
 
 ## Play Lo-Fi
 
-Set the tempo in the Music section and optionally pin a scale. Tempo and scale changes apply at a 16-bar boundary. The app bundles twenty sampled acoustic programs (pianos, plucked strings and guitars) and composes new phrases and bass lines each session. Enable **Archive footage** and leave **Footage audio** at its 50% default to hear the tuned mix. The original film plays in the background while fragments of the same voice land on the beat. The film and main image change together on eight-bar boundaries.
+Set the tempo in the Music section and optionally pin a scale. Tempo and scale changes apply at a 16-bar boundary. The app bundles twenty-one sampled acoustic programs (pianos, plucked strings and guitars) and composes new phrases and bass lines each session. Enable **Archive footage** and leave **Footage audio** at its 50% default to hear the tuned mix. The original film plays in the background while fragments of the same voice land on the beat. The film and main image change together on eight-bar boundaries.
 
 On a first run, play online to fill the curated picture pool and the film cache; no key or account is needed. The film cache holds ten pinned titles and two rotating discoveries. Saved pictures and cached footage and its sampled speech can play offline on Mac and Vision Pro. [Pinned films and sources](experience.md#pinned-films-and-rotating-discoveries)
 
