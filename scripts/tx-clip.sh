@@ -16,7 +16,7 @@
 #   DIR/clip.mp4, DIR/clip.gif                   real-time clips (ffmpeg)
 #   DIR/filmstrip.png                            18 labelled frames from -0.3 s to 1 s after the end
 #   DIR/plot.png, DIR/metrics.csv, DIR/check.json   visibility of A and B, frame steps, gates
-# No image is generated and the app is not launched. Env: FFMPEG (default /opt/homebrew/bin/ffmpeg).
+# Runs offline from the given pictures: it fetches nothing and does not launch the app. Env: FFMPEG (default /opt/homebrew/bin/ffmpeg).
 set -euo pipefail
 
 SCRIPT_DIR="${0:A:h}"

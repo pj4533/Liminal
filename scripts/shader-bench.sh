@@ -14,7 +14,7 @@
 #   scripts/shader-bench.sh --image IMG --footage-seq --footage CLIP.mp4 --video-look window --out DIR
 #                           [--seq-len 8] [--footage-b CLIP2.mp4 --footage-xfade 3,4] ...   # moving footage
 #                           (scripts/ffx-clip.sh wraps this; docs/plans/footage-fx.md)
-#   (effect attribution and judge sets are built on this: scripts/fx-structure.py, scripts/fx-judge-set.sh)
+#   (effect attribution and judge sets are built on this: scripts/fx-structure.py, scripts/fx-judge-set.py)
 # Defaults: --shader Liminal/Shaders/EffectsRenderer.metal (working tree),
 #           --image tools/ShaderBench/fixtures/07.jpg, --depth tools/ShaderBench/fixtures/07-depth.png.
 # See the header of scripts/shader-bench.swift for all options (--frames, --trials, --times, --mono ...).

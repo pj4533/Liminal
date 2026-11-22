@@ -43,7 +43,6 @@ nonisolated struct LofiDrift: Sendable {
 nonisolated struct LofiClock: Sendable {
     static let beats = 16.0
     static let footageEchoBeats = 1.0
-    static let footageReflectionBeats = 0.5
     static let musicEchoBeats = (left: 0.75, right: 1.25)
     let frameCount: Int
     let sampleRate: Double

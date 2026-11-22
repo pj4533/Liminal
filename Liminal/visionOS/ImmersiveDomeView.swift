@@ -51,14 +51,6 @@ struct CGImageTransitionState {
         return Float(progress)
     }
 
-    /// Eased transition progress for smoother perceptual transitions.
-    /// Uses ease-out cubic: smoother deceleration at end.
-    var easedProgress: Float {
-        let t = transitionProgress
-        // Ease-out cubic: 1 - (1 - t)^3
-        return 1 - pow(1 - t, 3)
-    }
-
     var isTransitioning: Bool {
         guard transitionStartTime != nil else { return false }
         return transitionProgress < 1.0

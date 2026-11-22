@@ -7,7 +7,7 @@
 
 JUDGE_DIR gets only <prefix>-001.png ... (768x512, shuffled; nothing in a name or in the directory
 tells the subject, the intensity or the time). KEY_DIR (keep it away from the judges) gets:
-  key.json      frame -> fixture, subject (prompt text from truth.json), intensity, time, image age,
+  key.json      frame -> fixture, subject (the fixture's "subject" text in truth.json), intensity, time, image age,
                 rotation (0, or 180 for the orientation decoys: --flip-fraction of the frames are
                 shown upside down so "upright" cannot be answered blindly), the uniforms used, and
                 the effect-free reference frame
@@ -144,7 +144,7 @@ def main():
                 scenarios.append({"name": name + "_ref", **base, "set": ref_over})
                 entries.append({"fixture": os.path.basename(img), "stem": stem, "name": name, "intensity": level,
                                 "time": t, "age": None if a.mode == "current" else age, "mode": a.mode,
-                                "subject": truth.get(os.path.basename(img), {}).get("prompt", "")})
+                                "subject": truth.get(os.path.basename(img), {}).get("subject", "")})
         sc_path = os.path.join(work, "scenarios.json")
         json.dump(scenarios, open(sc_path, "w"))
         cmd = [os.path.join(HERE, "shader-bench.sh"), *shader, "--image", img, "--scenarios", sc_path,

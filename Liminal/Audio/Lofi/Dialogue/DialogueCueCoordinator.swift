@@ -404,8 +404,6 @@ nonisolated final class DialogueDirector: @unchecked Sendable {
         return built
     }
 
-    func resetMemory() { state.withLock { $0.memory = DialoguePerformanceMemory(ledger: $0.memory.ledger); $0.generation += 1 } }
-
     // MARK: Bank cache
 
     /// The cached analysis and bank for this source, with the transcript-refined bank when a
@@ -452,11 +450,6 @@ nonisolated final class DialogueDirector: @unchecked Sendable {
     func cachedTranscript(_ source: DialogueSource) -> DialogueTranscript? {
         let key = CacheKey(source)
         return state.withLock { s in s.cache.first { $0.key == key && $0.matches(source) }?.transcript }
-    }
-
-    func cachedBankID(_ source: DialogueSource) -> UInt64? {
-        let key = CacheKey(source)
-        return state.withLock { s in s.cache.first { $0.key == key && $0.matches(source) }.flatMap { $0.acoustic?.bankID } }
     }
 
     private static func model(_ t: DialogueTranscript) -> String { "\(t.locale)|\(t.modelVersion)" }

@@ -515,9 +515,9 @@ nonisolated struct TransitionDirector: Sendable {
         return base.filter { $0 != last }.isEmpty ? base : base.filter { $0 != last }
     }
 
-    /// - Parameters: energy = music energy 0...1 when synced (nil: 0.5); imageInterval in seconds.
+    /// - Parameters: energy = music energy 0...1 when synced (nil: 0.5); holdSeconds = how long the picture stays.
     mutating func next(time: Float, intensity: Float, energy: Float?, hasDepth: Bool,
-                       imageInterval: Float = 30) -> TransitionSpec {
+                       holdSeconds: Float = 30) -> TransitionSpec {
         let i = min(max(intensity, 0), 1)
         let e = min(max(energy ?? 0.5, 0), 1)
         let d = EffectLook.macroDrive(time: time, intensity: i)
@@ -540,10 +540,10 @@ nonisolated struct TransitionDirector: Sendable {
         let u = nextUnit(), seed = nextUnit(), flip = nextUnit() < 0.5
         let range = style.shape.duration
         let raw = (range.0 + (range.1 - range.0) * u) * (1.15 - 0.30 * e)
-        let duration = Self.clampDuration(raw, imageInterval: imageInterval)
+        let duration = Self.clampDuration(raw, holdSeconds: holdSeconds)
         if let n = pinnedSeed {
             var spec = TransitionSpec.pinned(style, seed: n)
-            spec.duration = Self.clampDuration(spec.duration, imageInterval: imageInterval)
+            spec.duration = Self.clampDuration(spec.duration, holdSeconds: holdSeconds)
             return spec
         }
         return TransitionSpec(style: style, seed: seed, duration: duration, flip: flip)
@@ -643,9 +643,9 @@ nonisolated struct TransitionDirector: Sendable {
         return spec
     }
 
-    /// 1.5...4.5 s and at most 20 % of the image interval (never below 1.5 s).
-    static func clampDuration(_ d: Float, imageInterval: Float) -> Float {
-        let hi = max(min(TransitionSpec.maxDuration, 0.2 * imageInterval), TransitionSpec.minDuration)
+    /// 1.5...4.5 s and at most 20 % of the picture's hold (never below 1.5 s).
+    static func clampDuration(_ d: Float, holdSeconds: Float) -> Float {
+        let hi = max(min(TransitionSpec.maxDuration, 0.2 * holdSeconds), TransitionSpec.minDuration)
         return min(max(d, TransitionSpec.minDuration), hi)
     }
 }

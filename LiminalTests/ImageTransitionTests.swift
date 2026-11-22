@@ -128,14 +128,14 @@ struct ImageTransitionTests {
     @Test func directorRespectsDepthIntensityAndInterval() {
         var d = TransitionDirector(seed: 7)
         for k in 0..<200 {
-            let p = d.next(time: Float(k) * 30, intensity: 0.1, energy: nil, hasDepth: false, imageInterval: 8)
+            let p = d.next(time: Float(k) * 30, intensity: 0.1, energy: nil, hasDepth: false, holdSeconds: 8)
             #expect(p.style.isGentle, "only gentle styles below 0.25")
             #expect(p.duration >= 1.5 && p.duration <= 1.6 + 1e-6, "8 s interval: at most 20 % (1.6 s)")
             if k > 0 { #expect(d.history[d.history.count - 2] != p.style, "no immediate repeat") }
         }
         var e = TransitionDirector(seed: 7)
         for _ in 0..<100 {
-            let p = e.next(time: 100, intensity: 0.5, energy: 0.5, hasDepth: true, imageInterval: 10)
+            let p = e.next(time: 100, intensity: 0.5, energy: 0.5, hasDepth: true, holdSeconds: 10)
             #expect(p.duration <= 2.0 + 1e-6, "at most 20 % of a 10 s interval")
         }
     }

@@ -633,12 +633,6 @@ final class EffectsMetalView: MTKView {
         }
     }
 
-    /// Reset ghost taps (call when stopping playback)
-    func resetGhostTaps() {
-        ghostTapManager.reset()
-        LMLog.visual.info("🔄 Ghost taps reset")
-    }
-
     /// Music burst (a phrase change or a rhythm trail): forward to the ghost tap manager (no-op unless the serial changed).
     func requestGhostBurst(serial: UInt32) {
         ghostTapManager.requestBurst(serial: serial)

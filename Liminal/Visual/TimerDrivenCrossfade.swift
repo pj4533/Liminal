@@ -100,14 +100,6 @@ final class TimerDrivenCrossfade: ObservableObject {
         return true
     }
 
-    func addToPool(_ image: PlatformImage) {
-        if currentFrame != nil {
-            transitionTo(image)
-        } else {
-            setInitialImage(image)
-        }
-    }
-
     /// Reset all state - used when cache is cleared
     func reset() {
         currentFrame = nil

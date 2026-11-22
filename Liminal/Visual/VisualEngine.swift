@@ -72,11 +72,11 @@ nonisolated struct LofiImageReveal: Sendable {
 
     /// The next drum boundary after `uptime` and its reveal, or nil when it is too close to plan.
     /// - Parameters: fills = the audible take's fills (nil: the default builds); hasDrums = recorded drum
-    ///   takes are playing; pickDrop(build, fill, strength) and pickBell(imageInterval) ask the director.
+    ///   takes are playing; pickDrop(build, fill, strength) and pickBell(holdSeconds) ask the director.
     static func next(on grid: LofiTakeGrid, after uptime: Double, now: Double, fills: LofiTakeFills?, hasDrums: Bool,
                      drop: Bool = true,
                      pickDrop: (_ build: Double, _ fill: LofiFill, _ strength: Float) -> TransitionSpec,
-                     pickBell: (_ imageInterval: Double) -> TransitionSpec) -> (boundary: Double, reveal: Self?) {
+                     pickBell: (_ holdSeconds: Double) -> TransitionSpec) -> (boundary: Double, reveal: Self?) {
         let boundary = grid.nextBoundary(after: uptime)
         // Boundaries after the turnaround run at the committed new tempo (`nextBoundary`).
         let inTake = boundary.time <= grid.origin + 64 * grid.beatDuration + 1e-9
@@ -262,11 +262,11 @@ final class VisualEngine: ObservableObject {
     private var pickContext: (effectTime: Float, intensity: Float, energy: Float?, hasDepth: Bool) =
         (0, DebugLaunchOptions.effectIntensity(setting: SettingsService.shared.effectIntensity), nil, false)
 
-    /// - Parameter imageInterval: seconds the picture stays (a bell reveal passes its 32 beats).
-    private func pickTransition(imageInterval: Double = 30) -> TransitionSpec {
+    /// - Parameter holdSeconds: seconds the picture stays (a bell reveal passes its 32 beats).
+    private func pickTransition(holdSeconds: Double = 30) -> TransitionSpec {
         let c = pickContext
         let spec = transitionDirector.next(time: c.effectTime, intensity: c.intensity, energy: c.energy,
-                                           hasDepth: c.hasDepth, imageInterval: Float(imageInterval))
+                                           hasDepth: c.hasDepth, holdSeconds: Float(holdSeconds))
         LMLog.visual.info("🌀 TRANSITION style=\(spec.style.name, privacy: .public) seed=\(String(format: "%.3f", spec.seed), privacy: .public) duration=\(String(format: "%.2f", spec.duration), privacy: .public)s flip=\(spec.flip)")
         return spec
     }
@@ -320,7 +320,7 @@ final class VisualEngine: ObservableObject {
                 on: grid, after: max(now(), lastDownbeat + 0.01), now: now(), fills: timing?.fills, hasDrums: hasDrums,
                 drop: !DebugLaunchOptions.dropOff,
                 pickDrop: { pickDrop(build: $0, fill: $1, strength: $2) },
-                pickBell: { pickTransition(imageInterval: $0) })
+                pickBell: { pickTransition(holdSeconds: $0) })
             guard let cue = planned.reveal else {
                 // Too close to plan a build: the picture stays for this boundary.
                 LMLog.visual.info("Lo-Fi image reveal skipped: downbeat \(planned.boundary, format: .fixed(precision: 3)) is \((planned.boundary - now()) * 1000, format: .fixed(precision: 0)) ms away")

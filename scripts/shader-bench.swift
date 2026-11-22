@@ -1132,7 +1132,7 @@ if sequenceMode, let outDir = outDir, let prevImagePath = prevImagePath {
     let vibA = ImageColorStats.factors(for: framedA), vibB = vibrance
     let texA = uploadColor(framedA), texB = sourceTex
     let intensity = intensityArg ?? EffectLook.defaultIntensity
-    let imageInterval: Float = 30
+    let holdSeconds: Float = 30
     // Every effect amount off (scripts/fx-structure.py `ref`): Ken Burns is all that is left.
     let refOff: [String: Float] = [
         "distortionAmplitude": 0, "logSphereAmount": 0, "fractalNoiseAmount": 0, "chromaticAmount": 0,
@@ -1152,14 +1152,14 @@ if sequenceMode, let outDir = outDir, let prevImagePath = prevImagePath {
         let t = seqStart + rel
         let phase = k < kStart ? "pre" : (k < kDown ? "transition" : "post")
         let tp: Float = phase == "transition" ? rel / seqDuration : 0
-        let age: Float = rel < 0 ? imageInterval + rel : rel     // image A has been up for one interval
+        let age: Float = rel < 0 ? holdSeconds + rel : rel     // image A has been up for one hold
         // A drop shows only A (and its vibrance) until the cut.
         let vib = phase == "pre" ? vibA : (phase == "post" ? vibB : (dropMode ? vibA : VibranceFactors.lerp(vibA, vibB, tp)))
         let dropFrame: DropFrame? = dropMode && phase == "transition"
             ? DropFrame.make(at: Double(rel), build: Double(seqDuration), hits: dropHits) : nil
         let fadeCap: Float? = dropMode ? seqDuration : nil
         // A drop keeps A's framing running until the cut; B's push starts on the cut (ImageZoomTiming holdUntil).
-        let dropZoomAge: Float? = dropMode ? (phase == "post" ? rel - seqDuration : imageInterval + rel) : nil
+        let dropZoomAge: Float? = dropMode ? (phase == "post" ? rel - seqDuration : holdSeconds + rel) : nil
         var u: EffectsUniforms
         var source = phase == "pre" ? texA : texB
         var previous = phase == "transition" ? texA : source
@@ -1167,13 +1167,13 @@ if sequenceMode, let outDir = outDir, let prevImagePath = prevImagePath {
             source = ref == "a" ? texA : texB
             previous = source
             u = EffectsUniformsComputer.compute(time: t, transitionProgress: 0, hasSaliencyMap: false,
-                vibrance: ref == "a" ? vibA : vibB, look: EffectLook(intensity: intensity, imageAge: age, imageInterval: imageInterval,
+                vibrance: ref == "a" ? vibA : vibB, look: EffectLook(intensity: intensity, imageAge: age,
                                                                      transitionDuration: txSpec.duration, freshFadeEnd: fadeCap),
                 zoomAge: dropZoomAge)
             applyOverrides(&u, refOff)
         } else {
             u = EffectsUniformsComputer.compute(time: t, transitionProgress: tp, hasSaliencyMap: false, vibrance: vib,
-                look: EffectLook(intensity: intensity, imageAge: age, imageInterval: imageInterval,
+                look: EffectLook(intensity: intensity, imageAge: age,
                                  transitionDuration: txSpec.duration, freshFadeEnd: fadeCap),
                 zoomAge: dropZoomAge,
                 transition: txSpec, drop: dropFrame)

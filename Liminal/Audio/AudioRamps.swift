@@ -36,7 +36,6 @@ nonisolated struct SoftEnv {
     init(_ v: Float = 0) { value = v; from = v; to = v }
 
     var target: Float { to }
-    var isMoving: Bool { value != to }
 
     mutating func go(to v: Float, over: Double, now: Double) {
         from = value; to = v; start = now; duration = max(0, over)

@@ -19,7 +19,7 @@
 #   DIR/check.json               readability, footage visibility, temporal smoothness (ffx-check.py)
 #   DIR/frames, DIR/off, DIR/ref frame dumps: footage on (+ stage dumps), footage off, effects off.
 #                                Deleted after scoring unless --keep-frames.
-# No image is generated and the app is not launched. Env: FFMPEG (default /opt/homebrew/bin/ffmpeg).
+# Runs offline from the given pictures: it fetches nothing and does not launch the app. Env: FFMPEG (default /opt/homebrew/bin/ffmpeg).
 set -euo pipefail
 
 SCRIPT_DIR="${0:A:h}"

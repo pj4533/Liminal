@@ -24,7 +24,7 @@ struct DropTransitionTests {
     }
 
     @Test func dropIsDoneAtTheDownbeatAndEqualsAFrameWithoutTransition() {
-        let look = EffectLook(intensity: 0.6, imageAge: 3, imageInterval: 30, transitionDuration: 2)
+        let look = EffectLook(intensity: 0.6, imageAge: 3, transitionDuration: 2)
         for style in TransitionStyle.dropFamily {
             for tempo in Self.tempos {
                 for beats in [1.0, 2, 4, 8] {
@@ -213,7 +213,7 @@ struct DropTransitionTests {
             var hex = "", seedSum = 0.0, durSum = 0.0, flips = 0
             for k in 0..<64 {
                 let spec = d.next(time: Float(k) * 31, intensity: Float(k % 5) / 4, energy: k % 3 == 0 ? nil : Float(k % 7) / 6,
-                                  hasDepth: k % 2 == 0, imageInterval: 30)
+                                  hasDepth: k % 2 == 0, holdSeconds: 30)
                 hex += String(spec.style.rawValue, radix: 16)
                 seedSum += Double(spec.seed); durSum += Double(spec.duration); flips += spec.flip ? 1 : 0
                 #expect(spec.drop == nil)

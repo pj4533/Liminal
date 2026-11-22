@@ -17,8 +17,6 @@ nonisolated struct EffectLook: Sendable, Equatable {
     var intensity: Float = EffectLook.defaultIntensity
     /// Seconds on the effect clock since the current image's crossfade began; nil before the first crossfade.
     var imageAge: Float? = nil
-    /// Seconds between images; scales the fresh-image windows when short.
-    var imageInterval: Float = 30
     /// Seconds the current crossfade lasts (docs/plans/transitions.md 4): the fresh-image hold is anchored
     /// to its end, so a long transition still gets the same clear time after it. 1.5 = the classic timing.
     var transitionDuration: Float = 1.5
@@ -107,7 +105,6 @@ nonisolated struct EffectLook: Sendable, Equatable {
     /// 0 while a new image settles, 1 once it has been seen (plan 4.2).
     func fresh() -> Float {
         guard let age = imageAge else { return 1 }
-        let k = min(max(imageInterval / 30, 0.33), 1)
         let extra = max(transitionDuration - 1.5, 0)
         let fade = max(Tuning.freshFade, 0.4 * transitionDuration)
         var fadeStart: Float = 0, fadeEnd = fade
@@ -115,8 +112,8 @@ nonisolated struct EffectLook: Sendable, Equatable {
             fadeEnd = max(end, 0.05)
             fadeStart = fadeEnd - min(0.25, 0.25 * fadeEnd)
         }
-        let holdEnd = max((Tuning.freshHoldEnd + extra) * k, transitionDuration)
-        let end = max((Tuning.freshEnd + extra) * k, holdEnd + 1)
+        let holdEnd = max(Tuning.freshHoldEnd + extra, transitionDuration)
+        let end = max(Tuning.freshEnd + extra, holdEnd + 1)
         return 1 - Self.smoothstep(fadeStart, fadeEnd, age) * (1 - Self.smoothstep(holdEnd, end, age))
     }
 
