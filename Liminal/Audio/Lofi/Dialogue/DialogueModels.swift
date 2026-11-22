@@ -402,7 +402,7 @@ nonisolated struct DialogueTransportSnapshot: Sendable {
     var snares: [DialogueLandmark]
     var leadNotes: [ClosedRange<Double>] = []
     /// The drummer's human offset in beats at each sixteenth of the take (256 values, from
-    /// `LofiTimingField.offset(atBeat:)`); empty means a straight grid. The motif's slots follow it.
+    /// `LofiTimingField.sixteenthOffsets`); empty means a straight grid. The motif's slots follow it.
     var grooveOffsets: [Double] = []
 
     static let takeBeats = 64.0
@@ -474,6 +474,14 @@ nonisolated struct DialogueEvent: Sendable, Equatable {
     /// Motif fragment id (the pad id in the motif bank).
     var piece: Int? = nil
     var effect: DialogueChopEffect = .none
+    // Gate additions (D126). `gateSteps` is the hit's gate in sixteenths (nil: a one-shot);
+    // `gateEnd` how the dry piece ended (`natural`, `gate`, `valley` or `choke`); `drySeconds` the
+    // dry length the renderer cuts to (nil: the whole pad, or `duration` for a legacy choke);
+    // `sourceFrames` the source actually played.
+    var gateSteps: Double? = nil
+    var gateEnd = "natural"
+    var drySeconds: Double? = nil
+    var sourceFrames: Range<Int>? = nil
 
     var endTime: Double { startTime + duration }
 }

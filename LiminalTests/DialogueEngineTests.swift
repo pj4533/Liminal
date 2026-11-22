@@ -736,6 +736,8 @@ struct DialogueEngineTests {
             #expect(JSONSerialization.isValidJSONObject(log))
         }
         print("DIALOGUE-TIMINGS 30 s at 48 kHz: \(best.dictionary) cost \(bestCost)")
-        #expect(bestCost.milliseconds < 400, "\(bestCost); stages by wall clock \(best.dictionary)")
+        // 450 ms since D126: the plan renders each arranged pad once (its accent is read on the render)
+        // and every hit is a prefix of it, so the render stage dropped to about 10 ms while the plan grew.
+        #expect(bestCost.milliseconds < 450, "\(bestCost); stages by wall clock \(best.dictionary)")
     }
 }

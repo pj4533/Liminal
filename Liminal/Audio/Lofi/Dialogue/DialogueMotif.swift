@@ -138,6 +138,24 @@ nonisolated enum DialogueMotifTuning {
     /// Dry pieces plus echo tails of one section stay under this share: echo tails are shortened
     /// (or left out below `minimumEchoTailSeconds`) once the section reaches it.
     static let maximumSectionOccupancyWithEcho = 0.60
+    /// A gated hit ends this long before the step its gate reaches (D126), so a stutter's repeats
+    /// never touch and the next trigger starts clean.
+    static let gateLeadSeconds = 0.006
+    /// A gate closes at a cut point (syllable valley or word end) this close before its step instead.
+    static let valleySnapSeconds = 0.035
+    /// A gated hit keeps at least this much after its attack.
+    static let minimumGateSeconds = 0.060
+    /// The gated release: a raised cosine of at most this length (a quarter of the gate when shorter).
+    static let gateReleaseSeconds = 0.008
+    /// The gate of a repaired bar's hit, in sixteenths.
+    static let repairGate = 2
+    /// A transcribed piece's start may sit this far into its first word (its consonant's ramp) before
+    /// its weak first syllable becomes the beat.
+    static let wordStartSlackSeconds = 0.040
+    /// The first syllable of such a piece is the first peak within 12 dB of the loudest.
+    static let weakLeadPeakShare: Float = 0.25
+    /// A rendered pad's accent replaces the source one only within this many seconds of it.
+    static let renderedAccentRange: ClosedRange<Double> = -0.050...0.020
     /// Coverage repair tries these sixteenths of an empty bar, in order.
     static let repairSlots = [8, 4, 12, 6, 10, 14, 2, 1, 3, 5, 7, 9, 11, 13, 15]
 }
@@ -152,14 +170,24 @@ nonisolated struct DialogueMotifFragment: Sendable, Equatable {
     let order: Int
     /// The piece a half was cut from.
     let parent: Int?
-    let frames: Range<Int>
-    /// Source frame of the first syllable onset: the frame that lands on the slot.
-    let accentFrame: Int
-    let fadeIn: Int
+    var frames: Range<Int>
+    /// Source frame of the first syllable's attack (`DialogueAttack.beatFrame`): the frame that
+    /// lands on the slot. `frames` start at the waveform onset (D126), at most 30 ms before it for a
+    /// piece and 120 ms for the line.
+    var accentFrame: Int
+    var fadeIn: Int
     let fadeOut: Int
-    let text: String?
+    var text: String?
     /// The highest word weight inside the fragment (`DialogueLineInterest.wordWeights`); 0 for acoustic cuts.
     var weight: Float = 0
+    /// A plosive or glottal attack (`DialogueOnset`): the pad starts on its burst.
+    var hardOnset = false
+    /// The first syllable is the beat even when it is up to 12 dB under the next one (a transcribed
+    /// piece whose first word starts weakly: "re-MEM-ber" plays from "re", never "-member").
+    var weakLead = false
+    /// Source frames inside the fragment where a gate may close cleanly: the valleys between its
+    /// syllables and its word ends (D126).
+    var cutPoints: [Int] = []
 }
 
 /// A line that led a loop.
@@ -190,6 +218,10 @@ nonisolated struct DialogueMotifCell: Sendable, Equatable {
         /// A hook item: exactly on its step (no slot shift), or not at all, so every repeat of the
         /// hook is the same trigger pattern (D125).
         var fixed = false
+        /// How long the pad is held, in sixteenths (D126, an MPC pad in note-on mode): the piece is
+        /// cut `gateLeadSeconds` before the step `gate` steps after its own, or at a syllable valley
+        /// just before that. nil plays the piece to its natural end (a one-shot).
+        var gate: Int? = nil
     }
     let kind: DialogueCell
     let bar: Int
@@ -233,6 +265,10 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
     var interest: Float = DialogueMotifTuning.acousticInterest
     /// The repeating hook cell; nil only for motifs built before D125.
     var hook: DialogueMotifHook? = nil
+    /// Each fragment rendered once at full length and 0 dB (D126): every hit of the loop, at any gate,
+    /// is a prefix of its pad's render, so a stab and the word it was cut from share one level and
+    /// the renderer runs the chain once per pad rather than once per gate length.
+    var renders: [Int: AVAudioPCMBuffer] = [:]
 
     var line: DialogueMotifFragment { fragments[0] }
     var sampleRate: Double { source.sampleRate }
@@ -339,7 +375,7 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
         return DialogueMotif(loop: loop, source: source, analysis: analysis, lineUnit: lineUnit, lineKey: lineKey,
                              fragments: fragments, pieces: pieces, halves: halves, bank: bank, usedTranscript: usedTranscript,
                              reorderAllowed: reorderAllowed, cells: arranged.cells, carried: true, seed: loopSeed, interest: interest,
-                             hook: arranged.hook)
+                             hook: arranged.hook, renders: renders)
     }
 
     /// Chooses the best line (or `line` when given), cuts it into pieces and arranges the loop.
@@ -435,12 +471,17 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
         let arranged = arrange(fragments: fragments, pieces: cut.pieces, halves: cut.halves, reorderAllowed: reorderAllowed,
                                seed: loopSeed, lineSeconds: Double(line.frames.count) / rate, sampleRate: rate,
                                hookSeed: memory.cycleSeed ?? seed, loop: loop, anchors: anchors)
+        // The arranged pieces (and the line) take their accents from their renders; a piece only coverage
+        // repair may pick keeps its source accent and renders when played.
+        let used = Set(arranged.cells.flatMap { $0.items.map(\.fragment) } + [0])
+        let rendered = renderedAccents(fragments, line: line, source: source, analysis: analysis, only: used)
+        fragments = rendered.fragments
         let key = lineKey(analysis.contentID, line.frames)
         let bank = motifBank(fragments, line: line, analysis: analysis, key: key, usedTranscript: lineWords.count >= 2)
         return DialogueMotif(loop: loop, source: source, analysis: analysis, lineUnit: line.id, lineKey: key,
                              fragments: fragments, pieces: cut.pieces, halves: cut.halves, bank: bank,
                              usedTranscript: lineWords.count >= 2, reorderAllowed: reorderAllowed, cells: arranged.cells,
-                             carried: false, seed: loopSeed, interest: lineInterest, hook: arranged.hook)
+                             carried: false, seed: loopSeed, interest: lineInterest, hook: arranged.hook, renders: rendered.renders)
     }
 
     /// A line's words for the said-once rule: lowercased letters, digits and spaces.
@@ -512,16 +553,7 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
     static func motifBank(_ fragments: [DialogueMotifFragment], line: SpeechUnit, analysis: DialogueAnalysis, key: UInt64,
                           usedTranscript: Bool) -> DialoguePadBank {
         let rate = analysis.sampleRate
-        let pads = fragments.map { fr -> DialoguePad in
-            let role: DialoguePad.Role = fr.kind == .line ? .anchor : .stab
-            return DialoguePad(padID: fr.id, unitID: fr.kind == .line ? line.id : -1 - fr.id, role: role, frames: fr.frames,
-                               transform: .native, accentOffset: Double(fr.accentFrame - fr.frames.lowerBound) / rate,
-                               duration: Double(fr.frames.count) / rate, protected: fr.kind == .line, text: fr.text,
-                               fadeIn: fr.fadeIn, fadeOut: fr.fadeOut,
-                               level: fr.kind == .line ? line.level : (fr.kind == .piece ? .wordGroup : .stab),
-                               score: line.score,
-                               padKey: DialogueHash.padKey(sourceID: analysis.contentID, frames: fr.frames, transform: .native))
-        }
+        let pads = fragments.map { pad($0, line: line, analysis: analysis) }
         var hash = DialogueHash()
         hash.add(key)
         hash.add(analysis.version)
@@ -530,6 +562,54 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
         return DialoguePadBank(bankID: hash.value, analysisVersion: analysis.version, pads: pads, anchorPadID: 0, siblingGroups: [],
                                sourceID: analysis.contentID, clock: analysis.clock, rejections: [], usedTranscript: usedTranscript,
                                reorder: .sourceOrder, originalOrder: ids, arrangedOrder: ids, intendedText: line.text)
+    }
+
+    /// One fragment as a motif-bank pad.
+    static func pad(_ fr: DialogueMotifFragment, line: SpeechUnit, analysis: DialogueAnalysis) -> DialoguePad {
+        let rate = analysis.sampleRate
+        let role: DialoguePad.Role = fr.kind == .line ? .anchor : .stab
+        return DialoguePad(padID: fr.id, unitID: fr.kind == .line ? line.id : -1 - fr.id, role: role, frames: fr.frames,
+                           transform: .native, accentOffset: Double(fr.accentFrame - fr.frames.lowerBound) / rate,
+                           duration: Double(fr.frames.count) / rate, protected: fr.kind == .line, text: fr.text,
+                           fadeIn: fr.fadeIn, fadeOut: fr.fadeOut,
+                           level: fr.kind == .line ? line.level : (fr.kind == .piece ? .wordGroup : .stab),
+                           score: line.score,
+                           padKey: DialogueHash.padKey(sourceID: analysis.contentID, frames: fr.frames, transform: .native))
+    }
+
+    /// Accents read on the rendered pads (D126): the chop chain's 4:1 compressor (13 dB under the
+    /// cut's peak) lifts a soft onset, so its rendered attack comes earlier than the source's, by
+    /// 20 ms and more on a breathy "h" or "s" (a transcribed capture's signature pad read -23 ms).
+    /// Every gate of a pad is a truncation of the same render, so the full pad's attack is every
+    /// hit's attack. A rendered beat further than `renderedAccentRange` from the source one keeps
+    /// the source one.
+    static func renderedAccents(_ fragments: [DialogueMotifFragment], line: SpeechUnit, source: DialogueSource,
+                                analysis: DialogueAnalysis, only: Set<Int>? = nil) -> (fragments: [DialogueMotifFragment], renders: [Int: AVAudioPCMBuffer]) {
+        var renders: [Int: AVAudioPCMBuffer] = [:]
+        let out = fragments.map { fr -> DialogueMotifFragment in
+            if let only, !only.contains(fr.id) { return fr }
+            var level: Float?
+            guard let buffer = DialogueChopRenderer.renderPad(pad(fr, line: line, analysis: analysis), source: source,
+                                                              analysis: analysis, gainDB: 0, level: &level),
+                  let x = buffer.floatChannelData?[0] else { return fr }
+            renders[fr.id] = buffer
+            let n = Int(buffer.frameLength)
+            let rate = buffer.format.sampleRate
+            // The attack needs the first 300 ms peak window and a little after it.
+            let head = min(n, Int(0.45 * rate))
+            let envelope = DialogueOnsetEnvelope(samples: x, count: n, rate: rate, span: 0..<head, filtered: false)
+            let attack = DialogueOnset.attack(envelope, samples: x, count: n, rate: rate, search: 0..<head, line: fr.kind == .line,
+                                              firstPeakShare: fr.weakLead ? DialogueMotifTuning.weakLeadPeakShare : 0.5)
+            let beat = fr.frames.lowerBound + attack.beatFrame
+            let range = DialogueMotifTuning.renderedAccentRange
+            guard attack.beatFrame > 0, beat < fr.frames.upperBound,
+                  Double(beat - fr.accentFrame) / rate >= range.lowerBound, Double(beat - fr.accentFrame) / rate <= range.upperBound
+            else { return fr }
+            var out = fr
+            out.accentFrame = beat
+            return out
+        }
+        return (out, renders)
     }
 
     /// The `motif` element of the plan log: the line, its pieces and the loop's cells.
@@ -579,7 +659,9 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
         for e in events.sorted(by: { ($0.block, $0.slot) < ($1.block, $1.slot) }) {
             let s = (e.block - loop * 4) * 64 + e.slot
             guard s >= 0, s < 256 else { continue }
-            bars[s / 16, default: []].append("\(s % 16)\(role(e.piece))")
+            // `/2` a hit held two sixteenths (D126), `/c` choked; a one-shot has no suffix.
+            let gate = e.gateEnd == "choke" ? "/c" : (e.gateEnd == "natural" ? "" : e.gateSteps.map { "/\(Int($0))" } ?? "")
+            bars[s / 16, default: []].append("\(s % 16)\(role(e.piece))\(gate)")
         }
         out += " bars=" + bars.keys.sorted().map { "b\($0 + 1):" + bars[$0]!.joined(separator: ",") }.joined(separator: " ")
         return out
@@ -754,7 +836,8 @@ private nonisolated struct Cutter {
             }
             guard let best = options.max(by: { value($0) < value($1) }) else { continue }
             let c = snap(best.frame, bounds: (r.lowerBound + least)..<(r.upperBound - least))
-            let (ta, tb) = Self.split(piece.text, at: Double(c - r.lowerBound) / Double(r.count), words: words, cut: c)
+            let (ta, tb) = Self.split(piece.text, at: Double(c - r.lowerBound) / Double(r.count),
+                                      words: words.filter { r.contains(($0.frames.lowerBound + $0.frames.upperBound) / 2) }, cut: c)
             let a = DialogueMotifFragment(id: fragments.count, kind: .half, order: piece.order, parent: id,
                                           frames: r.lowerBound..<c, accentFrame: accent(r.lowerBound..<c),
                                           fadeIn: piece.fadeIn, fadeOut: min(fadeOut, (c - r.lowerBound) / 4), text: ta)
@@ -765,7 +848,51 @@ private nonisolated struct Cutter {
             fragments.append(b)
             halves[id] = [a.id, b.id]
         }
-        return Result(fragments: fragments, pieces: pieces, halves: halves)
+        return Result(fragments: trimmed(fragments, words: words), pieces: pieces, halves: halves)
+    }
+
+    /// Every fragment starts at its waveform onset and lands its attack on the step (D126): the
+    /// valley-started pads played breath, room tone and the consonant up to 130 ms before the step,
+    /// and a weak first syllable put the heard attack up to 175 ms after it (D125 captures).
+    func trimmed(_ fragments: [DialogueMotifFragment], words: [DialogueWordSpan]) -> [DialogueMotifFragment] {
+        guard let line = fragments.first else { return fragments }
+        let context = frames(0.2)
+        let envelope = DialogueOnsetEnvelope(samples: samples, count: count, rate: rate,
+                                             span: max(0, line.frames.lowerBound - context)..<min(count, line.frames.upperBound))
+        let least = frames(DialogueMotifTuning.minimumPieceSeconds)
+        let wordEnds = words.map(\.frames.upperBound)
+        return fragments.map { fr in
+            var out = fr
+            var attack = DialogueOnset.attack(envelope, samples: samples, count: count, rate: rate, search: fr.frames,
+                                              line: fr.kind == .line)
+            // A transcribed piece never starts inside a word: a weak first syllable is then the beat (the
+            // sound starts on the step) instead of being trimmed off. Whole weak lead words ("to the"
+            // before "time") may still go.
+            let slack = frames(DialogueMotifTuning.wordStartSlackSeconds)
+            if fr.kind != .line, words.contains(where: { $0.frames.lowerBound >= fr.frames.lowerBound - slack
+                    && attack.startFrame > max($0.frames.lowerBound, fr.frames.lowerBound) + slack
+                    && attack.startFrame < $0.frames.upperBound - slack }) {
+                attack = DialogueOnset.attack(envelope, samples: samples, count: count, rate: rate, search: fr.frames,
+                                              firstPeakShare: DialogueMotifTuning.weakLeadPeakShare)
+                out.weakLead = true
+            }
+            if fr.frames.upperBound - attack.startFrame >= least {
+                // A weak lead word trimmed off a piece ("to the" before "time") leaves its text too.
+                let dropped = words.filter { (fr.frames.lowerBound..<attack.startFrame).contains(($0.frames.lowerBound + $0.frames.upperBound) / 2) }.count
+                if fr.kind != .line, dropped > 0, let text = fr.text {
+                    let tokens = text.split(separator: " ")
+                    if tokens.count > dropped { out.text = tokens.dropFirst(dropped).joined(separator: " ") }
+                }
+                out.frames = attack.startFrame..<fr.frames.upperBound
+                out.accentFrame = attack.beatFrame
+                out.fadeIn = attack.fadeIn
+                out.hardOnset = attack.hard
+            }
+            let inner = out.accentFrame..<out.frames.upperBound
+            out.cutPoints = Array(Set(valleys(out.frames).map(\.frame).filter { inner.contains($0) }
+                + wordEnds.filter { inner.contains($0) && $0 < out.frames.upperBound - frames(0.01) })).sorted()
+            return out
+        }
     }
 
     /// Text per piece from the words whose middles fall inside it.
@@ -780,6 +907,12 @@ private nonisolated struct Cutter {
     static func split(_ text: String?, at share: Double, words: [DialogueWordSpan], cut: Int) -> (String?, String?) {
         guard let text else { return (nil, nil) }
         let parts = text.split(separator: " ").map(String.init)
+        // With word timings, each half takes the words whose middles fall on its side of the cut
+        // ("is" | "completed." was split by letter share before, D126).
+        if words.count == parts.count, words.count > 1 {
+            let k = words.filter { ($0.frames.lowerBound + $0.frames.upperBound) / 2 < cut }.count
+            if k > 0, k < parts.count { return (parts[..<k].joined(separator: " "), parts[k...].joined(separator: " ")) }
+        }
         guard parts.count > 1 else {
             let letters = Array(text)
             let k = min(letters.count - 1, max(1, Int((Double(letters.count) * share).rounded())))
@@ -869,6 +1002,34 @@ nonisolated extension DialogueMotif {
         return (s, r, t)
     }
 
+    /// Gates of a cell's hook pieces (D126; user direction of 21 November 2026: "shorter chops that
+    /// are always on beat but triggered, repeated, held"). A stutter repeat holds one sixteenth; a
+    /// hit one or two steps before the next holds to it; otherwise the signature and the third are
+    /// 1/8 stabs, the response a quarter-note word, and the cell's last response plays out (the
+    /// answer heard whole). The line, the reversed pickup, the landing and pieces outside the hook's
+    /// vocabulary (the return's quiet piece) keep their natural length.
+    static func gated(_ items: [DialogueMotifCell.Item], cellSteps: Int, response: Int, vocabulary: Set<Int>) -> [DialogueMotifCell.Item] {
+        let playable = items.indices.filter { !items[$0].landing && items[$0].fragment != 0 }
+        let lastResponse = playable.last { items[$0].fragment == response }
+        return items.enumerated().map { k, item in
+            var out = item
+            guard item.fragment != 0, !item.landing, item.effect != .reversed, item.gainDB == 0,
+                  vocabulary.contains(item.fragment) else { return out }
+            // A stutter's repeats, and the hit that opens one, hold one sixteenth.
+            if item.after != nil || (k + 1 < items.count && items[k + 1].after != nil) { out.gate = 1; return out }
+            let next = items[(k + 1)...].first { !$0.landing }?.slot ?? cellSteps
+            let space = next - item.slot
+            if space <= 2 {
+                out.gate = max(1, space)
+            } else if item.fragment == response {
+                out.gate = k == lastResponse ? nil : min(space, 4)
+            } else {
+                out.gate = 2
+            }
+            return out
+        }
+    }
+
     /// The half of a piece its stutters repeat: the first half when the cut splits a word ("Sall-")
     /// or nothing carries text, else the half with the stronger word ("LSD." rather than "of").
     static func headHalf(_ piece: Int, fragments: [DialogueMotifFragment], halves: [Int: [Int]]) -> Int {
@@ -908,9 +1069,10 @@ nonisolated extension DialogueMotif {
         // A carried loop (the same line again: the films have no fresh one) never keeps the trigger
         // rhythm too, or 16 bars repeat exactly (C-D1; the `same` matrix case read 0.04 difference).
         if template == avoidTemplate { template = (template + 1) % DialogueMotifTuning.hookTemplates.count }
-        let hook = DialogueMotifTuning.hookTemplates[template].map { role, step in
+        let vocabulary: Set<Int> = [s, r, t, sa, ra]
+        let hook = gated(DialogueMotifTuning.hookTemplates[template].map { role, step in
             at(role == .s ? s : (role == .r ? r : t), step)
-        }
+        }, cellSteps: 32, response: r, vocabulary: vocabulary)
         let barA = hook.filter { $0.slot < 16 }, barB = hook.filter { $0.slot >= 16 }
         var echoed = hook
         echoed[echoed.count - 1].effect = .echoThrow
@@ -944,7 +1106,10 @@ nonisolated extension DialogueMotif {
                                   at(r, 24), Item(fragment: s, slot: 32, landing: true)]),
         ]
         let arranged = cells.enumerated().map { k, c in
-            DialogueMotifCell(kind: c.0, bar: 2 * k, bars: 2, variant: template, items: c.1)
+            // The drop-out keeps its words whole (a word, a pause); every other cell holds its hook
+            // pieces for their gates (D126).
+            DialogueMotifCell(kind: c.0, bar: 2 * k, bars: 2, variant: template,
+                              items: c.0 == .splitPause ? c.1 : gated(c.1, cellSteps: 32, response: r, vocabulary: vocabulary))
         }
         return (arranged, DialogueMotifHook(template: template, signature: s, response: r, third: t, items: hook))
     }
@@ -965,6 +1130,26 @@ nonisolated enum DialogueMotifPerformer {
         var effect: DialogueMotifCell.Item.Effect
         var landing: Bool
         var choked = false
+        var gate: Int? = nil
+        /// How the dry piece ends: `natural`, `gate`, `valley` or `choke`.
+        var gateEnd = "natural"
+    }
+
+    /// The end of a hit whose attack is on take sixteenth `s` and whose pad starts at `start` (D126):
+    /// `gate` sixteenths on the drummer's grid less `gateLeadSeconds`, or a cut point of the piece up
+    /// to `valleySnapSeconds` before that; never past the piece's natural end.
+    static func gatedEnd(_ fragment: Int, start: Double, sixteenth s: Int, gate: Int?, motif: DialogueMotif,
+                         snapshot: DialogueTransportSnapshot) -> (end: Double, kind: String) {
+        let natural = start + motif.seconds(fragment)
+        guard let gate, gate > 0, fragment != 0 else { return (natural, "natural") }
+        let target = snapshot.gridTime(sixteenth: s + gate) - DialogueMotifTuning.gateLeadSeconds
+        guard target < natural else { return (natural, "natural") }
+        let fr = motif.fragments[fragment]
+        let least = start + motif.accentOffset(fragment) + DialogueMotifTuning.minimumGateSeconds
+        let valleys = fr.cutPoints.map { start + Double($0 - fr.frames.lowerBound) / motif.sampleRate }
+            .filter { $0 <= target && $0 >= target - DialogueMotifTuning.valleySnapSeconds && $0 >= least }
+        if let v = valleys.max() { return (v, "valley") }
+        return (min(natural, max(target, least)), "gate")
     }
 
     /// The plan for the motif's bars inside `window`, from `earliestStart` on.
@@ -1014,7 +1199,8 @@ nonisolated enum DialogueMotifPerformer {
                 // The section's dry budget; the line statement, the turnaround's landing and the phrase-end
                 // stutter (its repeats choke each other, so they cost little) always play.
                 let stutterFill = cell.kind == .stutter && item.slot >= 16
-                if item.fragment != 0, !item.landing, !stutterFill, drySeconds() + length > budget { continue }
+                let budgeted = item.fragment != 0 && !item.landing && !stutterFill
+                if budgeted, item.gate == nil, drySeconds() + length > budget { continue }
                 let shift = firstInCell && placed.isEmpty ? DialogueMotifTuning.lateSlotShift : DialogueMotifTuning.slotShift
                 let candidates: [Int]
                 if let gap = item.after {
@@ -1032,8 +1218,11 @@ nonisolated enum DialogueMotifPerformer {
                 for s in candidates {
                     let accent = snapshot.gridTime(sixteenth: s)
                     let start = accent - offset
-                    let end = start + length
+                    let gated = item.effect == .reversed ? (end: start + length, kind: "natural")
+                        : gatedEnd(item.fragment, start: start, sixteenth: s, gate: item.gate, motif: motif, snapshot: snapshot)
+                    let end = gated.end
                     guard start >= floor else { continue }
+                    if budgeted, item.gate != nil, drySeconds() + (end - start) > budget { break }
                     if item.landing {
                         // The landing piece sits on the next loop's downbeat only when this window reaches it.
                         guard start < upper, end <= upper + snapshot.beatLength(at: Double(s) / 4), item.slot >= cell.bars * 16 else { continue }
@@ -1048,9 +1237,11 @@ nonisolated enum DialogueMotifPerformer {
                         // must not stretch that piece past its pad (D124 seed-19 finding).
                         placed[placed.count - 1].end = min(placed[placed.count - 1].end, start - DialogueTuning.chokeLeadSeconds)
                         placed[placed.count - 1].choked = true
+                        placed[placed.count - 1].gateEnd = "choke"
                     }
                     placed.append(Placed(fragment: item.fragment, cell: cell.kind, sixteenth: s, accent: accent, start: start, end: end,
-                                         gainDB: item.gainDB, effect: item.effect, landing: item.landing))
+                                         gainDB: item.gainDB, effect: item.effect, landing: item.landing, gate: item.gate,
+                                         gateEnd: gated.kind))
                     prevEnd = end
                     if item.fragment == 0 { statements += 1 }
                     done = true
@@ -1128,7 +1319,8 @@ nonisolated enum DialogueMotifPerformer {
             for (slot, f) in hookItems + generic {
                 let accent = snapshot.gridTime(sixteenth: s0 + slot)
                 let start = accent - motif.accentOffset(f)
-                var end = start + motif.seconds(f)
+                let gated = gatedEnd(f, start: start, sixteenth: s0 + slot, gate: DialogueMotifTuning.repairGate, motif: motif, snapshot: snapshot)
+                var end = gated.end
                 guard start >= barStart, start < barEnd, start >= max(hard, floor) else { continue }
                 let previous = placed.lastIndex { $0.start < start }
                 let next = placed.firstIndex { $0.start >= start }
@@ -1149,9 +1341,11 @@ nonisolated enum DialogueMotifPerformer {
                 if chokePrevious, let p = previous {
                     placed[p].end = min(placed[p].end, start - DialogueTuning.chokeLeadSeconds)
                     placed[p].choked = true
+                    placed[p].gateEnd = "choke"
                 }
                 var e = Placed(fragment: f, cell: .repair, sixteenth: s0 + slot, accent: accent, start: start, end: end,
-                               gainDB: returnBar ? DialogueMotifTuning.returnPieceDB : 0, effect: .none, landing: false)
+                               gainDB: returnBar ? DialogueMotifTuning.returnPieceDB : 0, effect: .none, landing: false,
+                               gate: DialogueMotifTuning.repairGate, gateEnd: chokedSelf ? "choke" : gated.kind)
                 e.choked = chokedSelf
                 placed.insert(e, at: next ?? placed.count)
                 break
@@ -1202,6 +1396,13 @@ nonisolated enum DialogueMotifPerformer {
             event.cell = p.cell
             event.piece = p.fragment
             event.effect = effect
+            event.gateSteps = p.gate.map(Double.init)
+            event.gateEnd = p.gateEnd
+            // The dry buffer is cut here (with the gate's short release, or the choke's) even when an
+            // echo tail follows it: a gated stab thrown into its echo.
+            if p.gateEnd != "natural" || p.choked { event.drySeconds = p.end - p.start }
+            let sourceStart = motif.fragments[p.fragment].frames.lowerBound
+            event.sourceFrames = sourceStart..<(sourceStart + Int(((p.end - p.start) * motif.sampleRate).rounded()))
             out.append(event)
         }
         return out
@@ -1254,7 +1455,8 @@ nonisolated struct DialogueMotifPlan: @unchecked Sendable {
 
     /// Chops of every part, each rendered from its own motif's source.
     func render() -> [DialogueChop] {
-        parts.flatMap { DialogueEngine.render($0.plan, bank: $0.motif.bank, source: $0.motif.source, analysis: $0.motif.analysis) }
+        parts.flatMap { DialogueChopRenderer.render($0.plan, bank: $0.motif.bank, source: $0.motif.source, analysis: $0.motif.analysis,
+                                                    prerendered: $0.motif.renders) }
             .sorted { $0.event.startTime < $1.event.startTime }
     }
 

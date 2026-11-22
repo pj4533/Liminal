@@ -202,8 +202,9 @@ struct DialogueMotifTests {
                 if motif.text?.contains("LSD") == true { #expect(signature.contains("LSD"), "\(label)"); seen.insert("LSD") }
                 let pieces = loop.events.compactMap(\.piece).filter { $0 != 0 }
                 let counts = Dictionary(grouping: pieces, by: { $0 }).mapValues(\.count)
-                #expect(counts.max { $0.value < $1.value }?.key == hook.signature || counts[hook.signature] == counts.values.max(),
-                        "\(label): counts \(counts)")
+                // Within one hit of the most played piece: gated hits (D126) leave room for one more
+                // response in some loops.
+                #expect((counts[hook.signature] ?? 0) >= (counts.values.max() ?? 0) - 1, "\(label): counts \(counts)")
                 let phrase = loop.snapshot.phraseAtOrigin
                 let steps = loop.events.filter { $0.piece == hook.signature }.map { ((($0.block - phrase) * 64 + $0.slot) % 32) }
                 let modal = Dictionary(grouping: steps, by: { $0 }).values.map(\.count).max() ?? 0
@@ -386,9 +387,13 @@ struct DialogueMotifTests {
                 let line = motif.line.frames
                 let pieces = motif.pieces.map { motif.fragments[$0] }
                 #expect(pieces.count >= 2, "\(shape): \(pieces.count) pieces")
-                // Pieces tile the line in source order.
-                #expect(pieces.first?.frames.lowerBound == line.lowerBound && pieces.last?.frames.upperBound == line.upperBound)
-                for (a, b) in zip(pieces, pieces.dropFirst()) { #expect(a.frames.upperBound == b.frames.lowerBound) }
+                // Pieces run through the line in source order; each starts at its waveform onset (D126), so
+                // the breath or room tone after a cut is no longer part of the next piece.
+                #expect((pieces.first?.frames.lowerBound ?? -1) >= line.lowerBound && pieces.last?.frames.upperBound == line.upperBound)
+                for (a, b) in zip(pieces, pieces.dropFirst()) {
+                    #expect(a.frames.upperBound <= b.frames.lowerBound)
+                    #expect(b.accentFrame - b.frames.lowerBound <= Int(0.034 * rate), "\(shape): \(b.accentFrame - b.frames.lowerBound) frames before the accent")
+                }
                 // Every fragment is at least 120 ms; cuts never fall inside a vowel nucleus.
                 let vowels = film.fixture.syllables.map { Int(($0.lowerBound + 0.012) * rate)..<Int(($0.upperBound - 0.012) * rate) }
                 for fragment in motif.fragments {
@@ -403,7 +408,10 @@ struct DialogueMotifTests {
                     let gaps = zip(film.fixture.words, film.fixture.words.dropFirst()).map { ($0.end - 0.07)...($1.start + 0.07) }
                     for piece in pieces.dropFirst() {
                         let t = Double(piece.frames.lowerBound) / rate
-                        #expect(gaps.contains { $0.contains(t) }, "\(shape): cut at \(t) s not between words")
+                        // Between words, or near a word's onset: a lead syllable more than 6 dB under the next one is
+                        // trimmed (D126), so a piece may start at the stressed syllable of its first word.
+                        #expect(gaps.contains { $0.contains(t) } || film.fixture.words.contains { abs($0.start - t) <= 0.07 },
+                                "\(shape): cut at \(t) s not between words")
                         #expect(piece.text != nil)
                     }
                 }
@@ -449,7 +457,7 @@ struct DialogueMotifTests {
                 let rate = chop.buffer.format.sampleRate
                 // The buffer plays exactly the event (native rate, choked or with its echo tail), never longer.
                 #expect(abs(frames / rate - chop.event.duration) < 0.003, "\(shape): \(frames / rate) s for \(chop.event.duration) s")
-                if case .echoThrow = chop.event.effect {} else if chop.event.chokeAt == nil, let piece = chop.event.piece {
+                if case .echoThrow = chop.event.effect {} else if chop.event.chokeAt == nil, chop.event.drySeconds == nil, let piece = chop.event.piece {
                     #expect(abs(frames - Double(motif.fragments[piece].frames.count)) <= 2)
                 }
                 let samples = UnsafeBufferPointer(start: chop.buffer.floatChannelData![0], count: Int(chop.buffer.frameLength))

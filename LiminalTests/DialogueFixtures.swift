@@ -285,6 +285,9 @@ enum DialogueFixtures {
         }
     }
 
+    /// Syllables the synthetic voice speaks for a word (its vowel clusters).
+    static func syllablesCount(_ word: String) -> Int { Voice.syllables(word).count }
+
     static func bandpass(_ x: [Float], hz: Double, q: Double, rate: Double) -> [Float] {
         let w0 = 2 * .pi * min(hz, rate * 0.45) / rate, alpha = sin(w0) / (2 * max(q, 0.3))
         let a0 = 1 + alpha

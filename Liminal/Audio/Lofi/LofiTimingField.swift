@@ -95,6 +95,62 @@ nonisolated struct LofiTimingField: Sendable {
         return weighted / total * fade
     }
 
+    /// Clamp of a sixteenth's offset in beats: straight-ish on 8th positions, swung later on the
+    /// odd sixteenths ("e" and "a"), as AJ Hall plays them (D126).
+    static let evenStepClamp: ClosedRange<Double> = -0.06...0.06
+    static let oddStepClamp: ClosedRange<Double> = -0.04...0.19
+    /// Neighbouring sixteenths keep at least this many beats between them.
+    static let minimumStepSpacing = 0.02
+
+    /// The drummer's offset in beats at each of the take's `count` sixteenths, for the dialogue
+    /// chops' step grid (D126). Each confident kick or snare belongs to at most one step: the step
+    /// it follows within a quarter of a sixteenth, an even step it precedes by at most a quarter,
+    /// or, between, an odd step it follows (a swung "e" or "a"). A step without its own hit takes the
+    /// take's median offset for its place in the beat; it never borrows a neighbour's hit, which
+    /// put a step a whole swung sixteenth early (the D125 captures' step 8 on the pickup kick).
+    func sixteenthOffsets(count: Int = 256) -> [Double] {
+        guard count > 0 else { return [] }
+        var assigned = [(offset: Double, confidence: Float)?](repeating: nil, count: count)
+        if framesPerBeat > 0 {
+            for landmark in landmarks where (landmark.kind == .kick || landmark.kind == .snare)
+                && landmark.confidence >= Self.anchorConfidence {
+                let x = Double(landmark.attackFrame) / framesPerBeat * 4
+                let below = Int(x.rounded(.down))
+                let q = x - Double(below)
+                let step: Int?
+                if q <= 0.24 {
+                    step = below
+                } else if q >= 0.76 {
+                    step = (below + 1).isMultiple(of: 2) ? below + 1 : nil
+                } else {
+                    step = below.isMultiple(of: 2) ? nil : below
+                }
+                guard let step, step >= 0, step < count else { continue }
+                let offset = (x - Double(step)) / 4
+                if let current = assigned[step], current.confidence >= landmark.confidence { continue }
+                assigned[step] = (offset, landmark.confidence)
+            }
+        }
+        var classMedian = [Double](repeating: 0, count: 4)
+        for c in 0..<4 {
+            let values = stride(from: c, to: count, by: 4).compactMap { assigned[$0]?.offset }.sorted()
+            guard !values.isEmpty else { continue }
+            let mid = values.count / 2
+            classMedian[c] = values.count.isMultiple(of: 2) ? (values[mid - 1] + values[mid]) / 2 : values[mid]
+        }
+        var out = (0..<count).map { s -> Double in
+            let raw = assigned[s]?.offset ?? classMedian[s % 4]
+            let clamp = s.isMultiple(of: 2) ? Self.evenStepClamp : Self.oddStepClamp
+            return min(max(raw, clamp.lowerBound), clamp.upperBound)
+        }
+        // Strictly increasing step times: a step never sits closer than `minimumStepSpacing` to the one before.
+        for s in 1..<count {
+            let earliest = out[s - 1] - 0.25 + Self.minimumStepSpacing
+            if out[s] < earliest { out[s] = earliest }
+        }
+        return out
+    }
+
     // MARK: Diagnostics
 
     /// Median signed distance of confident kicks from their nearest sixteenth, in beats.

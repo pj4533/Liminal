@@ -5,31 +5,45 @@ import Foundation
 /// Renders pads to dry chops (plan 4.6, 8.5): linked-rate resample, per-band noise weighting,
 /// the per-cut vocal chain, refined edges, choke truncation, K-weighted levelling and role trims. Offline only.
 nonisolated enum DialogueChopRenderer {
-    private struct Key: Hashable { let pad: Int; let frames: Int; let gain: UInt32; let effect: DialogueChopEffect }
+    private struct Key: Hashable { let pad: Int; let dry: Int; let frames: Int; let gain: UInt32; let effect: DialogueChopEffect }
 
     /// One buffer per (pad, choke length, gain, effect) inside a call, so exact repeats share an instance.
+    /// `prerendered` holds full-length 0 dB renders by pad id (a motif's, D126); a hit of such a pad is
+    /// a prefix of it with the gate's release and the hit's gain.
     static func render(_ plan: DialoguePerformancePlan, bank: DialoguePadBank, source: DialogueSource,
-                       analysis: DialogueAnalysis) -> [DialogueChop] {
+                       analysis: DialogueAnalysis, prerendered: [Int: AVAudioPCMBuffer] = [:]) -> [DialogueChop] {
         var cache: [Key: AVAudioPCMBuffer] = [:]
         var levels: [Int: Float] = [:]
         var chops: [DialogueChop] = []
         for event in plan.events {
             guard let pad = bank.pad(event.padID) else { continue }
             let full = outputCount(pad)
-            var frames = event.chokeAt == nil ? full : min(full, Int((event.duration * source.sampleRate).rounded()))
+            let sr = source.sampleRate
+            // A gated or choked hit is cut to its dry length (D126: the pad is held for its gate).
+            let dry = event.drySeconds ?? (event.chokeAt == nil ? nil : event.duration)
+            let frames = dry.map { min(full, Int(($0 * sr).rounded())) } ?? full
             var total = frames
-            if case .echoThrow = event.effect {
-                frames = full
-                total = max(full, Int((event.duration * source.sampleRate).rounded()))
-            }
+            if case .echoThrow = event.effect { total = max(frames, Int((event.duration * sr).rounded())) }
             guard frames > 1 else { continue }
-            let key = Key(pad: pad.padID, frames: total, gain: event.gainDB.bitPattern, effect: event.effect)
+            let key = Key(pad: pad.padID, dry: frames, frames: total, gain: event.gainDB.bitPattern, effect: event.effect)
             if let buffer = cache[key] {
                 chops.append(DialogueChop(event: event, buffer: buffer))
                 continue
             }
-            guard var rendered = renderPad(pad, source: source, analysis: analysis, frames: frames,
-                                           gainDB: event.gainDB, level: &levels[pad.padID]) else { continue }
+            // A gate closes with a short raised-cosine release (a quarter of the gate when shorter);
+            // a choke keeps its 12 ms one.
+            let gated = event.gateEnd == "gate" || event.gateEnd == "valley"
+            let release = gated ? min(DialogueMotifTuning.gateReleaseSeconds, Double(frames) / sr / 4) : DialogueTuning.chokeReleaseSeconds
+            // Every gate of one pad shares the full pad's levelling gain (`levels`), so a stab and the
+            // word it was cut from play at one level.
+            var made: AVAudioPCMBuffer?
+            if let full = prerendered[pad.padID], Int(full.frameLength) == outputCount(pad) {
+                made = prefix(full, frames: frames, release: release, gainDB: event.gainDB)
+            } else {
+                made = renderPad(pad, source: source, analysis: analysis, frames: frames, release: release,
+                                 gainDB: event.gainDB, level: &levels[pad.padID])
+            }
+            guard var rendered = made else { continue }
             if event.effect != .none, let processed = apply(event.effect, to: rendered, frames: total) { rendered = processed }
             cache[key] = rendered
             chops.append(DialogueChop(event: event, buffer: rendered))
@@ -105,6 +119,7 @@ nonisolated enum DialogueChopRenderer {
     /// Renders one pad. `frames` below the full length truncates for a choke with a 12 ms release.
     /// `level` caches the levelling gain of the full-length render so choked copies match it.
     static func renderPad(_ pad: DialoguePad, source: DialogueSource, analysis: DialogueAnalysis, frames requested: Int? = nil,
+                          release releaseSeconds: Double = DialogueTuning.chokeReleaseSeconds,
                           gainDB: Float, level: inout Float?) -> AVAudioPCMBuffer? {
         let rate = pad.transform.playbackRate
         let sr = source.sampleRate
@@ -198,7 +213,7 @@ nonisolated enum DialogueChopRenderer {
         if !gain.isFinite { gain = 0 }
         if count < full {
             out.removeLast(full - count)
-            let release = min(count / 2, Int(DialogueTuning.chokeReleaseSeconds * sr))
+            let release = min(count / 2, max(2, Int(releaseSeconds * sr)))
             ramp(&out, from: count - release, length: release, rising: false)
             out[count - 1] = 0
         }
@@ -207,6 +222,30 @@ nonisolated enum DialogueChopRenderer {
               let channels = buffer.floatChannelData else { return nil }
         buffer.frameLength = AVAudioFrameCount(count)
         for ch in 0..<Int(source.buffer.format.channelCount) {
+            out.withUnsafeBufferPointer { channels[ch].update(from: $0.baseAddress!, count: count) }
+        }
+        return buffer
+    }
+
+    /// The first `frames` of a full render with a raised-cosine release of `release` seconds (when
+    /// shorter than the render) and `gainDB`, as `renderPad` truncates a choke.
+    static func prefix(_ full: AVAudioPCMBuffer, frames requested: Int, release releaseSeconds: Double, gainDB: Float) -> AVAudioPCMBuffer? {
+        let n = Int(full.frameLength)
+        let count = min(n, requested)
+        guard count > 1, let input = full.floatChannelData?[0],
+              let buffer = AVAudioPCMBuffer(pcmFormat: full.format, frameCapacity: AVAudioFrameCount(count)),
+              let channels = buffer.floatChannelData else { return nil }
+        var out = Array(UnsafeBufferPointer(start: input, count: count))
+        if count < n {
+            let release = min(count / 2, max(2, Int(releaseSeconds * full.format.sampleRate)))
+            ramp(&out, from: count - release, length: release, rising: false)
+            out[count - 1] = 0
+        }
+        var gain = powf(10, gainDB / 20)
+        if !gain.isFinite { gain = 0 }
+        vDSP_vsmul(out, 1, &gain, &out, 1, vDSP_Length(count))
+        buffer.frameLength = AVAudioFrameCount(count)
+        for ch in 0..<Int(full.format.channelCount) {
             out.withUnsafeBufferPointer { channels[ch].update(from: $0.baseAddress!, count: count) }
         }
         return buffer

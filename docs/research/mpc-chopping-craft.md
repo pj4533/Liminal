@@ -116,6 +116,16 @@ Without a verified numeric source, keep to the handoff: preserve AJ's timing; ap
 - NEW: Pete Rock moved to longer loops; speech-to-song repetition findings (exactness matters, shuffling and transposition destroy the effect); concrete cadence rule (4/8/16); off-beat sixteenth placement as a Kaytranada-style bias; rate shift budget and formant caution.
 - UNVERIFIED gaps: Premier scratch hook mechanics, RZA, 9th Wonder, Knxwledge, Madlib dialogue chopping, academic work specifically on automatic chopping of speech.
 
+## 7. Tight onsets, gates and the vocal chop arc (addendum, 21 November 2026)
+
+From general knowledge, with no new web search; not verified against a source. It supersedes the "gating is for texture only" reading of 1.5.
+
+- **Note-on pads.** Producers play one slice at several hold lengths: the slice point is only a start, and holding plays on into the following material. A short hold is a stab, a long one the phrase.
+- **The slice starts on the transient.** Manual chopping puts the slice on the transient with a 1 to 5 ms fade at a zero crossing. Threshold auto-slicing is routinely nudged later, because the detector fires early on noise and breath.
+- **Perceptual centre** (Morton, Marcus and Frankish 1976; Scott 1998). The felt beat of a syllable is near its vowel onset and moves later with a longer onset consonant; a plosive's burst is the attack. Singers and rappers start a fricative before the beat so the vowel lands on it, and put an unstressed first syllable before the beat as a pickup.
+- **Length against tempo.** At 62 to 90 BPM a sixteenth is 167 to 242 ms and an eighth 333 to 484 ms; an English syllable is about 150 to 250 ms and a word 300 to 500 ms. A syllable is about a sixteenth and a word an eighth to a dotted eighth, so pieces of two to four steps played whole read as phrases, not as rhythm.
+- **The vocal chop arc.** State the phrase, loop one or two slices in a rhythm locked to the kick and snare, build by halving note values into the bar line with a delay throw, drop to one held word with delay, then restate the phrase with internal repeats. Exact repetition inside the chop section is what makes it musical (3.2).
+
 ## Sources
 
 - https://www.redbullmusicacademy.com/lectures/dj-premier-you-know-my-steez/

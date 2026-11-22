@@ -56,6 +56,12 @@ Status: plan. Numbers marked *start* are tuning hypotheses exposed as named cons
 >
 > The user's next clip should come from a capture that uses the transcript path when on-device Apple transcription assets are available, so pieces align with real words.
 
+> **User direction on tight, gated chops and the 16-bar arc, 21 November 2026 (binding; supersedes craft note 1.5's "gating is for texture only" and the D125 rule that pieces play to their natural end).** After the D125 hook build on Vision Pro: "it still feels ... like the chops aren't tight enough ... you need to pay more attention to the waveform of the sample so that, when you trigger the sample, it immediately hits the word on beat. And they need to be shorter ... it only plays when you hold it ... let more of a waveform play if it hits on beat, but if it doesn't, you like stop it ... shorter chops that are always on beat but triggered, repeated, held ... as long as you're still telling the whole story." Each 16 bars should introduce the whole line, then chop it into a little beat (a word here, a word and a syllable there), build up, break down and close with an outro that plays the whole line again with some parts repeated, varied so it is never the same twice.
+>
+> 1. **Tight.** A chop's sound starts on its step: pads start at the waveform onset, the word's attack lands on the step, and the step follows the drummer's own hit, never a neighbour's (D126, done).
+> 2. **Short and gated.** Every hit is held for a gate in sixteenths and cut before the next step, so the same pad can play as a stab, a syllable, a word or the whole phrase (D126, done for the D125 arrangement).
+> 3. **The 16-bar arc.** Intro (the whole line on the downbeat), chop beat, build, breakdown and outro, varied by seed (plan of 21 November 2026, part 2; not yet implemented).
+
 ## 1. Goals and non-goals
 
 Goals

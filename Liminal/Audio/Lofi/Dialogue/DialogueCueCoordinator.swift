@@ -118,7 +118,8 @@ nonisolated enum DialogueCueCoordinator {
                                                  phraseAtOrigin: info.phraseAtTakeStart, kicks: kicks, snares: snares)
         snapshot.leadNotes = leadNotes(info, blocks: blocks(snapshot, window: window))
         if let timing = info.timing {
-            snapshot.grooveOffsets = (0..<DialogueTransportSnapshot.takeSixteenths).map { timing.offset(atBeat: Double($0) / 4) }
+            // Each step follows only its own kick or snare (D126), never a neighbour's.
+            snapshot.grooveOffsets = timing.sixteenthOffsets(count: DialogueTransportSnapshot.takeSixteenths)
         }
         return snapshot
     }
