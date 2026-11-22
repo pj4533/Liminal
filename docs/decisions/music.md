@@ -992,3 +992,73 @@ An adversarial pass on footage captures (`mix-matrix.sh`, cases ref, long, fast,
   - Unchanged: `long` C-D9 (the first 8 bars are empty in this case, as before), `fast` C-B2 and `ref` and `fast` C-B8.
   - C-B8's loudness spread grew in `ref` (2.37 to 4.14 LU) and `fast` (1.10 to 3.37 LU). The quietest featured spans are runs of three 1/16 kick-locked stabs, which stop before the vowel's full level. No gains were changed; this is left to the ear and to the C-B8 bound.
 - **Not checked.** Nothing was heard by ear or tested on the device. C-D10 to C-D12 are still not in `scripts/mixlib`.
+
+## D127. The chop beat mixes its pieces, plays off the drums and has a feel per loop (2026-11-21/22)
+
+**Direction.** On the D126 build the user wrote: "I think the chopped samples repeat too simplistically a bit too much. I like when it doesn't repeat the same chop over and over in a row. Better to mix it up, on beat chops. With swing. Or Dilla style. Playing off the drumbeats."
+
+**Measured first** (`DialogueChopVarietyProbeTests`, new; the D126 code; chop beat is bars 3-6, build bars 7-8):
+
+- The D126 groove filled the skeleton with the signature's head on every free modal kick step, repeated the head an 8th after each skeleton hit, and put the response on free snare steps. On the installed takes (eight takes, their own landmarks) 51 percent of chop-beat hits sat on a kick and 3 percent in a gap between drum hits; one piece fired twice in a row on 27 percent of consecutive pairs (up to 52 percent on CONDUCTOR); a 2-bar cell used 3.6 pieces. The build's bar 8 rolls ran up to six of one piece, unmarked.
+- Every confident snare counted as a snare step, so a take's ghost notes (snares at 0.1 to 0.4 of the take's typical strength, on 5 to 15 steps of a 2-bar cell in the installed takes) read as backbeats and drew response stabs.
+- On the footage matrix (D126 verification captures) one piece fired twice in a row on 30 percent (`ref`), 16 percent (`fast`) and 41 percent (`same`) of chop-beat pairs, with 3.4 to 4.0 pieces per 2-bar cell.
+
+**Change** (`DialogueChopBeat.swift`, new; `DialogueMotif.arrange`, `DialogueMotifDrums`, `DialogueMotifPerformer.perform`):
+
+- **Drums.** `DialogueLandmark` carries the landmark's `strength`. `DialogueMotifDrums` splits snares into full snares (strength above 0.45) and ghost notes (at most 0.45, confidence from 0.25), each modal in half the take's 2-bar pairs.
+- **Skeleton.** The hook template's S, R and T keep their steps (D125) except that a hit on a kick that is not a downbeat moves an 8th later (or earlier) to a step without a kick, onto a snare only for the response. It depends on the take alone, so the skeleton still holds for the template's two loops.
+- **Fill.** Each bar is filled to six onsets (five when the drummer plays on 13 or more of its sixteenths) by repeatedly taking the best-scoring free step that keeps D126's limits (three consecutive sixteenths at most, a beat without an onset): the 8th after a backbeat snare (2.6), a gap (2.0), a ghost-note pocket (1.8 on an 8th, 1.2 on an odd sixteenth), the swung "a" into one downbeat per cell (2.4, a seeded bar), a non-backbeat snare (0.3), the downbeat kick (0.6), another kick (-0.6). The drummer's busiest beat loses 1.4, a step between two drum hits 0.6 and a step next to another stab 0.7. At most two stabs per cell sit on odd sixteenths. A seeded spread (0 to 1.2) moves the fill every loop.
+- **Pieces.** Each stab takes, in time order, the cut its site prefers (`GrooveVocabulary`: gaps the signature's head and tail halves, then T and the response's halves; answers the response's halves; ghosts and pickups the shortest halves; the line's other words last) that differs from the hits on either side, with a seeded rotation per site kind. Gates are 1 or 2 sixteenths by site (seeded). The build's bar-7 stab and the turn's step-30 stab also take a cut their neighbours do not play.
+- **Stutters.** `DialogueMotifCell.Item.stutter` marks the only deliberate repeats: the build's rolls (halving's repeats and the ladder's restart) and the chop beat's turnaround stutter. Events carry `stutter`.
+- **Feel.** `DialogueFeel` (`DialogueArc.feel`, drawn from its own seeded stream so D126's section variants are unchanged; never the same as the previous loop's): grid (the take's own swing), laid (and +8, e +18, a +14 ms), rush (+4, +12, -16), drunk (+14, +24, +6), ahead (-6, -4, -12). The offset is added to the accent of chop-beat and build stabs on the "and", "e" and "a"; quarter steps, the line, reversed pickups and repairs stay on the drummer's grid. Every offset is within 25 ms (`maximumFeelSeconds`), inside the 25 ms the runtime tests allow off the grid. The arc name gains `F<n>`; consecutive arcs still differ in at least two section fields.
+- **A line that may not be reordered.** Before, every bar's new pieces had to be in source order. Now each run of a bar up to and including a signature hit (and the run after the bar's last one) plays its new pieces in source order, counting only pieces new to the bar. The line's words lead into its signature and a negation is never heard reversed. A 200 s app run showed why: "we can't call them brains." put S, R and T on "brains.", every fill site failed the old rule, and the chop beat played "brains." twelve times in a row (`chopRepeat=12/12`).
+- **Bug found by the app run.** A fill site with no fitting cut was removed from the groove while later sites still read it, and the first macOS run crashed on the force unwrap (`DialogueChopBeat.swift:233`). Dropped sites are now kept in a set and skipped. Regression tests: `aOnePieceLineDropsItsFillWithoutCrashing` (crashes the test host on the old code) and `aLineThatMayNotBeReorderedDropsSitesSafelyOnAnyDrums`.
+- **Logs.** The hook line adds `feel=`, `chopRepeat=` and `chopPieces=`, marks the signature's and response's halves `s` and `r` and stutters `~`. The plan log's arc carries `feel` and `feelName`, and its hook the `skeleton`. The capture manifest's chops carry `stutter` and `feelMs`.
+- **Kept.** D125's roles, templates and backbeat answer, the 2-bar cell twice in bars 3-6 (bars 5-6 equal 3-4 but for the last beat), D126's onsets, gates, arc sections and coverage repair, the dry budget, the cue token and revision, the acoustic fallback and all threading.
+
+**Measured after** (same probe, same seeds; fixture: 3 shapes by 6 seeds by 3 loops on a boom-bap take with ghost notes and an 0.08-beat swing; takes: eight installed takes by two seeds):
+
+| Chop beat (bars 3-6) | fixture before | fixture after | takes before | takes after |
+|---|---|---|---|---|
+| Same piece and gate twice in a row | 0.054 | 0.003 | 0.160 | 0.000 |
+| Same piece twice in a row (any gate) | 0.202 | 0.037 | 0.268 | 0.028 |
+| The same, not marked as a stutter | 0.202 | 0.026 | 0.268 | 0.014 |
+| Longest run of one piece | 2.2 | 1.5 | 2.6 | 1.4 |
+| Pieces per bar / per 2-bar cell (least) | 3.8 / 4.4 (4.4) | 4.8 / 6.3 (6.0) | 3.3 / 3.6 (3.4) | 4.7 / 6.1 (6.0) |
+| On a kick / snare / ghost / gap | 0.33 / 0.20 / 0.05 / 0.42 | 0.17 / 0.19 / 0.06 / 0.58 | 0.51 / 0.24 / 0.23 / 0.03 | 0.20 / 0.26 / 0.46 / 0.08 |
+| Odd sixteenths | 0.05 | 0.12 | 0.19 | 0.11 |
+| Bars 3-4 against 5-6 (Jaccard, before the last beat) | 1.00 | 1.00 (min 0.89) | 0.99 | 1.00 |
+| Hits per 4 bars | 25 | 24 | 25 | 23.5 |
+
+In the build (bars 7-8) unmarked same-piece pairs fell from 0.295 to 0.013 (fixture) and from 0.301 to 0.000 (takes); its 2.5 marked stutters a loop are the rolls.
+
+**Footage matrix** (`mix-matrix.sh`, cases ref, fast and same with private drums, against the D126 verification captures):
+
+- **Variety.** One piece twice in a row in the chop beat: `ref` 0.30 to 0.00, `fast` 0.16 to 0.00, `same` 0.41 to 0.01. Pieces per 2-bar cell 3.8, 4.0 and 3.4 became 6.0, 6.5 and 5.4. Chop-beat onsets per bar are 4 to 7.
+- **Off the kicks.** C-D8's share of accents at least 50 ms from a kick went from 0.65 to 0.81 (`ref`), 0.48 to 0.67 (`fast`, so its warn is gone) and 0.64 to 0.79 (`same`).
+- **Tightness held.** The independent onset detector (the steepest rise of a 10 ms log envelope in 300 Hz to 3.4 kHz, against `accentFrame`, which includes the feel) reads for `ref` sub-line pieces a median of -6.1 ms, p5 -24.6 ms and p95 -3.1 ms, with none more than 35 ms off. That is the D126 figure to the tenth (-6.1, -24.6, -3.0). `fast` reads -3.4 / -8.5 / +34.5 and `same` -5.9 / -27.3 / -3.4, again with none over 35 ms. Against the drum stem's own hit, the quarter steps in `ref` read medians of -4.5 (step 0), -6.0 (4), -4.2 (8) and -5.0 ms (12). The pushed "a" on step 15 reads -32 ms against the drum because those loops played the rush and ahead feels (-16 and -12 ms) by design.
+- **Fail-level criteria.** In these three cases there were 4 before (`ref` C-B8, `fast` C-B2 and C-B8, `same` C-B9) and 6 after.
+  - New failures: `ref` C-B9 (audibility 0.107 to 0.097 against the 0.10 floor) and `same` C-B8 (1 to 4 kHz SNR -1.56 to -3.00 dB).
+  - Unchanged: `fast` C-B2 (the bass lag, not dialogue) and `same` C-B9 (audibility 0.085 to 0.091, still under the floor).
+  - C-B8's loudness spread fell in `ref` (4.14 to 1.75 LU) and `same` (2.19 to 1.87 LU) and rose in `fast` (3.37 to 3.98 LU).
+  - The lower SNR follows the stabs moving off the kicks onto ghost notes and gaps, where the snare's and the music's 1 to 4 kHz energy sits. No gains were changed. This is left to the ear.
+
+**Verified.** New `DialogueChopVarietyTests` (fixture shapes by 6 seeds by 3 loops, on the ghost-note take and on a busy take with kicks on the "a" of 1, the "and" of 2 and beat 3's "e"):
+
+- In the chop beat, unmarked same-piece pairs are at most 0.20 and every 2-bar cell has at least 3 pieces. At least 65 percent of hits are off the kicks, and bars 3-4 recur in 5-6 at Jaccard 0.8 or more. The build's unmarked repeats are at most 0.20.
+- Stutters occur only in the build or the chop beat's last beat.
+- The feel is one offset per place in the beat, within 25 ms, 0 on quarter steps and outside the chop beat and build. Every accent is its grid step plus `feelSeconds`, consecutive loops change feel, and the seeds reach at least three feels.
+- The same seed gives the same events. The skeleton holds across a template's loops while every loop pair changes its fill.
+- On six installed takes (skipped without them), at most 35 percent of chop-beat hits are on a kick.
+- The two drop-site regression tests above, and `aGuardedLineWhoseSignatureEndsItStillMixesItsWords`.
+
+**Tests replaced on purpose.**
+
+- `DialogueMotifTests/accentsSitOnTheDrummersGridWithinTwoMilliseconds` now adds the event's `feelSeconds` to the grid.
+- `theTriggerRhythmHoldsForTwoLoops` compares the template skeleton's steps; the fill around it changes every loop.
+- `aNegatedLineKeepsSourceOrderInsideEachBar` checks the new rule: runs into a signature hit are in source order.
+- `DialogueFixtures.snapshot` gains an opt-in `ghosts`. The capture manifest gains `stutter` and `feelMs`.
+
+The macOS and visionOS Simulator builds succeed. A 200 s macOS app run (automation flags, offline footage) played 4 loops with `chopRepeat` 0 to 1 of 19 to 22 chop-beat pairs and 5 to 7 pieces a loop, on the laid, rush, drunk and ahead feels.
+
+**Not checked.** Nothing was heard by ear or on the device. Whether the ghost-pocket stabs and the drunk and ahead feels sit right is for the user's ear, as is the C-B8 and C-B9 movement. Ghost notes come only from soft snares (hats and "other" landmarks are not read), and the take's fills (`LofiFillDetector`) are not used to thin the chop beat.
