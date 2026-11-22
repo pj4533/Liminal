@@ -386,6 +386,9 @@ nonisolated struct DialogueLandmark: Sendable, Equatable {
     /// Take-relative beats.
     let beat: Double
     let confidence: Float
+    /// Band peak against the take's typical hit of the same kind (`LofiDrumLandmark.strength`): a
+    /// soft snare is a ghost note (D127).
+    var strength: Float = 1
 }
 
 nonisolated struct DialogueTransportSnapshot: Sendable {
@@ -482,6 +485,11 @@ nonisolated struct DialogueEvent: Sendable, Equatable {
     var gateEnd = "natural"
     var drySeconds: Double? = nil
     var sourceFrames: Range<Int>? = nil
+    // Chop-beat additions (D127). `stutter`: a deliberate repeat of the hit before it (a roll in the
+    // build or a turnaround stutter), the only same-piece repeats the chop beat plays; `feelSeconds`
+    // the loop's microtiming feel added to the step on the drummer's grid (0 on quarter steps).
+    var stutter = false
+    var feelSeconds: Double = 0
 
     var endTime: Double { startTime + duration }
 }

@@ -269,7 +269,8 @@ struct DialogueMotifTests {
             for seed in Self.seeds {
                 let motifs = run(shape, seed: seed, takes: 4).loops.compactMap(\.motif)
                 try #require(motifs.count == 4)
-                let steps = motifs.map { Set($0.hook?.items.map(\.slot) ?? []) }
+                // The template's skeleton (D127: the fill around it changes every loop).
+                let steps = motifs.map { Set($0.hook?.items.filter(\.skeleton).map(\.slot) ?? []) }
                 #expect(steps[0] == steps[1] && steps[2] == steps[3], "\(shape) seed \(seed): \(steps)")
                 #expect(steps[1] != steps[2], "\(shape) seed \(seed): the template never rotates")
             }
@@ -477,7 +478,8 @@ struct DialogueMotifTests {
                 let motif = try #require(loop.motif)
                 for e in loop.events {
                     let sixteenth = 64 * (e.block - loop.snapshot.phraseAtOrigin) + e.slot
-                    let grid = loop.snapshot.gridTime(sixteenth: sixteenth)
+                    // The loop's feel (D127) moves offbeat chop-beat and build stabs by a fixed offset.
+                    let grid = loop.snapshot.gridTime(sixteenth: sixteenth) + e.feelSeconds
                     #expect(abs(e.accentTime - grid) < 0.002, "\(shape): accent \(e.accentTime) against grid \(grid)")
                     guard let piece = e.piece else { continue }
                     let offset = e.effect == .reversed ? motif.seconds(piece) + DialogueMotifTuning.reversedLeadSeconds : motif.accentOffset(piece)

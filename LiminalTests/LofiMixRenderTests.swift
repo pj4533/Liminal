@@ -421,6 +421,7 @@ struct LofiMixRenderTests {
                                 "cell": e.cell?.rawValue ?? NSNull(), "piece": e.piece.map { $0 as Any } ?? NSNull(),
                                 "effect": e.effect.name, "reversed": e.effect == .reversed,
                                 "gateSteps": e.gateSteps.map { $0 as Any } ?? NSNull(), "gateEnd": e.gateEnd,
+                                "stutter": e.stutter, "feelMs": e.feelSeconds * 1000,
                                 "sourceFrames": e.sourceFrames.map { [$0.lowerBound, $0.upperBound] as Any } ?? NSNull(),
                                 "dryFrames": Int(chop.buffer.frameLength) - { if case .echoThrow(_, let tail) = e.effect {
                                     return Int((tail * format.sampleRate).rounded()) } else { return 0 } }()] as [String: Any]

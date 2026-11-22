@@ -105,7 +105,8 @@ nonisolated enum DialogueCueCoordinator {
         var kicks: [DialogueLandmark] = [], snares: [DialogueLandmark] = []
         if let timing = info.timing {
             for landmark in timing.landmarks {
-                let mark = DialogueLandmark(beat: timing.beat(ofFrame: landmark.attackFrame), confidence: landmark.confidence)
+                let mark = DialogueLandmark(beat: timing.beat(ofFrame: landmark.attackFrame), confidence: landmark.confidence,
+                                            strength: landmark.strength)
                 switch landmark.kind {
                 case .kick: kicks.append(mark)
                 case .snare: snares.append(mark)

@@ -162,6 +162,19 @@ nonisolated enum DialogueMotifTuning {
     static let grooveHits = 6
     /// A groove bar has at most this many onsets on consecutive sixteenths, and a beat without one.
     static let grooveRun = 3
+    /// A groove cell has at most this many fill stabs on odd sixteenths (D127: the swung pickup into a
+    /// downbeat and one ghost-note pocket; the chop beat stays on 8ths otherwise).
+    static let grooveOffEighths = 2
+    /// A groove bar whose drummer plays on at least this many of its sixteenths takes one stab less.
+    static let busyBarSteps = 11
+    /// The seeded spread of the fill sites' scores (D127): two loops on one template fill different steps.
+    static let grooveJitter = 1.2
+    /// The largest feel offset (`DialogueFeel`), inside the 25 ms a step may sit off the drummer's grid.
+    static let maximumFeelSeconds = 0.025
+    /// A ghost note: a snare at most this strong against the take's typical snare (`LofiDrumLandmark.strength`).
+    static let ghostStrength: Float = 0.45
+    /// Ghost notes count from this confidence (soft hits classify less clearly).
+    static let ghostConfidence: Float = 0.25
     /// Variants per section of the 16-bar arc (intro, build, breakdown, outro; the groove is the hook template).
     static let arcVariants = 3
     /// Consecutive loops' arcs differ in at least this many of their five fields (C-D12).
@@ -237,6 +250,11 @@ nonisolated struct DialogueMotifCell: Sendable, Equatable {
         var follow: Int? = nil
         /// With `after`: only 8th positions (the outro's restatement walks the line on the 8ths).
         var onEighths = false
+        /// A hook template hit (D127): the groove's fixed skeleton, which holds for `hookLoops` loops.
+        var skeleton = false
+        /// A deliberate repeat of the hit before it (a roll in the build, a turnaround stutter): the only
+        /// same-piece repeats the chop beat and build play (D127).
+        var stutter = false
     }
     let kind: DialogueCell
     let bar: Int
@@ -265,38 +283,50 @@ nonisolated struct DialogueArc: Sendable, Equatable {
     var build: Int
     var breakdown: Int
     var outro: Int
+    /// The chop beat's and build's microtiming feel (D127), an index into `DialogueFeel.variants`.
+    var feel: Int = 0
 
     func differences(_ o: DialogueArc) -> Int {
-        [intro != o.intro, groove != o.groove, build != o.build, breakdown != o.breakdown, outro != o.outro].filter { $0 }.count
+        [intro != o.intro, groove != o.groove, build != o.build, breakdown != o.breakdown, outro != o.outro, feel != o.feel]
+            .filter { $0 }.count
     }
 
-    var name: String { "I\(intro) G\(groove) B\(build) K\(breakdown) O\(outro)" }
+    var name: String { "I\(intro) G\(groove) B\(build) K\(breakdown) O\(outro) F\(feel)" }
 }
 
-/// The take's modal kick and snare steps over a 2-bar cell (0...31): the steps a confident hit
-/// lands on in at least half of the take's 2-bar pairs. The chop beat's stabs lock to them.
+/// The take's modal kick, snare and ghost-note steps over a 2-bar cell (0...31): the steps a hit
+/// of that class lands on in at least half of the take's 2-bar pairs. The chop beat's stabs play off
+/// them (D127): in the gaps between kicks, answering the snare and in the ghost notes' pockets.
 nonisolated struct DialogueMotifDrums: Sendable, Equatable {
     var kicks: [Int]
+    /// Full snares (the backbeat and other accented snares).
     var snares: [Int]
+    /// Soft snares (`DialogueMotifTuning.ghostStrength`) on steps without a kick or full snare.
+    var ghosts: [Int] = []
 
     /// A boom-bap pattern for plans without landmarks.
     static let boomBap = DialogueMotifDrums(kicks: [0, 10, 16, 26], snares: [4, 12, 20, 28])
 
-    init(kicks: [Int], snares: [Int]) { self.kicks = kicks; self.snares = snares }
+    init(kicks: [Int], snares: [Int], ghosts: [Int] = []) { self.kicks = kicks; self.snares = snares; self.ghosts = ghosts }
 
     init(snapshot: DialogueTransportSnapshot) {
-        func modal(_ marks: [DialogueLandmark]) -> [Int] {
+        func modal(_ marks: [DialogueLandmark], _ keep: (DialogueLandmark) -> Bool) -> [Int] {
             var counts = [Int](repeating: 0, count: 32)
-            for m in marks where m.confidence >= DialogueTuning.landmarkConfidence {
+            for m in marks where keep(m) {
                 let step = Int((m.beat * 4).rounded())
                 counts[((step % 32) + 32) % 32] += 1
             }
             let pairs = max(1, Int(DialogueTransportSnapshot.takeBeats / 8))
             return (0..<32).filter { counts[$0] * 2 >= pairs }
         }
-        let snares = modal(snapshot.snares)
-        let kicks = modal(snapshot.kicks).filter { !snares.contains($0) }
-        self = kicks.isEmpty && snares.isEmpty ? .boomBap : DialogueMotifDrums(kicks: kicks, snares: snares)
+        let confident = DialogueTuning.landmarkConfidence
+        // Before D127 every confident snare counted, so a take's ghost notes read as snare steps and the
+        // response stabbed on them.
+        let snares = modal(snapshot.snares) { $0.confidence >= confident && $0.strength > DialogueMotifTuning.ghostStrength }
+        let kicks = modal(snapshot.kicks) { $0.confidence >= confident }.filter { !snares.contains($0) }
+        let ghosts = modal(snapshot.snares) { $0.confidence >= DialogueMotifTuning.ghostConfidence && $0.strength <= DialogueMotifTuning.ghostStrength }
+            .filter { !snares.contains($0) && !kicks.contains($0) }
+        self = kicks.isEmpty && snares.isEmpty ? .boomBap : DialogueMotifDrums(kicks: kicks, snares: snares, ghosts: ghosts)
     }
 }
 
@@ -333,6 +363,8 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
     var priorArc: DialogueArc? = nil
 
     var line: DialogueMotifFragment { fragments[0] }
+    /// The chop beat's and build's feel (D127; the grid's own swing for motifs without an arc).
+    var feel: DialogueFeel { DialogueFeel.variants[min(max(0, arc?.feel ?? 0), DialogueFeel.variants.count - 1)] }
     var sampleRate: Double { source.sampleRate }
     func seconds(_ id: Int) -> Double { Double(fragments[id].frames.count) / sampleRate }
     func accentOffset(_ id: Int) -> Double { Double(fragments[id].accentFrame - fragments[id].frames.lowerBound) / sampleRate }
@@ -703,9 +735,10 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
             "cells": cells.map { ["kind": $0.kind.rawValue, "bar": $0.bar, "bars": $0.bars, "variant": $0.variant,
                                   "items": $0.items.map { [$0.fragment, $0.slot] }] as [String: Any] },
             "arc": arc.map { ["intro": $0.intro, "groove": $0.groove, "build": $0.build, "breakdown": $0.breakdown,
-                              "outro": $0.outro, "name": $0.name] as [String: Any] } as Any,
+                              "outro": $0.outro, "feel": $0.feel, "feelName": feel.name, "name": $0.name] as [String: Any] } as Any,
             "hook": hook.map { ["template": $0.template, "signature": $0.signature, "response": $0.response, "third": $0.third,
-                                "items": $0.items.map { [$0.fragment, $0.slot] }] as [String: Any] } as Any,
+                                "items": $0.items.map { [$0.fragment, $0.slot] },
+                                "skeleton": $0.items.filter(\.skeleton).map { [$0.fragment, $0.slot] }] as [String: Any] } as Any,
         ]
     }
 
@@ -717,7 +750,7 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
     func hookSummary(events: [DialogueEvent]) -> String {
         func quote(_ id: Int) -> String { "\"\(fragments.indices.contains(id) ? (fragments[id].text ?? "#\(id)") : "#\(id)")\"" }
         var out = "interest=\(String(format: "%.2f", interest)) line=\"\(text ?? "-")\""
-        if let arc { out += " arc=\(arc.name.replacingOccurrences(of: " ", with: ","))" }
+        if let arc { out += " arc=\(arc.name.replacingOccurrences(of: " ", with: ",")) feel=\(feel.name)" }
         if let hook {
             out += " template=\(hook.template) S=\(quote(hook.signature)) R=\(quote(hook.response)) T=\(quote(hook.third))"
         }
@@ -727,6 +760,9 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
             if piece == hook?.signature { return "S" }
             if piece == hook?.response { return "R" }
             if piece == hook?.third { return "T" }
+            // D127: the signature's and response's halves are `s` and `r`, any other cut `.`.
+            if let h = hook, halves[h.signature]?.contains(piece) == true { return "s" }
+            if let h = hook, halves[h.response]?.contains(piece) == true { return "r" }
             return "."
         }
         var bars: [Int: [String]] = [:]
@@ -735,9 +771,15 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
             guard s >= 0, s < 256 else { continue }
             // `/2` a hit held two sixteenths (D126), `/c` choked; a one-shot has no suffix.
             let gate = e.gateEnd == "choke" ? "/c" : (e.gateEnd == "natural" ? "" : e.gateSteps.map { "/\(Int($0))" } ?? "")
-            bars[s / 16, default: []].append("\(s % 16)\(role(e.piece))\(gate)")
+            bars[s / 16, default: []].append("\(s % 16)\(role(e.piece))\(gate)\(e.stutter ? "~" : "")")
         }
         out += " bars=" + bars.keys.sorted().map { "b\($0 + 1):" + bars[$0]!.joined(separator: ",") }.joined(separator: " ")
+        // The chop beat's variety (D127): consecutive same-piece hits not marked as stutters, of all pairs.
+        let chop = events.filter { $0.cell == .chopBeat }.sorted { $0.startTime < $1.startTime }
+        if chop.count > 1 {
+            let same = zip(chop, chop.dropFirst()).filter { $0.piece == $1.piece && !$1.stutter }.count
+            out += " chopRepeat=\(same)/\(chop.count - 1) chopPieces=\(Set(chop.compactMap(\.piece)).count)"
+        }
         return out
     }
 }
@@ -1089,98 +1131,29 @@ nonisolated extension DialogueMotif {
     /// from `avoid` (the previous loop's) in at least `arcChange` fields; a carried loop (the same
     /// line again) changes the groove and `arcChange` more.
     static func chooseArc(seed: UInt64, groove: Int, keep: DialogueArc?, avoid: DialogueArc?, carried: Bool) -> DialogueArc {
-        if let keep { return DialogueArc(intro: keep.intro, groove: groove, build: keep.build, breakdown: keep.breakdown, outro: keep.outro) }
+        if let keep {
+            return DialogueArc(intro: keep.intro, groove: groove, build: keep.build, breakdown: keep.breakdown, outro: keep.outro, feel: keep.feel)
+        }
         var rng = MusicRNG(seed: seed ^ 0xA2C0_0126)
         let n = DialogueMotifTuning.arcVariants
         var arc = DialogueArc(intro: rng.int(0...(n - 1)), groove: groove, build: rng.int(0...(n - 1)),
                               breakdown: rng.int(0...(n - 1)), outro: rng.int(0...(n - 1)))
+        // The feel is drawn from its own stream, so D126's sections keep their seeded variants (D127).
+        var feelRNG = MusicRNG(seed: seed ^ 0xD127_FEE1)
+        let feels = DialogueFeel.variants.count
+        arc.feel = feelRNG.int(0...(feels - 1))
+        // Consecutive loops never share a feel, so the groove's pocket moves every loop.
+        if let avoid, arc.feel == avoid.feel { arc.feel = (arc.feel + 1 + feelRNG.int(0...(feels - 2))) % feels }
         guard let avoid else { return arc }
         let needed = DialogueMotifTuning.arcChange + (carried ? 1 : 0)
-        // Change the fields still equal to the previous arc, in a seeded order, until enough differ.
+        // Change the fields still equal to the previous arc, in a seeded order, until enough differ
+        // (the feel already differs, so it counts as one).
         var order: [WritableKeyPath<DialogueArc, Int>] = [\.intro, \.build, \.breakdown, \.outro]
         for k in stride(from: order.count - 1, to: 0, by: -1) { order.swapAt(k, rng.int(0...k)) }
-        for path in order where arc.differences(avoid) < needed && arc[keyPath: path] == avoid[keyPath: path] {
+        for path in order where arc.differences(avoid) < needed + 1 && arc[keyPath: path] == avoid[keyPath: path] {
             arc[keyPath: path] = (arc[keyPath: path] + 1 + rng.int(0...(n - 2))) % n
         }
         return arc
-    }
-
-    /// The chop beat's 2-bar groove cell (D126 part 2): the hook template's skeleton (S, R and T on
-    /// fixed steps, R answering on a snare step), filled to `grooveHits` onsets per bar with short
-    /// stabs locked to the drums: free kick steps take the signature's head at 1/16, the 8th after a
-    /// skeleton hit repeats it at 1/16, free snare steps take the response at 1/8. At most `grooveRun`
-    /// onsets on consecutive sixteenths and a beat without an onset in every bar. Skeleton hits hold
-    /// 1/8 (less when the next hit is nearer), one hit per cell holds three sixteenths (a word and a
-    /// syllable) and the cell's last response plays out.
-    static func groove(template: [(DialogueMotifTuning.HookRole, Int)], s: Int, r: Int, t: Int, sa: Int, ra: Int,
-                       drums: DialogueMotifDrums, reorderAllowed: Bool, fragments: [DialogueMotifFragment]) -> [DialogueMotifCell.Item] {
-        typealias Item = DialogueMotifCell.Item
-        var hits: [Int: (fragment: Int, gate: Int?, skeleton: Bool)] = [:]
-        for (role, step) in template { hits[step] = (role == .s ? s : (role == .r ? r : t), nil, true) }
-        func fits(_ step: Int) -> Bool {
-            guard hits[step] == nil, step >= 0, step < 32 else { return false }
-            let bar = (step / 16) * 16
-            var on = Set(hits.keys.filter { $0 >= bar && $0 < bar + 16 })
-            on.insert(step)
-            // No more than `grooveRun` consecutive sixteenths.
-            var run = 0
-            for k in bar..<(bar + 16) {
-                run = on.contains(k) ? run + 1 : 0
-                if run > DialogueMotifTuning.grooveRun { return false }
-            }
-            // A beat (four steps) without an onset somewhere in the bar.
-            return (bar...(bar + 12)).contains { a in (a..<(a + 4)).allSatisfy { !on.contains($0) } }
-        }
-        func count(_ bar: Int) -> Int { hits.keys.filter { $0 / 16 == bar }.count }
-        func head(_ f: Int) -> Int { f == s ? sa : (f == r ? ra : f) }
-        // A line that may not be reordered keeps source order inside each bar: before the bar's first
-        // signature only the signature's head plays.
-        func answer(_ step: Int) -> Int {
-            if reorderAllowed || fragments[r].order <= fragments[s].order { return r }
-            let bar = (step / 16) * 16
-            return hits.contains { $0.key >= bar && $0.key < step && $0.value.fragment == s } ? r : sa
-        }
-        for bar in 0..<2 {
-            let target = DialogueMotifTuning.grooveHits
-            let lo = bar * 16, hi = lo + 16
-            for step in drums.kicks where step >= lo && step < hi && count(bar) < target && fits(step) {
-                hits[step] = (sa, 1, false)
-            }
-            for step in hits.filter({ $0.value.skeleton && $0.key >= lo && $0.key < hi }).keys.sorted()
-            where count(bar) < target && fits(step + 2) && step + 2 < hi {
-                hits[step + 2] = (head(hits[step]!.fragment), 1, false)
-            }
-            for step in drums.snares where step >= lo && step < hi && count(bar) < target && fits(step) {
-                hits[step] = (answer(step), 2, false)
-            }
-            for step in stride(from: lo, to: hi, by: 2) where count(bar) < target - 1 && fits(step) {
-                hits[step] = (sa, 1, false)
-            }
-        }
-        let steps = hits.keys.sorted()
-        let lastResponse = steps.last { hits[$0]!.fragment == r && hits[$0]!.skeleton }
-        var held = false
-        return steps.enumerated().map { k, step in
-            let h = hits[step]!
-            let space = (k + 1 < steps.count ? steps[k + 1] : 32) - step
-            var gate: Int?
-            var fragment = h.fragment
-            if let g = h.gate {
-                gate = min(g, max(1, space))
-            } else if step == lastResponse {
-                gate = nil
-            } else if space <= 2 {
-                gate = max(1, space)
-            } else if !held, space >= 3, h.fragment == s {
-                // The cell's one "word and a syllable": the signature held three sixteenths.
-                gate = 3
-                held = true
-                fragment = s
-            } else {
-                gate = h.fragment == r ? min(space, 4) : 2
-            }
-            return Item(fragment: fragment, slot: step, fixed: true, gate: gate)
-        }
     }
 
     /// The loop's 16-bar arc (D126 part 2; user direction of 21 November 2026), cells on the
@@ -1223,6 +1196,8 @@ nonisolated extension DialogueMotif {
         func follow(_ f: Int, _ steps: Int = 1, gate: Int? = 1) -> Item {
             Item(fragment: f, slot: 0, fixed: true, gate: gate, follow: steps)
         }
+        /// A deliberate repeat of the hit before it (D127).
+        func stutter(_ item: Item) -> Item { var i = item; i.stutter = true; return i }
 
         var mix = MusicRNG(seed: hookSeed ^ 0x600C_ED00)
         let offset = mix.int(0...(DialogueMotifTuning.hookTemplates.count - 1))
@@ -1231,8 +1206,10 @@ nonisolated extension DialogueMotif {
         // rhythm too, or 16 bars repeat exactly (C-D1; the `same` matrix case read 0.04 difference).
         if template == avoidTemplate { template = (template + 1) % DialogueMotifTuning.hookTemplates.count }
         let arc = chooseArc(seed: seed, groove: template, keep: keepArc, avoid: avoidArc, carried: carried)
-        let g = groove(template: DialogueMotifTuning.hookTemplates[template], s: s, r: r, t: t, sa: sa, ra: ra, drums: drums,
-                       reorderAllowed: reorderAllowed, fragments: fragments)
+        let vocabulary = GrooveVocabulary(s: s, r: r, t: t, sa: sa, ra: ra, pieces: pieces, halves: halves)
+        // The skeleton holds for the template's loops; the fill around it is drawn from this loop's seed (D127).
+        let g = groove(template: DialogueMotifTuning.hookTemplates[template], vocabulary: vocabulary, drums: drums,
+                       reorderAllowed: reorderAllowed, fragments: fragments, sampleRate: sampleRate, seed: seed)
         let barA = g.filter { $0.slot < 16 }
         let last = pieces.last ?? r
         // The return's short piece carries a real word when the line has a short one (it stays short:
@@ -1254,27 +1231,29 @@ nonisolated extension DialogueMotif {
         let turn: [Item]
         switch rng.int(0...2) {
         // The backbeat answer stays on step 28.
-        case 0: turn = [at(r, 28, gate: 1), at(ra, 29, gate: 1), at(ra, 30, gate: 2)]
+        case 0: turn = [at(r, 28, gate: 1), at(ra, 29, gate: 1), stutter(at(ra, 30, gate: 2))]
         case 1: turn = [at(r, 28, .echoThrow, gate: 2)]
-        default: turn = [at(r, 28, gate: 2), at(sa, 30, gate: 2)]
+        default: turn = [at(r, 28, gate: 2), at(vocabulary.sb != r ? vocabulary.sb : sa, 30, gate: 2)]
         }
         let second = g.filter { $0.slot < 28 } + turn
 
         // Build (bars 7-8): bar 7 is the groove's call with one more stab, bar 8 doubles it into the drop.
         var seven = barA
         if let free = stride(from: 0, to: 16, by: 2).first(where: { k in !seven.contains { abs($0.slot - k) <= 1 } }) {
-            seven.append(at(sa, free, gate: 1))
+            // A cut the hits around it do not play (D127).
+            seven.append(at(freshCut([vocabulary.sb, sa, t, ra] + vocabulary.others, at: free, among: seven), free, gate: 1))
             seven.sort { $0.slot < $1.slot }
         }
         let eight: [Item]
         switch arc.build {
         case 0:
-            // Halving: a quarter, two 8ths, then 16ths, answered on the last 8th.
-            eight = [at(s, 16, gate: 4), at(s, 20, gate: 2), at(s, 22, gate: 2)] + (24...29).map { at(sa, $0, gate: 1) } + [at(r, 30, gate: 1)]
+            // Halving: a quarter, two 8ths, then 16ths, answered on the last 8th. The repeats are the roll.
+            eight = [at(s, 16, gate: 4), stutter(at(s, 20, gate: 2)), stutter(at(s, 22, gate: 2)), at(sa, 24, gate: 1)]
+                + (25...29).map { stutter(at(sa, $0, gate: 1)) } + [at(r, 30, gate: 1)]
         case 1:
-            // Ladder: the line's first words, one more each beat, in source order.
+            // Ladder: the line's first words, one more each beat, in source order (the beat-2 restart is the ladder's stutter).
             let w = (0..<3).map { pieces[min($0, pieces.count - 1)] }
-            eight = [at(w[0], 16, gate: 2), at(w[0], 20, gate: 1), at(w[1], 22, gate: 2),
+            eight = [at(w[0], 16, gate: 2), stutter(at(w[0], 20, gate: 1)), at(w[1], 22, gate: 2),
                      at(w[0], 24, gate: 1), at(w[1], 25, gate: 1), at(w[2], 26, gate: 2),
                      at(w[0], 28, gate: 1), at(w[1], 29, gate: 1), at(w[2], 30, gate: 1)]
         default:
@@ -1353,6 +1332,9 @@ nonisolated enum DialogueMotifPerformer {
         var gate: Int? = nil
         /// How the dry piece ends: `natural`, `gate`, `valley` or `choke`.
         var gateEnd = "natural"
+        var stutter = false
+        /// The loop's feel offset in the accent (D127).
+        var feel: Double = 0
     }
 
     /// The end of a hit whose attack is on take sixteenth `s` and whose pad starts at `start` (D126):
@@ -1445,8 +1427,11 @@ nonisolated enum DialogueMotifPerformer {
                     candidates = Array(stride(from: base, through: base + shift, by: 2)).filter { $0 < cellEnd }
                 }
                 var done = false
+                // The loop's feel moves the chop beat's and build's offbeat stabs (D127); quarter steps stay on the grid.
+                let feels = (cell.kind == .chopBeat || cell.kind == .build) && item.fragment != 0 && item.effect != .reversed
                 for s in candidates {
-                    let accent = snapshot.gridTime(sixteenth: s)
+                    let feel = feels ? motif.feel.offset(step: s) : 0
+                    let accent = snapshot.gridTime(sixteenth: s) + feel
                     let start = accent - offset
                     let gated = item.effect == .reversed ? (end: start + length, kind: "natural")
                         : gatedEnd(item.fragment, start: start, sixteenth: s, gate: item.gate, motif: motif, snapshot: snapshot)
@@ -1471,7 +1456,7 @@ nonisolated enum DialogueMotifPerformer {
                     }
                     placed.append(Placed(fragment: item.fragment, cell: cell.kind, sixteenth: s, accent: accent, start: start, end: end,
                                          gainDB: item.gainDB, effect: item.effect, landing: item.landing, gate: item.gate,
-                                         gateEnd: gated.kind))
+                                         gateEnd: gated.kind, stutter: item.stutter, feel: feel))
                     prevEnd = end
                     if item.fragment == 0 { statements += 1 }
                     done = true
@@ -1637,6 +1622,8 @@ nonisolated enum DialogueMotifPerformer {
             event.effect = effect
             event.gateSteps = p.gate.map(Double.init)
             event.gateEnd = p.gateEnd
+            event.stutter = p.stutter
+            event.feelSeconds = p.feel
             // The dry buffer is cut here (with the gate's short release, or the choke's) even when an
             // echo tail follows it: a gated stab thrown into its echo.
             if p.gateEnd != "natural" || p.choked { event.drySeconds = p.end - p.start }

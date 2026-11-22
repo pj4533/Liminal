@@ -114,7 +114,8 @@ enum DialogueFixtures {
 
     /// Boom-bap take: kicks on 1 and the "and" of 3, snares on 2 and 4, a few milliseconds of human offset.
     static func snapshot(bpm: Double, origin: Double = 0, phraseAtOrigin: Int = 0, takeIndex: Int = 0,
-                         nextBPM: Double? = nil, seed: UInt64 = 3, revision: UInt32 = 1) -> DialogueTransportSnapshot {
+                         nextBPM: Double? = nil, seed: UInt64 = 3, revision: UInt32 = 1,
+                         ghosts: Bool = false) -> DialogueTransportSnapshot {
         var rng = MusicRNG(seed: seed)
         var kicks: [DialogueLandmark] = [], snares: [DialogueLandmark] = []
         for bar in 0..<16 {
@@ -124,6 +125,11 @@ enum DialogueFixtures {
             if bar % 2 == 1 { kicks.append(DialogueLandmark(beat: b + 1.75, confidence: 0.3)) }
             snares.append(DialogueLandmark(beat: b + 1 + rng.range(-0.015...0.025), confidence: 0.9))
             snares.append(DialogueLandmark(beat: b + 3 + rng.range(-0.015...0.025), confidence: 0.9))
+            // `ghosts`: soft snares on the "a" of 2 and the "e" of 4 (D127).
+            if ghosts {
+                snares.append(DialogueLandmark(beat: b + 1.75 + 0.03, confidence: 0.6, strength: 0.25))
+                snares.append(DialogueLandmark(beat: b + 3.25 + 0.03, confidence: 0.6, strength: 0.25))
+            }
         }
         return DialogueTransportSnapshot(revision: revision, takeIndex: takeIndex, origin: origin, beatDuration: 60 / bpm,
                                          nextBeatDuration: nextBPM.map { 60 / $0 }, phraseAtOrigin: phraseAtOrigin,
