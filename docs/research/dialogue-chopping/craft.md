@@ -1,6 +1,6 @@
 # Boom-bap dialogue chopping: craft research and Liminal rules
 
-19 November 2026 · Independent check of the craft and history claims in [mpc-chopping-handoff.md](mpc-chopping-handoff.md), plus new material for the automatic dialogue chopping engine.
+19 November 2026 · Independent check of the craft and history claims in the [handoff](handoff.md), plus new material for the automatic dialogue chopping engine.
 
 ## How to read this note
 
@@ -11,22 +11,22 @@ Several requested subjects returned little reliable first-hand material: Knxwled
 ## 1. Re-verification of handoff claims
 
 ### 1.1 DJ Premier, "The Question Remains" (CONFIRMED, with detail)
-The RBMA transcript says the source was a Bob James record damaged by a paper stuck to it, that he "kept chopping it and kept starting it over right at that one little stab", then "pitched it down one time and Guru was like, 'Yo, let's just leave it like that'" and "put it on a different pad and then flip-flopped from then." He also says "I started doing stab-type samples just to strip down more" and defines stabs as "a short dash." The MPC60 is not mentioned in that lecture text, so any claim tying this account to a specific machine is unsupported there. Source: [RBMA lecture](https://www.redbullmusicacademy.com/lectures/dj-premier-you-know-my-steez/).
+The RBMA transcript confirms the restart, pitch-down and pad flip-flop account, and does not mention the MPC60, so the anecdote must not be tied to a machine. Evidence and quotes: [DJ Premier](../producers/dj-premier.md).
 
-Rule: bank = one anchor stab (native) plus one sibling that differs by a single pitch/rate step (suggest -2 to -4 semitones linked rate, range 0.79-0.89x), placed on a different pad, and alternated ("flip-flop") rather than layered. Alternate by a fixed pattern for at least 2 repeats before changing.
+Rule: bank = one anchor stab (native) plus one sibling that differs by a single pitch/rate step (suggest -2 to -4 semitones linked rate, range 0.79-0.89x), placed on a different pad, and alternated ("flip-flop") rather than layered. Alternate by a fixed pattern for at least 2 repeats before changing. (Not lifted into the product: the user direction is native rate only; see D125 in `docs/decisions/music.md`.)
 
 ### 1.2 Premier pitch/tempo figures (NEW, secondary, lower weight)
-A ModeAudio article states, in the author's words (no Premier quotes), that "Mass Appeal" uses a roughly 2 second Vic Juris section slowed 118 to 96 BPM and pitched down about 4 semitones, and that "N.Y. State of Mind" drums are a nearly unedited break slowed about 16 BPM from ~100. These come from the author's analysis via WhoSampled and are not Premier testimony. Source: [ModeAudio](https://modeaudio.com/magazine/masters-of-sampling-dj-premier).
+A ModeAudio article's figures for "Mass Appeal" (118 to 96 BPM, about 4 semitones down) and "N.Y. State of Mind" (about 16 BPM slower) are the author's analysis, not Premier testimony ([DJ Premier](../producers/dj-premier.md)).
 
 Rule: treat a drop of 2-4 semitones (about 16-20 percent slower) as the upper "dark" end of the linked-rate candidate set; most variants should be 0 to -2 semitones. Keep native as the default candidate.
 
 ### 1.3 Pete Rock, "The Joy" (CONFIRMED, nuanced)
-In the Microphone Check transcript he says he wanted "to sample the actual singing on 33, the way it was made" and mentions that "certain things only sound right on 45." He also says he "stopped sampling half a bar loops to one bar loops to making it bigger." The second quote is NEW and counters a "tiny chop only" bias: longer, near-intact phrases are a legitimate producer choice. He says the beat was an older SP-1200 beat he redid on the MPC with the vocal added. Source: [Microphone Check](https://www.withradio.org/2014-07-01/pete-rock-real-could-be-another-word-for-original).
+Confirmed in the Microphone Check transcript: native-speed singing on purpose, and the new point that he "stopped sampling half a bar loops to one bar loops to making it bigger", which counters a "tiny chop only" bias. Evidence: [Pete Rock](../producers/pete-rock.md).
 
 Rule: keep long (1-2 bar, 2-6 s) native-speed phrases as first-class candidates. Per-phrase candidate set: native, one modest linked-rate variant. Never apply a global pitch change.
 
 ### 1.4 Ski Beatz, Todd Edwards, Dilla, Bob Power, Linn, Charnas (NOT RE-READ)
-These were not re-fetched in this pass. They are neither confirmed nor corrected here. Treat the handoff's own caveats about them as the authority.
+These were not re-fetched in this pass. They are neither confirmed nor corrected here. Treat the handoff's own caveats about them as the authority: [Ski Beatz](../producers/ski-beatz.md), [Todd Edwards](../producers/todd-edwards.md), [J Dilla](../producers/j-dilla.md) (with Charnas), [Bob Power and Roger Linn](../producers/bob-power-and-roger-linn.md).
 
 ### 1.5 MPC play modes (CONFIRMED)
 Akai documentation: with note-on enabled a sample plays only while the pad is held; otherwise it is a one-shot played in full. Pads in the same mute group silence each other, last played wins (32 groups on the MPC X, per-program). Note-off has no separate official definition in the material found; forum posts describe it like note-on. A forum note says drum programs default to one-shot while keygroup programs default to note-on. Sources: [Akai pad guide](https://www.akaipro.com/guides/mpc-sample/pad_play.htm), [MPC manual pages](https://www.manualslib.com/manual/724425/Akai-Mpc.html?page=49). The handoff's "do not conflate" advice stands; the note-off point should be marked as manufacturer-ambiguous.
@@ -46,20 +46,20 @@ Sonicbids notes that pitching without formant preservation sounds chipmunk-like 
 Rule: apply rate shifts only inside -4 to +2 semitones. Upward shifts beyond +2 only for texture-fill events, never for protected phrases.
 
 ### 2.3 Kaytranada-style placement (NEW, analysis level)
-A LiveSchool analysis of one track describes chops mostly on off-beat sixteenths (second, third or fourth sixteenth of the beat), swung chops, a repeated chop that stays the same until a breakdown, and pitch change on every fourth repeat. A Sample Focus guide describes deliberately unquantized notes for a laid-back feel. Rolling Stone ties his influence to Dilla. Sources: [LiveSchool](https://liveschool.net/?p=8950), [Sample Focus](https://samplefocus.com/blog/make-kaytranada-type-beat.md), [Rolling Stone](https://www.rollingstone.com/music/music-features/kaytranada-new-album-TIMELESS-interview-1235019415/). These are third-party analyses of a house/R&B-adjacent producer; no first-hand vocal-chop method was found.
+Third-party analyses of one track describe chops mostly on off-beat sixteenths, swung chops, a repeat that holds until a breakdown and a pitch change on every fourth repeat. No first-hand vocal-chop method was found. Evidence: [Kaytranada](../producers/kaytranada.md).
 
 Rule: bias stressed-syllable landmarks toward off-beat sixteenths ("e" and "a" of the beat) rather than the downbeat, and put the clearest word on a position at least 60-120 ms away from a kick landmark. Change one parameter (pitch step, one omitted hit) on every fourth repeat of a pattern.
 
 ### 2.4 Madlib (partially UNVERIFIED)
-Sources describe a loose, improvised, loop-oriented approach with the SP-303 and tape, "dirtier than the original", and say his methods vary (contrast with Premier's consistent style). Nothing reliable was found on how he handled spoken skit or dialogue samples. Sources: [Micro-Chopping Madlib](https://medium.com/micro-chop/micro-chopping-madlib-5d77b91a5ea5), [Madvillainy story](https://medium.com/micro-chop/i-dont-remember-the-samples-i-use-hell-no-the-story-of-madvillainy-e6b378d4689c).
+Sources describe a loose, improvised, loop-oriented approach, and nothing reliable was found on how he handled spoken skit or dialogue samples. Evidence: [Madlib](../producers/madlib.md).
 
 Rule: allow an occasional "loose" pattern family in which a single dialogue loop repeats with minimal change and no grid correction; cap its use to at most one in four performances.
 
 ### 2.5 Premier scratch hooks (UNVERIFIED mechanics)
-Searches found that Premier's hooks are collage-like cut vocal samples and that he described cutting the "Rite Where You Stand" hook, but no source gave which cuts or how they were performed. Sources are secondary lists, not usable for parameters. Do not assert scratch behavior; if scratch-style gestures are added later they are an invention, not a documented technique.
+Searches found that Premier's hooks are collage-like cut vocal samples, but no source gave which cuts or how they were performed ([DJ Premier](../producers/dj-premier.md)). Do not assert scratch behavior; if scratch-style gestures are added later they are an invention, not a documented technique.
 
 ### 2.6 RZA, 9th Wonder, Knxwledge (UNVERIFIED)
-No reliable chopping-method detail found. A 9th Wonder NPR exchange frames craft as what you do with a sample rather than which sample you choose, and notes that how a producer loops or chops distinguishes them (secondary summary). Source: [NPR transcript](https://www.npr.org/transcripts/848488734). RZA material found was low quality and is not used. Do not cite these producers for any parameter.
+No reliable chopping-method detail was found for any of them. RZA material found was low quality and is not used ([RZA and the Wu-Tang Clan](../producers/rza-and-wu-tang.md)); 9th Wonder and Knxwledge are listed under [no usable detail](../producers/README.md#studied-with-no-usable-detail). Do not cite these producers for any parameter.
 
 ## 3. Arrangement, repetition and change cadence
 
@@ -128,21 +128,14 @@ From general knowledge, with no new web search; not verified against a source. I
 
 ## Sources
 
-- https://www.redbullmusicacademy.com/lectures/dj-premier-you-know-my-steez/
-- https://modeaudio.com/magazine/masters-of-sampling-dj-premier
-- https://www.withradio.org/2014-07-01/pete-rock-real-could-be-another-word-for-original
+Producer and engineer sources (Premier, Pete Rock, Madlib, Kaytranada, 9th Wonder) are listed with their producer notes in [producers](../producers/README.md). The rest:
+
 - https://www.akaipro.com/guides/mpc-sample/pad_play.htm
 - https://www.manualslib.com/manual/724425/Akai-Mpc.html?page=49
 - https://en.wikipedia.org/wiki/Speech-to-song_illusion
 - https://deutsch.ucsd.edu/psychology/pages.php?i=212
 - https://typeset.io/pdf/illusory-transformation-from-speech-to-song-6a5240zn48.pdf
 - https://frontiersin.org/articles/10.3389/fpsyg.2015.00048/pdf
-- https://liveschool.net/?p=8950
-- https://samplefocus.com/blog/make-kaytranada-type-beat.md
-- https://www.rollingstone.com/music/music-features/kaytranada-new-album-TIMELESS-interview-1235019415/
-- https://medium.com/micro-chop/micro-chopping-madlib-5d77b91a5ea5
-- https://medium.com/micro-chop/i-dont-remember-the-samples-i-use-hell-no-the-story-of-madvillainy-e6b378d4689c
-- https://www.npr.org/transcripts/848488734
 - https://hub.yamaha.com/proaudio/recording/creating-vocal-chops-and-other-sampler-tricks-part-1
 - https://www.musicradar.com/tuition/tech/how-to-perform-mpc-style-sampling-tricks-using-ableton-push-2-643660
 - https://blog.sonicbids.com/music-production-tutorial-how-to-chop-vocals

@@ -2,7 +2,7 @@
 
 [← Image sources](README.md) · [Pipeline](pipeline.md) · [Providers](providers.md) · [Adding a source](adding-a-source.md) · [Research history](research-history.md)
 
-Every source in `Liminal/Visual/ImageSources/image-collections.json` (version 2, updated 2026-11-21). 43 of 44 sources are enabled, with a total weight of 60. The JSON is the authority; this page was written from it on 2026-11-21. Measured sizes come from the research passes ([collections](../research/image-apis/collections.md), [other institutions](../research/image-apis/other-institutions.md), [new providers](../research/image-apis/new-providers.md)) and the live ingest runs (`decisions/images.md` D41-D44).
+Every source in `Liminal/Visual/ImageSources/image-collections.json` (version 2, updated 2026-11-21). 43 of 44 sources are enabled, with a total weight of 60. The JSON is the authority; this page was written from it on 2026-11-21. Measured sizes come from the research passes ([collections](../research/visuals/image-apis/collections.md), [other institutions](../research/visuals/image-apis/other-institutions.md), [new providers](../research/visuals/image-apis/new-providers.md)) and the live ingest runs (`decisions/images.md` D41-D44).
 
 How to read the columns:
 
@@ -859,7 +859,7 @@ Two of those entries are out of date: FSA/OWI colour now reaches its masters thr
 
 ## Library of Congress batch (D45)
 
-Research: [loc-collections.md](../research/image-apis/loc-collections.md).
+Research: [loc-collections.md](../research/visuals/image-apis/loc-collections.md).
 
 ### loc-margolies-roadside
 

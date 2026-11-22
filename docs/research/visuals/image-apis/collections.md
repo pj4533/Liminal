@@ -1,6 +1,6 @@
 # Curated image collections (2026-11-21)
 
-This file records which public collections and queries Liminal's curated pictures rotate through, and why. It follows [survey.md](survey.md), which ranks the APIs, and [openpics.md](openpics.md), which covers the earlier OpenPics project. The machine-readable result is [`Liminal/Visual/ImageSources/image-collections.json`](../../../Liminal/Visual/ImageSources/image-collections.json).
+This file records which public collections and queries Liminal's curated pictures rotate through, and why. It follows [survey.md](survey.md), which ranks the APIs, and [openpics.md](openpics.md), which covers the earlier OpenPics project. The machine-readable result is [`Liminal/Visual/ImageSources/image-collections.json`](../../../../Liminal/Visual/ImageSources/image-collections.json).
 
 ## Method
 

@@ -278,7 +278,7 @@ struct DialogueMotifTests {
     }
 
     /// The response answers on the backbeat (a snare step, 4 or 12 of a bar) in every hook cell, the
-    /// boom-bap call and response (docs/research/mpc-chopping-craft.md section 4).
+    /// boom-bap call and response (docs/research/dialogue-chopping/craft.md section 4).
     @Test(arguments: MotifShape.all) fileprivate func theResponseAnswersOnTheBackbeat(_ shape: MotifShape) throws {
         for template in DialogueMotifTuning.hookTemplates {
             #expect(template.contains { $0.0 == .r && $0.1 % 4 == 0 && ($0.1 / 4) % 2 == 1 }, "\(template.map { "\($0.0)@\($0.1)" })")

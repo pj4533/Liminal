@@ -2,7 +2,7 @@
 
 19 November 2026. Branch `feature/mpc-chopping` (local only, never pushed). Baseline commit `c42f1b5`.
 
-Inputs: [handoff](../research/mpc-chopping-handoff.md), [craft notes](../research/mpc-chopping-craft.md), [mix engineering notes](../research/lofi-mix-engineering.md), [technical notes](../research/mpc-chopping-technical.md), and a code audit of the baseline. This plan implements handoff phases 1 to 3 in full and phase 4 only where a measured need appears (section 13 lists what is deferred and why).
+Inputs: [handoff](../research/dialogue-chopping/handoff.md), [craft notes](../research/dialogue-chopping/craft.md), [mix engineering notes](../research/mix/engineering.md), [technical notes](../research/dialogue-chopping/technical.md), and a code audit of the baseline. This plan implements handoff phases 1 to 3 in full and phase 4 only where a measured need appears (section 13 lists what is deferred and why).
 
 Status: plan. Numbers marked *start* are tuning hypotheses exposed as named constants. Numbers in section 9 are acceptance criteria.
 

@@ -33,7 +33,7 @@ The melody and midrange rack can pick up a short window from its own colored ret
 
 The archive store protects ten curated titles and reserves two slots for discoveries within a shared 3 GB limit. At launch, off the main actor, the store deletes files its index does not list, and stale `CFNetworkDownload_*.tmp` files and old `liminal-*` fixtures are removed from `tmp/`; indexed clips are never touched by this cleanup. When both groups are available, the weaver schedules a discovery after four curated excerpts. After its second play and outgoing fade, a discovery becomes eligible for replacement. [Film credits](experience.md#pinned-films-and-rotating-discoveries)
 
-An incoming footage cue can decode while the current cue plays. Late PCM starts at the matching position in the active excerpt with a short fade. The Lo-Fi archive rack picks a three-tap echo pattern every four audible bars. Each pattern uses beat subdivisions for its main echo, darker stereo answer, and room reflection. The tap levels swell independently. Two delay banks let earlier echoes decay at their original timing across changes. Footage and music are summed independently before the final bus. The combined final path uses light compression, slowly adjusts gain within bounded limits, and protects sample peaks with a conservative output trim. [Research and verification](research/lofi-studio.md) · [Headless capture](development.md#lo-fi-checks)
+An incoming footage cue can decode while the current cue plays. Late PCM starts at the matching position in the active excerpt with a short fade. The Lo-Fi archive rack picks a three-tap echo pattern every four audible bars. Each pattern uses beat subdivisions for its main echo, darker stereo answer, and room reflection. The tap levels swell independently. Two delay banks let earlier echoes decay at their original timing across changes. Footage and music are summed independently before the final bus. The combined final path uses light compression, slowly adjusts gain within bounded limits, and protects sample peaks with a conservative output trim. [Research and verification](research/lofi-production/studio.md) · [Headless capture](development.md#lo-fi-checks)
 
 ### Dialogue chopping pipeline
 
@@ -51,7 +51,7 @@ Lo-Fi turns the film's speech into a small bank of related cuts and plays it aga
 
 Transcription is optional (`DialogueTranscriptionMode`: off, installed only by default, or allow one model download). `AppleSpeechTranscriptProvider` uses Apple SpeechAnalyzer and SpeechTranscriber off the scheduling path. The acoustic bank is built first and used whenever transcription is off, unavailable or late. The director waits for the transcript before the first plan for at most 1.2 s from the cue's start (`transcriptFirstWait`), and never past 0.45 s plus the commit margin before the window, so a transcript that is ready in time chooses and cuts the loop's line from bar 1 (D124); the bed and the music never wait.
 
-Handoff record names and their code types, from [the research handoff](research/mpc-chopping-handoff.md):
+Handoff record names and their code types, from [the research handoff](research/dialogue-chopping/handoff.md):
 
 | Handoff record | Code type | Notes |
 | --- | --- | --- |

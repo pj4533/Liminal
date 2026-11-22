@@ -103,7 +103,7 @@ nonisolated enum DialogueMotifTuning {
     /// template holds for `hookLoops` loops (the words change every loop, the trigger rhythm with
     /// them less often), then the next one in a seeded rotation. Every template answers on the
     /// backbeat: the response sounds on a snare step (4, 12, 20 or 28) at least once per cell, the
-    /// boom-bap call and response (docs/research/mpc-chopping-craft.md section 4, "reserve one
+    /// boom-bap call and response (docs/research/dialogue-chopping/craft.md section 4, "reserve one
     /// anchor to land on the snare"; verification pass of 21 November 2026).
     enum HookRole: String, Sendable { case s, r, t }
     static let hookTemplates: [[(HookRole, Int)]] = [

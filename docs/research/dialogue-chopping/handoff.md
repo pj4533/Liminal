@@ -71,45 +71,14 @@ Bed readiness must be independent of optional semantic analysis. `ArchiveFootage
 
 ## Producer practices and their useful translations
 
-### DJ Premier: make a few related pieces carry identity
+The producer evidence (what each source says, how much weight it carries, and what Liminal did with it) lives in [producers](../producers/README.md). The translations that shaped this design, in short:
 
-In the RBMA account of “The Question Remains,” Premier describes repeatedly restarting a short stab from a damaged record, pitching a copy down, assigning it to another pad and alternating versions. The useful principle is a small, related vocabulary with deliberate performance. One strong source event and its expressive sibling can establish identity more clearly than a stream of unrelated cuts. His Wax Poetics account also describes equipment learning and responding to the artist in the room, reinforcing selection from the actual situation rather than a universal recipe. These are Premier's own accounts of particular practices, not exhaustive rules for his catalog. [Premier RBMA](https://www.redbullmusicacademy.com/lectures/dj-premier-you-know-my-steez/), [Premier Wax Poetics](https://magazine.waxpoetics.com/article/dj-premier-takes-it-personal/).
-
-For Liminal, reserve an original phrase, a short recognizable subphrase and one alternate articulation or modest linked pitch/rate version. Keep their pad identities stable for several appearances. Let repetition announce the vocabulary before an alternate surprises the listener. A “Premier-inspired operation” here means related sample variants and repeated stabs; it does not mean a Premier sound preset, copying a record, or claiming stylistic equivalence. Do not down-pitch every word automatically. A voice's identity and intelligibility can be more useful than a conspicuous effect.
-
-### J Dilla: expressive choices and relationships among timing layers
-
-Dilla's own 2001 interview discusses sixteenth-note rhythms and extended listening to a pattern before deciding what it needs. That account supports deliberate revision and patient selection. A reproduced Scratch Q&A connects limited sampling memory with chopping, values imperfections in live recordings and describes a then-current sampled-groove-first process. The reproduction has transcription problems and the original scan was not inspected, so it should carry less weight than the preserved 2001 interview. Neither source supplies a universal numerical swing setting. [Dilla, Soul Under Control](https://www.stonesthrow.com/news/soul-under-control/), [reproduced Scratch interview](https://www.sirpierre.se/2013/12/dagens-dilla-j-dilla-still-lives-through-scratch-magazine-mayjune-2006.html).
-
-Collaborators add a different kind of evidence. Questlove recalls Dilla retaining many dynamically different drum hits from an extended break, and complicates his initial quantization answer rather than leaving it at “off.” T3 recalls selective quantization and constructing whole melodies from small pieces; Young RJ describes learning from Dilla. These are firsthand memories of working practice, with the normal limits of retrospective accounts. They support expressive alternatives and selective relationships, not applying random timing to every event. [Questlove RBMA](https://www.redbullmusicacademy.com/lectures/uestlove-phrenology-of-hip-hop/), [T3 and Young RJ](https://antigravitymagazine.com/column/red-light-fever-t3-young-rj-of-slum-village-on-j-dillas-production/).
-
-Later analysis offers an additional interpretation. Dan Charnas describes comparing grids and waveforms: evenly spaced hats can feel swung because of a displaced snare. His discussion of Another Batch also describes evolving programming and slowed samples. These are Charnas's historical/research interpretations, not Dilla explaining his own exact settings; the underlying measurements were not inspected here. The useful inference is that groove emerges among layers, and cannot be captured by one global late offset or a quantization-off switch. [Charnas interview](https://rockandrollglobe.com/hip-hop/hip-hop-still-runs-on-dilla-time/), [Charnas on Another Batch](https://pitchfork.com/features/article/the-obscure-j-dilla-beat-tape-that-changed-music-forever/).
-
-Apply this by keeping alternative expressive source units, retaining a selected pattern and changing one dimension at a time: an answer, an accent, a rest or a rate variant. Preserve AJ's existing timing rather than imposing “Dilla swing” over him. Bass may share selected kick attacks, mids may answer a backbeat and speech may anticipate a gap; their relationships should be stable within a phrase. Dynamic and timing choices must remain related across repeats. Uniform independent jitter would obscure the decisions this evidence makes interesting.
-
-### Pete Rock: playback speed is an expressive choice
-
-Pete Rock's discussion of “The Joy” distinguishes the appeal of high-speed sampling from his choice to retain the original-speed singing for that record. It is a source-specific judgment, not a command to always repitch or never repitch. Keep native cadence as a real candidate. Compare it with linked pitch/rate playback when a shorter or darker gesture fits; retain the original when speech character matters more. [Pete Rock, Microphone Check transcript](https://www.withradio.org/2014-07-01/pete-rock-real-could-be-another-word-for-original).
-
-This also corrects terminology. Rate conversion couples duration and pitch. Pitch-preserving time-stretch attempts to change duration independently and may smear consonants or tails. Pitch shifting alone is a third operation. The planner must identify which transform it requests and map time accordingly. Do not label all slower playback “time stretch,” or assume that speech needs pitch correction to become musical.
-
-### Ski Beatz: choose attractive sounds before fitting tempo
-
-Ableton's written demonstration describes Ski listening with the metronome off, marking desirable source events without tying them to session tempo, slicing those markers, playing the bank and tapping a tempo. Selection precedes tempo establishment in that example. It directly challenges a universal stretch-whole-source-before-chopping recipe. The written account of a modern Ableton demonstration is not proof of a historical MPC feature. [Ski Beatz demonstration](https://www.ableton.com/de/blog/ski-beatz/).
-
-Liminal already has a drummer and tempo, so it should not let speech replace that authority. Transfer the selection principle: first find clear, characterful units, then ask which can fit the current beat. A sentence is not a periodic drum loop and may have no meaningful native BPM. Fit one or several stress anchors, not an imaginary evenly spaced syllable grid. A shorter good phrase can beat a perfectly bar-sized bad one.
-
-### Todd Edwards: prepared banks and vocal texture, as a cross-genre comparison
-
-Edwards describes preparing sample banks, trying compatible sounds and rejecting failures, with historical memory limits influencing sampling speed and artifacts. His 5 Magazine account also emphasizes preparation effort and the possibility of spacious tracks despite larger sampling capacity. This is house/garage vocal collage practice, included because the bank-preparation decisions transfer; it is not presented as a boom-bap exemplar. [Edwards RBMA](https://www.redbullmusicacademy.com/lectures/todd-edwards/?template=RBMA_Lecture/transcript), [Edwards 5 Magazine](https://5mag.net/features/todd-edwards-interview-2012/).
-
-Separate readable speech from vocal texture. Most featured dialogue should convey recognizable original language. Occasional tiny slices can act as percussion or atmosphere, but should have a distinct role and a strict density budget. A modern MPC Slice Motion tutorial demonstrates deliberately restricted random stutter and envelope changes; that is useful sound design, not evidence that random syllables form meaningful sentences. [Vocal Slice Motion](https://www.mpc-tutor.com/mpc3-tutorial-slice-motion-vocals/).
-
-### Bob Power and Roger Linn: timing needs intention and clean boundaries
-
-Power explains how source timing carries the feel of its original context, and how replay can remove interesting friction. Linn describes systematic swing, velocity-sensitive performance, accurate playback and trimmed samples rather than a secret random timing engine. Together these support preserving internal phrasing while choosing particular relationships to the current drummer. They do not establish that every timing mismatch is desirable. [Bob Power RBMA](https://www.redbullmusicacademy.com/lectures/bob-power-it-always-takes-longer/), [Roger Linn interview](https://www.attackmagazine.com/features/interview/roger-linn-swing-groove-magic-mpc-timing/).
-
-Treat a sample's linguistic entrance and its rhythmic accent separately. A consonant can precede the stressed vowel that should coincide with a drum. Schedule the necessary lead-in before that accent rather than cutting it off. Repeated gestures should retain their contour. These are internal composition rules, not artist-specific timing presets.
+- **[DJ Premier](../producers/dj-premier.md): make a few related pieces carry identity.** Reserve an original phrase, a short recognizable subphrase and one alternate articulation or modest linked pitch/rate version. Keep their pad identities stable for several appearances, and let repetition announce the vocabulary before an alternate surprises the listener. This is related sample variants and repeated stabs, not a Premier sound preset. Do not down-pitch every word automatically.
+- **[J Dilla](../producers/j-dilla.md): expressive choices and relationships among timing layers.** Keep alternative expressive source units, retain a selected pattern and change one dimension at a time: an answer, an accent, a rest or a rate variant. Preserve AJ's existing timing rather than imposing "Dilla swing". Bass may share selected kick attacks, mids may answer a backbeat and speech may anticipate a gap; the relationships stay stable within a phrase, and uniform independent jitter would obscure the decisions this evidence makes interesting.
+- **[Pete Rock](../producers/pete-rock.md): playback speed is an expressive choice.** Keep native cadence a real candidate; compare it with linked pitch/rate playback when a shorter or darker gesture fits. Terminology: rate conversion couples duration and pitch, pitch-preserving time-stretch changes duration independently and may smear consonants or tails, and pitch shifting alone is a third operation. The planner must identify which transform it requests and map time accordingly. Do not label all slower playback "time stretch," or assume speech needs pitch correction to become musical.
+- **[Ski Beatz](../producers/ski-beatz.md): choose attractive sounds before fitting tempo.** Liminal already has a drummer and tempo, so speech must not replace that authority. Find clear, characterful units first, then ask which can fit the current beat; fit one or several stress anchors, not an imaginary evenly spaced syllable grid. A shorter good phrase can beat a perfectly bar-sized bad one.
+- **[Todd Edwards](../producers/todd-edwards.md): prepared banks and vocal texture** (house and garage, a cross-genre comparison). Separate readable speech from vocal texture: most featured dialogue conveys recognizable language, and occasional tiny slices act as percussion or atmosphere with a distinct role and a strict density budget.
+- **[Bob Power and Roger Linn](../producers/bob-power-and-roger-linn.md): timing needs intention and clean boundaries.** Preserve internal phrasing while choosing particular relationships to the current drummer. Treat a sample's linguistic entrance and its rhythmic accent separately: a consonant can precede the stressed vowel that should coincide with a drum, so schedule the lead-in before that accent rather than cutting it off. Repeated gestures keep their contour. These are internal composition rules, not artist-specific timing presets.
 
 ## The manual workflow translated into an autonomous loop
 
@@ -342,55 +311,31 @@ The Driftbot repository's `bin/ci-local` validates its Python/TypeScript suites,
 
 ## Annotated craft and history sources
 
-The following entries retain the research reading scopes. Interviews were read in the listed passages, not consumed end to end. Embedded music, tutorial audio and video were not auditioned. Line references describe the retrieved text, not permanent publisher anchors. Manufacturer documents establish their controls and procedures; they do not prove that the proposed algorithm sounds good. The two Charnas entries are later analysis rather than primary testimony about Dilla's actions.
+The following entries retain the research reading scopes. Interviews were read in the listed passages, not consumed end to end. Embedded music, tutorial audio and video were not auditioned. Line references describe the retrieved text, not permanent publisher anchors. Manufacturer documents establish their controls and procedures; they do not prove that the proposed algorithm sounds good. The two Charnas entries (S20, S21, now in the [J Dilla](../producers/j-dilla.md) note) are later analysis rather than primary testimony about Dilla's actions.
 
 ### S1. Ski Beatz: Unique techniques — Ableton, 26 January 2010
-
-URL: https://www.ableton.com/de/blog/ski-beatz/
-
-Read: the complete substantive written demonstration, lines 55–70, particularly its six workflow bullets. This is Ableton's contemporaneous written account of its own filmed producer demonstration; the embedded video was not watched. Ski listens with the metronome off, adds roughly 10–15 markers to desirable events without relating them to session tempo, slices at those markers, plays the resulting keyboard bank, taps a tempo with his other hand, and records. Purpose: quickly discover a new performance from selected sounds. Modern Ableton technique, not evidence that an MPC60 had Warp Markers.
+Moved with the producer evidence: see the sources of [Ski Beatz](../producers/ski-beatz.md). Numbering kept so references to S1 still resolve.
 
 ### S2. DJ Premier — Red Bull Music Academy lecture, Toronto 2007; host Jeff “Chairman” Mao
-
-URL: https://www.redbullmusicacademy.com/lectures/dj-premier-you-know-my-steez/
-
-Read: transcript passage on “The Question Remains,” lines 318–348, plus adjoining discussion of sample search. Premier describes repeatedly restarting one short stab from a damaged record, pitching a copy down, assigning it to another pad, and alternating between the versions. He also describes searching for sounds to match an imagined beat. Purpose: transform a familiar source through a small playable vocabulary. Do not extrapolate this one example into “Premier always uses this technique.” Embedded music was not auditioned.
+Moved with the producer evidence: see the sources of [DJ Premier](../producers/dj-premier.md). Numbering kept so references to S2 still resolve.
 
 ### S3. DJ Premier takes it personal — Wax Poetics original interview, current web edition
-
-URL: https://magazine.waxpoetics.com/article/dj-premier-takes-it-personal/
-
-Read: equipment history and production-process passages, lines 80–106, also retrieved as direct HTML. Original print-era interview date was not established; current search indexing suggests a later web republication. Premier recounts learning loops on an S900 and moving to an MPC60 for programming after Eddie Sancho introduced it. He describes making beats in the room from a fresh start, responding to the artist. Purpose: sampling is situated selection and responsive making. This is historical first-person testimony, not a complete technical specification.
+Moved with the producer evidence: see the sources of [DJ Premier](../producers/dj-premier.md). Numbering kept so references to S3 still resolve.
 
 ### S4. Pete Rock: “Real Could Be Another Word For Original” — NPR Microphone Check, Ali Shaheed Muhammad and Frannie Kelley, 1 July 2014
-
-URL: https://www.withradio.org/2014-07-01/pete-rock-real-could-be-another-word-for-original
-
-Read: transcript exchange about “The Joy,” 33 versus 45 RPM, lines 654–676, with article attribution. Rock explains choosing the original-speed singing for that record, while recognizing the appeal of higher-speed sampling elsewhere. He identifies the beat as an SP-1200 production from 1997/98. Purpose: playback speed changes character, and the right choice depends on the ear and source. Only the relevant transcript was read; the 84-minute audio was not heard.
+Moved with the producer evidence: see the sources of [Pete Rock](../producers/pete-rock.md). Numbering kept so references to S4 still resolve.
 
 ### S5. Todd Edwards — RBMA New York 2013 lecture; host Emma Warren
-
-URL: https://www.redbullmusicacademy.com/lectures/todd-edwards/?template=RBMA_Lecture/transcript
-
-Read: transcript preparation passages, lines 450–478, and audience questions, lines 700–730. Edwards describes laying drums down, finding a sound, trying it, rejecting it if it fails, and later preparing banks to experiment with. He recalls sampling 33 RPM records at 45 to conserve memory, then playing them lower, producing artifacts. He discusses texture selection and losses from excessive pitch movement. Purpose: choose compatible material and exploit constraints deliberately. This is house/garage practice, included for vocal collage craft, not presented as a 90s boom-bap recipe. Transcript only.
+Moved with the producer evidence: see the sources of [Todd Edwards](../producers/todd-edwards.md). Numbering kept so references to S5 still resolve.
 
 ### S6. Todd Edwards: The 5 Magazine Interview — Czarina Mirani, 30 November 2012
-
-URL: https://5mag.net/features/todd-edwards-interview-2012/
-
-Read: sample-count, memory, sample-bank preparation, and perfectionism answers, lines 61–77, via page and direct HTML. Edwards reports early sampling-time limits of roughly 5–15 seconds, later denser constructions, and time-consuming attention to pitch and preparation. He notes renewed appetite for older spacious tracks. Purpose: quality depends on choosing and preparing usable ingredients; available memory does not require density. First-person historical account; not evidence of a universal hardware memory limit or optimal density.
+Moved with the producer evidence: see the sources of [Todd Edwards](../producers/todd-edwards.md). Numbering kept so references to S6 still resolve.
 
 ### S7. Bob Power — RBMA Rome 2004 lecture; host Torsten Schmidt
-
-URL: https://www.redbullmusicacademy.com/lectures/bob-power-it-always-takes-longer/
-
-Read: sampling/replay and timing discussion, lines 533–559, with adjacent material for context; also retrieved direct HTML. Power explains that a sampled part carries timing from its original musical context, and removing that friction when replaying can remove interest. Purpose: preserve meaningful relationships rather than sterilizing everything into one pocket. Entire lecture and embedded music were not consumed.
+Moved with the producer evidence: see the sources of [Bob Power](../producers/bob-power-and-roger-linn.md). Numbering kept so references to S7 still resolve.
 
 ### S8. Roger Linn on Swing, Groove & the Magic of the MPC's Timing — Greg Scarth and Roger Linn, Attack Magazine, 2 July 2013
-
-URL: https://www.attackmagazine.com/features/interview/roger-linn-swing-groove-magic-mpc-timing/
-
-Read: full substantive first-page email interview via direct publisher HTML after web-reader timeouts; reader comments excluded. Linn explains delaying even sixteenths, velocity-sensitive performance, pressure-controlled repeated notes, accurate playback, and tightly trimmed samples. He rejects secret random timing as his implementation's explanation. Purpose: controlled timing and dynamics enable expression. His design account is primary for his machines, not a claim to know every Dilla production decision. This supports avoiding a vague “humanize with random offsets” shortcut.
+Moved with the producer evidence: see the sources of [Roger Linn](../producers/bob-power-and-roger-linn.md). Numbering kept so references to S8 still resolve.
 
 ### S9. Akai MPC2000XL Operator's Manual — Akai, revision header 2001, mirrored primary document
 
@@ -435,40 +380,22 @@ URLs: https://www.akaipro.com/guides/mpc-sample/pad_play.htm and https://www.aka
 Read: pad chopping controls and note-on behavior, lines 26–112; tutorial recording/sequence/editing passages, lines 31–145 and 174–210. Counted as one manufacturer guide, not two independent authorities. Threshold, equal-region and manual pad-tapped cuts are distinct modes; slices can be merged/split; note-on and one-shot differ; sequence changes can queue at an ending; recording quantization is optional. Modern 2026 hardware reference only. Manufacturer procedure is reliable for the documented behavior, not evidence that new automatic modes sound better.
 
 ### S16. J Dilla: Soul Under Control — Datwon Thomas, Platform.net, February 2001; preserved by Stones Throw, 7 May 2001
-
-URL: https://www.stonesthrow.com/news/soul-under-control/
-
-Read: production passages, lines 79–126, including Runnin, Fantastic Vol. 1 and the final habits question. First-person Dilla testimony: sixteenth-note rhythms and spending up to two hours listening to a pattern before choosing what it needs. This supports deliberate selection and sustained listening; it does not establish an exact quantization setting. No source audio was listened to.
+Moved with the producer evidence: see the sources of [J Dilla](../producers/j-dilla.md). Numbering kept so references to S16 still resolve.
 
 ### S17. J Dilla Still Lives Through — Scratch, May/June 2006; reproduced transcription
-
-URL: https://www.sirpierre.se/2013/12/dagens-dilla-j-dilla-still-lives-through-scratch-magazine-mayjune-2006.html
-
-Read: substantive Q&A through direct HTML. The original magazine scan was not inspected. This is reproduced primary testimony with weaker provenance and apparent transcription errors, so paraphrase cautiously. Dilla connects limited sampler memory with chopping, values imperfections in live recordings, describes a then-current sampled-groove-first process, and discusses MPC3000 familiarity and mono pads. A description of what he was doing lately is not a universal lifelong workflow. No hardware settings are inferred from garbled wording.
+Moved with the producer evidence: see the sources of [J Dilla](../producers/j-dilla.md). Numbering kept so references to S17 still resolve.
 
 ### S18. Questlove — RBMA Seattle 2005 lecture; host Monk One
-
-URL: https://www.redbullmusicacademy.com/lectures/uestlove-phrenology-of-hip-hop/
-
-Read: relevant transcript, lines 450–461; embedded media not consumed. Firsthand collaborator testimony: Questlove recalls Dilla retaining many dynamically different kicks, snares and hats from an extended break. His quantization answer moves from no to yes-and-no. This supports expressive alternates and selective timing choices, not universal quantization-off or a numerical Dilla offset.
+Moved with the producer evidence: see the sources of [J Dilla](../producers/j-dilla.md). Numbering kept so references to S18 still resolve.
 
 ### S19. Red Light Fever: T3 & Young RJ of Slum Village on J Dilla's Production — Robert Offner, ANTIGRAVITY, June 2014
-
-URL: https://antigravitymagazine.com/column/red-light-fever-t3-young-rj-of-slum-village-on-j-dillas-production/
-
-Read: whole short article, lines 17–32. T3 describes selective quantization and whole melodies built from small pieces; Young RJ says Dilla taught him. These are collaborator memories. The author's wabi-sabi framing is not Dilla's stated philosophy. Analog-warmth testimony does not establish a required analog processing chain.
+Moved with the producer evidence: see the sources of [J Dilla](../producers/j-dilla.md). Numbering kept so references to S19 still resolve.
 
 ### S20. Hip-Hop Still Runs On Dilla Time — Michaelangelo Matos interviews Dan Charnas, Rock and Roll Globe, 9 August 2022
-
-URL: https://rockandrollglobe.com/hip-hop/hip-hop-still-runs-on-dilla-time/
-
-Read: timing Q&A, lines 100–124. Charnas describes comparing waveforms with a grid: evenly spaced hats can feel swung because of an early snare. This is Charnas's research account and secondary evidence about Dilla, not Dilla's own explanation; underlying files and measurements were not inspected. It supports considering relationships among timing layers rather than reducing groove to quantize-off.
+Moved with the producer evidence: see the sources of [J Dilla](../producers/j-dilla.md). Numbering kept so references to S20 still resolve.
 
 ### S21. The Obscure J Dilla Beat Tape That Changed Music Forever — Dan Charnas, Pitchfork, 9 February 2023
-
-URL: https://pitchfork.com/features/article/the-obscure-j-dilla-beat-tape-that-changed-music-forever/
-
-Read: substantive historical discussion, lines 40–80, about Another Batch versus Donuts, evolving freehand programming, slowed samples and timing displacement. Later historical analysis; broad originality claims belong to the author. Not direct Dilla statements or an inspected production session.
+Moved with the producer evidence: see the sources of [J Dilla](../producers/j-dilla.md). Numbering kept so references to S21 still resolve.
 
 ## Annotated technical sources and access limits
 

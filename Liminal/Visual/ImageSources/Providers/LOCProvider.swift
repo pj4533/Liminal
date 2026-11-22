@@ -2,7 +2,7 @@
 //  LOCProvider.swift
 //  Liminal
 //
-//  Library of Congress (docs/research/image-apis/collections.md). Collection search JSON; only items
+//  Library of Congress (docs/research/visuals/image-apis/collections.md). Collection search JSON; only items
 //  with a IIIF image service reach 2K (Carol M. Highsmith's archive). The search result already
 //  carries the rights advisory and the IIIF derivatives with their sizes in the URL fragment, so
 //  a search hit needs no further request. Pinned ids are looked up through /item/<id>/?fo=json.

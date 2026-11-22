@@ -1,7 +1,7 @@
 # Bass sample sources (CC0 only shortlist)
 
 Research only. Nothing added to the repo. Small inspection downloads are in `downloads/` (not executed).
-Repo state checked: `InstrumentSamples/` ships LofiLead-* only (upright = VSCO/KW pizz, flatwound/jazzbox/archtop guitar leads). No bass samples are bundled; `LofiBassVoice` is pure synthesis (sine + 2nd/3rd harmonic, 0.005-0.018 s rise, 0.18-0.42 s release). `docs/research/instrument-sources.md` already lists D. Smolken pizz double bass (CC0) as pick #7 and VSCO Contrabass Pizz; the licence rules (CC0 first, no EULA freebies, Pianobook/Spitfire/Ableton/Splice rejected, CC-BY only with a modified note) are applied here too.
+Repo state checked: `InstrumentSamples/` ships LofiLead-* only (upright = VSCO/KW pizz, flatwound/jazzbox/archtop guitar leads). No bass samples are bundled; `LofiBassVoice` is pure synthesis (sine + 2nd/3rd harmonic, 0.005-0.018 s rise, 0.18-0.42 s release). `docs/research/instruments/sources.md` already lists D. Smolken pizz double bass (CC0) as pick #7 and VSCO Contrabass Pizz; the licence rules (CC0 first, no EULA freebies, Pianobook/Spitfire/Ableton/Splice rejected, CC-BY only with a modified note) are applied here too.
 
 All repos below: GitHub spdx `CC0-1.0`, `LICENSE` = "Creative Commons Legal Code / CC0 1.0 Universal" (checked via API 2026-11-20). Download pattern that works: `https://github.com/sfzinstruments/<repo>/raw/refs/heads/<branch>/<path>` (plain raw URLs 404 for some paths; zips are release assets).
 
@@ -49,7 +49,7 @@ Runners-up: Karoryfer Ergo EUB (pizz, reaches E0), Big Little Bass (very low, 2 
 - 11 mono 44.1 kHz 16-bit samples, a tritone-spaced multisample C1 to F#5 (C1 5.7 s, fundamental 32.8 Hz), sustained but with a plucky FM attack; >2 kHz at -58 dB in the bass register. Judgement: the classic 80s/90s FM "Lately" bass is a snappy tonal sub; cheap to try as the "new tone" layer under the sampled pluck (sub support in dub). Also covers pitched lead-ish register, not needed.
 
 ### Others examined
-- **D. Smolken / Karoryfer Meatbass** (1958 Otto Rubner upright, pizz): CC0-1.0 (spdx). Release `DSmolken.double_bass.v1.001.zip` 265 MB (and `karoryfer.meatbass` v1.001 255 MB). Already in the repo's plan (instrument-sources D.1). A cleaner, more jazz upright than Sneakybass; sustains long. Use if Sneakybass proves too dark/too articulation-heavy.
+- **D. Smolken / Karoryfer Meatbass** (1958 Otto Rubner upright, pizz): CC0-1.0 (spdx). Release `DSmolken.double_bass.v1.001.zip` 265 MB (and `karoryfer.meatbass` v1.001 255 MB). Already in the repo's plan ([instrument sources](../instruments/sources.md) D.1). A cleaner, more jazz upright than Sneakybass; sustains long. Use if Sneakybass proves too dark/too articulation-heavy.
 - **VSCO 2 CE Contrabass Pizz** (CC0, already in use as VSCO source): older sample quality, fixed pitch grid.
 - **Rickenbacker 4001** (project16 multisample): CC-BY-NC-SA-3.0 per sfzinstruments catalog -> REJECT (non-commercial).
 - **Standard Bass** (sfzinstruments): licence listed "Custom" -> skip. **Kalimbass** (MIT, electric kalimba bass) is not suitable as a boom-bap bass. **Baconwulf / Beefowulf / Karniszbass / Secret Agent Bass**: commercial -> reject. (Beefowulf is the R&B/hip-hop bass; paid.)

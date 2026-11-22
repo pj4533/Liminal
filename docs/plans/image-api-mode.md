@@ -11,7 +11,7 @@ Pictures are curated public-domain and openly licensed imagery fetched from libr
 APIs: roadside neon, 1970s Kodachrome, Apollo-era Earth views, photochroms, fungi, woodblock landscapes. They are
 the only picture source.
 
-Research this plan rests on: `docs/research/image-apis/survey.md` (which APIs work, keys, resolution, rights),
+Research this plan rests on: `docs/research/visuals/image-apis/survey.md` (which APIs work, keys, resolution, rights),
 `collections.md` (the curated sources, measured sizes, rejections) and `openpics.md` (the user's earlier
 OpenPics app). The approved source list is `Liminal/Visual/ImageSources/image-collections.json`.
 

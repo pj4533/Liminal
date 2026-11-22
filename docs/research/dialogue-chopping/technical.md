@@ -1,6 +1,6 @@
 # Technical research for MPC-style dialogue chopping and mix work
 
-Date: 2026-11-19. Companion to [mpc-chopping-handoff.md](mpc-chopping-handoff.md). Scope: Swift on macOS 26 / visionOS 26 (Xcode 27.2).
+Date: 2026-11-19. Companion to [mpc-chopping-handoff.md](handoff.md). Scope: Swift on macOS 26 / visionOS 26 (Xcode 27.2).
 
 Evidence labels: **[doc]** read on sosumi.ai during this session; **[wwdc]** WWDC25 session 277 transcript via sosumi.ai; **[known]** standard DSP literature or prior knowledge, not re-fetched this session; **[verify]** must be tested on the target machine before relying on it. No code in this note has been compiled or benchmarked.
 

@@ -2,7 +2,7 @@
 //  ArticProvider.swift
 //  Liminal
 //
-//  Art Institute of Chicago, keyless (docs/research/image-apis/new-providers.md 2). Search with an
+//  Art Institute of Chicago, keyless (docs/research/visuals/image-apis/new-providers.md 2). Search with an
 //  Elasticsearch bool query in GET parameters: the title match plus `is_public_domain` (combining
 //  `q` with a filter falls back to popularity order). The IIIF server serves only a few fixed widths;
 //  `full/3000,/0/default.jpg` gives 3000 px on the long side, or native size when smaller. The

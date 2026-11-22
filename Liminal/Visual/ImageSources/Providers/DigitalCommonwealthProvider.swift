@@ -3,7 +3,7 @@
 //  Liminal
 //
 //  Digital Commonwealth (Boston Public Library and other Massachusetts collections), keyless
-//  Blacklight JSON plus IIIF 2 (docs/research/image-apis/new-providers.md 1). A source's `collection`
+//  Blacklight JSON plus IIIF 2 (docs/research/visuals/image-apis/new-providers.md 1). A source's `collection`
 //  is the host collection facet (for example "The Tichnor Brothers Collection": 1930-45 linen
 //  postcards of motels, highways and moonlit main streets, about 3300 px). Only records whose
 //  `reuse_allowed_ssi` is "no restrictions" are kept; other collections on the site are mixed.

@@ -2,7 +2,7 @@
 
 > Status: input to D128 (`docs/decisions/music.md`). The numbers below are research starting values; the shipped hook (`LofiStrumHook`) uses its own tuned constants and fewer archetypes (five, A-E), and does not implement the per-take detune. Where this note and D128 differ, D128 and the source win.
 
-22 November 2026 (D128). Production-craft research done before the strummed hook was built. This note covers how RZA-era Wu-Tang and related boom-bap and lo-fi producers used guitar and other strummed or plucked parts, and turns that into pattern rules and archetypes Liminal can implement. It builds on `docs/research/mpc-chopping-craft.md` (the 4/8/16-bar cadence, exact repetition, and placement on off-beat sixteenths) and on D114 (`LofiGuitarPhrasing`: strums 8 to 25 ms per string, about 25 percent up-strums, fingerpicking, double stops and grace notes around an unchanged melody).
+22 November 2026 (D128). Production-craft research done before the strummed hook was built. This note covers how RZA-era Wu-Tang and related boom-bap and lo-fi producers used guitar and other strummed or plucked parts, and turns that into pattern rules and archetypes Liminal can implement. It builds on `docs/research/dialogue-chopping/craft.md` (the 4/8/16-bar cadence, exact repetition, and placement on off-beat sixteenths) and on D114 (`LofiGuitarPhrasing`: strums 8 to 25 ms per string, about 25 percent up-strums, fingerpicking, double stops and grace notes around an unchanged melody).
 
 ## How to read this note
 
@@ -13,21 +13,19 @@ Liminal context: phrases are 4 bars (16 beats) at 58 to 82 BPM, so one sixteenth
 ## 1. What the sources say
 
 ### 1.1 RZA used the guitar as a sound to sample, not as a part to play (SOURCED)
-- Engineer Yoram Vazan on the 36 Chambers sessions: "RZA really could not play but he had a way of using it like it was a sound he was going to sample." Also: "There were synthesizers to come in to add a few notes and a guitar." Ethan Ryman on mixing: "the trick was to not have anything step on anything else, especially the vocals." The sound was "grimy and dirty ... not as polished and sparkly clean" (Nolan Moffitte). Source: [RBMA Daily, Engineering the Wu-Tang Clan](https://daily.redbullmusicacademy.com/2018/06/engineering-wu-tang-clan).
+- Engineer testimony from the 36 Chambers sessions: RZA treated the guitar "like it was a sound he was going to sample", and the mixing trick was "to not have anything step on anything else, especially the vocals". Quotes and sources: [RZA and the Wu-Tang Clan](../producers/rza-and-wu-tang.md).
 - **Rule:** the guitar is one more sample pad. It contributes a few notes or one gesture, not a continuous rhythm part, and it must never step on the dialogue chops, which act as the vocal here.
 
 ### 1.2 One strum as the main stab of a beat (SECONDARY)
-- On "Incarcerated Scarfaces" (Raekwon, *Only Built 4 Cuban Linx*), RZA "uses the first guitar strum" of Koko Taylor's "Wang Dang Doodle," "which forms the main stab of the beat." An "off key piano sample that plays throughout the chorus" answers that stab. On "All I Need," "bandpass filtered" hits scattered through the track make each loop sound different. On "C.R.E.A.M.," the loop is "literally the first two seconds" of the Charmels record. Source: [Mixdown, Five times RZA showed he's a sampling genius](https://mixdownmag.com.au/features/five-times-the-rza-showed-hes-a-sampling-genius/).
-- "Shame on a Nigga" uses Syl Johnson's "Different Strokes," "including the horn line, guitar stabs and groove." Source: [Mixdown, 25 years of 36 Chambers](https://mixdownmag.com.au/features/more-than-a-sample-25-years-of-enter-the-wu-tang-36-chambers/).
+- "Incarcerated Scarfaces" takes the first strum of "Wang Dang Doodle" as the main stab, answered by an off-key piano sample; "All I Need" scatters bandpass-filtered hits so each loop differs ([RZA and the Wu-Tang Clan](../producers/rza-and-wu-tang.md)).
 - **Rule:** the core Wu-Tang gesture is one chord strum used as a stab, repeated exactly, with a second off-key element answering it. Make the single-stab archetype the most common one.
 
 ### 1.3 Soft nylon guitar under a cut (SECONDARY plus GENERAL)
-- "Ice Cream" (Raekwon, 1995, produced by RZA) is built on Earl Klugh's "A Time for Love" from *Late Night Guitar* (1980). Kenny Beats reused the same sample in 2023. Sources: [Wikipedia, Ice Cream](https://en.wikipedia.com/wiki/Ice_Cream_(Raekwon_song)), [AllHipHop](https://allhiphop.com/?p=6045002). Method John Blige's "All I Need" opens with Klugh's "I'll Never Say Goodbye" (Mixdown, above).
-- GENERAL: Klugh plays a soft, warm, nylon-string jazz guitar. Lifted into a beat, it becomes a short broken-chord figure that repeats against the drums.
+- "Ice Cream" (1995) is built on Earl Klugh's soft, warm, nylon-string jazz guitar. Lifted into a beat, that becomes a short broken-chord figure that repeats against the drums ([RZA and the Wu-Tang Clan](../producers/rza-and-wu-tang.md)).
 - **Rule:** a gentle nylon broken-chord figure (one bar, sounded and then repeated exactly) is the second core archetype. It suits the existing Nylon Fingerstyle and Archtop programs.
 
 ### 1.4 Detuned "harmony of its own" (SOURCED)
-- RZA on Fresh Air (2005): "all the notes are maybe not a half step, but maybe one-eighth of a step, just out of tune ... I like it when it's detuned, because that means it's not in the musical harmony according to the theory of music ... but yet it has a harmony of its own." On kung-fu film scores: "the stings and the stabs that used to come out of nowhere," "the music had to be edited to match the fight scenes," and "a very abstract flow of music." He describes "a muddy string guitar sample" and, on *Wu-Tang Forever*, "you'll just hear the guitar hit with the piano." He moved from one- and two-bar loops to four-bar loops: "I came with the four bars," and "take ... three different parts from one song." Source: [Fresh Air archive](https://freshairarchive.org/segments/rapper-producer-composer-rza).
+- RZA on Fresh Air (2005) describes deliberately detuned samples, "one-eighth of a step, just out of tune", that have "a harmony of its own"; kung-fu film "stings and stabs"; and a move from one- and two-bar to four-bar loops. Quotes: [RZA and the Wu-Tang Clan](../producers/rza-and-wu-tang.md).
 - **Rules:**
   - Allow a fixed detune of up to about 25 cents (an eighth of a tone) on the strum part for the whole take. That is about 12 cents at most against the key, which reads as old-sample character, not error. Keep it constant within a take, because random drift sounds sloppy rather than sampled.
   - A "sting" is a sudden one-off pluck or tremolo at a bar line, edited in rather than played as a riff. Allow at most one per 8 bars.
@@ -35,17 +33,15 @@ Liminal context: phrases are 4 bars (16 beats) at 58 to 82 BPM, so one sixteenth
   - Make the guitar "hit with the piano": when a piano phrase and a guitar stab coincide, put them on the same step (unison), not a sixteenth apart (flam).
 
 ### 1.5 Too much guitar was the failure case (SOURCED)
-- On *8 Diagrams* (2007), Raekwon complained publicly that RZA was "trying to do too much of this guitar stuff," and RZA defended guitars in hip-hop. RZA says that around 1997 he began learning theory and chord progressions so he could play what he had been sampling, and later added live guitar and solos to his Bobby Digital work. "The Heart Gently Weeps" used Dhani Harrison replaying the Beatles riff rather than a sample. Sources: [XXL](https://www.xxlmag.com/rza-says-guitars-are-a-part-of-hip-hop-cites-lil-waynes-lp-defends-last-wu-album/), [Complex, 77 best rock samples](https://www.complex.com/music/a/jesse-serwer/the-77-best-rock-samples-in-rap-history), [Complex, RZA and Shavo](https://www.complex.com/pigeons-and-planes/a/crax/rza-shavo-interview-wu-tang-clan).
+- On *8 Diagrams* (2007) Raekwon complained that RZA was "trying to do too much of this guitar stuff" ([RZA and the Wu-Tang Clan](../producers/rza-and-wu-tang.md)).
 - **Rule:** this is the documented "don't overdo it" lesson. Played-sounding guitar (solos, continuous comping, busy fingerwork) is what the group itself rejected. The classic era used short sampled gestures. Hard caps follow in section 3.
 
 ### 1.6 Kung-fu film music came mostly from library records (SECONDARY)
-- Shaw Brothers scores drew heavily on the De Wolfe production-music library, with cues reused across films. Wu-Tang mostly sampled the films' dialogue and sound rather than these cues. Sources: [Bleep, De Wolfe presents Kung Fu Super Sounds](https://bleep.com/release/21546-various-artists-de-wolfe-presents-kung-fu-super-sounds), [Splice, Shaw Brothers and Wu-Tang](https://splice.com/blog/shaw-brothers-studio-wu-tang-clan).
-- GENERAL: the "Eastern" colour in Wu beats comes mostly from minor-pentatonic plucked lines, sudden stings, and cue edits, not from an authentic guzheng or pipa part.
-- **Rule:** an Eastern colour can be suggested with the existing harp or plucked-string programs playing a minor-pentatonic sting (archetype 9). Any new Asian plucked instrument must pass the high bar on its own (see the instrument task). Do not add one for the reference alone.
+- Shaw Brothers scores drew heavily on the De Wolfe production-music library; Wu-Tang mostly sampled the films' dialogue and sound rather than those cues. The "Eastern" colour in Wu beats comes mostly from minor-pentatonic plucked lines, sudden stings and cue edits, not from an authentic guzheng or pipa part (general knowledge). See [RZA and the Wu-Tang Clan](../producers/rza-and-wu-tang.md).
+- **Rule:** an Eastern colour can be suggested with the existing harp or plucked-string programs playing a minor-pentatonic sting (archetype 9). Any new Asian plucked instrument must pass the high bar on its own (see [the instrument survey](../instruments/strum-survey.md)). Do not add one for the reference alone.
 
 ### 1.7 Madlib, Alchemist, Griselda, Dilla, Pete Rock (SECONDARY or gap)
-- Madlib: "sped-up guitar strums" from Jimmy Smith and Wes Montgomery's "Mellow Mood" under Quasimoto, and "guitar strings slink across the tops of drum breaks." Source: [DJBooth, Ode to Madlib](https://djbooth.net/features/2019-07-10-ode-to-madlib-forever-loop-digga/). Alchemist: "taking whatever sample, making a basic loop," and give a beat "a little bit of structure, even if it's imagined structure." Source: [MusicRadar](https://www.musicradar.com/news/the-alchemist-beatmaking-tips).
-- No usable method detail was found for Daringer, Beat Butcha, 4th Disciple, True Master, Pete Rock or Dilla guitar use this pass. GENERAL: Griselda beats often loop a short, dusty, unresolved fragment (guitar, piano or strings) with minimal or no drum variation, and use dropouts for emphasis. The Dilla influence is a consistent late (lagging) placement rather than random jitter (mpc-chopping-craft 2.3 and 5).
+- Madlib's sped-up guitar strums under Quasimoto ([Madlib](../producers/madlib.md)); the Alchemist's "basic loop" with imagined structure ([The Alchemist](../producers/the-alchemist.md)); Griselda's short, dusty, unresolved loops with dropouts, which is general knowledge only ([Griselda producers](../producers/griselda.md)); Dilla's consistent late placement rather than random jitter ([J Dilla](../producers/j-dilla.md); mpc-chopping craft 2.3 and 5, now [dialogue craft](../dialogue-chopping/craft.md)). No usable method detail was found for Pete Rock or Dilla guitar use.
 - **Rule:** the "loose loop" family is legitimate: one fragment repeated with little change. Lag is a fixed per-pattern offset, never per-note randomness.
 
 ### 1.8 Boom-bap arrangement and space (SECONDARY, tutorial level)
@@ -95,7 +91,7 @@ Lo-fi and Wu harmony is minor and extended. Lo-fi chord guides lean on m7, maj7,
 - Only **one plucked part is busy at a time.** When the guitar is in strum mode, the existing melody line from the same program thins (it keeps its landmark notes) rather than both playing fully. The melody contract (pitch, onset, length) holds for the notes that remain. If D114's contract forbids removing melody notes, the strum pattern must instead fit the melody's gaps (see 4.2).
 - **Choke always wins.** Strum-mode stabs default to a short hold of 1 to 2 sixteenths. Only archetypes 4, 8 and 10 ring longer.
 
-### 3.3 Repetition and change (from mpc-chopping-craft 3.1 and 3.2)
+### 3.3 Repetition and change (from the [dialogue craft note](../dialogue-chopping/craft.md) 3.1 and 3.2)
 - Statement: a 2- or 4-bar strum pattern, repeated **exactly** (same steps, voicing, spread and velocities) at least twice. Exactness is what makes a sample-like hook. Random per-repeat jitter must not be added.
 - Micro change every 4 bars: one of omit one stab, move one stab by one sixteenth, swap the voicing's top note, or add or remove a pickup rake.
 - Macro change every 8 bars: switch archetype, or drop the strum part for a bar.
@@ -168,21 +164,8 @@ Combined defaults: 1 plus 13, or 2 plus 8, give about 3 to 5 events per 4 bars, 
 
 ## Sources
 
-- https://daily.redbullmusicacademy.com/2018/06/engineering-wu-tang-clan
-- https://freshairarchive.org/segments/rapper-producer-composer-rza
-- https://mixdownmag.com.au/features/five-times-the-rza-showed-hes-a-sampling-genius/
-- https://mixdownmag.com.au/features/more-than-a-sample-25-years-of-enter-the-wu-tang-36-chambers/
-- https://magazine.waxpoetics.com/article/wu-tang-clans-gza-runs-down-every-track-off-liquid-swords
-- https://en.wikipedia.com/wiki/Ice_Cream_(Raekwon_song)
-- https://allhiphop.com/?p=6045002
-- https://www.xxlmag.com/rza-says-guitars-are-a-part-of-hip-hop-cites-lil-waynes-lp-defends-last-wu-album/
-- https://www.complex.com/music/a/jesse-serwer/the-77-best-rock-samples-in-rap-history
-- https://www.complex.com/pigeons-and-planes/a/crax/rza-shavo-interview-wu-tang-clan
-- https://tapeop.com/interviews/163/rza
-- https://bleep.com/release/21546-various-artists-de-wolfe-presents-kung-fu-super-sounds
-- https://splice.com/blog/shaw-brothers-studio-wu-tang-clan
-- https://djbooth.net/features/2019-07-10-ode-to-madlib-forever-loop-digga/
-- https://www.musicradar.com/news/the-alchemist-beatmaking-tips
+Wu-Tang, Madlib and Alchemist sources are listed with their notes in [producers](../producers/README.md). The rest:
+
 - https://beatstorapon.com/blog/how-to-make-a-boom-bap-beat/
 - https://samplefocus.com/blog/dj-premier-breakbeat-hip-hop-samples.md
 - https://www.native-instruments.com/en/blogs/blog/what-is-boom-bap

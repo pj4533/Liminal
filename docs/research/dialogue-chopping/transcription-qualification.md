@@ -1,6 +1,6 @@
 # On-device speech transcription: qualification record
 
-Date: 2026-11-19. Scope: plan [mpc-chopping.md](../plans/mpc-chopping.md) section 7, the optional `AppleSpeechTranscriptProvider` behind `TranscriptProvider`. The acoustic dialogue path never depends on it.
+Date: 2026-11-19. Scope: plan [mpc-chopping.md](../../plans/mpc-chopping.md) section 7, the optional `AppleSpeechTranscriptProvider` behind `TranscriptProvider`. The acoustic dialogue path never depends on it.
 
 ## Environment
 

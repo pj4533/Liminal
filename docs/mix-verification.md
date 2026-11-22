@@ -1,6 +1,6 @@
 # Mix verification
 
-How to measure a Lo-Fi mix without listening, read the figures, and decide pass or fail. Written for an engineer or agent who has the repository and has not seen the MPC chopping and mix work. The method was designed in [the plan](plans/mpc-chopping.md) (section 9) and the [mix engineering notes](research/lofi-mix-engineering.md) (sections 8 and 9). This document describes what the tools in `scripts/` actually do.
+How to measure a Lo-Fi mix without listening, read the figures, and decide pass or fail. Written for an engineer or agent who has the repository and has not seen the MPC chopping and mix work. The method was designed in [the plan](plans/mpc-chopping.md) (section 9) and the [mix engineering notes](research/mix/engineering.md) (sections 8 and 9). This document describes what the tools in `scripts/` actually do.
 
 Contents: [what it verifies](#what-this-verifies-and-what-it-cannot) · [prerequisites](#prerequisites) · [quick start](#quick-start) · [what a capture contains](#what-a-capture-contains) · [measurements](#measurements) · [criteria](#criteria) · [reading the figures](#reading-the-figures) · [before and after](#before-and-after) · [dialogue cadence and lead time](#dialogue-cadence-and-lead-time) · [adding a stem or a diagnostic](#adding-a-stem-or-a-diagnostic) · [troubleshooting](#troubleshooting) · [where results live](#where-results-live)
 
@@ -708,6 +708,6 @@ Then read it in Python through `Capture` (`scripts/mixlib/audio.py`): `cap.diagn
 `docs/plans/mpc-chopping-measurements.md` holds the measured numbers of record, with dates and the reason for any threshold change. This document does not repeat them; the numbers quoted above come from one illustrative capture and will differ from a later build.
 
 - Method and thresholds: [the plan, section 9](plans/mpc-chopping.md), `scripts/mix-criteria.json`.
-- Background for the targets: [lofi-mix-engineering.md](research/lofi-mix-engineering.md), section 8 (targets) and 9 (analysis methods).
+- Background for the targets: [lofi-mix-engineering.md](research/mix/engineering.md), section 8 (targets) and 9 (analysis methods).
 - The capture checker and older Lo-Fi commands: [development.md, Lo-Fi checks](development.md#lo-fi-checks), `scripts/check-lofi.sh`, `scripts/analyze-lofi.py`, `scripts/plot-lofi.py`.
 - The code: `scripts/mix-report.sh`, `scripts/mix-report.py`, `scripts/mix-matrix.sh`, `scripts/mixlib/`, `LiminalTests/LofiMixRenderTests.swift`, `Liminal/Audio/Lofi/LofiCaptureHooks.swift`.

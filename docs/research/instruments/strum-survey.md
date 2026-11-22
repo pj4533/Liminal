@@ -2,7 +2,7 @@
 
 > Status: input to D128 (`docs/decisions/music.md`). Outcome: only the Black And Green Hofner (Hollowbody Soul) was added (`docs/lofi-samples.md`); the Gretsch from the same library was rejected for hiss; Kayageum, Robohymn and the muted strokes were deferred. The candidates were downloaded outside the repository and the analysis scripts were scratch tools that are not kept.
 
-Scope: openly licensed recordings that would give Liminal's Lo-Fi guitars more strummed and RZA-style hook material. The bar is dusty, warm and tucked into the mix. Prior work read first: `docs/research/instrument-sources.md`, `docs/research/lofi-instrument-qualification.md`, `docs/lofi-samples.md` and D114 in `docs/decisions/music.md`.
+Scope: openly licensed recordings that would give Liminal's Lo-Fi guitars more strummed and RZA-style hook material. The bar is dusty, warm and tucked into the mix. Prior work read first: `docs/research/instruments/sources.md`, `docs/research/instruments/qualification.md`, `docs/lofi-samples.md` and D114 in `docs/decisions/music.md`.
 
 Already bundled, all vl1/rr1 single notes: FreePats nylon, Martin HD28 steel, Shinyguitar mic and pickup, Emilyguitar flatwound. D114 rejected FSBS Clean #2 as too bright. The chord-strum sets (Robohymn, Carbonthief) were left as candidates because they need a chord playback path.
 

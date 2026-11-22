@@ -1,6 +1,6 @@
 # Lo-fi / boom-bap mix engineering and objective verification
 
-19 November 2026 · Research note for the Liminal mix and mastering implementation (companion to [mpc-chopping-handoff.md](mpc-chopping-handoff.md))
+19 November 2026 · Research note for the Liminal mix and mastering implementation (companion to [mpc-chopping-handoff.md](../dialogue-chopping/handoff.md))
 
 ## Purpose and evidence grading
 

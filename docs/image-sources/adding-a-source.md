@@ -27,7 +27,7 @@ Most failures are "the API only shows a 1024 px preview". Before giving up on a 
 
 1. **Read the item record, not just the search result.** Look for every derivative: `files`, `resources`, `images`, `representation`, `access_point` or `digitally_shown_by`.
 2. **Look for a IIIF service.** If any URL contains `/iiif/`, take the part before `/full/` and request `{service}/info.json`. It gives the native `width`, `height`, and sometimes the allowed `sizes` or a `maxWidth`. Then try `full/!2528,2528/0/default.jpg`, `full/3000,/0/default.jpg` and `full/full/0/default.jpg`, and note which ones answer 200, 403 or 500. AIC answers only a few fixed widths, and some LoC masters answer only `full/full`.
-3. **Use the OpenPics trick.** The user's earlier app, OpenPics ([openpics.md](../research/image-apis/openpics.md)), reached high-resolution LoC files through old endpoints that still name the TIFF master. A master path often maps onto a IIIF id. For LoC, `storage-services/service/pnp/<path>v.jpg` becomes `image-services/iiif/master:pnp:<path with : for />u`. Check under which prefix the server serves masters (`master:` at LoC, not `service:`); a guessed id with the wrong prefix returns 404 and looks like "no master". This is how FSA/OWI colour went from "1024 px only" to 4641-7738 px (D44).
+3. **Use the OpenPics trick.** The user's earlier app, OpenPics ([openpics.md](../research/visuals/image-apis/openpics.md)), reached high-resolution LoC files through old endpoints that still name the TIFF master. A master path often maps onto a IIIF id. For LoC, `storage-services/service/pnp/<path>v.jpg` becomes `image-services/iiif/master:pnp:<path with : for />u`. Check under which prefix the server serves masters (`master:` at LoC, not `service:`); a guessed id with the wrong prefix returns 404 and looks like "no master". This is how FSA/OWI colour went from "1024 px only" to 4641-7738 px (D44).
 4. **Look for mirrors.** Commons holds full-size copies of LoC photochroms (up to 7300 px) and NARA's DOCUMERICA. The Internet Archive mirrors the Met.
 
 ### Measure
@@ -73,7 +73,7 @@ sheet.save(sys.argv[2])
 
 Drop queries whose results are mostly off-brief. Note the words in bad titles: they become `rejectTitleWords`. Pick the best items as pins.
 
-Write the findings, with dates, measured sizes and verdicts, into `docs/research/image-apis/`. Use a new file, or a section in [collections.md](../research/image-apis/collections.md) or [other-institutions.md](../research/image-apis/other-institutions.md). Keep raw probe data and sheets out of git.
+Write the findings, with dates, measured sizes and verdicts, into `docs/research/visuals/image-apis/`. Use a new file, or a section in [collections.md](../research/visuals/image-apis/collections.md) or [other-institutions.md](../research/visuals/image-apis/other-institutions.md). Keep raw probe data and sheets out of git.
 
 ## 2. Write the JSON entry
 

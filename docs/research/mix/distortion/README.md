@@ -1,6 +1,6 @@
 # Mix distortion research
 
-Research done on 2026-11-20 after listening to the shared Lo-Fi clips and hearing distortion in the mix and the bass. The outcome is [D121](../../decisions/music.md); the plan is [mix-distortion](../../plans/mix-distortion.md).
+Research done on 2026-11-20 after listening to the shared Lo-Fi clips and hearing distortion in the mix and the bass. The outcome is [D121](../../../decisions/music.md); the plan is [mix-distortion](../../../plans/mix-distortion.md).
 
 | Doc | Contents |
 |-----|----------|

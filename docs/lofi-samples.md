@@ -73,7 +73,7 @@ Each archive or repository's own licence text was checked on 2026-11-19.
 - "Shinyguitar by Karoryfer Lecolds, played and mapped by D. Smolken, CC0 1.0" (`LICENSE` at commit 57243cca). Its signature note covers only the Sforzando bank XML, which is not used.
 - "Emilyguitar by Karoryfer Lecolds (D. Smolken), CC0 1.0" (`LICENSE` at commit b4920dc6).
 
-The FreePats FSBS Electric Guitar Clean #2 (Jazz, bridge pickup, CC0 1.0) was also prepared and then left out. Its notes keep 11 to 16 dB-relative energy between 2 and 5 kHz even after a fourth-order 2 kHz low-pass, about 15 dB more than every other program. The Shinyguitar pickup set covers the jazz tone instead. The [instrument source survey](research/instrument-sources.md) lists further candidates and the sources that were rejected.
+The FreePats FSBS Electric Guitar Clean #2 (Jazz, bridge pickup, CC0 1.0) was also prepared and then left out. Its notes keep 11 to 16 dB-relative energy between 2 and 5 kHz even after a fourth-order 2 kHz low-pass, about 15 dB more than every other program. The Shinyguitar pickup set covers the jazz tone instead. The [instrument source survey](research/instruments/sources.md) lists further candidates and the sources that were rejected.
 
 
 ## Additions on 2026-11-22 (D128)

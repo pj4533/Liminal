@@ -2,7 +2,7 @@
 
 [← Image sources](README.md) · [Pipeline](pipeline.md) · [Sources](sources.md) · [Adding a source](adding-a-source.md) · [Research history](research-history.md)
 
-A provider is one adapter per institution API, in `Liminal/Visual/ImageSources/Providers/`. This page gives, for each one, the endpoints it calls, auth, paging, the fields it reads, how it reaches a high-resolution file, rate limits and the pitfalls found so far. Measurements are from 2026-11-21 (`docs/research/image-apis/`, `decisions/images.md` D37, D40, D44). The code is the authority. The `providers` blocks in `image-collections.json` carry the same information as notes, but the app reads only their `name` and `institution`, so where a template in the JSON differs from the code (Commons still says `iiurlwidth=2048`), the code is right.
+A provider is one adapter per institution API, in `Liminal/Visual/ImageSources/Providers/`. This page gives, for each one, the endpoints it calls, auth, paging, the fields it reads, how it reaches a high-resolution file, rate limits and the pitfalls found so far. Measurements are from 2026-11-21 (`docs/research/visuals/image-apis/`, `decisions/images.md` D37, D40, D44). The code is the authority. The `providers` blocks in `image-collections.json` carry the same information as notes, but the app reads only their `name` and `institution`, so where a template in the JSON differs from the code (Commons still says `iiurlwidth=2048`), the code is right.
 
 | id | Institution | Auth | Search paging | High-resolution route | Rights field → label | Host gap |
 |---|---|---|---|---|---|---|
@@ -121,7 +121,7 @@ https://tile.loc.gov/storage-services/service/pnp/fsac/1a33000/1a33800/1a33849v.
 - The Yanker posters have 640 px JPEGs only. The Margolies Roadside America items tried had only a thumbnail online.
 - Mid-century `/photos/` searches (`dates=1950/1969`) turn up mostly 1024 px items with restricted or unevaluated rights.
 
-**Library of Congress batch (D45, 2026-11-21).** Findings from [loc-collections.md](../research/image-apis/loc-collections.md):
+**Library of Congress batch (D45, 2026-11-21).** Findings from [loc-collections.md](../research/visuals/image-apis/loc-collections.md):
 
 - **The `master:` route works across Prints & Photographs**, not only FSA colour: Margolies (`mrg`), Matson (`matpc`), photochrom (`ppmsc`), Prokudin-Gorskii (`prokc`), Detroit (`det`), Japanese prints and popular graphic arts (`cph`, `ppmsca`), FSA B&W (`fsa`). Search results usually carry only `_150px.jpg` or `t.gif` thumbnails; `masterIIIF` accepts both. HABS masters use a `p` suffix (`347223p` → `347223pu`) and also work, but every HABS rights string mentions "may be restricted", so HABS is not used.
 - **`partof` sources.** Collections that exist only as a facet (Margolies, Matson) are searched at `https://www.loc.gov/photos/?fo=json&q=…&fa=partof:<name>|online-format:image`; the JSON has the same shape as a collection search. Set `partof` instead of `collection`.

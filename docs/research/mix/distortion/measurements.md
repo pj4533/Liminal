@@ -1,6 +1,6 @@
 # Mix distortion measurements (2026-11-20)
 
-Measurement summary behind [D121](../../decisions/music.md). Reference capture: seed 2077, 72 BPM, 32 bars, private drums, film reel. Plan: [mix-distortion](../../plans/mix-distortion.md). Tool: `scripts/distortion-report.py` ([how to read it](../../mix-verification.md#distortion-and-headroom)). Captures themselves are not committed.
+Measurement summary behind [D121](../../../decisions/music.md). Reference capture: seed 2077, 72 BPM, 32 bars, private drums, film reel. Plan: [mix-distortion](../../../plans/mix-distortion.md). Tool: `scripts/distortion-report.py` ([how to read it](../../../mix-verification.md#distortion-and-headroom)). Captures themselves are not committed.
 
 Implementation notes from the run (rows are net drive in dB after the -2 dB staging, clip threshold in dBFS; "gain" in the sweep rows is the `masterInputGainDb` hook value):
 

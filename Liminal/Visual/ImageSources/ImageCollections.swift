@@ -3,7 +3,7 @@
 //  Liminal
 //
 //  The approved sources the curated feed rotates through: bundled image-collections.json
-//  (docs/research/image-apis/collections.md, docs/plans/image-api-mode.md 3.2).
+//  (docs/research/visuals/image-apis/collections.md, docs/plans/image-api-mode.md 3.2).
 //
 
 import Foundation

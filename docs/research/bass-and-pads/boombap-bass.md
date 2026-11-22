@@ -1,5 +1,7 @@
 # Boom bap bass research
 
+Producer evidence for the bass sound lives in [DJ Premier](../producers/dj-premier.md), [Pete Rock](../producers/pete-rock.md) and [J Dilla](../producers/j-dilla.md).
+
 Sourcing note: no primary interviews with Pete Rock / Premier / Dilla give bass compressor values. Web sources are general guides. Items marked [S] are sourced; [R] are rule-of-thumb synthesis (verify by Liminal's own mix-matrix analysis).
 
 ## Sources of bass sound
