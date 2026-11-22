@@ -3,20 +3,16 @@
 //  Liminal
 //
 //  Archive footage as a continuous stream of short pieces (docs/decisions/archive-video.md A27). While
-//  footage is on, some film is always woven into the picture: pieces of 8-30 s from random points of
-//  cached clips, each crossfading into the next over a few seconds (never a cut, never a gap to zero).
-//  Per piece: clip, start point, recipe (blend look or interaction mode, docs/plans/footage-fx.md 5), warp, a level inside a subtle band (some pieces swell slowly to
-//  more prominent) and whether the film's sound comes in. Pure and seeded: ticked twice a second by
-//  ArchiveFootageService off the main actor; the render loops evaluate `FootagePiece.weight(at:)` only.
-//  Times are seconds since footage started (`elapsed`).
+//  footage is on, some film is always woven into the picture: pieces from random points of cached clips,
+//  each crossfading into the next (never a cut, never a gap to zero). Every piece change is planned on the
+//  drum grid: it completes on a fill boundary's downbeat, and the crossfade spans that fill's dissolve.
+//  Per piece: clip, start point, recipe (blend look or interaction mode, docs/plans/footage-fx.md 5), warp,
+//  a level inside a subtle band (some pieces swell slowly to more prominent) and whether the film's sound
+//  comes in. Pure and seeded: ticked twice a second by ArchiveFootageService off the main actor; the
+//  render loops evaluate `FootagePiece.weight(at:)` only. Times are seconds since footage started (`elapsed`).
 //
 
 import Foundation
-
-/// "Change speed" setting: how long each piece stays before the next drifts in.
-nonisolated enum FootageChangeSpeed: String, CaseIterable, Sendable {
-    case slow, medium, fast
-}
 
 /// One piece of footage, fixed when it is prepared (its fade out is set once the next piece is placed).
 nonisolated struct FootagePiece: Sendable, Equatable {
@@ -55,7 +51,6 @@ nonisolated struct FootagePiece: Sendable, Equatable {
 
     /// The carrier look (Window for the carrier-less recipes: their size and drift).
     var look: VideoLook { recipe.carrier ?? .window }
-    var plannedChange: Double { start + length }
     /// Elapsed seconds at which this piece has fully faded out (nil while it is the newest piece).
     var end: Double? { fadeOutStart.map { $0 + (fadeOut ?? 0) } }
 
@@ -89,30 +84,22 @@ nonisolated struct FootagePiece: Sendable, Equatable {
 nonisolated struct FootageWeaver {
 
     struct Timing: Sendable, Equatable {
-        var pieceLength: ClosedRange<Double>
-        var crossfade: ClosedRange<Double>
         /// Fade in of the very first piece.
         var firstFade: Double = 5
         var rate: ClosedRange<Float> = 0.6...0.85
         var warp: ClosedRange<Float> = 0.35...0.85
-        /// Chance that a piece brings its sound.
-        var soundChance: Float
+        /// Pieces long enough for a cue bring the film's sound.
+        var sound = true
         /// Seconds the next piece's decoder (and its sound decode) get before its crossfade begins.
         var lead: Double = 3
-        /// Longest a crossfade waits for an image transition to finish.
-        var maxTransitionWait: Double = 6
-        /// Longest a crossfade waits for the incoming decoder's first frame before that piece is dropped.
+        /// Longest the first piece waits for its decoder's first frame before it is dropped.
         var maxReadyWait: Double = 10
+        /// Once the first piece exists no further piece is prepared.
+        var holdsFirstPiece = false
 
-        static func speed(_ s: FootageChangeSpeed) -> Timing {
-            switch s {
-            case .slow: return Timing(pieceLength: 20...30, crossfade: 5...7, soundChance: 0.97)
-            case .medium: return Timing(pieceLength: 12...20, crossfade: 3.5...5, soundChance: 0.97)
-            case .fast: return Timing(pieceLength: 8...12, crossfade: 2.5...3.5, soundChance: 0.97)
-            }
-        }
-        /// -LiminalVideoMix (stills): one piece for an hour, in 1 s.
-        static let stills = Timing(pieceLength: 3600...3600, crossfade: 3...3, firstFade: 1, soundChance: 0)
+        static let standard = Timing()
+        /// -LiminalVideoMix (stills): one silent piece that fades in over 1 s and stays.
+        static let stills = Timing(firstFade: 1, sound: false, holdsFirstPiece: true)
     }
 
     /// The subtle band (fraction of the look's ceiling): every piece sits between `floor` and `bandTop`;
@@ -122,8 +109,8 @@ nonisolated struct FootageWeaver {
     static let swellChance: Float = 0.3
     static let swellRange: ClosedRange<Float> = 0.15...0.38
     static let swellMinLength: Double = 14
-    /// Emerge takes the whole frame: its pieces are capped.
-    static let emergeMaxLength: Double = FootageRecipe.cappedLength
+    /// Seconds past a fade in's end before the next fill boundary may end the piece.
+    static let boundaryMargin: Double = 0.01
     /// The first piece fades in this soon after a clip is available.
     static let firstLead: Double = 1
     /// Sound: starts this long after the piece's fade in begins; ends this long after its planned change.
@@ -133,9 +120,6 @@ nonisolated struct FootageWeaver {
     static let soundMinSpan: Double = 5
 
     struct Conditions: Sendable, Equatable {
-        var transitionRunning = false
-        /// Seconds since the current image's crossfade began (nil: no image yet / first image).
-        var imageAge: Double? = nil
         /// Music energy 0...1.
         var musicIntensity: Float = 0
         /// Effect intensity setting 0...1.
@@ -179,8 +163,7 @@ nonisolated struct FootageWeaver {
         case drop(slot: Int)
     }
 
-    /// Settable: the "Change speed" setting applies from the next piece on.
-    var timing: Timing
+    let timing: Timing
     private var rng: MusicRNG
     /// At most two: the current piece and, from its preparation until the old one has faded, the next.
     private(set) var pieces: [FootagePiece] = []
@@ -231,15 +214,8 @@ nonisolated struct FootageWeaver {
     /// No clip could be prepared (cache empty, file gone): ask again on a later tick.
     mutating func prepareFailed() { awaiting = false }
 
-    /// The current piece's clip ran out early: bring the next piece in as soon as possible.
-    mutating func hurry(at t: Double) {
-        guard pieces.count == 1, var p = pieces.last else { return }
-        let change = max(t + timing.lead, p.start + p.fadeIn + 1)
-        if change < p.plannedChange { p.length = change - p.start; pieces[0] = p }
-    }
-
     mutating func tick(elapsed t: Double, conditions c: Conditions, hasClip: Bool,
-                       grid: LofiTakeGrid? = nil, ready: (Int) -> Bool) -> Decision {
+                       grid: LofiTakeGrid, ready: (Int) -> Bool) -> Decision {
         // A scheduled film edit is published in advance so the render loop can
         // crossfade on its exact clock even though the weaver ticks at 2 Hz.
         if let incoming = pieces.last, incoming.fill != nil, pieces.count == 2,
@@ -264,77 +240,49 @@ nonisolated struct FootageWeaver {
             return .prepare(makeRequest(slot: 0, start: t + Self.firstLead, fadeIn: timing.firstFade,
                                         conditions: c, grid: grid))
         }
-        // 3. A piece close to its fade in: hold it (and the outgoing piece) while its decoder has no frame
-        //    yet or an image transition runs; give up on a decoder that never delivers.
+        // 3. The first piece close to its fade in: hold it while its decoder has no frame yet; give up on a
+        //    decoder that never delivers (a later tick prepares another first piece). A later piece is a
+        //    fill edit on its exact clock: it is never held, and the check above drops it.
         if t < last.start {
-            if last.fill != nil { return .none }
-            guard t >= last.start - 0.75 else { return .none }
-            let isReady = ready(last.slot)
+            guard last.fill == nil, t >= last.start - 0.75, !ready(last.slot) else { return .none }
             let since = holdSince ?? t
-            let waited = t - since
-            if !isReady && waited >= timing.maxReadyWait {
+            if t - since >= timing.maxReadyWait {
                 pieces.removeLast()
                 pinnedRun = pinnedRunBeforePrepare
-                if var cur = pieces.last {
-                    cur.fadeOutStart = nil
-                    cur.fadeOut = nil
-                    cur.length = max(cur.length, t - cur.start + timing.lead + 1)
-                    pieces[pieces.count - 1] = cur
-                }
                 holdSince = nil
                 return .drop(slot: last.slot)
             }
-            let transitionHold = pieces.count == 2 && c.transitionRunning && waited < timing.maxTransitionWait
-            if !isReady || transitionHold {
-                holdSince = since
-                postponeNewest(by: 1)
-            }
+            holdSince = since
+            pieces[pieces.count - 1].start += 1
             return .none
         }
-        if pieces.count == 2 { return .none }
-        if let grid {
-            let boundary = grid.nextBoundary(after: max(last.start + last.fadeIn, t + 0.5))
-            let fade = boundary.fill.dissolveBeats * grid.beatDuration
-            // The piece change is complete on the downbeat, with the picture's drop cut (drop-transitions.md 3.5).
-            let start = boundary.time - fade
-            guard hasClip, t >= start - timing.lead else { return .none }
-            awaiting = true
-            return .prepare(makeRequest(slot: 1 - last.slot, start: start, fadeIn: fade, conditions: c,
-                                        grid: grid, fill: boundary.fill))
-        }
-        // 4. One piece showing: prepare the next `lead` seconds before the planned change.
-        guard hasClip, t >= last.plannedChange - timing.lead else { return .none }
+        if pieces.count == 2 || timing.holdsFirstPiece { return .none }
+        // 4. One piece showing: the next one crossfades in over the coming fill boundary's dissolve and is
+        //    complete on its downbeat, with the picture's drop cut (drop-transitions.md 3.5). It is prepared
+        //    `lead` seconds before its crossfade begins, never before this piece has fully faded in.
+        let boundary = grid.nextBoundary(after: max(last.start + last.fadeIn, t + 0.5))
+        let fade = boundary.fill.dissolveBeats * grid.beatDuration
+        let start = boundary.time - fade
+        guard hasClip, t >= start - timing.lead else { return .none }
         awaiting = true
-        let fade = rng.range(timing.crossfade)
-        // The next crossfade may not begin before this piece has fully faded in.
-        let start = max(last.plannedChange, t + 1, last.start + last.fadeIn + 0.5)
-        return .prepare(makeRequest(slot: 1 - last.slot, start: start, fadeIn: fade, conditions: c))
-    }
-
-    /// Moves the newest piece's fade in (and the outgoing piece's fade out) later.
-    private mutating func postponeNewest(by dt: Double) {
-        guard let n = pieces.indices.last else { return }
-        pieces[n].start += dt
-        if n > 0 {
-            pieces[n - 1].fadeOutStart = pieces[n].start
-            pieces[n - 1].length = max(pieces[n - 1].length, pieces[n].start - pieces[n - 1].start)
-        }
+        return .prepare(makeRequest(slot: 1 - last.slot, start: start, fadeIn: fade, conditions: c,
+                                    grid: grid, fill: boundary.fill))
     }
 
     private mutating func makeRequest(slot: Int, start: Double, fadeIn: Double, conditions c: Conditions,
-                                      grid: LofiTakeGrid? = nil, fill: LofiFill? = nil) -> Request {
-        let gridLength = grid.map { $0.nextBoundary(after: start + fadeIn).time - start }
+                                      grid: LofiTakeGrid, fill: LofiFill? = nil) -> Request {
+        // A piece lasts until the fill boundary after its fade in. A fill edit's fade in ends on its own
+        // boundary, and `start + fadeIn` may round to just below it: the margin keeps that boundary out.
+        let length = grid.nextBoundary(after: start + fadeIn + Self.boundaryMargin).time - start
         let recipe = pinnedRecipe ?? Self.chooseRecipe(last: lastRecipe, recent: recent, intensity: c.effectIntensity,
-                                                       hasDepth: c.hasDepth, minimumLength: gridLength ?? 0, rng: &rng)
-        let length = gridLength ?? max(fadeIn + 4, min(rng.range(timing.pieceLength), recipe.maxLength ?? .infinity))
+                                                       hasDepth: c.hasDepth, minimumLength: length, rng: &rng)
         let level = rng.rangeF(Self.floor...Self.bandTop)
         // Swells are slow: only on pieces of 14 s or more (and never on the capped recipes, which take the
         // frame or its tones).
         let swells = rng.chance(Self.swellChance)
         let swell = swells && recipe.maxLength == nil && length >= Self.swellMinLength ? rng.rangeF(Self.swellRange) : 0
         let soundSpan = length + Self.soundTail - Self.soundDelay
-        let sound = soundSpan >= Self.soundMinSpan
-            && (rng.chance(timing.soundChance) || (grid != nil && timing.soundChance > 0))
+        let sound = timing.sound && soundSpan >= Self.soundMinSpan
         let index = pieceCount
         return Request(index: index, slot: slot, start: start, fadeIn: fadeIn, length: length, recipe: recipe,
                        seed: rng.unit(), rate: rng.rangeF(timing.rate), warp: rng.rangeF(timing.warp),

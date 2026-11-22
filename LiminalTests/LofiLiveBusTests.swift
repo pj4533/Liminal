@@ -303,34 +303,32 @@ struct LofiLiveBusTests {
         #expect(abs(rmsDB(bed, stab + 0.05, stab + 0.28, rate: rate) - bedBefore) < 0.1)
     }
 
-    @Test func faderReturnToUnityOnResetAndWhenBeatLockEnds() throws {
-        for endBeatLock in [false, true] {
-            let engine = GenerativeEngine(seed: 16)
-            let format = engine.archiveFormat
-            let rate = format.sampleRate
-            let rig = try DuckRig(engine)
-            let film = try buffer(format, seconds: 5) { _, _ in 0.5 }
-            var step = 0
-            var released = false
-            let x = try render(engine, seconds: 2.2, beat: 0.8, taps: rig.faders, output: rig.output) { t in
-                if step == 0 {
-                    rig.play()
-                    engine.post(.begin(ArchiveVoice.Cue(buffer: film, gain: 1, fadeIn: 0.1, label: "reset", token: 1)))
-                    engine.post(.chops(.init(token: 1, revision: 0, chops: [try! chop(0.8, seconds: 1.2, role: .head, format: format)])))
-                }
-                if !released, t >= 1.3 {
-                    released = true
-                    #expect(engine.archive.isMusicDucked)
-                    if endBeatLock { engine.archive.setBeatLocked(false) } else { engine.archive.reset(now: t) }
-                }
-                step += 1
+    @Test func faderReturnToUnityOnReset() throws {
+        let engine = GenerativeEngine(seed: 16)
+        let format = engine.archiveFormat
+        let rate = format.sampleRate
+        let rig = try DuckRig(engine)
+        let film = try buffer(format, seconds: 5) { _, _ in 0.5 }
+        var step = 0
+        var released = false
+        let x = try render(engine, seconds: 2.2, beat: 0.8, taps: rig.faders, output: rig.output) { t in
+            if step == 0 {
+                rig.play()
+                engine.post(.begin(ArchiveVoice.Cue(buffer: film, gain: 1, fadeIn: 0.1, label: "reset", token: 1)))
+                engine.post(.chops(.init(token: 1, revision: 0, chops: [try! chop(0.8, seconds: 1.2, role: .head, format: format)])))
             }
-            #expect(!engine.archive.isMusicDucked)
-            for k in 0..<3 {
-                let before = rmsDB(x[k], 0.3, 0.7, rate: rate)
-                #expect(rmsDB(x[k], 1.0, 1.25, rate: rate) < before - 1)
-                #expect(abs(rmsDB(x[k], 1.5, 1.95, rate: rate) - before) < 0.05, "fader \(k) after release")
+            if !released, t >= 1.3 {
+                released = true
+                #expect(engine.archive.isMusicDucked)
+                engine.archive.reset(now: t)
             }
+            step += 1
+        }
+        #expect(!engine.archive.isMusicDucked)
+        for k in 0..<3 {
+            let before = rmsDB(x[k], 0.3, 0.7, rate: rate)
+            #expect(rmsDB(x[k], 1.0, 1.25, rate: rate) < before - 1)
+            #expect(abs(rmsDB(x[k], 1.5, 1.95, rate: rate) - before) < 0.05, "fader \(k) after release")
         }
     }
 

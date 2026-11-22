@@ -62,7 +62,6 @@ nonisolated final class VideoFrameSource: @unchecked Sendable {
 
     private struct Published {
         var texture: MTLTexture?
-        var ended = false
     }
     private let published = OSAllocatedUnfairLock(initialState: Published())
 
@@ -88,9 +87,6 @@ nonisolated final class VideoFrameSource: @unchecked Sendable {
 
     /// The newest finished stage texture (nil when nothing is playing). Lock read only.
     func latest() -> MTLTexture? { published.withLock { $0.texture } }
-
-    /// True once the segment has played to its end (the service fades out early).
-    var ended: Bool { published.withLock { $0.ended } }
 
     /// Latest play/stop request: a play whose track load finishes after a later stop is dropped.
     private let request = OSAllocatedUnfairLock(initialState: UInt64(0))
@@ -191,7 +187,6 @@ nonisolated final class VideoFrameSource: @unchecked Sendable {
             guard let sb = pending else {
                 // End of the segment: loop it (the director fades out well before this normally).
                 if reader?.status == .completed || reader?.status == .failed {
-                    published.withLock { $0.ended = true }
                     loops += 1
                     if !openReader(s) { teardown(); return }
                 }

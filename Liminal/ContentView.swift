@@ -502,15 +502,11 @@ struct VisualDisplayView: View {
         }
         // Log Ken Burns values periodically for debugging
         .onChange(of: effectController.time) { _, newTime in
-            let tp = Float(transitionManager.transitionProgress)
             // Archive footage: what the footage weaver listens to (about 2 Hz).
             if newTime - sync.lastFootageUpdate >= 0.5 || newTime < sync.lastFootageUpdate {
                 sync.lastFootageUpdate = newTime
-                let et = DebugLaunchOptions.effectTime(Float(newTime))
                 let modulation = sync.reactor.modulation
                 ArchiveFootageService.shared.update(.init(
-                    transitionRunning: tp > 0,
-                    imageAge: sync.transitionStart.map { Double(et - $0) },
                     musicIntensity: modulation.amount > 0 ? modulation.energy : 0,
                     effectIntensity: DebugLaunchOptions.effectIntensity(setting: settings.effectIntensity)))
             }

@@ -8,7 +8,8 @@
 //  `update(_:)`, each a lock access plus a little arithmetic: no scheduling, I/O or decoding on the main
 //  actor. While footage is on, some film always shows: a continuous stream of short pieces.
 //  The pieces' sound (decoded off the main actor, posted to the music conductor) comes and goes on its
-//  own, and the "Archive Footage" settings (on/off, change speed, audio level) apply at once.
+//  own, and the "Archive Footage" settings (on/off, audio level) apply at once. Piece changes follow the
+//  drum grid the transport publishes; the weaver waits for it.
 //
 
 import AVFoundation
@@ -57,7 +58,6 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
         // Settings and lifecycle: footage runs while playback wants it AND the setting is on.
         var wantsRun = false
         var enabled = true
-        var speed: FootageChangeSpeed = .medium
         var audioLevel: Float = 0.5
         /// The setting was turned off: fade everything out over 2 s, then stop.
         var disabling = false
@@ -81,10 +81,10 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
         let post: @Sendable (ArchiveControl) -> Void
         let format: AVAudioFormat
         let takeGrid: @Sendable () -> LofiTakeGrid?
-        /// The Lo-Fi transport side channel (plan 3.6); nil outside Lo-Fi.
+        /// The transport side channel (plan 3.6); nil until the transport is armed.
         let transport: @Sendable () -> LofiTransportInfo?
         init(format: AVAudioFormat, takeGrid: @escaping @Sendable () -> LofiTakeGrid?,
-             transport: @escaping @Sendable () -> LofiTransportInfo? = { nil },
+             transport: @escaping @Sendable () -> LofiTransportInfo?,
              post: @escaping @Sendable (ArchiveControl) -> Void) {
             self.format = format
             self.takeGrid = takeGrid
@@ -140,13 +140,12 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
 
     /// "Archive Footage" settings. Turning footage off fades picture and sound out over 2 s and stops
     /// prefetching (the cache stays); turning it on while playing starts it again (on again during the
-    /// fade brings it back). The change speed applies from the next piece.
-    func apply(enabled: Bool, speed: FootageChangeSpeed, audioLevel: Float) {
+    /// fade brings it back).
+    func apply(enabled: Bool, audioLevel: Float) {
         let level = min(max(audioLevel, 0), 1)
         let (wasEnabled, running, levelChanged) = shared.withLock { s -> (Bool, Bool, Bool) in
             let was = s.enabled, changed = s.audioLevel != level
             s.enabled = enabled
-            s.speed = speed
             s.audioLevel = level
             if enabled {
                 s.disabling = false
@@ -203,7 +202,7 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
             return true
         }
         guard go else { return }
-        LMLog.visual.info("📼 footage start (force=\(DebugLaunchOptions.videoForce) offline=\(DebugLaunchOptions.videoOffline) file=\(DebugLaunchOptions.videoFile ?? "-", privacy: .public) look=\(DebugLaunchOptions.videoLook ?? "-", privacy: .public) mode=\(DebugLaunchOptions.videoMode ?? "-", privacy: .public) mix=\(DebugLaunchOptions.videoMix.map { String($0) } ?? "-", privacy: .public))")
+        LMLog.visual.info("📼 footage start (quick fetch=\(DebugLaunchOptions.videoForce) offline=\(DebugLaunchOptions.videoOffline) file=\(DebugLaunchOptions.videoFile ?? "-", privacy: .public) look=\(DebugLaunchOptions.videoLook ?? "-", privacy: .public) mode=\(DebugLaunchOptions.videoMode ?? "-", privacy: .public) mix=\(DebugLaunchOptions.videoMix.map { String($0) } ?? "-", privacy: .public))")
         let prefetch = Task.detached(priority: .utility) { [weak self] () -> Void in await self?.prefetchLoop() }
         let weaver = Task.detached(priority: .userInitiated) { [weak self] () -> Void in await self?.weaverLoop() }
         tasks.withLock { $0 = [prefetch, weaver] }
@@ -481,37 +480,29 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
 
     // MARK: - Pieces
 
-    private static func timing(_ speed: FootageChangeSpeed) -> FootageWeaver.Timing {
-        if DebugLaunchOptions.videoMix != nil { return .stills }
-        if DebugLaunchOptions.videoForce { return .speed(.fast) }
-        return .speed(speed)
-    }
-
     private func weaverLoop() async {
-        let speed = shared.withLock { $0.speed }
         let seed = DebugLaunchOptions.videoSeed.map { UInt64($0) } ?? UInt64.random(in: 0...UInt64.max)
-        var weaver = FootageWeaver(seed: seed, timing: Self.timing(speed),
+        var weaver = FootageWeaver(seed: seed, timing: DebugLaunchOptions.videoMix != nil ? .stills : .standard,
                                    pinnedLook: DebugLaunchOptions.videoLook.flatMap(VideoLook.init(name:)),
                                    pinnedRecipe: DebugLaunchOptions.videoMode.flatMap(FootageRecipe.init(name:)))
         var rng = MusicRNG(seed: seed ^ 0xA5C1_17E5)
         var recordedPieceIndex = -1
         var lastLog = -10.0
-        LMLog.visual.info("📼 weaver seed=\(seed) speed=\(speed.rawValue, privacy: .public)")
+        LMLog.visual.info("📼 weaver seed=\(seed)")
         while !Task.isCancelled {
             try? await Task.sleep(nanoseconds: 500_000_000)
             guard !Task.isCancelled else { break }
             let now = Self.uptime()
-            let (running, start, cond, speed, disabling) = shared.withLock {
-                ($0.running, $0.startUptime, $0.conditions, $0.speed, $0.disabling)
+            let (running, start, cond, disabling) = shared.withLock {
+                ($0.running, $0.startUptime, $0.conditions, $0.disabling)
             }
             guard running else { break }
             let elapsed = now - start
-            if weaver.timing != Self.timing(speed) { weaver.timing = Self.timing(speed) }
             if let off = DebugLaunchOptions.videoOffAt, elapsed >= off, !disabling,
                shared.withLock({ $0.enabled }) {
                 LMLog.visual.info("📼 DEBUG: footage setting off at \(String(format: "%.1f", elapsed), privacy: .public)s (-LiminalVideoOffAt)")
                 let level = shared.withLock { $0.audioLevel }
-                apply(enabled: false, speed: speed, audioLevel: level)
+                apply(enabled: false, audioLevel: level)
                 continue
             }
             if disabling {
@@ -528,7 +519,6 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
                 LofiTakeGrid(origin: $0.origin - start, beatDuration: $0.beatDuration, takeIndex: $0.takeIndex,
                              nextBeatDuration: $0.nextBeatDuration)
             }
-            if grid == nil, let cur = weaver.current, sources[cur.slot].ended { weaver.hurry(at: elapsed) }
             // The sound fades out on its own schedule (A27).
             if let a = shared.withLock({ $0.audio }), !a.ended {
                 // Finish the old direct sound before the incoming fill edit needs the
@@ -540,6 +530,11 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
                 if elapsed >= end - a.cue.fadeOut {
                     endAudio(fade: max(0.035, end - elapsed), matching: a.token)
                 }
+            }
+            // Nothing is scheduled until the transport publishes its drum grid.
+            guard let grid else {
+                shared.withLock { $0.grid = nil }
+                continue
             }
             let decision = weaver.tick(elapsed: elapsed, conditions: cond, hasClip: !clips.isEmpty,
                                        grid: grid) { [sources] slot in
@@ -563,7 +558,7 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
                 LMLog.visual.warning("📼 piece dropped slot=\(slot) (no frame); the current piece holds")
             case .prepare(let r):
                 _ = prepare(r, clips: clips, weaver: &weaver,
-                            rng: &rng, elapsed: elapsed, startUptime: start, followsFills: grid != nil)
+                            rng: &rng, elapsed: elapsed, startUptime: start)
             }
             let pieces = weaver.pieces
             shared.withLock { $0.pieces = pieces; $0.grid = grid }
@@ -600,18 +595,13 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
     /// Start the next decoder at the existing deadline.
     private func prepare(_ r: FootageWeaver.Request, clips: [ArchiveClip],
                          weaver: inout FootageWeaver, rng: inout MusicRNG,
-                         elapsed: Double, startUptime: Double, followsFills: Bool) -> FootagePiece? {
+                         elapsed: Double, startUptime: Double) -> FootagePiece? {
         let rate = Double(r.rate)
         let preroll = max(r.start - elapsed + 0.5, 0) * rate
         func segment(for clip: ArchiveClip) -> (length: Double, sourceLength: Double) {
             let usable = max(clip.duration - 1, 1)
             let visible = (usable - preroll) / rate
-            let length: Double
-            if followsFills {
-                length = min(r.length, max(r.fadeIn + 2, visible - 1))
-            } else {
-                length = visible < r.length + 12 ? max(min(r.length, visible - 10), r.fadeIn + 2) : r.length
-            }
+            let length = min(r.length, max(r.fadeIn + 2, visible - 1))
             let margin = min(27, max(visible - length, 2))
             return (length, min(preroll + (length + margin) * rate, usable))
         }
@@ -619,7 +609,7 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
         let different = clips.filter { $0.id != weaver.current?.clipID }
         let pool = r.fill != nil && !different.isEmpty ? different : clips
         let sufficient = pool.filter { $0.duration >= (r.length + 2) * rate + preroll + 1 }
-        let candidates = followsFills && !sufficient.isEmpty ? sufficient : pool
+        let candidates = sufficient.isEmpty ? pool : sufficient
         let audioClips = r.sound ? candidates.filter(\.hasAudio) : []
         let eligible = audioClips.isEmpty ? candidates : audioClips
         guard let clip = weaver.chooseClipForPlayback(eligible, rng: &rng) else {

@@ -49,7 +49,6 @@ nonisolated final class ArchiveConductor: @unchecked Sendable {
     func start(beatDuration: Double, pattern: ArchiveMixBus.EchoPattern = .straight) {
         queue.async { [self] in
             runToken += 1
-            voice.setBeatLocked(true)
             voice.setEchoTempo(beatDuration)
             mix.syncEcho(beatDuration: beatDuration, pattern: pattern, now: now)
             if began, !stopping { return }
@@ -109,7 +108,6 @@ nonisolated final class ArchiveConductor: @unchecked Sendable {
     /// Offline start at conductor time 0 on the calling thread (no timer, no queue).
     func beginOffline(beatDuration: Double, pattern: ArchiveMixBus.EchoPattern = .straight) {
         realtime = false
-        voice.setBeatLocked(true)
         voice.setEchoTempo(beatDuration)
         mix.syncEcho(beatDuration: beatDuration, pattern: pattern)
         begin(at: 0)

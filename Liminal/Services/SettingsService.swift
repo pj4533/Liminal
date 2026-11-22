@@ -21,7 +21,6 @@ final class SettingsService: ObservableObject {
         static let effectIntensity = "visual.effectIntensity"
         static let depthStrength = "visual.depthStrength"
         static let archiveEnabled = "archive.enabled"
-        static let archiveChangeSpeed = "archive.changeSpeed"
         /// Removed in A27 ("Footage amount" Rare / Normal / Often): deleted on launch.
         static let legacyArchiveAmount = "archive.amount"
         static let archiveAudioLevel = "archive.audioLevel"
@@ -41,7 +40,6 @@ final class SettingsService: ObservableObject {
     static let defaultEffectIntensity: Float = EffectLook.defaultIntensity
     static let defaultDepthStrength: Float = ShellLayout.defaultDepth
     static let defaultArchiveEnabled: Bool = true
-    static let defaultArchiveChangeSpeed: FootageChangeSpeed = .medium
     static let defaultArchiveAudioLevel: Float = 0.5
 
     // MARK: - Published Settings
@@ -101,11 +99,6 @@ final class SettingsService: ObservableObject {
         didSet { defaults.set(archiveEnabled, forKey: Keys.archiveEnabled) }
     }
 
-    /// "Change speed": how long each piece of footage stays before the next drifts in (Slow / Medium / Fast).
-    @Published var archiveChangeSpeed: FootageChangeSpeed {
-        didSet { defaults.set(archiveChangeSpeed.rawValue, forKey: Keys.archiveChangeSpeed) }
-    }
-
     /// "Footage audio", 0 (silent) ... 1: level of the film's sound. 0.5 is the default.
     @Published var archiveAudioLevel: Float {
         didSet { defaults.set(archiveAudioLevel, forKey: Keys.archiveAudioLevel) }
@@ -140,9 +133,7 @@ final class SettingsService: ObservableObject {
         self.depthStrength = min(max(defaults.object(forKey: Keys.depthStrength) as? Float ?? Self.defaultDepthStrength, 0), 1)
 
         self.archiveEnabled = defaults.object(forKey: Keys.archiveEnabled) as? Bool ?? Self.defaultArchiveEnabled
-        self.archiveChangeSpeed = FootageChangeSpeed(rawValue: defaults.string(forKey: Keys.archiveChangeSpeed) ?? "")
-            ?? Self.defaultArchiveChangeSpeed
-        // "Footage amount" no longer exists (footage is always present while on); it does not map onto a speed.
+        // "Footage amount" no longer exists (footage is always present while on).
         defaults.removeObject(forKey: Keys.legacyArchiveAmount)
         self.archiveAudioLevel = min(max(defaults.object(forKey: Keys.archiveAudioLevel) as? Float ?? Self.defaultArchiveAudioLevel, 0), 1)
 
@@ -163,7 +154,6 @@ final class SettingsService: ObservableObject {
         effectIntensity = Self.defaultEffectIntensity
         depthStrength = Self.defaultDepthStrength
         archiveEnabled = Self.defaultArchiveEnabled
-        archiveChangeSpeed = Self.defaultArchiveChangeSpeed
         archiveAudioLevel = Self.defaultArchiveAudioLevel
         dialogueTranscription = DialogueTranscriptionMode.defaultMode
         LMLog.state.info("Settings reset to defaults")

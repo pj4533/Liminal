@@ -674,9 +674,7 @@ struct ImmersiveDomeView: View {
                     freshFadeEnd: transitionState.spec.drop != nil ? transitionState.spec.duration : nil)
                 let footageFrame = footage.frame(image: cgImage)
                 if frameCount % 30 == 0 {
-                    footage.update(.init(transitionRunning: transitionState.isTransitioning,
-                                         imageAge: transitionStartEffectTime.map { Double(effectTime - $0) },
-                                         musicIntensity: modulation.amount > 0 ? modulation.energy : 0,
+                    footage.update(.init(musicIntensity: modulation.amount > 0 ? modulation.energy : 0,
                                          effectIntensity: look.intensity,
                                          hasDepth: renderer.depthTexture != nil))
                 }

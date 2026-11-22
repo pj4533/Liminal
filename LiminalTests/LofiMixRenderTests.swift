@@ -308,7 +308,7 @@ struct LofiMixRenderTests {
         // `FootageWeaver.firstLead` after it is prepared. The bed is decoded, then the dialogue task runs
         // classify, analyze, bank, plan and render. The bed itself is due `FootageWeaver.soundDelay` after
         // the piece starts; that margin is not credited here (conservative).
-        let pieceLead = FootageWeaver.Timing.speed(.fast).lead - Self.footagePollSeconds
+        let pieceLead = FootageWeaver.Timing.standard.lead - Self.footagePollSeconds
         var cueIndex = 0
         var cursor = 0
         var noProgress = 0

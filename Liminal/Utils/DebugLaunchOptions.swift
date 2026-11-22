@@ -194,7 +194,8 @@ nonisolated enum DebugLaunchOptions {
 
     // Archive footage (docs/plans/archive-video.md 3). The automation flags above do not block the archive.
 
-    /// -LiminalVideoForce YES (alias -LiminalVideoNow YES): footage pieces at the Fast change speed (A27).
+    /// -LiminalVideoForce YES (alias -LiminalVideoNow YES): the first footage fetch starts after 1 s, not 5 s,
+    /// even when films are already cached.
     static let videoForce: Bool = defaults.bool(forKey: "LiminalVideoForce") || defaults.bool(forKey: "LiminalVideoNow")
     /// -LiminalVideoLook phantom|imprint|window|emerge: every piece uses this look.
     static let videoLook: String? = defaults.string(forKey: "LiminalVideoLook")
@@ -403,7 +404,7 @@ nonisolated enum DebugLaunchOptions {
         if let d = shellDepth { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalShellDepth=\(d, format: .fixed(precision: 2))") }
         if let p = depthImagePath { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalDepthImage=\(p, privacy: .public) (replaces the ML depth map)") }
         if shellTextureStereo { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalShellTextureStereo=YES (per-eye texture parallax, hero tile)") }
-        if videoForce { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalVideoForce=YES (footage pieces at the Fast change speed)") }
+        if videoForce { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalVideoForce=YES (first footage fetch after 1 s)") }
         if let l = videoLook { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalVideoLook=\(l, privacy: .public)") }
         if let m = videoMode {
             let ok = FootageRecipe(name: m) != nil

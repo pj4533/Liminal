@@ -23,7 +23,7 @@ nonisolated final class ArchiveVoice {
         var chops: [LofiDialogueSampler.Hit] = []
         /// The footage service's cue token. Plans with this token belong to this cue. Nil means a new one.
         var token: Int? = nil
-        /// The Lo-Fi transport when the bed was posted: places the theme return's bed dip without any
+        /// The transport when the bed was posted: places the theme return's bed dip without any
         /// dialogue plan (a film with no speech still dips under the hook).
         var transport: LofiTransportInfo? = nil
     }
@@ -98,7 +98,7 @@ nonisolated final class ArchiveVoice {
     let highpass: HighPassButterworthFilter
     let lowpass: LowPassButterworthFilter
     let lowpass2: LowPassButterworthFilter
-    /// Dip in the dialogue slot, kept in the graph but bypassed in both modes: the Lo-Fi bed keeps its
+    /// Dip in the dialogue slot, kept in the graph but always bypassed: the film bed keeps its
     /// baseline chain (user direction, 19 November 2026).
     let presenceDip: PeakingParametricEqualizerFilter
     let spectralSweep: Phaser
@@ -107,7 +107,6 @@ nonisolated final class ArchiveVoice {
     let format: AVAudioFormat
 
     static let dryGain: Float = dbToGain(-12)
-    static let clearDryGain: Float = dbToGain(-1)
     static let reverbSend: Float = 1.3
     static let delaySend: Float = 1.3
     static let highpassHz: Float = 220
@@ -115,7 +114,7 @@ nonisolated final class ArchiveVoice {
     /// Strip trim at the default Footage audio setting.
     static let baseTrim: Float = dbToGain(-10.5)
 
-    /// Lo-Fi film bed. The user's direction of 19 November 2026 (docs/plans/mpc-chopping.md) keeps the
+    /// The film bed. The user's direction of 19 November 2026 (docs/plans/mpc-chopping.md) keeps the
     /// baseline effected bed: mostly wet, dark band-limiting (HPF about 205-290 Hz, two low-pass stages at
     /// 2.1-3.2 kHz), the beat-locked phaser at 0.36-0.58 wet and sends at 1.18 times the contours. Plan 8.6's
     /// clarity pass (drier direct sound, smaller sends, an opened low-pass) is not applied.
@@ -223,7 +222,6 @@ nonisolated final class ArchiveVoice {
     }
 
     // The music bus receives only scheduled chops. The archive strip carries the film and its returns.
-    private var beatLocked = false
     private var cueGain: Float = 1
 
     /// Featured queued chops in conductor seconds: they duck the bed (when the plan asks) and the music.
@@ -231,8 +229,9 @@ nonisolated final class ArchiveVoice {
     private var duckWindows: [Range<Double>] = []
     private var musicDuck: (lead: Fader, mids: Fader, space: Fader)?
     private var musicDucked = false
-    private var lastBedGain: Float = 1
-    /// Beat seconds of the Lo-Fi transport (from `setEchoTempo`) and the theme returns it implies.
+    /// The bed starts at its context gain: no ramp toward it when the first cue begins.
+    private var lastBedGain: Float = LofiBed.contextGain
+    /// Beat seconds of the transport (from `setEchoTempo`) and the theme returns it implies.
     private var chopBeat: Double?
     /// Theme return downbeats (transport seconds). `precise` ones come from the transport or a plan's
     /// events; the others are estimated from the audible phrase callback and yield to a precise one.
@@ -255,10 +254,10 @@ nonisolated final class ArchiveVoice {
     private var chopsUntil = -Double.infinity
     private var lastTime = 0.0
 
-    /// The chop fader follows the Footage audio setting and beat lock, with its own 50 ms ramp.
-    /// It no longer follows the bed's fade-in (plan 6.3).
+    /// The chop fader follows the Footage audio setting while a cue and its tail last, with its own 50 ms
+    /// ramp. It does not follow the bed's fade-in (plan 6.3).
     private func updateChopGain(at t: Double) {
-        let gain: Float = beatLocked && t < chopsUntil ? min(cueGain, 1.15) : 0
+        let gain: Float = t < chopsUntil ? min(cueGain, 1.15) : 0
         guard abs(gain - lastChopGain) > 0.0001 else { return }
         ParamRamp.setGain(chopOutput, gain, over: 0.05)
         lastChopGain = gain
@@ -267,14 +266,14 @@ nonisolated final class ArchiveVoice {
     /// Diagnostics and tests: chops stored but not yet on the player, and those queued.
     var chopCounts: (stored: Int, queued: Int) { (storedChops.count, queuedChops.count) }
 
-    /// The bed's context gain while beat-locked: `LofiBed.contextGain`, and `underChopGain` under a featured
-    /// chop that ducks the bed (65 ms down, 150 ms up); 1 otherwise. Called on every conductor step, so the
-    /// down ramp starts within half a step of 40 ms before the chop.
+    /// The bed's context gain: `LofiBed.contextGain`, `underChopGain` under a featured chop that ducks the
+    /// bed (65 ms down, 150 ms up), and the return dip under a theme return's opening bar. Called on every
+    /// conductor step, so the down ramp starts within half a step of 40 ms before the chop.
     private func blendSoundtrack(at time: Double) {
         let ahead = time + 0.01 + LofiBed.duckDown
         let underDrop = dropWindows.contains { ahead >= $0.lowerBound && time + 0.01 < $0.upperBound }
-        let inReturn = beatLocked && inReturnDip(at: time)
-        var gain: Float = beatLocked ? (underDrop ? LofiBed.underChopGain : LofiBed.contextGain) : 1
+        let inReturn = inReturnDip(at: time)
+        var gain: Float = underDrop ? LofiBed.underChopGain : LofiBed.contextGain
         if inReturn { gain = min(gain, LofiBed.contextGain * LofiBed.returnDipGain) }
         guard gain != lastBedGain else { return }
         let returning = inReturn || lastBedGain < LofiBed.underChopGain * 0.99
@@ -323,12 +322,12 @@ nonisolated final class ArchiveVoice {
         }
     }
 
-    /// The Lo-Fi phrase `index` just became audible (`LofiPlayback.onPhrase` through the conductor).
+    /// The phrase `index` just became audible (`LofiPlayback.onPhrase` through the conductor).
     /// When the next phrase is a theme return, its downbeat is about one phrase from now. An estimate:
     /// the callback is polled, so it may be a few tens of milliseconds late; the dip's 3-beat lead and
     /// 0.3 s ramp absorb that. A transport or plan time replaces it.
     func notePhrase(_ index: Int, beatDuration: Double, now: Double) {
-        guard beatLocked, beatDuration.isFinite, beatDuration > 0,
+        guard beatDuration.isFinite, beatDuration > 0,
               LofiScore.section(at: index + 1) == .returnTheme else { return }
         addReturn(transportNow(now) + LofiClock.beats * beatDuration, precise: false)
     }
@@ -347,7 +346,7 @@ nonisolated final class ArchiveVoice {
         }
     }
 
-    /// The Lo-Fi lead, mids and space faders this voice ducks under featured chops. Call once after
+    /// The lead, mids and space faders this voice ducks under featured chops. Call once after
     /// both objects exist and before the conductor runs (the graph and the capture harness).
     func attachMusicDuck(lead: Fader, mids: Fader, space: Fader) {
         musicDuck = (lead, mids, space)
@@ -355,10 +354,9 @@ nonisolated final class ArchiveVoice {
         for f in [lead, mids, space] { ParamRamp.setGain(f, 1, over: 0.02) }
     }
 
-    /// Every conductor step in Lo-Fi (20 ms): the music duck and the bed's context gain follow the
-    /// windows of queued featured chops. The attack starts 20 ms before the chop (within half a step).
+    /// Every conductor step (20 ms): the music duck and the bed's context gain follow the windows of
+    /// queued featured chops. The attack starts 20 ms before the chop (within half a step).
     func updateDucks(at t: Double) {
-        guard beatLocked else { return }
         let probe = t + 0.01
         let ducked = duckWindows.contains { probe + MusicDuck.lead >= $0.lowerBound && probe < $0.upperBound }
         if ducked != musicDucked, let duck = musicDuck {
@@ -371,7 +369,7 @@ nonisolated final class ArchiveVoice {
         if playing { blendSoundtrack(at: t) }
     }
 
-    /// Beat lock off, reset and power down: the music faders return to unity.
+    /// Reset and power down: the music faders return to unity.
     private func releaseMusicDuck() {
         duckWindows.removeAll()
         musicDucked = false
@@ -388,17 +386,6 @@ nonisolated final class ArchiveVoice {
         let time = Float(0.75 * beat)
         guard let parameter = chopEcho.$time.parameter, abs(parameter.value - time) > 0.0001 else { return }
         ParamRamp.set(chopEcho.$time, time, over: 0.12)
-    }
-
-    func setBeatLocked(_ enabled: Bool) {
-        if !enabled { stopChopTimeline() }
-        beatLocked = enabled
-        blendSoundtrack(at: cueStart)
-        updateChopGain(at: lastTime)
-        if playing {
-            setGain(cueGain)
-            setFilters(running: true)
-        }
     }
 
     private var cueStart = 0.0
@@ -421,7 +408,7 @@ nonisolated final class ArchiveVoice {
 
     init(format: AVAudioFormat = Settings.audioFormat) {
         self.format = format
-        bed = Fader(source)
+        bed = Fader(source, gain: LofiBed.contextGain)
         chopDry = Fader(chops, gain: ChopBus.dryGain)
         chopEcho = VariableDelay(chops, time: 0.64, feedback: ChopBus.echoFeedback, maximumTime: 2, dryWetMix: 1)
         // Echo return: one 0.75-beat slap band-passed to 400 Hz-3 kHz, about 16 dB under the dry line.
@@ -520,8 +507,8 @@ nonisolated final class ArchiveVoice {
         lastTime = now
         let token = adoptChopToken(cue.token)
         chopsUntil = now + seconds + Self.chopTailSeconds
-        if beatLocked, let info = cue.transport { noteReturnStarts(info) }
-        if !cue.chops.isEmpty, beatLocked, !cancelledTokens.contains(token) {
+        if let info = cue.transport { noteReturnStarts(info) }
+        if !cue.chops.isEmpty, !cancelledTokens.contains(token) {
             planRevisions[token] = max(planRevisions[token] ?? 0, 0)
             store(cue.chops.map { ScheduledChop(token: token, start: $0.time, buffer: $0.buffer, duck: true) })
             LMLog.audio.info("Lo-Fi film sampler stored \(cue.chops.count) hits for this picture")
@@ -534,7 +521,6 @@ nonisolated final class ArchiveVoice {
     /// stored, not yet queued chops at or after `replaceFrom`. Queued audio is never moved.
     func perform(_ plan: ChopPlan, now: Double) {
         lastTime = now
-        guard beatLocked else { return }
         if let current = currentCueToken, plan.token < current {
             LMLog.audio.info("Lo-Fi dialogue plan for stale cue \(plan.token) ignored")
             return
@@ -582,8 +568,8 @@ nonisolated final class ArchiveVoice {
         isOffline ? t : Double(DispatchTime.now().uptimeNanoseconds) / 1e9
     }
 
-    /// Starts the persistent chop player once per beat-locked session. The live anchor is the same
-    /// host clock as the drum player, compensated for the route's presentation latency (read once).
+    /// Starts the persistent chop player once per session (until a reset or power down). The live anchor
+    /// is the same host clock as the drum player, compensated for the route's presentation latency (read once).
     private func startChopTimeline(at t: Double) -> ChopTimeline {
         if let timeline { return timeline }
         let player = chops.player
@@ -627,8 +613,8 @@ nonisolated final class ArchiveVoice {
         // Only the begun cue's chops are due. A later cue's plan stays stored, inert (no audio, no duck),
         // until its bed begins and `beginChops` adopts its token; it never blocks the current cue's chops.
         let horizon = now + Self.chopQueueAhead
-        if beatLocked, timeline == nil, !returnStarts.isEmpty { _ = startChopTimeline(at: t) }
-        guard beatLocked, let current = currentCueToken,
+        if timeline == nil, !returnStarts.isEmpty { _ = startChopTimeline(at: t) }
+        guard let current = currentCueToken,
               storedChops.contains(where: { $0.token == current && $0.start < horizon }) else { return }
         let timeline = startChopTimeline(at: t)
         let rate = format.sampleRate
@@ -746,34 +732,11 @@ nonisolated final class ArchiveVoice {
         speechActivity = playing && activityEnvelope.indices.contains(window) ? presence * activityEnvelope[window] : 0
     }
 
+    /// The bed's baseline effected chain the user asked to keep. Sends at 1.18 times the room and echo
+    /// contours, the beat-locked phaser at 0.36-0.58 wet, HPF 290-205 Hz and two low-pass stages at
+    /// 2.1-3.2 kHz, direct sound 0.27-0.60, with one short clarity swell per picture.
     private func updateMix(progress: Double) {
         guard let cueMix else { return }
-        if beatLocked {
-            updateLofiMix(cueMix, progress: progress)
-            return
-        }
-        let value = cueMix.clarity.value(at: progress)
-        // Keep both effects present even at full clarity. The consonants come forward
-        // mainly through the wider filter, with only a small dip in the sends.
-        let wetScale: Float = 1 - 0.18 * value
-        let reverb = cueMix.room.value(at: progress) * wetScale
-        let echo = cueMix.echo.value(at: progress) * wetScale
-        let cutoff = Self.lowpassHz + 1650 * value
-        let motion = cueMix.movement.value(at: progress)
-        ParamRamp.set(spectralSweep.$notchMaximumFrequency, 900 + 970 * motion, over: 0.13)
-        ParamRamp.set(spectralSweep.$dryWetMix, 0.05 + 0.49 * motion * (1 - 0.55 * value), over: 0.13)
-        ParamRamp.set(highpass.$cutoffFrequency, Self.highpassHz - 110 * value, over: 0.12)
-        ParamRamp.set(lowpass.$cutoffFrequency, cutoff, over: 0.12)
-        ParamRamp.set(lowpass2.$cutoffFrequency, cutoff, over: 0.12)
-        let direct = Self.dryGain + (Self.clearDryGain - Self.dryGain) * value
-        ParamRamp.setGain(strip.dryGain, direct, over: 0.12)
-        strip.setSends(reverb: reverb, delay: echo, over: 0.12)
-    }
-
-    /// Lo-Fi bed: the baseline effected chain the user asked to keep. Sends at 1.18 times the room and
-    /// echo contours, the beat-locked phaser at 0.36-0.58 wet, HPF 290-205 Hz and two low-pass stages at
-    /// 2.1-3.2 kHz, direct sound 0.27-0.60, with one short clarity swell per picture.
-    private func updateLofiMix(_ cueMix: CueMix, progress: Double) {
         let value = cueMix.clarity.value(at: progress)
         let wetScale: Float = 1.18 * (1 - 0.18 * value)
         let reverb = cueMix.room.value(at: progress) * wetScale

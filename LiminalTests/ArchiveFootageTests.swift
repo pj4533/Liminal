@@ -317,7 +317,7 @@ struct ArchiveCachePolicyTests {
 
 struct FootageWeaverTests {
     typealias C = FootageWeaver.Conditions
-    static let calm = C(transitionRunning: false, imageAge: 20, musicIntensity: 0.3, effectIntensity: 0.5)
+    static let calm = C(musicIntensity: 0.3, effectIntensity: 0.5)
 
     @Test func filmCutsCenterOnBothFillDownbeatsAcrossTempoChanges() throws {
         let first = LofiClock(tempo: 58, sampleRate: 48_000)
@@ -325,10 +325,9 @@ struct FootageWeaverTests {
         // Footage can be enabled partway through an already running drum take.
         let origin = -3.713
         let turn = origin + 64 * first.beatDuration
-        var w = FootageWeaver(seed: 12, timing: .speed(.fast))
+        var w = FootageWeaver(seed: 12, timing: .standard)
         var cuts: [Double] = []
-        var conditions = Self.calm
-        conditions.transitionRunning = true
+        let conditions = Self.calm
         for step in 0..<240 {
             let t = Double(step) * 0.5
             let grid = t < turn ? LofiTakeGrid(origin: origin, beatDuration: first.beatDuration,
@@ -358,7 +357,7 @@ struct FootageWeaverTests {
 
     @Test func missedFillKeepsTheOldFilmUntilTheNextDownbeat() throws {
         let grid = LofiTakeGrid(origin: 0, beatDuration: 0.8)
-        var weaver = FootageWeaver(seed: 14, timing: .speed(.medium))
+        var weaver = FootageWeaver(seed: 14, timing: .standard)
         var dropped = false
         var fills: [LofiFill] = []
         for step in 0...108 {
@@ -381,6 +380,10 @@ struct FootageWeaverTests {
         #expect(weaver.current?.index == 2)
     }
 
+    /// 75 BPM: a fill boundary (halfway or turnaround) every 32 beats, 25.6 s.
+    static let grid = LofiTakeGrid(origin: 0, beatDuration: 0.8)
+    static var boundarySeconds: Double { 32 * grid.beatDuration }
+
     struct Run {
         /// Every piece, in its final state (fade out set once the next was placed).
         var pieces: [FootagePiece] = []
@@ -389,8 +392,10 @@ struct FootageWeaverTests {
         var decisions: [(t: Double, d: FootageWeaver.Decision)] = []
     }
 
-    /// Runs a weaver at 2 Hz (as the service does) and samples what the render loop would see every 0.1 s.
-    static func run(seed: UInt64, timing: FootageWeaver.Timing, seconds: Double, clipFrom: Double = 0,
+    /// Runs a weaver at 2 Hz (as the service does) on `grid` and samples what the render loop would see
+    /// every 0.1 s. Like the render loop, an incoming fill edit whose decoder has no frame yet freezes the
+    /// crossfade at its start, so the current piece shows at full level until the weaver drops the edit.
+    static func run(seed: UInt64, timing: FootageWeaver.Timing = .standard, seconds: Double, clipFrom: Double = 0,
                     ready: @escaping (Int, Double) -> Bool = { _, _ in true },
                     conditions: (Double) -> C = { _ in calm }) -> Run {
         var w = FootageWeaver(seed: seed, timing: timing)
@@ -400,68 +405,66 @@ struct FootageWeaverTests {
         for i in 0..<steps {
             let t = Double(i) / 10
             if i % 5 == 0 {
-                let d = w.tick(elapsed: t, conditions: conditions(t), hasClip: t >= clipFrom) { ready($0, t) }
+                let d = w.tick(elapsed: t, conditions: conditions(t), hasClip: t >= clipFrom, grid: grid) { ready($0, t) }
                 if d != .none { out.decisions.append((t, d)) }
                 if case .prepare(let r) = d {
                     w.didPrepare(r.piece(clipID: "c\(r.index % 3)", segmentStart: 10))
                 }
                 for p in w.pieces { byIndex[p.index] = p }
             }
-            out.samples.append((t, w.presence(at: t), w.pieces.count))
+            let pieces = w.pieces
+            let awaiting = pieces.count == 2 && pieces[1].fill != nil && !ready(pieces[1].slot, t)
+            let shown = awaiting ? min(t, pieces[1].start) : t
+            out.samples.append((t, pieces.reduce(0) { $0 + $1.weight(at: shown) }, pieces.count))
         }
         out.pieces = byIndex.keys.sorted().map { byIndex[$0]! }
         return out
     }
 
     @Test func alwaysPresentAboveTheFloorAfterTheFirstFade() {
-        for speed in FootageChangeSpeed.allCases {
-            for seed in UInt64(0)..<150 {
-                let r = Self.run(seed: seed, timing: .speed(speed), seconds: 900)
-                guard let first = r.pieces.first else { Issue.record("no piece"); continue }
-                // Cold start with a clip at once: the first piece fades in after 1 s, over 5 s.
-                #expect(first.start <= 1.5)
-                let on = first.start + first.fadeIn
-                for s in r.samples where s.t >= on {
-                    #expect(s.presence >= FootageWeaver.floor - 1e-5)
-                    #expect(s.presence <= FootageWeaver.bandTop + FootageWeaver.swellRange.upperBound + 1e-5)
-                    #expect(s.live >= 1 && s.live <= 2)
-                }
-                // Before the first fade the envelope only rises (a fade in, not a pop).
-                let early = r.samples.filter { $0.t < on }.map { first.envelope(at: $0.t) }
-                #expect(early == early.sorted())
+        for seed in UInt64(0)..<150 {
+            let r = Self.run(seed: seed, seconds: 900)
+            guard let first = r.pieces.first else { Issue.record("no piece"); continue }
+            // Cold start with a clip at once: the first piece fades in after 1 s, over 5 s.
+            #expect(first.start <= 1.5)
+            #expect(first.fadeIn == FootageWeaver.Timing.standard.firstFade)
+            let on = first.start + first.fadeIn
+            for s in r.samples where s.t >= on {
+                #expect(s.presence >= FootageWeaver.floor - 1e-5)
+                #expect(s.presence <= FootageWeaver.bandTop + FootageWeaver.swellRange.upperBound + 1e-5)
+                #expect(s.live >= 1 && s.live <= 2)
             }
+            // Before the first fade the envelope only rises (a fade in, not a pop).
+            let early = r.samples.filter { $0.t < on }.map { first.envelope(at: $0.t) }
+            #expect(early == early.sorted())
         }
     }
 
-    @Test func pieceLengthsAndCrossfadesFollowTheSpeed() {
-        for speed in FootageChangeSpeed.allCases {
-            let timing = FootageWeaver.Timing.speed(speed)
-            for seed in UInt64(0)..<150 {
-                let r = Self.run(seed: seed, timing: timing, seconds: 900)
-                #expect(r.pieces.count >= Int(900 / (timing.pieceLength.upperBound + 1)))
-                for (a, b) in zip(r.pieces, r.pieces.dropFirst()) {
-                    // Calm conditions: no holds, so a piece lasts its planned length.
-                    let shown = b.start - a.start
-                    if let cap = a.recipe.maxLength {
-                        #expect(shown <= cap + 0.5)
-                    } else {
-                        #expect(shown >= timing.pieceLength.lowerBound - 1e-9)
-                        #expect(shown <= timing.pieceLength.upperBound + 0.5)
-                    }
-                    #expect(timing.crossfade.contains(b.fadeIn))
-                    #expect(a.recipe != b.recipe)
-                    #expect(a.recipe.family != b.recipe.family)
-                    #expect(a.slot != b.slot)
-                }
+    @Test func everyPieceChangeCompletesOnTheNextFillDownbeat() {
+        let span = Self.boundarySeconds
+        for seed in UInt64(0)..<60 {
+            let r = Self.run(seed: seed, seconds: 600)
+            // Calm conditions: no fill boundary is skipped.
+            #expect(r.pieces.count == Int(600 / span) + 1)
+            for (n, (a, b)) in zip(r.pieces, r.pieces.dropFirst()).enumerated() {
+                let downbeat = Double(n + 1) * span
+                let fill = (n + 1).isMultiple(of: 2) ? LofiFill.turnaround : .halfway
+                #expect(b.fill == fill)
+                #expect(abs(b.start + b.fadeIn - downbeat) < 1e-9)
+                #expect(abs(b.fadeIn - fill.dissolveBeats * Self.grid.beatDuration) < 1e-9)
+                // A piece is planned to last until the boundary after its fade in.
+                #expect(abs(b.start + b.length - (downbeat + span)) < 1e-9)
+                #expect(abs(a.start + a.length - downbeat) < 1e-9)
+                #expect(a.recipe != b.recipe)
+                #expect(a.recipe.family != b.recipe.family)
+                #expect(a.slot != b.slot)
             }
         }
-        // Faster speed, more pieces.
-        let n = FootageChangeSpeed.allCases.map { Self.run(seed: 7, timing: .speed($0), seconds: 1200).pieces.count }
-        #expect(n[0] < n[1] && n[1] < n[2])
     }
 
     @Test func crossfadesAreContinuousAndComplementary() {
-        let r = Self.run(seed: 11, timing: .speed(.medium), seconds: 600)
+        let r = Self.run(seed: 11, seconds: 600)
+        #expect(r.pieces.count > 10)
         for (a, b) in zip(r.pieces, r.pieces.dropFirst()) {
             #expect(a.fadeOutStart == b.start)
             #expect(a.fadeOut == b.fadeIn)
@@ -469,7 +472,7 @@ struct FootageWeaverTests {
             var t = b.start
             while t <= b.start + b.fadeIn {
                 #expect(abs(a.envelope(at: t) + b.envelope(at: t) - 1) < 1e-5)
-                t += 0.05
+                t += 0.01
             }
             #expect(a.envelope(at: b.start + b.fadeIn + 0.01) == 0)
         }
@@ -482,74 +485,61 @@ struct FootageWeaverTests {
         }
     }
 
-    @Test func mostPiecesRequestSoundAndMayPrepareBeforeTheOldCueEnds() {
-        var sounding = 0, total = 0, overlaps = 0
+    @Test func everyPieceRequestsSoundAndMayPrepareBeforeTheOldCueEnds() {
+        var overlaps = 0
         for seed in UInt64(0)..<100 {
-            let r = Self.run(seed: seed, timing: .speed(.medium), seconds: 900)
-            total += r.pieces.count
-            let withSound = r.pieces.filter(\.sound)
-            sounding += withSound.count
+            let r = Self.run(seed: seed, seconds: 900)
+            #expect(r.pieces.allSatisfy { $0.sound })
             let preparationTimes = Dictionary(uniqueKeysWithValues: r.decisions.compactMap { time, decision -> (Int, Double)? in
                 guard case .prepare(let request) = decision else { return nil }
                 return (request.index, time)
             })
             // The scheduler can prepare the next cue while the first one still has audio.
-            for (a, b) in zip(withSound, withSound.dropFirst()) {
+            for (a, b) in zip(r.pieces, r.pieces.dropFirst()) {
                 let ca = ArchiveAudioCuePlan(piece: a, clipDuration: 10_000)!
                 let cb = ArchiveAudioCuePlan(piece: b, clipDuration: 10_000)!
                 #expect(cb.beginAt > ca.beginAt)
                 if let prepareAt = preparationTimes[b.index], prepareAt < ca.fadeOutAt { overlaps += 1 }
             }
         }
-        let share = Double(sounding) / Double(total)
-        #expect(share > 0.90 && share < 0.99)
         #expect(overlaps > 0)
     }
 
+    @Test func stillsHoldOneSilentPiece() {
+        let r = Self.run(seed: 4, timing: .stills, seconds: 300)
+        #expect(r.pieces.count == 1)
+        #expect(r.pieces.first.map { !$0.sound && $0.fadeIn == 1 && $0.end == nil } == true)
+        #expect(r.samples.filter { $0.t >= 2.5 }.allSatisfy { $0.presence >= FootageWeaver.floor - 1e-5 })
+    }
+
     @Test func coldStartWaitsForTheFirstClipOnly() {
-        let r = Self.run(seed: 3, timing: .speed(.medium), seconds: 60, clipFrom: 20)
+        let r = Self.run(seed: 3, seconds: 60, clipFrom: 20)
         #expect(r.pieces.first.map { $0.start >= 20 && $0.start <= 21.5 } == true)
         #expect(r.samples.filter { $0.t < 20 }.allSatisfy { $0.presence == 0 })
     }
 
-    @Test func crossfadeWaitsOutAnImageTransition() {
-        let timing = FootageWeaver.Timing.speed(.medium)
-        let base = Self.run(seed: 5, timing: timing, seconds: 120)
-        let change = base.pieces[1].start
-        // A 4 s transition starting just before the planned crossfade: the crossfade waits for it.
-        let r = Self.run(seed: 5, timing: timing, seconds: 120) { t in
-            C(transitionRunning: t >= change - 1 && t < change + 3, imageAge: 1, musicIntensity: 0.2, effectIntensity: 0.5)
-        }
-        #expect(r.pieces[1].start >= change + 3 - 1e-9)
-        #expect(r.pieces[1].start <= change + 4.5)
-        // Endless transitions: it waits at most 6 s.
-        let busy = Self.run(seed: 5, timing: timing, seconds: 120) { _ in
-            C(transitionRunning: true, imageAge: 1, musicIntensity: 0.2, effectIntensity: 0.5)
-        }
-        #expect(busy.pieces[1].start <= change + timing.maxTransitionWait + 1.5)
-        // The current piece holds meanwhile: presence never drops.
-        let on = r.pieces[0].start + r.pieces[0].fadeIn
-        #expect(r.samples.filter { $0.t >= on }.allSatisfy { $0.presence >= FootageWeaver.floor - 1e-5 })
+    @Test func theFirstPieceHoldsUntilItsDecoderDelivers() {
+        // Slot 0 has no frame until 6 s: the first piece's fade in waits for it.
+        let late = Self.run(seed: 5, seconds: 60, ready: { slot, t in slot != 0 || t >= 6 })
+        let first = late.pieces[0]
+        #expect(first.start >= 6 - 1e-9 && first.start <= 7.5)
+        #expect(first.origin <= 1.5)   // the decoder's clock and the sound stay anchored
+        #expect(late.samples.filter { $0.t < 6 }.allSatisfy { $0.presence == 0 })
+        // A decoder that never delivers is given up after `maxReadyWait`; another first piece follows.
+        let never = Self.run(seed: 5, seconds: 60, ready: { slot, t in slot != 0 || t >= 30 })
+        let drops = never.decisions.filter { if case .drop(slot: 0) = $0.d { return true }; return false }
+        #expect(drops.first.map { $0.t >= FootageWeaver.Timing.standard.maxReadyWait } == true)
+        #expect(never.pieces.contains { $0.slot == 0 && $0.start >= 30 })
     }
 
     @Test func aDecoderThatNeverDeliversIsDroppedWhileTheCurrentPieceHolds() {
         // Slot 1 never produces a frame until 80 s.
-        let r = Self.run(seed: 9, timing: .speed(.fast), seconds: 140, ready: { slot, t in slot == 0 || t >= 80 })
+        let r = Self.run(seed: 9, seconds: 140, ready: { slot, t in slot == 0 || t >= 80 })
         #expect(r.decisions.contains { if case .drop(slot: 1) = $0.d { return true }; return false })
         let on = r.pieces[0].start + r.pieces[0].fadeIn
         #expect(r.samples.filter { $0.t >= on }.allSatisfy { $0.presence >= FootageWeaver.floor - 1e-5 })
-        // Once slot 1 delivers, pieces flow again.
+        // Once slot 1 delivers, pieces flow again, on the next fill downbeat.
         #expect(r.pieces.contains { $0.slot == 1 && $0.start >= 80 })
-    }
-
-    @Test func aClipThatEndsBringsTheNextPieceSooner() {
-        var w = FootageWeaver(seed: 2, timing: .speed(.slow))
-        guard case .prepare(let r) = w.tick(elapsed: 0, conditions: Self.calm, hasClip: true, ready: { _ in true }) else {
-            Issue.record("no first piece"); return
-        }
-        w.didPrepare(r.piece(clipID: "a", segmentStart: 0))
-        w.hurry(at: 10)
-        #expect(w.current.map { $0.plannedChange <= 13 + 1e-9 } == true)
     }
 
     @Test func recipeEligibilityByIntensityAndDepth() {
@@ -570,6 +560,12 @@ struct FootageWeaverTests {
             seen = true
         }
         #expect(seen)
+        // A capped recipe is never chosen for a piece longer than its cap.
+        for _ in 0..<400 {
+            let r = FootageWeaver.chooseRecipe(last: nil, recent: [], intensity: 1, hasDepth: true,
+                                               minimumLength: FootageRecipe.cappedLength + 1, rng: &rng)
+            #expect(r.maxLength == nil)
+        }
     }
 
     @Test func recipeSequenceHasVarietyAndKeepsThePlainLooks() {
@@ -603,8 +599,9 @@ struct FootageWeaverTests {
     }
 
     @Test func pinnedRecipe() {
-        var w = FootageWeaver(seed: 5, timing: .speed(.fast), pinnedRecipe: .undertow)
-        guard case .prepare(let r) = w.tick(elapsed: 0, conditions: Self.calm, hasClip: true, ready: { _ in true }) else {
+        var w = FootageWeaver(seed: 5, timing: .standard, pinnedRecipe: .undertow)
+        guard case .prepare(let r) = w.tick(elapsed: 0, conditions: Self.calm, hasClip: true, grid: Self.grid,
+                                            ready: { _ in true }) else {
             Issue.record("no first piece"); return
         }
         #expect(r.recipe == .undertow)
@@ -614,8 +611,9 @@ struct FootageWeaverTests {
     }
 
     @Test func pinnedLook() {
-        var w = FootageWeaver(seed: 5, timing: .speed(.fast), pinnedLook: .window)
-        guard case .prepare(let r) = w.tick(elapsed: 0, conditions: Self.calm, hasClip: true, ready: { _ in true }) else {
+        var w = FootageWeaver(seed: 5, timing: .standard, pinnedLook: .window)
+        guard case .prepare(let r) = w.tick(elapsed: 0, conditions: Self.calm, hasClip: true, grid: Self.grid,
+                                            ready: { _ in true }) else {
             Issue.record("no first piece"); return
         }
         #expect(r.look == .window)
@@ -645,13 +643,14 @@ struct FootageWeaverTests {
         let pinnedID = try #require(ArchiveSeedList.pinned.first?.id)
         let pinned = ArchiveCachePolicyTests.clip(pinnedID, mb: 80, used: 10)
         let regular = ArchiveCachePolicyTests.clip("regular", mb: 20, used: 1)
-        var weaver = FootageWeaver(seed: 7, timing: .speed(.medium))
+        var weaver = FootageWeaver(seed: 7, timing: .standard)
         var rng = MusicRNG(seed: 11)
         #expect(weaver.chooseClipForPlayback([regular], rng: &rng)?.id == regular.id)
 
         var selected: [String] = []
         for step in 0..<360 {
-            let decision = weaver.tick(elapsed: Double(step) / 2, conditions: Self.calm, hasClip: true) { _ in true }
+            let decision = weaver.tick(elapsed: Double(step) / 2, conditions: Self.calm, hasClip: true,
+                                       grid: Self.grid) { _ in true }
             if case .prepare(let request) = decision {
                 let clip = try #require(weaver.chooseClipForPlayback([regular, pinned], rng: &rng))
                 selected.append(clip.id)

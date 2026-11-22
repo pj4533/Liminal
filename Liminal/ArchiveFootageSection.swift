@@ -165,13 +165,11 @@ struct ArchiveFootageSettingsSync: ViewModifier {
                 if settings.dialogueTranscription == .allowDownload { DialogueSpeechAssets.requestInstallIfAllowed() }
             }
             .onChange(of: settings.archiveEnabled) { _, _ in apply() }
-            .onChange(of: settings.archiveChangeSpeed) { _, _ in apply() }
             .onChange(of: settings.archiveAudioLevel) { _, _ in apply() }
     }
 
     private func apply() {
-        ArchiveFootageService.shared.apply(enabled: settings.archiveEnabled, speed: settings.archiveChangeSpeed,
-                                           audioLevel: settings.archiveAudioLevel)
+        ArchiveFootageService.shared.apply(enabled: settings.archiveEnabled, audioLevel: settings.archiveAudioLevel)
     }
 }
 
