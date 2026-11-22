@@ -170,15 +170,6 @@
     "2015632614",
     "2014630329"
    ],
-   "mood": {
-    "moods": [
-     "electric",
-     "playful"
-    ],
-    "subjectCategory": "architecture",
-    "energy": 0.55,
-    "warmth": 0.4
-   },
    "allowMonochrome": false,
    "useMasters": true
   },
@@ -214,15 +205,6 @@
     "2016632994",
     "2013630402"
    ],
-   "mood": {
-    "moods": [
-     "majestic",
-     "serene"
-    ],
-    "subjectCategory": "landscape",
-    "energy": 0.3,
-    "warmth": 0.1
-   },
    "allowMonochrome": false,
    "useMasters": true
   },
@@ -256,15 +238,6 @@
    "useMasters": true,
    "license": "loc rights_advisory (FSA/OWI, US Government work)",
    "pinned": [],
-   "mood": {
-    "moods": [
-     "melancholy",
-     "serene"
-    ],
-    "subjectCategory": "landscape",
-    "energy": 0.3,
-    "warmth": 0.5
-   },
    "allowMonochrome": false,
    "trimScanEdges": true
   },
@@ -331,15 +304,6 @@
     "ARC-1975-AC75-1086",
     "ARC-1976-AC76-0525"
    ],
-   "mood": {
-    "moods": [
-     "majestic",
-     "eerie"
-    ],
-    "subjectCategory": "celestial",
-    "energy": 0.4,
-    "warmth": -0.3
-   },
    "allowMonochrome": false
   },
   {
@@ -378,15 +342,6 @@
     "PIA15658",
     "PIA25433"
    ],
-   "mood": {
-    "moods": [
-     "euphoric",
-     "majestic"
-    ],
-    "subjectCategory": "celestial",
-    "energy": 0.5,
-    "warmth": 0.0
-   },
    "allowMonochrome": false
   },
   {
@@ -426,15 +381,6 @@
     "File:OHIO RIVER AND LOUISVILLE AT NIGHT - NARA - 545913.jpg",
     "File:A GOOD WIND AND A GOOD SAIL ON HOOVER DAM'S LAKE MEAD - NARA - 549082.jpg"
    ],
-   "mood": {
-    "moods": [
-     "melancholy",
-     "intimate"
-    ],
-    "subjectCategory": "landscape",
-    "energy": 0.4,
-    "warmth": 0.5
-   },
    "allowMonochrome": false
   },
   {
@@ -458,15 +404,6 @@
     "File:Bamberg Hain Pilze Unidentified Pholiota stack.jpg",
     "File:2017.05.13.-04-Bruehl Rohrhof--Laetiporus sulphureus (Gemeiner Schwefelporling).jpg"
    ],
-   "mood": {
-    "moods": [
-     "lush",
-     "eerie"
-    ],
-    "subjectCategory": "plant",
-    "energy": 0.35,
-    "warmth": 0.1
-   },
    "allowMonochrome": false
   },
   {
@@ -485,15 +422,6 @@
    ],
    "license": "Public domain / CC BY 2.0 (BHL scans)",
    "pinned": [],
-   "mood": {
-    "moods": [
-     "eerie",
-     "intimate"
-    ],
-    "subjectCategory": "plant",
-    "energy": 0.25,
-    "warmth": 0.3
-   },
    "allowMonochrome": false
   },
   {
@@ -523,15 +451,6 @@
     "File:Crinoidea. - Palmensterne LCCN2015648907.jpg",
     "File:Ctenophorae. - Kammquallen LCCN2015648914.jpg"
    ],
-   "mood": {
-    "moods": [
-     "euphoric",
-     "eerie"
-    ],
-    "subjectCategory": "creature",
-    "energy": 0.5,
-    "warmth": 0.0
-   },
    "allowMonochrome": false
   },
   {
@@ -557,15 +476,6 @@
     "File:Shalkarteniz 1981-06-18 Landsat 1-5 MSS L1 False Color Near Infrared.jpg",
     "File:Ebinur 1972-09-21 Landsat 1-5 MSS L1 False Color Near Infrared.jpg"
    ],
-   "mood": {
-    "moods": [
-     "euphoric",
-     "majestic"
-    ],
-    "subjectCategory": "landscape",
-    "energy": 0.5,
-    "warmth": 0.2
-   },
    "allowMonochrome": false
   },
   {
@@ -598,15 +508,6 @@
     "File:In Buller Gorge II LCCN2017658074.jpg",
     "File:Kotau Point. West Coast LCCN2017657809.jpg"
    ],
-   "mood": {
-    "moods": [
-     "serene",
-     "majestic"
-    ],
-    "subjectCategory": "landscape",
-    "energy": 0.3,
-    "warmth": 0.3
-   },
    "allowMonochrome": false
   },
   {
@@ -644,15 +545,6 @@
     152499,
     106965
    ],
-   "mood": {
-    "moods": [
-     "serene",
-     "melancholy"
-    ],
-    "subjectCategory": "landscape",
-    "energy": 0.25,
-    "warmth": -0.1
-   },
    "allowMonochrome": false
   },
   {
@@ -689,15 +581,6 @@
     164940,
     156527
    ],
-   "mood": {
-    "moods": [
-     "melancholy",
-     "serene"
-    ],
-    "subjectCategory": "landscape",
-    "energy": 0.2,
-    "warmth": 0.2
-   },
    "allowMonochrome": true
   },
   {
@@ -744,15 +627,6 @@
     732813,
     732816
    ],
-   "mood": {
-    "moods": [
-     "serene",
-     "majestic"
-    ],
-    "subjectCategory": "landscape",
-    "energy": 0.25,
-    "warmth": 0.0
-   },
    "allowMonochrome": false
   },
   {
@@ -771,15 +645,6 @@
    ],
    "license": "CC0",
    "pinned": [],
-   "mood": {
-    "moods": [
-     "serene",
-     "majestic"
-    ],
-    "subjectCategory": "landscape",
-    "energy": 0.25,
-    "warmth": 0.1
-   },
    "allowMonochrome": false
   },
   {
@@ -852,15 +717,6 @@
     "File:VIEW OF GLEN CANYON, UTAH, FROM THE ARIZONA SHORE OF LAKE POWELL - NARA - 544170.jpg",
     "File:AERIAL VIEW OF THE POND WHEN CLEANUP OPERATIONS WERE HALF FINISHED. THE WHITE AREAS ARE ALKALINE. IN THE BACKGROUND... - NARA - 555863.jpg"
    ],
-   "mood": {
-    "moods": [
-     "melancholy",
-     "majestic"
-    ],
-    "subjectCategory": "landscape",
-    "energy": 0.35,
-    "warmth": 0.55
-   },
    "allowMonochrome": false
   },
   {
@@ -912,15 +768,6 @@
     "File:THE BRENDA CUTOFF, INTERSTATE 10. A NEW FREEWAY TO LOS ANGELES, CALIFORNIA - NARA - 544043.jpg",
     "File:FREEWAY INTERCHANGE NORTH OF MIAMI - NARA - 544642.jpg"
    ],
-   "mood": {
-    "moods": [
-     "electric",
-     "eerie"
-    ],
-    "subjectCategory": "landscape",
-    "energy": 0.55,
-    "warmth": 0.7
-   },
    "allowMonochrome": false
   },
   {
@@ -960,15 +807,6 @@
     "File:Center of the Milky Way Galaxy IV – Composite.jpg",
     "File:Pedra Azul Milky Way.jpg"
    ],
-   "mood": {
-    "moods": [
-     "euphoric",
-     "eerie"
-    ],
-    "subjectCategory": "celestial",
-    "energy": 0.45,
-    "warmth": -0.2
-   },
    "allowMonochrome": false
   },
   {
@@ -1009,15 +847,6 @@
     "File:Infrared false color view of M66 from the Jamess Webb Telescope.jpg",
     "File:Crab Nebula imaged using James Webb Space Telescope.png"
    ],
-   "mood": {
-    "moods": [
-     "euphoric",
-     "majestic"
-    ],
-    "subjectCategory": "celestial",
-    "energy": 0.5,
-    "warmth": 0.0
-   },
    "allowMonochrome": false
   },
   {
@@ -1047,15 +876,6 @@
     "File:Bruderwald-Herbst-026375.jpg",
     "File:Bruderwald Nebel 286411.jpg"
    ],
-   "mood": {
-    "moods": [
-     "lush",
-     "serene"
-    ],
-    "subjectCategory": "plant",
-    "energy": 0.3,
-    "warmth": 0.2
-   },
    "allowMonochrome": false
   },
   {
@@ -1096,15 +916,6 @@
     "File:Apollo 11 CSM from LM after undocking (48334388826).jpg",
     "File:Apollo 11 liftoff - July 16, 1969 9 32 AM EDT (48299052517).jpg"
    ],
-   "mood": {
-    "moods": [
-     "majestic",
-     "eerie"
-    ],
-    "subjectCategory": "celestial",
-    "energy": 0.45,
-    "warmth": -0.2
-   },
    "allowMonochrome": true
   },
   {
@@ -1138,15 +949,6 @@
     "File:Thomas Moran, American (born England) - Grand Canyon of the Colorado River - Google Art Project.jpg",
     "File:Thomas Moran - Grand Canyon in Stormy Weather, Arizona - Google Art Project.jpg"
    ],
-   "mood": {
-    "moods": [
-     "majestic",
-     "serene"
-    ],
-    "subjectCategory": "landscape",
-    "energy": 0.35,
-    "warmth": 0.3
-   },
    "allowMonochrome": false
   },
   {
@@ -1171,15 +973,6 @@
     "File:Hodakayama, from the series Twelve Scenes in the Japan Alps, Hiroshi Yoshida.jpg",
     "File:Hiroshi Landschaft.jpg"
    ],
-   "mood": {
-    "moods": [
-     "serene",
-     "melancholy"
-    ],
-    "subjectCategory": "landscape",
-    "energy": 0.25,
-    "warmth": -0.1
-   },
    "allowMonochrome": false
   },
   {
@@ -1265,15 +1058,6 @@
     "SL3-33-167",
     "SL3-45-020"
    ],
-   "mood": {
-    "moods": [
-     "majestic",
-     "serene"
-    ],
-    "subjectCategory": "celestial",
-    "energy": 0.4,
-    "warmth": -0.2
-   },
    "allowMonochrome": false
   },
   {
@@ -1317,15 +1101,6 @@
     "as8-14-2392",
     "as17-152-23274"
    ],
-   "mood": {
-    "moods": [
-     "eerie",
-     "majestic"
-    ],
-    "subjectCategory": "celestial",
-    "energy": 0.3,
-    "warmth": -0.4
-   },
    "allowMonochrome": true
   },
   {
@@ -1363,15 +1138,6 @@
     "iss071e570863",
     "iss040e113977"
    ],
-   "mood": {
-    "moods": [
-     "eerie",
-     "euphoric"
-    ],
-    "subjectCategory": "celestial",
-    "energy": 0.45,
-    "warmth": -0.3
-   },
    "allowMonochrome": false
   },
   {
@@ -1408,15 +1174,6 @@
     "S69-27916",
     "KSC-64PC-0082"
    ],
-   "mood": {
-    "moods": [
-     "majestic",
-     "playful"
-    ],
-    "subjectCategory": "architecture",
-    "energy": 0.4,
-    "warmth": 0.2
-   },
    "allowMonochrome": true
   },
   {
@@ -1455,15 +1212,6 @@
     124771,
     163456
    ],
-   "mood": {
-    "moods": [
-     "majestic",
-     "serene"
-    ],
-    "subjectCategory": "landscape",
-    "energy": 0.3,
-    "warmth": 0.3
-   },
    "allowMonochrome": false
   },
   {
@@ -1501,15 +1249,6 @@
     86501,
     112467
    ],
-   "mood": {
-    "moods": [
-     "melancholy",
-     "serene"
-    ],
-    "subjectCategory": "landscape",
-    "energy": 0.25,
-    "warmth": -0.2
-   },
    "allowMonochrome": false
   },
   {
@@ -1542,15 +1281,6 @@
     16577,
     10181
    ],
-   "mood": {
-    "moods": [
-     "eerie",
-     "melancholy"
-    ],
-    "subjectCategory": "landscape",
-    "energy": 0.2,
-    "warmth": 0.1
-   },
    "allowMonochrome": false
   },
   {
@@ -1593,15 +1323,6 @@
     728329,
     282040
    ],
-   "mood": {
-    "moods": [
-     "melancholy",
-     "serene"
-    ],
-    "subjectCategory": "landscape",
-    "energy": 0.2,
-    "warmth": 0.3
-   },
    "allowMonochrome": true
   },
   {
@@ -1631,15 +1352,6 @@
     56677,
     55712
    ],
-   "mood": {
-    "moods": [
-     "serene",
-     "melancholy"
-    ],
-    "subjectCategory": "landscape",
-    "energy": 0.25,
-    "warmth": -0.1
-   },
    "allowMonochrome": false
   },
   {
@@ -1675,15 +1387,6 @@
    ],
    "license": "Boston Public Library, reuse_allowed_ssi no restrictions",
    "pinned": [],
-   "mood": {
-    "moods": [
-     "playful",
-     "melancholy"
-    ],
-    "subjectCategory": "architecture",
-    "energy": 0.45,
-    "warmth": 0.6
-   },
    "allowMonochrome": false
   },
   {
@@ -1729,15 +1432,6 @@
    ],
    "license": "CC0 (AIC is_public_domain)",
    "pinned": [],
-   "mood": {
-    "moods": [
-     "serene",
-     "majestic"
-    ],
-    "subjectCategory": "landscape",
-    "energy": 0.25,
-    "warmth": 0.2
-   },
    "allowMonochrome": false
   },
   {
@@ -1777,15 +1471,6 @@
     "2017709814",
     "2017702562"
    ],
-   "mood": {
-    "moods": [
-     "playful",
-     "electric"
-    ],
-    "subjectCategory": "architecture",
-    "energy": 0.55,
-    "warmth": 0.5
-   },
    "allowMonochrome": false
   },
   {
@@ -1825,15 +1510,6 @@
     "2008679690",
     "2017649294"
    ],
-   "mood": {
-    "moods": [
-     "serene",
-     "majestic"
-    ],
-    "subjectCategory": "landscape",
-    "energy": 0.3,
-    "warmth": 0.3
-   },
    "allowMonochrome": false
   },
   {
@@ -1863,15 +1539,6 @@
     "2018680980",
     "2018679170"
    ],
-   "mood": {
-    "moods": [
-     "serene",
-     "eerie"
-    ],
-    "subjectCategory": "landscape",
-    "energy": 0.3,
-    "warmth": 0.2
-   },
    "allowMonochrome": false
   },
   {
@@ -1902,15 +1569,6 @@
     "2016796971",
     "2016817416"
    ],
-   "mood": {
-    "moods": [
-     "majestic",
-     "melancholy"
-    ],
-    "subjectCategory": "landscape",
-    "energy": 0.25,
-    "warmth": 0.0
-   },
    "allowMonochrome": true
   },
   {
@@ -1946,15 +1604,6 @@
     "2008660526",
     "2009615043"
    ],
-   "mood": {
-    "moods": [
-     "serene",
-     "melancholy"
-    ],
-    "subjectCategory": "landscape",
-    "energy": 0.25,
-    "warmth": -0.1
-   },
    "allowMonochrome": false
   },
   {
@@ -1986,15 +1635,6 @@
     "2018750467",
     "2018750469"
    ],
-   "mood": {
-    "moods": [
-     "euphoric",
-     "electric"
-    ],
-    "subjectCategory": "celestial",
-    "energy": 0.7,
-    "warmth": 0.2
-   },
    "allowMonochrome": false
   },
   {
@@ -2035,15 +1675,6 @@
     "2017760354",
     "2017768823"
    ],
-   "mood": {
-    "moods": [
-     "melancholy",
-     "majestic"
-    ],
-    "subjectCategory": "landscape",
-    "energy": 0.3,
-    "warmth": 0.0
-   },
    "allowMonochrome": true
   },
   {
@@ -2070,15 +1701,6 @@
     "2018756622",
     "2017650239"
    ],
-   "mood": {
-    "moods": [
-     "serene",
-     "melancholy"
-    ],
-    "subjectCategory": "landscape",
-    "energy": 0.25,
-    "warmth": 0.3
-   },
    "allowMonochrome": false
   },
   {
@@ -2105,15 +1727,6 @@
     "2011630263",
     "2017687218"
    ],
-   "mood": {
-    "moods": [
-     "electric",
-     "euphoric"
-    ],
-    "subjectCategory": "architecture",
-    "energy": 0.55,
-    "warmth": 0.2
-   },
    "allowMonochrome": false
   },
   {
@@ -2144,15 +1757,6 @@
     "2019706273",
     "2019700416"
    ],
-   "mood": {
-    "moods": [
-     "eerie",
-     "majestic"
-    ],
-    "subjectCategory": "landscape",
-    "energy": 0.25,
-    "warmth": 0.2
-   },
    "allowMonochrome": true
   }
  ],

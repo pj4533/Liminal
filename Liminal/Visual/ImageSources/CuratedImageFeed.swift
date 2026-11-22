@@ -2,14 +2,13 @@
 //  CuratedImageFeed.swift
 //  Liminal
 //
-//  API mode's two halves (docs/plans/image-api-mode.md 4.3):
+//  The curated picture feed's two halves (docs/plans/image-api-mode.md 4.3):
 //  - ingest: one picture at a time from the next source in the rotation -> rights and size gates ->
 //    download -> bounded decode -> border trim -> 3:2 window -> openness, document and face gates ->
-//    colour analysis -> JPEG into the pool. Runs while fewer than `unseenAhead` never-shown pictures
+//    saturation -> JPEG into the pool. Runs while fewer than `unseenAhead` never-shown pictures
 //    wait, so the network only ever adds to the disk pool.
 //  - display: picks the next stored picture (ImageRotation.nextDisplay). Reads only from disk, so
-//    Lo-Fi's reserve deadline and offline use behave exactly as with the AI cache.
-//  Never calls Gemini, never touches GenerationBudget or the prompt history.
+//    the reveal's reserve deadline and offline use never wait on the network.
 //
 
 import Foundation
@@ -51,7 +50,7 @@ nonisolated final class CuratedImageFeed: Sendable {
         /// Sources with nothing left to try, until this date.
         var dry: [String: Date] = [:]
         /// Picked for display but not yet shown (queued), with when. A pick that is dropped without being
-        /// shown (a Lo-Fi stage that missed its reveal) expires after `reservationLifetime`.
+        /// shown (a staged picture that missed its reveal) expires after `reservationLifetime`.
         var reserved: [UUID: Date] = [:]
         var networkDown = false
         var ingested = 0
@@ -62,7 +61,7 @@ nonisolated final class CuratedImageFeed: Sendable {
 
     static let backoffLadder: [TimeInterval] = [60, 120, 300, 900, 1800]
     static let perPage = 20
-    /// Longer than any queue wait (two pending pictures at the longest image interval, or a Lo-Fi phrase).
+    /// Longer than any queue wait (two pending pictures, or a 16-bar phrase at the slowest tempo).
     static let reservationLifetime: TimeInterval = 600
     /// Decoded pixels above this are refused before decoding: a small PNG can declare a huge canvas.
     static let maxSourcePixels = 150_000_000
@@ -112,7 +111,7 @@ nonisolated final class CuratedImageFeed: Sendable {
         }
     }
 
-    /// "Curated collections: 5 sources online" and so on (APIStatusRow).
+    /// "Curated collections: 5 sources online" and so on (CollectionsStatusRow).
     func statusLine() -> (text: String, ok: Bool) {
         switch status {
         case .offline: return ("Offline, showing saved pictures", false)
@@ -455,12 +454,9 @@ nonisolated final class CuratedImageFeed: Sendable {
         if let fingerprint, let copy = pool.duplicate(of: fingerprint) {
             throw CandidateRejected(reason: "duplicate of \(copy.candidateKey)")
         }
-        let analysis = DominantColorExtractor.analyze(image)
         let metadata = ImageMetadata(
-            id: UUID(), createdAt: Date(), spec: source.promptSpec, model: "api.\(source.provider)",
-            pixelWidth: image.width, pixelHeight: image.height, mimeType: "image/jpeg",
-            dominantColors: analysis.colors, measuredBrightness: analysis.brightness,
-            measuredSaturation: analysis.saturation, archiveReference: nil, source: resolved.credit, openness: score)
+            id: UUID(), createdAt: Date(), pixelWidth: image.width, pixelHeight: image.height, mimeType: "image/jpeg",
+            measuredSaturation: SaturationMeter.meanSaturation(image), source: resolved.credit, openness: score)
         guard let jpeg = ImageStore.encodeJPEG(image, quality: 0.9) else { throw CandidateRejected(reason: "encode failed") }
         try pool.add(jpeg: jpeg, metadata: metadata, budget: d.storeBudgetBytes, clearGeneration: clearGeneration,
                      fingerprint: fingerprint, aliases: ImageIdentity.aliases(providerID: resolved.credit.providerID,

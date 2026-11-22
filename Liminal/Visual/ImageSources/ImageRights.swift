@@ -2,7 +2,7 @@
 //  ImageRights.swift
 //  Liminal
 //
-//  Rights rule for API mode (decision D37): keep a picture only when its own record says it is
+//  Rights rule for curated pictures (decision D37): keep a picture only when its own record says it is
 //  public domain, CC0, carries no known restrictions, or is CC BY / CC BY-SA (credited). Unknown,
 //  empty, non-commercial and no-derivatives licences are rejected.
 //

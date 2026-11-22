@@ -110,13 +110,12 @@ struct ScalePicker: View {
 
 // MARK: - Status
 
-/// "Playing", cached image count and generation queue, as wrapping text.
+/// "Playing", saved picture count and queue, as wrapping text.
 struct PlaybackStatus: View {
     let isPlaying: Bool
     var isPreparing = false
-    let cachedCount: Int
+    let poolCount: Int
     let queuedCount: Int
-    var source: ImageSource = .ai
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -128,9 +127,7 @@ struct PlaybackStatus: View {
                     .fontWeight(.medium)
                     .wrapping()
             }
-            Text(source == .api
-                 ? "\(cachedCount) curated \(cachedCount == 1 ? "picture" : "pictures") saved, \(queuedCount) in queue"
-                 : "\(cachedCount) \(cachedCount == 1 ? "image" : "images") cached, \(queuedCount) in queue")
+            Text("\(poolCount) curated \(poolCount == 1 ? "picture" : "pictures") saved, \(queuedCount) in queue")
                 .font(.callout.monospacedDigit())
                 .foregroundStyle(.secondary)
                 .wrapping()

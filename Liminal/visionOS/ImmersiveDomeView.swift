@@ -98,7 +98,6 @@ struct CGImageTransitionState {
 nonisolated struct PreparedImage: @unchecked Sendable {
     let generation: UInt64
     let framed: CGImage
-    let metadata: ImageMetadata?
     let depthOverride: CGImage?
     let texture: MTLTexture?
     let milliseconds: Double
@@ -310,7 +309,7 @@ struct ImmersiveDomeView: View {
             loadingState = "DEBUG: Solid color mode"
             LMLog.visual.info("🔴 DEBUG: Skipping image wait, using solid color test")
         } else {
-            loadingState = "Waiting for Gemini image..."
+            loadingState = "Waiting for a picture..."
             LMLog.visual.info("🎨 Waiting for first image...")
             var waitCount = 0
             while visualEngine.imageBuffer.loadCurrent() == nil {
@@ -330,12 +329,12 @@ struct ImmersiveDomeView: View {
         }
 
         // Set initial image directly from CGImage - NO UIImage conversion!
-        let initial = visualEngine.imageBuffer.loadCurrentWithMetadata()
+        let initial = visualEngine.imageBuffer.loadCurrentWithGeneration()
         if let rawImage = initial.image {
             let uploader = renderer.textureUploader
             let generation = initial.generation
             let prepared = await Task.detached(priority: .userInitiated) {
-                Self.prepareImage(rawImage, metadata: nil, generation: generation, uploader: uploader)
+                Self.prepareImage(rawImage, generation: generation, uploader: uploader)
             }.value
             let cgImage = prepared.framed
             if let texture = prepared.texture { renderer.registerPreparedTexture(texture, for: cgImage) }
@@ -343,7 +342,6 @@ struct ImmersiveDomeView: View {
             transitionState.lastGeneration = initial.generation
             relief.imageChanged(generation: initial.generation)
             LMLog.visual.info("🎬 Initial image set directly from CGImage (gen \(transitionState.lastGeneration))")
-            ArchiveFootageService.shared.displayedImage(initial.metadata)
 
             loadingState = "Preparing 3D depth..."
             await generateAndApplyDepth(for: cgImage, logLabel: "initial")
@@ -553,7 +551,7 @@ struct ImmersiveDomeView: View {
                 effectsRenderer?.gpuStats.beginFrame()
 
                 // Check for new images from AtomicImageBuffer (thread-safe)
-                // One atomic read of image, metadata and generation (C10).
+                // One atomic read of image and generation (C10).
                 // DEBUG -LiminalShellCycle: switch to the next fixture image every N seconds.
                 if !Self.debugCycle.isEmpty, frameStartTime.timeIntervalSince(lastCycleSwitch) >= DebugLaunchOptions.shellCycleSeconds {
                     lastCycleSwitch = frameStartTime
@@ -561,10 +559,10 @@ struct ImmersiveDomeView: View {
                     visualEngine.imageBuffer.storeCurrent(Self.debugCycle[cycleIndex].image, metadata: nil)
                     LMLog.visual.info("🧪 DEBUG: shell cycle -> image \(cycleIndex)")
                 }
-                let (rawImage, metadata, newGeneration) = visualEngine.imageBuffer.loadCurrentWithMetadata()
+                let (rawImage, newGeneration) = visualEngine.imageBuffer.loadCurrentWithGeneration()
                 if let staged = visualEngine.stagedImage, stagedRaw !== staged.cgImage {
                     stagedRaw = staged.cgImage
-                    stagedSlot = prepareForDisplay(staged.cgImage, metadata: staged.metadata, generation: newGeneration &+ 1)
+                    stagedSlot = prepareForDisplay(staged.cgImage, generation: newGeneration &+ 1)
                 }
                 if let rawImage, newGeneration != transitionState.lastGeneration, newGeneration != preparingGeneration {
                     preparingGeneration = newGeneration
@@ -572,7 +570,7 @@ struct ImmersiveDomeView: View {
                         preparedSlot = stagedSlot
                         stagedRaw = nil
                     } else {
-                        preparedSlot = prepareForDisplay(rawImage, metadata: metadata, generation: newGeneration)
+                        preparedSlot = prepareForDisplay(rawImage, generation: newGeneration)
                     }
                 }
                 // A result for an older generation (superseded while preparing) is dropped.
@@ -581,7 +579,6 @@ struct ImmersiveDomeView: View {
                     // Centre-cropped to the dome's 3:2 once; colour AND depth use the framed image.
                     let framedImage = prepared.framed
                     let generation = prepared.generation
-                    let metadata = prepared.metadata
                     if let texture = prepared.texture { effectsRenderer?.registerPreparedTexture(texture, for: framedImage) }
                     let wasFirst = transitionState.currentImage == nil
                     transitionState.lastGeneration = generation
@@ -601,7 +598,6 @@ struct ImmersiveDomeView: View {
                         r.isDrop ? zoomStart + Float(r.downbeat - ArchiveFootageService.uptime()) : nil } : nil
                     zoom.imageChanged(at: zoomStart, replacing: !wasFirst, holdUntil: cut)
                     LMLog.visual.info("🎬 New image detected (gen \(generation)), triggering transition (prepared off-main in \(String(format: "%.1f", prepared.milliseconds), privacy: .public)ms)")
-                    ArchiveFootageService.shared.displayedImage(metadata)
                 }
 
                 if preparedSlot.generation == transitionState.lastGeneration, let ready = preparedSlot.takeDepth() {
@@ -900,12 +896,12 @@ struct ImmersiveDomeView: View {
 
     /// Stage colour first. Inference and mesh preparation can use the remaining
     /// lead time before the fill. A late depth result only belongs to its own slot.
-    private func prepareForDisplay(_ raw: CGImage, metadata: ImageMetadata?, generation: UInt64) -> PreparedImageSlot {
+    private func prepareForDisplay(_ raw: CGImage, generation: UInt64) -> PreparedImageSlot {
         let slot = PreparedImageSlot(generation: generation)
         let uploader = effectsRenderer?.textureUploader
         let generator = DebugLaunchOptions.forceStereoFlatDepth ? nil : depthGenerator
         Task.detached(priority: .userInitiated) {
-            let image = Self.prepareImage(raw, metadata: metadata, generation: generation, uploader: uploader)
+            let image = Self.prepareImage(raw, generation: generation, uploader: uploader)
             slot.store(image)
             guard let generator else { return }
             do {
@@ -922,13 +918,13 @@ struct ImmersiveDomeView: View {
     }
 
     /// Off the main actor: frame the image, cache its vibrance factors, build its source texture.
-    nonisolated private static func prepareImage(_ raw: CGImage, metadata: ImageMetadata?, generation: UInt64,
+    nonisolated private static func prepareImage(_ raw: CGImage, generation: UInt64,
                                                  uploader: SourceTextureUploader?) -> PreparedImage {
         let start = Date()
         let framed = ImageFraming.coverCrop(raw)
         _ = ImageColorStats.cachedFactors(key: framed) { framed }
         let texture = uploader?.makeTexture(from: framed, label: "source")
-        return PreparedImage(generation: generation, framed: framed, metadata: metadata,
+        return PreparedImage(generation: generation, framed: framed,
                              depthOverride: debugDepth(for: raw), texture: texture,
                              milliseconds: Date().timeIntervalSince(start) * 1000)
     }

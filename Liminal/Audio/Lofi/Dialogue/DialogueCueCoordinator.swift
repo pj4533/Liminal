@@ -368,10 +368,10 @@ nonisolated final class DialogueDirector: @unchecked Sendable {
         /// line is chosen by its words (D124). 0 keeps the acoustic-first, refine-later flow.
         var transcriptFirstWait = 1.2
         /// Lines played across sessions (D123). The app's file ledger, or an in-memory one under
-        /// XCTest and in automated DEBUG launches (any automation flag, `DebugLaunchOptions.blocksImageGeneration`),
+        /// XCTest and in automated DEBUG launches (any automation flag, `DebugLaunchOptions.isAutomated`),
         /// so tests and verification runs neither read nor consume the user's played lines.
         var ledger: DialogueLineLedger = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil
-            && !DebugLaunchOptions.blocksImageGeneration ? .shared : DialogueLineLedger()
+            && !DebugLaunchOptions.isAutomated ? .shared : DialogueLineLedger()
         var now: @Sendable () -> Double = { Double(DispatchTime.now().uptimeNanoseconds) / 1e9 }
         /// Bounded SoundAnalysis classification (buffer, seconds, budget). Tests may inject fixed windows.
         var classify: @Sendable (AVAudioPCMBuffer, Double, Double) async -> [LofiSpeechFocus.Window] = {

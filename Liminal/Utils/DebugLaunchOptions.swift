@@ -43,8 +43,8 @@ nonisolated enum DebugLaunchOptions {
     /// kept so existing perf-run invocations still parse.
     static let splitPasses: Bool = defaults.bool(forKey: "LiminalPerfSplitPasses")
 
-    /// -LiminalTestPattern YES: replace every source image with the generated orientation/colour
-    /// test card (TestPatternGenerator) and skip image generation entirely.
+    /// -LiminalTestPattern YES: replace every picture with the orientation/colour test card
+    /// (TestPatternGenerator).
     static let testPattern: Bool = defaults.bool(forKey: "LiminalTestPattern")
 
     /// -LiminalTestImage <path>: like -LiminalTestPattern, but show this image file (any path the
@@ -107,7 +107,7 @@ nonisolated enum DebugLaunchOptions {
 
     /// -LiminalTransitionStyle <name>: every image transition uses this style (TransitionStyle names,
     /// docs/plans/transitions.md); -LiminalTransitionSeed <n> pins its seed too (same mapping as
-    /// scripts/shader-bench.sh --tx-style / --tx-seed). Not an automation flag: generation stays as set.
+    /// scripts/shader-bench.sh --tx-style / --tx-seed). Not an automation flag.
     static let transitionStyle: String? = defaults.string(forKey: "LiminalTransitionStyle")
     static let transitionSeed: Int? = {
         guard defaults.object(forKey: "LiminalTransitionSeed") != nil else { return nil }
@@ -117,7 +117,7 @@ nonisolated enum DebugLaunchOptions {
     /// Drop transitions (docs/plans/drop-transitions.md 4.5). -LiminalDropColour <name> and
     /// -LiminalDropFinisher <name> pin a drop's colour layer and finisher (DropColour / DropFinisher names;
     /// -LiminalTransitionStyle accepts the drop styles), -LiminalDropLead <ms> overrides the display lead,
-    /// -LiminalDropOff YES brings back the bell reveal of T43 for an A/B. Automation flags (no generation).
+    /// -LiminalDropOff YES brings back the bell reveal of T43 for an A/B. Automation flags.
     static let dropColour: String? = defaults.string(forKey: "LiminalDropColour")
     static let dropFinisher: String? = defaults.string(forKey: "LiminalDropFinisher")
     static let dropLead: Double? = {
@@ -125,12 +125,6 @@ nonisolated enum DebugLaunchOptions {
         return defaults.double(forKey: "LiminalDropLead") / 1000
     }()
     static let dropOff: Bool = defaults.bool(forKey: "LiminalDropOff")
-
-    /// -LiminalAllowGeneration YES: let an automated/debug launch call Gemini. Without it, any launch
-    /// that uses the automation flags above (perf runs, screenshots, sim checks) never generates new
-    /// images: it shows cached images, or the test card when the cache is empty. Testing must not
-    /// spend API budget by accident (2026-11-14 budget alert).
-    static let allowGeneration: Bool = defaults.bool(forKey: "LiminalAllowGeneration")
 
     // Spatial shell harness (docs/plans/spatial.md). The simulator camera is fixed and looks forward,
     // so these move the scene instead of the head.
@@ -244,34 +238,23 @@ nonisolated enum DebugLaunchOptions {
     /// through the setting's Download model path (DialogueSpeechAssets.requestInstallIfAllowed).
     static let dialogueTranscription: String? = defaults.string(forKey: "LiminalDialogueTranscription")
 
-    // API image mode (docs/plans/image-api-mode.md 8). Every one of these blocks Gemini generation;
-    // none of them blocks fetching from the free public image APIs.
+    // Curated pictures. These are automation flags; none of them blocks fetching from the free
+    // public image APIs.
 
-    /// -LiminalImageSource ai|api: use this image source for this launch instead of the setting (not saved).
-    static let imageSource: String? = defaults.string(forKey: "LiminalImageSource")
-    /// -LiminalImageProvider <id[,id]>: restrict API ingest and display to these provider or source ids.
+    /// -LiminalImageProvider <id[,id]>: restrict ingest and display to these provider or source ids.
     static let imageProviders: [String]? = {
         guard let s = defaults.string(forKey: "LiminalImageProvider") else { return nil }
         let ids = s.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         return ids.isEmpty ? nil : ids
     }()
-    /// -LiminalImageAPIOffline YES: API mode shows only pictures already in the pool; no network.
+    /// -LiminalImageAPIOffline YES: show only pictures already in the pool; no network.
     static let imageAPIOffline: Bool = defaults.bool(forKey: "LiminalImageAPIOffline")
-    /// -LiminalImageAPISeed <n>: seed of the API ingest and display rotations.
+    /// -LiminalImageAPISeed <n>: seed of the ingest and display rotations.
     static let imageAPISeed: UInt64? = defaults.string(forKey: "LiminalImageAPISeed").flatMap { UInt64($0) }
     /// -LiminalImageAPIFresh YES: use an empty CuratedImageStore-Verify folder, so a run proves that
     /// fetching works and leaves the real pool alone. Removed again by the next normal launch. With
     /// -LiminalImageAPIOffline the verify folder of the previous fresh run is kept and reused.
     static let imageAPIFresh: Bool = defaults.bool(forKey: "LiminalImageAPIFresh")
-    /// -LiminalImageSourceFlipAt <s[,s...]>: at each time (seconds after launch) flip the Images picker
-    /// (AI <-> API) through the same settings binding the picker uses, then put the stored setting
-    /// back, so a locked-screen run can check the switch without saving it (macOS control panel).
-    static let imageSourceFlipAt: [Double]? = {
-        guard let s = defaults.string(forKey: "LiminalImageSourceFlipAt") else { return nil }
-        let times = s.split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }.filter { $0 >= 0 }.sorted()
-        return times.isEmpty ? nil : times
-    }()
-
     /// -LiminalRecordAt <start>,<seconds>[,photos]: start a recording <start> s after playback is ready and stop
     /// it <seconds> later, keeping the file in Documents/Recordings without the Photos step (no prompt in
     /// automation). docs/recording.md.
@@ -298,22 +281,22 @@ nonisolated enum DebugLaunchOptions {
         return (v[0], v[1])
     }()
 
-    /// True when any API image flag is set.
-    static var anyImageAPIFlag: Bool {
-        imageSource != nil || imageProviders != nil || imageAPIOffline || imageAPISeed != nil || imageAPIFresh
-            || imageSourceFlipAt != nil
+    /// True when any picture flag is set.
+    static var anyImageFlag: Bool {
+        imageProviders != nil || imageAPIOffline || imageAPISeed != nil || imageAPIFresh
     }
 
-    /// True when any shell harness flag is set (they also block generation).
+    /// True when any shell harness flag is set (they are automation flags too).
     static var anyShellFlag: Bool {
         defaults.object(forKey: "LiminalShellYaw") != nil || defaults.object(forKey: "LiminalShellPitch") != nil
             || defaults.object(forKey: "LiminalShellHeadOffset") != nil || shellDepth != nil || shellTextureStereo
             || hideControls || depthImagePath != nil || !shellCycle.isEmpty
     }
 
-    static var blocksImageGeneration: Bool {
-        guard !allowGeneration else { return false }
-        return autoPlay || openDome || musicSeed != nil || freezeTime != nil || testPattern || testImagePath != nil
+    /// True for an automated launch (perf runs, screenshots, simulator checks): any automation flag is set.
+    /// Such a launch keeps the user's own state alone, e.g. the dialogue line ledger.
+    static var isAutomated: Bool {
+        autoPlay || openDome || musicSeed != nil || freezeTime != nil || testPattern || testImagePath != nil
             || defaults.object(forKey: "LiminalPerfLogInterval") != nil || splitPasses
             || forceStereoFlatDepth || forceMonoMaterial || noEffects || syncLog
             || defaults.object(forKey: "LiminalSyncStrength") != nil || effectIntensity != nil
@@ -323,11 +306,10 @@ nonisolated enum DebugLaunchOptions {
             || videoOffline || videoOff || controlsScroll != nil || controlsWidth != nil || videoOffAt != nil
             || dialogueTranscription != nil
             || dropColour != nil || dropFinisher != nil || dropLead != nil || dropOff
-            || anyImageAPIFlag || recordAt != nil || recordSize != nil || recordH264 || recordTrace
+            || anyImageFlag || recordAt != nil || recordSize != nil || recordH264 || recordTrace
     }
 #else
-    static let allowGeneration = false
-    static let blocksImageGeneration = false
+    static let isAutomated = false
     static let autoPlay = false
     static let musicSeed: UInt64? = nil
     static let openDome = false
@@ -377,13 +359,10 @@ nonisolated enum DebugLaunchOptions {
     static let controlsWidth: Double? = nil
     static let videoOffAt: Double? = nil
     static let dialogueTranscription: String? = nil
-    static let imageSource: String? = nil
     static let imageProviders: [String]? = nil
     static let imageAPIOffline = false
     static let imageAPISeed: UInt64? = nil
     static let imageAPIFresh = false
-    static let imageSourceFlipAt: [Double]? = nil
-    static let anyImageAPIFlag = false
 #endif
 
     private static let logOnce: Void = {
@@ -407,7 +386,6 @@ nonisolated enum DebugLaunchOptions {
         if forceStereoFlatDepth { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalForceStereoFlatDepth=YES (stereo material + flat depth)") }
         if forceMonoMaterial { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalForceMonoMaterial=YES (mono UnlitMaterial)") }
         if noEffects { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalNoEffects=YES (passthrough, no effects)") }
-        if blocksImageGeneration { LMLog.general.info("🧪 DEBUG: automation launch, Gemini image generation OFF (cached images only; pass -LiminalAllowGeneration YES to override)") }
         if syncLog { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalSyncLog=YES (🎼 SYNC lines)") }
         if let i = effectIntensity { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalEffectIntensity=\(i, format: .fixed(precision: 2)) (overrides the Effect intensity setting)") }
         if let s = transitionStyle { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalTransitionStyle=\(s, privacy: .public)") }
@@ -440,15 +418,10 @@ nonisolated enum DebugLaunchOptions {
             let ok = DialogueTranscriptionMode(argument: m) != nil
             LMLog.general.info("🧪 DEBUG FLAG applied: LiminalDialogueTranscription=\(m, privacy: .public)\(ok ? "" : " (unknown mode, ignored)", privacy: .public)")
         }
-        if let s = imageSource {
-            let ok = ImageSource(argument: s) != nil
-            LMLog.general.info("🧪 DEBUG FLAG applied: LiminalImageSource=\(s, privacy: .public)\(ok ? "" : " (unknown source, ignored)", privacy: .public)")
-        }
         if let p = imageProviders { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalImageProvider=\(p.joined(separator: ","), privacy: .public)") }
-        if imageAPIOffline { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalImageAPIOffline=YES (API pool only, no network)") }
+        if imageAPIOffline { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalImageAPIOffline=YES (pool only, no network)") }
         if let n = imageAPISeed { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalImageAPISeed=\(n)") }
         if imageAPIFresh { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalImageAPIFresh=YES (empty verify pool)") }
-        if let t = imageSourceFlipAt { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalImageSourceFlipAt=\(t.map { String(format: "%.0f", $0) }.joined(separator: ","), privacy: .public)s (flips the Images picker, not saved)") }
         if syncStrength != 1 { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalSyncStrength=\(syncStrength, format: .fixed(precision: 2))") }
 #endif
     }()

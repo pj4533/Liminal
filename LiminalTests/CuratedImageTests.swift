@@ -1,10 +1,10 @@
 //
-//  ImageAPIModeTests.swift
+//  CuratedImageTests.swift
 //  LiminalTests
 //
-//  API image mode (docs/plans/image-api-mode.md 9): the setting and flags, the bundled collections,
-//  each provider's parsing on saved responses, the rights rule, both rotations, openness scoring
-//  and the on-disk pool. No test touches the network or Gemini.
+//  Curated pictures (docs/plans/image-api-mode.md 9): the bundled collections, each provider's
+//  parsing on saved responses, the rights rule, both rotations, openness scoring, the on-disk pool
+//  and the display queue. No test touches the network.
 //
 
 import Foundation
@@ -36,9 +36,7 @@ enum ImageAPIFixtures {
                       queries: [CuratedQuery(q: "q")], searches: nil, categories: nil,
                       pinned: pinned.map(FlexibleID.init), rejectTitleWords: rejectTitleWords,
                       requireTitleContains: nil, requireIIIF: true, requiresKey: nil, allowClassification: nil,
-                      allowMonochrome: false,
-                      mood: SourceMood(moods: [.serene, .eerie], subjectCategory: .landscape, energy: 0.3, warmth: 0.2),
-                      license: "test")
+                      allowMonochrome: false, license: "test")
     }
 
     static let context = ResolveContext(targetLongSide: 3072, maxBytes: 12_000_000, institution: "Test",
@@ -54,10 +52,8 @@ enum ImageAPIFixtures {
                          createdAt: Date = Date()) -> ImageMetadata {
         let score = OpennessScore(shadowShare: 0.3, highlightShare: 0.1, keyShare: 0.3, calmShare: 0.4, edgeDensity: 0.03,
                                   paperShare: 0, saturation: saturation, openness: openness)
-        return ImageMetadata(id: UUID(), createdAt: createdAt, spec: Self.source(id: source).promptSpec, model: "api.loc",
-                             pixelWidth: 60, pixelHeight: 40, mimeType: "image/jpeg", dominantColors: [],
-                             measuredBrightness: 0.4, measuredSaturation: saturation, archiveReference: nil,
-                             source: credit(source: source), openness: score)
+        return ImageMetadata(id: UUID(), createdAt: createdAt, pixelWidth: 60, pixelHeight: 40, mimeType: "image/jpeg",
+                             measuredSaturation: saturation, source: credit(source: source), openness: score)
     }
 
     static let jpeg: Data = {
@@ -95,45 +91,6 @@ enum ImageAPIFixtures {
     }
 }
 
-// MARK: - Setting and flags
-
-struct ImageSourceSettingsTests {
-    @Test func defaultIsAI() {
-        #expect(ImageSource.defaultSource == .ai)
-        #expect(ImageSource.resolve(stored: nil, debugFlag: nil) == .ai)
-        #expect(ImageSource.resolve(stored: "bogus", debugFlag: nil) == .ai)
-    }
-
-    @Test func storedValueAndFlagOverride() {
-        #expect(ImageSource.resolve(stored: "api", debugFlag: nil) == .api)
-        #expect(ImageSource.resolve(stored: "ai", debugFlag: "API") == .api)
-        #expect(ImageSource.resolve(stored: "api", debugFlag: "ai") == .ai)
-        // An unknown flag value is ignored.
-        #expect(ImageSource.resolve(stored: "api", debugFlag: "gemini") == .api)
-        #expect(ImageSource.defaultsKey == "visual.imageSource")
-        #expect(ImageSource.allCases.map(\.title) == ["AI", "API"])
-    }
-
-    /// Every API flag is in `anyImageAPIFlag`, which `blocksImageGeneration` includes (source check:
-    /// launch flags are constants read once per process).
-    @Test func everyAPIFlagBlocksGeneration() throws {
-        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("Liminal/Utils/DebugLaunchOptions.swift")
-        let text = try String(contentsOf: url, encoding: .utf8)
-        for key in ["LiminalImageSource", "LiminalImageProvider", "LiminalImageAPIOffline", "LiminalImageAPISeed",
-                    "LiminalImageAPIFresh"] {
-            #expect(text.contains("\"\(key)\""), "\(key) is read")
-        }
-        let any = try #require(text.range(of: "static var anyImageAPIFlag: Bool {"))
-        let body = text[any.upperBound...].prefix(200)
-        for name in ["imageSource", "imageProviders", "imageAPIOffline", "imageAPISeed", "imageAPIFresh"] {
-            #expect(body.contains(name), "\(name) in anyImageAPIFlag")
-        }
-        let gate = try #require(text.range(of: "static var blocksImageGeneration: Bool {"))
-        #expect(text[gate.upperBound...].prefix(1500).contains("|| anyImageAPIFlag"))
-    }
-}
-
 // MARK: - Collections
 
 struct ImageCollectionsTests {
@@ -155,8 +112,6 @@ struct ImageCollectionsTests {
             #expect(keyless.contains(s.provider), "\(s.id) uses a keyless provider")
             #expect(c.providers[s.provider] != nil, "\(s.id) has a provider block")
             #expect(s.weight > 0)
-            #expect(!s.mood.moods.isEmpty && s.mood.moods.count <= 4)
-            #expect((0...1).contains(s.mood.energy) && (-1...1).contains(s.mood.warmth))
             #expect(!s.allQueries.isEmpty || !s.pinnedIDs.isEmpty, "\(s.id) has something to fetch")
             #expect(s.requiresKey == nil, "\(s.id) needs no key")
         }
@@ -209,12 +164,6 @@ struct ImageCollectionsTests {
         #expect(doc.rejectsTitle("A sunset", itemID: "File:A sunset.jpg"))
     }
 
-    @Test func promptSpecCarriesTheSourceMood() {
-        let spec = ImageAPIFixtures.source(id: "x").promptSpec
-        #expect(spec.styleID == "api.x")
-        #expect(spec.moods == [.serene, .eerie])
-        #expect(spec.subjectCategory == .landscape)
-    }
 }
 
 // MARK: - Provider parsing
@@ -699,28 +648,26 @@ struct ImageOpennessTests {
 // MARK: - Pool
 
 struct CuratedImagePoolTests {
-    @Test func separateFolderAndEpochFromTheAICache() throws {
+    /// The real pool and a -LiminalImageAPIFresh verify pool live in their own folders with their own
+    /// epoch keys: purging one leaves the other.
+    @Test func poolsKeepSeparateFoldersAndEpochs() throws {
         let (root, defaults) = ImageAPIFixtures.tempRoot()
         defer { try? FileManager.default.removeItem(at: root) }
-        let ai = ImageStore(root: root, defaults: defaults)
         let pool = CuratedImagePool(root: root, defaults: defaults)
-        #expect(ai.directory != pool.store.directory)
-        // Save one in each.
-        let aiMeta = ImageAPIFixtures.metadata()
-        try ai.save(jpeg: ImageAPIFixtures.jpeg, metadata: aiMeta, clearGeneration: ai.clearGeneration)
+        let verify = CuratedImagePool(root: root, defaults: defaults, directoryName: CuratedImagePool.verifyDirectoryName,
+                                      epochKey: CuratedImagePool.epochKey + ".verify")
+        #expect(pool.store.directory.lastPathComponent == CuratedImagePool.directoryName)
+        #expect(pool.store.directory != verify.store.directory)
         pool.loadIfNeeded()
+        verify.loadIfNeeded()
         try pool.add(jpeg: ImageAPIFixtures.jpeg, metadata: ImageAPIFixtures.metadata(), budget: 1 << 40)
-        // Migrating (purging) the AI cache leaves the pool; migrating the pool leaves the AI cache.
-        defaults.set(0, forKey: ImageStore.epochDefaultsKey)
-        ai.migrateIfNeeded()
-        #expect(ai.imageCount() == 0)
-        #expect(pool.store.imageCount() == 1)
-        try ai.save(jpeg: ImageAPIFixtures.jpeg, metadata: ImageAPIFixtures.metadata(), clearGeneration: ai.clearGeneration)
+        try verify.add(jpeg: ImageAPIFixtures.jpeg, metadata: ImageAPIFixtures.metadata(), budget: 1 << 40)
+        // A lower stored epoch purges that pool's folder only.
         defaults.set(0, forKey: CuratedImagePool.epochKey)
         pool.store.migrateIfNeeded()
-        #expect(pool.store.imageCount() == 0)
-        #expect(ai.imageCount() == 1)
-        #expect(pool.store.maxImageCount == nil)
+        #expect(pool.store.entries().isEmpty)
+        #expect(verify.store.entries().count == 1)
+        #expect(defaults.integer(forKey: CuratedImagePool.epochKey) == CuratedImagePool.epoch)
     }
 
     @Test func sidecarRoundTripWithCreditAndOldSidecarsDecode() throws {
@@ -738,12 +685,20 @@ struct CuratedImagePoolTests {
         again.loadIfNeeded()
         #expect(again.count == 1)
         #expect(again.seenKeys.contains(meta.source!.candidateKey))
-        // An AI sidecar written before `source` existed still decodes.
+        // A sidecar written before `source` existed still decodes.
         var json = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(meta)) as? [String: Any])
         json["source"] = nil
         json["openness"] = nil
         let old = try JSONDecoder().decode(ImageMetadata.self, from: JSONSerialization.data(withJSONObject: json))
         #expect(old.source == nil && old.openness == nil)
+        // So does one that still carries keys of an earlier format (they are ignored).
+        var earlier = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(meta)) as? [String: Any])
+        earlier["model"] = "api.loc"
+        earlier["measuredBrightness"] = 0.4
+        earlier["dominantColors"] = [["r": 0.1, "g": 0.2, "b": 0.3]]
+        earlier["spec"] = ["text": "x"]
+        let decoded = try JSONDecoder().decode(ImageMetadata.self, from: JSONSerialization.data(withJSONObject: earlier))
+        #expect(decoded == meta)
     }
 
     @Test func sweepRemovesOnlyJunk() {
@@ -777,7 +732,7 @@ struct CuratedImagePoolTests {
         #expect(evicted == [ids[1]])
         #expect(pool.count == 3)
         #expect(!pool.seenKeys.contains(removedKey))   // can be fetched again
-        #expect(pool.store.imageFiles().count == 3)
+        #expect(pool.store.entries().count == 3)
     }
 
     @Test func clearRemovesPicturesAndLedger() throws {
@@ -788,7 +743,7 @@ struct CuratedImagePoolTests {
         try pool.add(jpeg: ImageAPIFixtures.jpeg, metadata: ImageAPIFixtures.metadata(), budget: 1 << 40)
         pool.recordRejected("loc:x", reason: "test")
         pool.clear()
-        #expect(pool.count == 0 && pool.seenKeys.isEmpty && pool.store.imageCount() == 0)
+        #expect(pool.count == 0 && pool.seenKeys.isEmpty && pool.store.entries().isEmpty)
     }
 
     /// A picture whose ingest began before Clear is refused, and the cleared ledger stays cleared on disk.
@@ -804,7 +759,7 @@ struct CuratedImagePoolTests {
             try pool.add(jpeg: ImageAPIFixtures.jpeg, metadata: ImageAPIFixtures.metadata(), budget: 1 << 40,
                          clearGeneration: generation)
         }
-        #expect(pool.count == 0 && pool.store.imageCount() == 0)
+        #expect(pool.count == 0 && pool.store.entries().isEmpty)
         pool.recordRejected("loc:after", reason: "test")
         let again = CuratedImagePool(root: root, defaults: defaults)
         again.loadIfNeeded()
@@ -833,21 +788,20 @@ struct CuratedImageFeedTests {
     }
 }
 
-// MARK: - Queue in API mode
+// MARK: - Queue
 
 @MainActor
-struct ImageQueueAPIModeTests {
+struct ImageQueueTests {
     private func makeQueue() -> (ImageQueue, CuratedImagePool, URL) {
         let (root, defaults) = ImageAPIFixtures.tempRoot()
         let pool = CuratedImagePool(root: root, defaults: defaults)
-        let ai = ImageStore(root: root, defaults: defaults)
         let feed = CuratedImageFeed(collections: .bundled, pool: pool, providers: ImageProviders.all(environment: [:]),
                                     offline: true, filter: nil, seed: 1)
-        return (ImageQueue(store: ai, source: .api, feed: { feed }), pool, root)
+        return (ImageQueue(feed: feed), pool, root)
     }
 
-    /// API mode only shows pool pictures and never records a Gemini generation.
-    @Test func apiDisplayLeavesTheGenerationLedgerUnchanged() async throws {
+    /// The queue shows pool pictures, with their credits.
+    @Test func reservesPoolPicturesWithTheirCredits() async throws {
         let (queue, pool, root) = makeQueue()
         defer { try? FileManager.default.removeItem(at: root) }
         pool.loadIfNeeded()
@@ -856,50 +810,22 @@ struct ImageQueueAPIModeTests {
         for seed in 0..<3 {
             try pool.add(jpeg: ImageAPIFixtures.patternJPEG(UInt64(seed)), metadata: ImageAPIFixtures.metadata(source: source.id), budget: 1 << 40)
         }
-        let before = UserDefaults.standard.data(forKey: GenerationBudget.Keys.ledger)
         queue.start()
         try await Task.sleep(for: .seconds(3))
+        #expect(queue.queuedCount > 0)
         let reserved = await queue.reserveForFill(excluding: nil)
         queue.stop()
         #expect(reserved?.metadata?.source != nil)
-        #expect(UserDefaults.standard.data(forKey: GenerationBudget.Keys.ledger) == before)
-        #expect(queue.activeSource == .api)
-        #expect(queue.activeStore.directory == pool.store.directory)
+        #expect(pool.items.contains { $0.id == reserved?.id })
     }
 
-    /// API -> AI -> API while running: the stores swap, pending pictures are dropped, and the AI side
-    /// (an automation test host) never generates.
-    @Test func switchingSourcesSwapsStoresWithoutGenerating() async throws {
-        let (queue, pool, root) = makeQueue()
-        defer { try? FileManager.default.removeItem(at: root) }
-        pool.loadIfNeeded()
-        let source = try #require(ImageCollections.bundled.sources.first { $0.enabled })
-        // Three different pictures: the ingest task's duplicate backfill keeps one copy of identical ones.
-        for seed in 0..<3 {
-            try pool.add(jpeg: ImageAPIFixtures.patternJPEG(UInt64(seed)), metadata: ImageAPIFixtures.metadata(source: source.id), budget: 1 << 40)
-        }
-        let before = UserDefaults.standard.data(forKey: GenerationBudget.Keys.ledger)
-        queue.start()
-        try await Task.sleep(for: .seconds(2))
-        await queue.switchSource(.ai)
-        #expect(queue.activeSource == .ai)
-        #expect(queue.imageSource == .ai)
-        #expect(queue.activeStore.directory != pool.store.directory)
-        #expect(queue.queuedCount == 0)
-        try await Task.sleep(for: .seconds(1))
-        await queue.switchSource(.api)
-        #expect(queue.activeSource == .api)
-        try await Task.sleep(for: .seconds(2))
-        #expect(queue.queuedCount > 0)
-        queue.stop()
-        #expect(UserDefaults.standard.data(forKey: GenerationBudget.Keys.ledger) == before)
-    }
-
-    @Test func emptyPoolGivesNoFillButStandbyArt() async {
+    @Test func emptyPoolGivesNoFillButTwoDistinctStandbyPictures() async throws {
         let (queue, _, root) = makeQueue()
         defer { try? FileManager.default.removeItem(at: root) }
         #expect(await queue.reserveForFill(excluding: nil) == nil)
-        #expect(queue.standbyImage(index: 0) != nil)
+        let first = try #require(queue.standbyImage(index: 0))
+        let second = try #require(queue.standbyImage(index: 1))
+        #expect(first.cgImage.width != second.cgImage.width)
     }
 }
 

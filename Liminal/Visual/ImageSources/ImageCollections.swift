@@ -2,7 +2,7 @@
 //  ImageCollections.swift
 //  Liminal
 //
-//  The approved sources API mode rotates through: bundled image-collections.json
+//  The approved sources the curated feed rotates through: bundled image-collections.json
 //  (docs/research/image-apis/collections.md, docs/plans/image-api-mode.md 3.2).
 //
 
@@ -48,7 +48,7 @@ nonisolated struct ImageCollections: Codable, Sendable {
         let institution: String
     }
 
-    /// The bundled list, loaded once. Falls back to an empty list (API mode then shows standby art).
+    /// The bundled list, loaded once. Falls back to an empty list (the reveals then show standby art).
     static let bundled: ImageCollections = {
         guard let url = Bundle.main.url(forResource: "image-collections", withExtension: "json") else {
             LMLog.visual.error("🖼️ [API] image-collections.json missing from the bundle")
@@ -122,7 +122,6 @@ nonisolated struct CuratedSource: Codable, Sendable, Equatable {
     var requiresKey: String?
     var allowClassification: [String]?
     var allowMonochrome: Bool?
-    let mood: SourceMood
     let license: String
 
     var pinnedIDs: [String] { (pinned ?? []).map(\.value) }
@@ -147,23 +146,6 @@ nonisolated struct CuratedSource: Codable, Sendable, Equatable {
             return lower.range(of: "\\b\(NSRegularExpression.escapedPattern(for: w))\\b", options: .regularExpression) != nil
         }
     }
-
-    /// The synthesized prompt spec VisualMoodBuilder reads (moods, category, energy, warmth).
-    var promptSpec: PromptSpec {
-        PromptSpec(text: "Curated picture from \(id)", styleID: "api.\(id)", styleFamily: .photographic,
-                   paletteID: "api", paletteSwatches: [], subjectID: "api.\(id)",
-                   subjectCategory: mood.subjectCategory, secondSubjectID: nil, transformationID: "none",
-                   transformationKind: .plain, materialID: nil, compositionID: "api", moods: mood.moods,
-                   energy: mood.energy, warmth: mood.warmth, needsStrongSurreal: false, series: nil,
-                   promptVersion: 0)
-    }
-}
-
-nonisolated struct SourceMood: Codable, Sendable, Equatable {
-    let moods: [Mood]
-    let subjectCategory: SubjectCategory
-    let energy: Double
-    let warmth: Double
 }
 
 /// A search: a plain string, or an object with a year window (NASA), type (Cleveland) or

@@ -2,7 +2,7 @@
 //  ImageHTTP.swift
 //  Liminal
 //
-//  The one HTTPS client of API mode (docs/plans/image-api-mode.md 3.1). Polite by construction,
+//  The one HTTPS client of the curated feed (docs/plans/image-api-mode.md 3.1). Polite by construction,
 //  like ArchiveClient: a generic User-Agent with no personal data, no URL cache, no downloads in
 //  Low Data Mode, and a minimum gap per host (5 s for the Met, whose bot wall trips after about 100
 //  quick requests). Only awaited from the feed's detached ingest task, never from a render path.

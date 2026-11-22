@@ -158,23 +158,6 @@ struct ArchiveCatalogTests {
         }
     }
 
-    @Test func footagePairUsesPreparedStartThenFreshNearbyStartThenNoMatch() throws {
-        var rng = MusicRNG(seed: 13)
-        let bounds = 4.0...120.0
-        #expect(ArchiveCatalog.pairedStart(referenceTime: 62, plannedStart: 60, bounds: bounds,
-                                          shown: [12, 100], allowsCallback: false, rng: &rng) == 60)
-        #expect(ArchiveCatalog.pairedStart(referenceTime: 62, plannedStart: 60, bounds: bounds,
-                                          shown: [60], allowsCallback: false, rng: &rng) == nil)
-        let fresh = try #require(ArchiveCatalog.pairedStart(referenceTime: 62, plannedStart: 60, bounds: bounds,
-                                                           shown: [60], allowsCallback: true, rng: &rng))
-        #expect((38...86).contains(fresh) && abs(fresh - 60) >= 20)
-        #expect(ArchiveCatalog.pairedStart(referenceTime: 62, plannedStart: nil, bounds: bounds,
-                                          shown: Array(stride(from: 35.0, through: 90, by: 5)),
-                                          allowsCallback: true, rng: &rng) == nil)
-        #expect(ArchiveCatalog.pairedStart(referenceTime: 142, plannedStart: 140, bounds: bounds,
-                                          shown: [120], allowsCallback: true, rng: &rng) == nil)
-    }
-
     @Test func shuffleBagHasNoRepeatsUntilExhausted() {
         var bag = ShuffleBag(["a", "b", "c", "d", "e"])
         var rng = MusicRNG(seed: 3)

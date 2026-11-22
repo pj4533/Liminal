@@ -109,8 +109,7 @@ nonisolated struct LofiImageReveal: Sendable {
     }
 }
 
-/// Coordinates visual generation.
-/// Advances images on a schedule; prompts come from PromptDirector inside ImageQueue.
+/// Coordinates the pictures: reveals a curated picture from ImageQueue on each drum boundary.
 ///
 /// ARCHITECTURE NOTE for visionOS:
 /// The 90fps TimelineView render loop should NOT read from @Published properties.
@@ -137,18 +136,15 @@ final class VisualEngine: ObservableObject {
     // MARK: - State (@Published for UI only - NOT for render loop)
 
     @Published private(set) var currentImage: PlatformImage?
-    @Published private(set) var nextImage: PlatformImage?  // For morph preloading
-    @Published private(set) var isGenerating: Bool = false
-    @Published private(set) var totalCachedCount: Int = 0
+    /// Pictures saved in the pool.
+    @Published private(set) var poolCount: Int = 0
     @Published private(set) var queuedCount: Int = 0
-    /// Style, palette, moods and measured colors of the image on screen. Best effort on
+    /// Credit and measurements of the picture on screen. Best effort on
     /// visionOS; the reliable read is `imageBuffer.loadCurrentMetadata()`.
     @Published private(set) var currentMetadata: ImageMetadata?
     @Published private(set) var statusMessage: String?
     @Published private(set) var isClearing = false
-    /// The image source the queue is running (AI / API).
-    @Published private(set) var imageSource: ImageSource = .current
-    /// API mode's collection status line (nil in AI mode).
+    /// The collections status line (nil until the feed has run).
     @Published private(set) var sourceStatus: (text: String, ok: Bool)?
 
     private let imageQueue = ImageQueue()
@@ -193,25 +189,10 @@ final class VisualEngine: ObservableObject {
             }
             .store(in: &cancellables)
 
-        // Mirror next image for morph preloading
-        imageQueue.$nextImage
-            .receive(on: RunLoop.main)
-            .sink { [weak self] image in
-                self?.nextImage = image
-            }
-            .store(in: &cancellables)
-
-        imageQueue.$isGenerating
-            .receive(on: RunLoop.main)
-            .sink { [weak self] generating in
-                self?.isGenerating = generating
-            }
-            .store(in: &cancellables)
-
-        imageQueue.$totalCachedCount
+        imageQueue.$poolCount
             .receive(on: RunLoop.main)
             .sink { [weak self] count in
-                self?.totalCachedCount = count
+                self?.poolCount = count
             }
             .store(in: &cancellables)
 
@@ -233,13 +214,6 @@ final class VisualEngine: ObservableObject {
             .receive(on: RunLoop.main)
             .sink { [weak self] message in
                 self?.statusMessage = message
-            }
-            .store(in: &cancellables)
-
-        imageQueue.$imageSource
-            .receive(on: RunLoop.main)
-            .sink { [weak self] source in
-                self?.imageSource = source
             }
             .store(in: &cancellables)
 
@@ -311,35 +285,17 @@ final class VisualEngine: ObservableObject {
 
     // MARK: - Cache
 
-    /// Count and size of the active source's pictures on disk (the AI cache or the API pool).
+    /// Count and size of the pool's pictures on disk.
     func cacheUsage() async -> ImageStore.Usage {
-        let queue = imageQueue
+        let pool = imageQueue.feed.pool
         return await Task.detached {
-            if queue.activeSource == .api {
-                queue.feed.pool.loadIfNeeded()
-                return queue.feed.pool.usage()
-            }
-            return queue.store.usage()
+            pool.loadIfNeeded()
+            return pool.usage()
         }.value
     }
 
-    /// AI <-> API (the "Images" picker). Takes effect at the next image change.
-    /// Switches run one after another in the order they were asked for: two detached tasks could
-    /// otherwise run out of order on a quick AI -> API -> AI and leave the queue on the source the
-    /// picker no longer shows, or interleave inside `switchSource` and start two loops.
-    func setImageSource(_ source: ImageSource) {
-        stagedImage = nil
-        let queue = imageQueue
-        let previous = sourceSwitch
-        sourceSwitch = Task.detached {
-            await previous?.value
-            await queue.switchSource(source)
-        }
-    }
-    private var sourceSwitch: Task<Void, Never>?
-
-    /// Deletes every cached image (files, sidecars, depth maps, legacy folders), clears the
-    /// display buffers and prompt history, and restarts generation if it was running.
+    /// Deletes every pool picture and the ledger, clears the display buffers, and restarts
+    /// fetching if it was running.
     func clearAllImages() async {
         guard !isClearing else { return }
         stagedImage = nil
@@ -375,29 +331,25 @@ final class VisualEngine: ObservableObject {
                 do { try await Task.sleep(for: .seconds(max(0, planned.boundary + 0.25 - now()))) } catch { return }
                 continue
             }
-            ArchiveFootageService.shared.expectNextImage(after: max(0, cue.downbeat - now()))
             // The renderers build this drop's specialized pipelines in the background, well before the fill.
             DropPipelines.announce(cue.spec)
-            // Give live generation most of the phrase, with six seconds left for
-            // a local decode, crop, colour analysis and both platforms' GPU upload.
+            // Reserve six seconds ahead, for a local decode, crop, colour analysis and both
+            // platforms' GPU upload.
             do { try await Task.sleep(for: .seconds(max(0, cue.start - now() - 6))) } catch { return }
-            // The store the picture comes from (AI cache or API pool) and its clear generation: a
-            // clear or a source switch while the picture is staged keeps it off screen.
-            let epochStore = imageQueue.activeStore
-            let cacheEpoch = epochStore.clearGeneration
-            let queue = imageQueue
-            let sameEpoch = { queue.activeStore === epochStore && epochStore.clearGeneration == cacheEpoch }
+            // The pool's clear generation: a clear while the picture is staged keeps it off screen.
+            let store = imageQueue.feed.pool.store
+            let cacheEpoch = store.clearGeneration
+            let sameEpoch = { store.clearGeneration == cacheEpoch }
             let currentID = imageBuffer.displayedID()
             let prefetch = Task {
                 guard !isClearing, let item = await imageQueue.reserveForFill(excluding: currentID),
                       !Task.isCancelled, sameEpoch(),
                       now() < cue.start - 2 else { return }
                 stagedImage = item
-                ArchiveFootageService.shared.queuedImage(item.metadata)
             }
             defer { prefetch.cancel() }
             do { try await Task.sleep(for: .seconds(max(0, cue.start - now() - 2))) } catch { return }
-            // A slow cache read or image generation never owns the deadline.
+            // A slow pool read never owns the deadline.
             if stagedImage == nil, !isClearing {
                 stagedImage = imageQueue.standbyImage(index: standbyIndex)
             }

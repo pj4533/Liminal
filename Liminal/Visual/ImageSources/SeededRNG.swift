@@ -2,11 +2,8 @@
 //  SeededRNG.swift
 //  Liminal
 //
-//  Deterministic SplitMix64 generator so prompt batches can be reproduced
-//  from a seed (unit tests, scripts/print-prompts.sh).
-//
-//  Prompt/ imports Foundation only. scripts/print-prompts.sh compiles this
-//  folder standalone with swiftc, so nothing here may reference app types.
+//  Deterministic SplitMix64 generator, so a seeded picture rotation can be
+//  reproduced (unit tests, -LiminalImageAPISeed).
 //
 
 import Foundation

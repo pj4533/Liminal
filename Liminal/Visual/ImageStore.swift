@@ -2,12 +2,13 @@
 //  ImageStore.swift
 //  Liminal
 //
-//  Persistent image cache (replaces ImageCache). docs/decisions/images.md D13-D15.
+//  A folder of pictures on disk, the backing store of CuratedImagePool:
 //
-//    Application Support/Liminal/ImageStore/
-//        <uuid>.jpg | .png      original bytes from the model (after border trim if trimmed)
+//    Application Support/Liminal/<directoryName>/
+//        <uuid>.jpg             the picture
 //        <uuid>.json            ImageMetadata sidecar
-//        <uuid>.depth.png       optional depth map
+//
+//  Each store has its own epoch key: a stored epoch below `epoch` purges the folder at launch.
 //
 //  ARCHITECTURE NOTE: Not an actor and not MainActor (the 90fps visionOS render
 //  loop starves MainActor). A lock guards the in-memory counters; FileManager
@@ -22,21 +23,11 @@ import os.lock
 import OSLog
 
 extension Notification.Name {
-    /// Posted once after every image (files, buffers, history) has been removed.
+    /// Posted once after every picture (files, buffers, ledger) has been removed.
     static let imageCacheCleared = Notification.Name("imageCacheCleared")
 }
 
 nonisolated final class ImageStore: @unchecked Sendable {
-
-    /// The AI (Gemini) cache.
-    static let shared = ImageStore()
-
-    /// Bump to purge every device's cache on its next launch. 2 = first 3:2 / Gemini 3.1 release,
-    /// which removes the old square images from before prompt version 2.
-    static let cacheEpoch = 2
-    static let epochDefaultsKey = "images.cacheEpoch"
-    /// Oldest images beyond this are deleted on save.
-    static let maxImages = 400
 
     struct Entry: Sendable, Equatable {
         let id: UUID
@@ -51,18 +42,15 @@ nonisolated final class ImageStore: @unchecked Sendable {
 
     enum StoreError: LocalizedError {
         case staleClearGeneration
-        var errorDescription: String? { "Image belongs to a generation started before Clear All Images" }
+        var errorDescription: String? { "The picture was fetched before the pictures were cleared" }
     }
 
     let root: URL                     // .../Liminal
-    let directory: URL                // .../Liminal/ImageStore
-    private let legacyDirectories: [URL]
+    let directory: URL                // .../Liminal/<directoryName>
     private let defaults: UserDefaults
-    /// Epoch bookkeeping of this store (the API pool has its own, so neither purges the other).
+    /// Epoch bookkeeping of this store.
     let epochKey: String
     let epoch: Int
-    /// Oldest images beyond this are deleted on save; nil = no count cap (the API pool, D39).
-    let maxImageCount: Int?
     private let lock = OSAllocatedUnfairLock()
     nonisolated(unsafe) private var _clearGeneration: UInt64 = 0
 
@@ -71,33 +59,20 @@ nonisolated final class ImageStore: @unchecked Sendable {
         return appSupport.appendingPathComponent("Liminal", isDirectory: true)
     }
 
-    convenience init() {
-        self.init(root: Self.applicationRoot, defaults: .standard)
-    }
-
-    /// Injectable for tests (temporary directory, private defaults suite). The defaults describe the
-    /// AI cache; a second store (the API pool) passes its own directory, epoch key and no count cap,
-    /// and owns no legacy directories.
-    init(root: URL, defaults: UserDefaults, directoryName: String = "ImageStore",
-         epochKey: String = ImageStore.epochDefaultsKey, epoch: Int = ImageStore.cacheEpoch,
-         maxImages: Int? = ImageStore.maxImages) {
+    /// Injectable for tests (temporary directory, private defaults suite).
+    init(root: URL, defaults: UserDefaults, directoryName: String, epochKey: String, epoch: Int) {
         self.root = root
         self.directory = root.appendingPathComponent(directoryName, isDirectory: true)
-        self.legacyDirectories = directoryName == "ImageStore" ? [
-            root.appendingPathComponent("RawImages", isDirectory: true),
-            root.appendingPathComponent("UpscaledImages", isDirectory: true),
-        ] : []
         self.defaults = defaults
         self.epochKey = epochKey
         self.epoch = epoch
-        self.maxImageCount = maxImages
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     }
 
     // MARK: - Clear generation
 
-    /// Increments on every clear. A save carrying an older value is refused, so an
-    /// image that was in flight when the user tapped Clear never reappears.
+    /// Increments on every clear. A save carrying an older value is refused, so a
+    /// picture that was in flight when the user tapped Clear never reappears.
     var clearGeneration: UInt64 {
         lock.withLock { _clearGeneration }
     }
@@ -105,7 +80,7 @@ nonisolated final class ImageStore: @unchecked Sendable {
     // MARK: - Migration
 
     /// Runs once at launch before anything is loaded. A lower or missing stored epoch
-    /// deletes this store's directory (and, for the AI cache, the legacy RawImages/ and UpscaledImages/).
+    /// deletes this store's directory.
     func migrateIfNeeded() {
         let stored = defaults.integer(forKey: epochKey)   // 0 when missing
         guard stored < epoch else { return }
@@ -126,7 +101,7 @@ nonisolated final class ImageStore: @unchecked Sendable {
         var result: [(Entry, Date)] = []
         for url in files {
             let ext = url.pathExtension.lowercased()
-            guard ext == "jpg" || ext == "png", !url.lastPathComponent.contains(".depth."),
+            guard ext == "jpg" || ext == "png",
                   let id = UUID(uuidString: url.deletingPathExtension().lastPathComponent) else { continue }
             let sidecar = directory.appendingPathComponent("\(id.uuidString).json")
             let metadata = (try? Data(contentsOf: sidecar)).flatMap { try? decoder.decode(ImageMetadata.self, from: $0) }
@@ -136,20 +111,6 @@ nonisolated final class ImageStore: @unchecked Sendable {
         }
         return result.sorted { $0.1 > $1.1 }.map(\.0)
     }
-
-    /// Cheap listing for the recycler: ids and file URLs, no sidecars, no pixels.
-    func imageFiles() -> [(id: UUID, url: URL)] {
-        guard let files = try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil,
-                                                                      options: [.skipsHiddenFiles]) else { return [] }
-        return files.compactMap { url in
-            let ext = url.pathExtension.lowercased()
-            guard ext == "jpg" || ext == "png", !url.lastPathComponent.contains(".depth."),
-                  let id = UUID(uuidString: url.deletingPathExtension().lastPathComponent) else { return nil }
-            return (id, url)
-        }
-    }
-
-    func imageCount() -> Int { imageFiles().count }
 
     /// Entry for one id, reading only its sidecar.
     func entry(id: UUID, url: URL) -> Entry {
@@ -166,37 +127,7 @@ nonisolated final class ImageStore: @unchecked Sendable {
 
     // MARK: - Saving
 
-    /// Writes the bytes (re-encoded only if the border trimmer cropped the image) and the sidecar.
-    @discardableResult
-    func save(_ image: GeneratedImageData, metadata: ImageMetadata, trimmed: CGImage? = nil,
-              clearGeneration: UInt64) throws -> Entry {
-        guard clearGeneration == self.clearGeneration else { throw StoreError.staleClearGeneration }
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-
-        var bytes = image.data
-        var ext = image.mimeType.contains("png") ? "png" : "jpg"
-        if let trimmed, let encoded = Self.encodeJPEG(trimmed) {
-            bytes = encoded
-            ext = "jpg"
-        }
-        let imageURL = directory.appendingPathComponent("\(metadata.id.uuidString).\(ext)")
-        try bytes.write(to: imageURL, options: .atomic)
-
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        encoder.outputFormatting = [.sortedKeys]
-        try encoder.encode(metadata).write(to: sidecarURL(metadata.id), options: .atomic)
-
-        // A clear may have happened while writing: undo so nothing stale survives.
-        if clearGeneration != self.clearGeneration {
-            removeFiles(for: metadata.id)
-            throw StoreError.staleClearGeneration
-        }
-        evictBeyondCap()
-        return Entry(id: metadata.id, imageURL: imageURL, metadata: metadata)
-    }
-
-    /// Saves JPEG bytes that did not come from Gemini (API mode) with their sidecar.
+    /// Saves a picture's JPEG bytes with their sidecar.
     @discardableResult
     func save(jpeg: Data, metadata: ImageMetadata, clearGeneration: UInt64) throws -> Entry {
         guard clearGeneration == self.clearGeneration else { throw StoreError.staleClearGeneration }
@@ -211,58 +142,41 @@ nonisolated final class ImageStore: @unchecked Sendable {
             removeFiles(for: metadata.id)
             throw StoreError.staleClearGeneration
         }
-        evictBeyondCap()
         return Entry(id: metadata.id, imageURL: imageURL, metadata: metadata)
     }
 
-    /// Removes one image with its sidecar and depth map.
+    /// Removes one picture with its sidecar.
     func remove(id: UUID) {
         removeFiles(for: id)
     }
 
-    // MARK: - Depth (slot for the dome view; see docs/decisions/images.md)
-
-    func saveDepth(_ depth: CGImage, for id: UUID) {
-        let url = directory.appendingPathComponent("\(id.uuidString).depth.png")
-        guard let dest = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil) else { return }
-        CGImageDestinationAddImage(dest, depth, nil)
-        CGImageDestinationFinalize(dest)
-    }
-
-    func loadDepth(for id: UUID) -> CGImage? {
-        let url = directory.appendingPathComponent("\(id.uuidString).depth.png")
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
-        return CGImageSourceCreateImageAtIndex(source, 0, nil)
-    }
-
     // MARK: - Usage and clearing
 
-    /// Image count and total bytes on disk (current store plus any legacy directories).
+    /// Picture count and total bytes on disk.
     func usage() -> Usage {
         let fm = FileManager.default
         var count = 0
         var bytes: Int64 = 0
-        for dir in [directory] + legacyDirectories {
-            guard let enumerator = fm.enumerator(at: dir, includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey]) else { continue }
+        if let enumerator = fm.enumerator(at: directory, includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey]) {
             for case let url as URL in enumerator {
                 let values = try? url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
                 guard values?.isRegularFile == true else { continue }
                 bytes += Int64(values?.fileSize ?? 0)
                 let ext = url.pathExtension.lowercased()
-                if (ext == "jpg" || ext == "png") && !url.lastPathComponent.contains(".depth.") { count += 1 }
+                if ext == "jpg" || ext == "png" { count += 1 }
             }
         }
         return Usage(imageCount: count, bytes: bytes)
     }
 
-    /// Deletes every cached image, sidecar and depth map, plus the legacy directories,
-    /// as whole directories. Increments clearGeneration first. Returns what was removed.
+    /// Deletes every picture and sidecar, as a whole directory. Increments clearGeneration first.
+    /// Returns what was removed.
     @discardableResult
     func clearEverything() -> Usage {
         lock.withLock { _clearGeneration &+= 1 }
         let removed = usage()
         removeAllFiles()
-        LMLog.visual.info("🗑️ [ImageStore] cleared \(removed.imageCount) images (\(removed.bytes) bytes)")
+        LMLog.visual.info("🗑️ [ImageStore] cleared \(removed.imageCount) pictures (\(removed.bytes) bytes)")
         return removed
     }
 
@@ -274,9 +188,9 @@ nonisolated final class ImageStore: @unchecked Sendable {
 
     private func removeAllFiles() {
         let fm = FileManager.default
-        for dir in [directory] + legacyDirectories where fm.fileExists(atPath: dir.path) {
-            do { try fm.removeItem(at: dir) } catch {
-                LMLog.visual.error("🗑️ [ImageStore] could not remove \(dir.lastPathComponent): \(error.localizedDescription)")
+        if fm.fileExists(atPath: directory.path) {
+            do { try fm.removeItem(at: directory) } catch {
+                LMLog.visual.error("🗑️ [ImageStore] could not remove \(self.directory.lastPathComponent): \(error.localizedDescription)")
             }
         }
         try? fm.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -284,17 +198,8 @@ nonisolated final class ImageStore: @unchecked Sendable {
 
     private func removeFiles(for id: UUID) {
         let fm = FileManager.default
-        for name in ["\(id.uuidString).jpg", "\(id.uuidString).png", "\(id.uuidString).json", "\(id.uuidString).depth.png"] {
+        for name in ["\(id.uuidString).jpg", "\(id.uuidString).png", "\(id.uuidString).json"] {
             try? fm.removeItem(at: directory.appendingPathComponent(name))
-        }
-    }
-
-    private func evictBeyondCap() {
-        guard let cap = maxImageCount else { return }
-        let all = entries()
-        guard all.count > cap else { return }
-        for entry in all.dropFirst(cap) {
-            removeFiles(for: entry.id)
         }
     }
 

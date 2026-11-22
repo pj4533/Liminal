@@ -11,8 +11,8 @@
 //  property updates) will be starved indefinitely.
 //
 //  This buffer provides a MainActor-free communication channel:
-//  - Background pipeline: Calls `store()` from any thread (no MainActor!)
-//  - Render loop: Calls `load()` from any thread (no MainActor!)
+//  - Image queue: calls `storeCurrent()` from any thread (no MainActor!)
+//  - Render loop: calls `loadCurrent()` from any thread (no MainActor!)
 //
 //  CRITICAL: Uses CGImage directly, NOT PlatformImage (UIImage/NSImage).
 //  CGImage is a Core Graphics type that is fully thread-safe.
@@ -27,7 +27,7 @@ import CoreGraphics
 import os.lock
 import OSLog
 
-/// Thread-safe buffer for passing CGImages from background pipeline to render loop.
+/// Thread-safe buffer for passing CGImages from the image queue to the render loop.
 /// Designed for high-frequency reads (90fps) with infrequent writes.
 ///
 /// IMPORTANT: Stores CGImage directly to avoid any UIImage/NSImage involvement.
@@ -44,9 +44,6 @@ nonisolated final class AtomicImageBuffer: @unchecked Sendable {
     /// nonisolated(unsafe) because we manage thread safety via lock.
     nonisolated(unsafe) private var _current: CGImage?
 
-    /// The next CGImage (for preloading morphs). Protected by lock.
-    nonisolated(unsafe) private var _next: CGImage?
-
     /// The current depth map CGImage (grayscale, 0=far, 1=near). Protected by lock.
     nonisolated(unsafe) private var _currentDepth: CGImage?
 
@@ -56,12 +53,7 @@ nonisolated final class AtomicImageBuffer: @unchecked Sendable {
     /// Generation counter for depth maps - independent from image generation.
     nonisolated(unsafe) private var _depthGeneration: UInt64 = 0
 
-    /// Pending queue for visionOS - generated images wait here until advance() is called.
-    /// This ensures visionOS respects the same timing as macOS.
-    /// Each entry carries its metadata so advanceFromQueue() moves both together.
-    nonisolated(unsafe) private var _pendingQueue: [(image: CGImage, metadata: ImageMetadata?, id: UUID?)] = []
-
-    /// Metadata for `_current` (style, palette, moods, measured colors). Protected by lock.
+    /// Metadata for `_current` (credit, measured saturation, openness). Protected by lock.
     nonisolated(unsafe) private var _currentMetadata: ImageMetadata?
 
     /// Generation counter - increments on each store, allows detecting changes.
@@ -95,30 +87,6 @@ nonisolated final class AtomicImageBuffer: @unchecked Sendable {
         LMLog.visual.info("📦 AtomicBuffer STORE: \(image.width)x\(image.height), gen=\(gen), wasEmpty=\(wasEmpty), id=\(selfId)")
     }
 
-    /// Store a new next CGImage (for morph preloading). Called from background pipeline.
-    func storeNext(_ image: CGImage?) {
-        lock.withLock {
-            self._next = image
-            if let img = image {
-                print("📦 [AtomicBuffer] STORE next: \(img.width)x\(img.height)")
-            }
-        }
-    }
-
-    /// Store both current and next atomically.
-    func store(current: CGImage, next: CGImage?, metadata: ImageMetadata? = nil, id: UUID? = nil) {
-        lock.withLock {
-            let wasEmpty = self._current == nil
-            self._current = current
-            self._currentMetadata = metadata
-            self.currentID = id ?? metadata?.id
-            self._next = next
-            self._generation &+= 1
-            self._storeCount += 1
-            print("📦 [AtomicBuffer] STORE both: current=\(current.width)x\(current.height), next=\(next != nil), gen=\(self._generation), wasEmpty=\(wasEmpty)")
-        }
-    }
-
     /// Load the current CGImage. Called from render loop.
     /// Returns nil if no image has been stored yet.
     /// Fully thread-safe, no MainActor required.
@@ -139,45 +107,13 @@ nonisolated final class AtomicImageBuffer: @unchecked Sendable {
         return image
     }
 
-    /// Load the next CGImage. Called for morph preloading.
-    func loadNext() -> CGImage? {
-        lock.withLock {
-            _next
-        }
-    }
-
-    /// Load both current and next atomically.
-    func load() -> (current: CGImage?, next: CGImage?) {
-        lock.withLock {
-            (_current, _next)
-        }
-    }
-
-    /// Get the current generation counter.
-    /// Useful for detecting if the image has changed since last check.
-    func generation() -> UInt64 {
-        lock.withLock {
-            _generation
-        }
-    }
-
-    /// Load current CGImage and generation atomically.
-    /// Allows render loop to detect changes efficiently.
-    func loadWithGeneration() -> (image: CGImage?, generation: UInt64) {
-        lock.withLock {
-            (_current, _generation)
-        }
-    }
-
     /// Clear all stored images.
     func clear() {
         lock.withLock {
             _current = nil
-            _next = nil
             _currentDepth = nil
             _currentMetadata = nil
             currentID = nil
-            _pendingQueue.removeAll()
             _generation &+= 1
             _depthGeneration &+= 1
         }
@@ -202,63 +138,6 @@ nonisolated final class AtomicImageBuffer: @unchecked Sendable {
         }
     }
 
-    /// Load the current depth map.
-    func loadDepth() -> CGImage? {
-        lock.withLock {
-            _currentDepth
-        }
-    }
-
-    // MARK: - Pending Queue (for visionOS timing parity)
-
-    /// Queue an image for later display. Used by visionOS generation pipeline.
-    /// Images wait here until advanceFromQueue() is called by the timer.
-    func queuePending(_ image: CGImage, metadata: ImageMetadata? = nil, id: UUID? = nil) {
-        let count = lock.withLock {
-            self._pendingQueue.append((image, metadata, id ?? metadata?.id))
-            return self._pendingQueue.count
-        }
-        LMLog.visual.info("📦 AtomicBuffer QUEUE: \(image.width)x\(image.height), pending=\(count)")
-    }
-
-    func takePending() -> (image: CGImage, metadata: ImageMetadata?, id: UUID?)? {
-        lock.withLock { _pendingQueue.isEmpty ? nil : _pendingQueue.removeFirst() }
-    }
-
-    /// Advance from pending queue to current display.
-    /// Called by the timer to maintain consistent timing across platforms.
-    /// Returns true if an image was advanced, false if queue was empty.
-    @discardableResult
-    func advanceFromQueue() -> Bool {
-        let result: (advanced: Bool, image: CGImage?, gen: UInt64, remaining: Int) = lock.withLock {
-            guard !self._pendingQueue.isEmpty else {
-                return (false, nil, 0, 0)
-            }
-
-            let (image, metadata, id) = self._pendingQueue.removeFirst()
-            self._current = image
-            self._currentMetadata = metadata
-            self.currentID = id ?? metadata?.id
-            self._generation &+= 1
-
-            return (true, image, self._generation, self._pendingQueue.count)
-        }
-
-        if result.advanced, let image = result.image {
-            LMLog.visual.info("📦 AtomicBuffer ADVANCE: \(image.width)x\(image.height), gen=\(result.gen), remaining=\(result.remaining)")
-        } else {
-            LMLog.visual.debug("📦 AtomicBuffer ADVANCE: queue empty, nothing to advance")
-        }
-        return result.advanced
-    }
-
-    /// Get the count of pending images in the queue.
-    func pendingCount() -> Int {
-        lock.withLock {
-            self._pendingQueue.count
-        }
-    }
-
     // MARK: - Metadata
 
     /// Metadata for the image currently displayed (nil for images without a sidecar).
@@ -266,9 +145,9 @@ nonisolated final class AtomicImageBuffer: @unchecked Sendable {
         lock.withLock { _currentMetadata }
     }
 
-    /// Current image, its metadata and the generation counter, read atomically.
-    func loadCurrentWithMetadata() -> (image: CGImage?, metadata: ImageMetadata?, generation: UInt64) {
-        lock.withLock { (_current, _currentMetadata, _generation) }
+    /// Current image and the generation counter, read atomically.
+    func loadCurrentWithGeneration() -> (image: CGImage?, generation: UInt64) {
+        lock.withLock { (_current, _generation) }
     }
 
     /// Check if there's a current image to display.

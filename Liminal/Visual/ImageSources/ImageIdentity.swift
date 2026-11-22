@@ -2,7 +2,7 @@
 //  ImageIdentity.swift
 //  Liminal
 //
-//  The same picture can reach API mode under more than one id (decision D48): Commons holds copies of
+//  The same picture can reach the pool under more than one id (decision D48): Commons holds copies of
 //  Library of Congress scans (titles end in "LCCN<n>"), of NASA frames ("AS08-14-2383") and of
 //  DOCUMERICA prints uploaded twice ("... - NARA - 544071"), and two museums can hold the same print.
 //  Two checks keep one copy:

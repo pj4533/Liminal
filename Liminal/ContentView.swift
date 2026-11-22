@@ -14,12 +14,11 @@ import AppKit
 // MARK: - Window Aspect Ratio Constraint
 
 /// Enforces window resizing so the visual area keeps the image aspect ratio
-/// (width = height * visualAspect + controlPanelWidth). Images are 3:2 since
-/// the Gemini 3.1 switch (docs/decisions/images.md D4).
+/// (width = height * visualAspect + controlPanelWidth). Pictures are shown 3:2.
 final class SquareVisualWindowDelegate: NSObject, NSWindowDelegate {
     /// Panel + 1 divider; 0 when -LiminalHideControls YES shows the picture alone (content-only recordings).
     static let controlPanelWidth: CGFloat = DebugLaunchOptions.hideControls ? 0 : ContentView.panelWidth + 1
-    static let visualAspect: CGFloat = ImageFraming.displayAspect  // 3:2, matches generated images
+    static let visualAspect: CGFloat = ImageFraming.displayAspect  // 3:2, the pictures' display crop
 
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
         // Calculate title bar height for this window
@@ -108,25 +107,9 @@ struct ContentView: View {
                 audioEngine.start()
                 LMLog.general.info("🧪 DEBUG: auto-play started")
             }
-            #if DEBUG
-            if let times = DebugLaunchOptions.imageSourceFlipAt {
-                let settings = self.settings
-                Task { @MainActor in
-                    let start = ContinuousClock.now
-                    for t in times {
-                        try? await Task.sleep(until: start + .milliseconds(Int(t * 1000)), clock: .continuous)
-                        let stored = UserDefaults.standard.object(forKey: ImageSource.defaultsKey)
-                        settings.imageSource = settings.imageSource == .ai ? .api : .ai
-                        UserDefaults.standard.set(stored, forKey: ImageSource.defaultsKey)
-                        LMLog.general.info("🧪 DEBUG: Images picker flipped to \(settings.imageSource.rawValue, privacy: .public)")
-                    }
-                }
-            }
-            #endif
         }
         // Settings -> AudioEngine: propagate changes immediately
         .onChange(of: settings.lofiOptions) { _, options in audioEngine.options = options }
-        .onChange(of: settings.imageSource) { _, source in visualEngine.setImageSource(source) }
         .onChange(of: audioEngine.isPlaybackReady, initial: true) { _, playing in
             if playing { visualEngine.start(music: audioEngine) } else { visualEngine.stop() }
         }
@@ -165,9 +148,8 @@ extension ContentView {
 
                     PlaybackStatus(isPlaying: audioEngine.isPlaybackReady,
                            isPreparing: audioEngine.isRunning && !audioEngine.isPlaybackReady,
-                                   cachedCount: visualEngine.totalCachedCount,
-                                   queuedCount: visualEngine.queuedCount,
-                                   source: visualEngine.imageSource)
+                                   poolCount: visualEngine.poolCount,
+                                   queuedCount: visualEngine.queuedCount)
                     RecordControls(audio: audioEngine)
                     if let status = visualEngine.statusMessage {
                         Label(status, systemImage: "info.circle")
@@ -197,8 +179,7 @@ extension ContentView {
                     .id("archive")
 
                 ControlSection(title: "Images & Storage", systemImage: "photo.stack") {
-                    ImageSourceControls(settings: settings)
-                    APIStatusRow(source: visualEngine.imageSource, apiStatus: visualEngine.sourceStatus)
+                    CollectionsStatusRow(status: visualEngine.sourceStatus)
                     ImageCreditLine(metadata: visualEngine.currentMetadata)
                     Button {
                         showingSettings = true
@@ -257,23 +238,6 @@ struct SettingsSheetView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     ControlSection(title: "Images", systemImage: "photo.stack") {
-                        // Gemini controls only matter in AI mode; API mode never generates.
-                        if settings.imageSource == .ai {
-                            ExplainedToggle(title: "Cache only",
-                                            explanation: "Show only images already saved on this Mac. No new images are generated, which is useful for testing effects without API costs.",
-                                            isOn: $settings.cacheOnly)
-                            if settings.cacheOnly && visualEngine.totalCachedCount == 0 {
-                                Label("No cached images, so nothing will display.",
-                                      systemImage: "exclamationmark.triangle.fill")
-                                    .font(.callout)
-                                    .foregroundStyle(.yellow)
-                                    .wrapping()
-                            }
-                            if !settings.cacheOnly {
-                                ImageLimitSection(settings: settings)
-                            }
-                        }
-                        Divider()
                         ClearImagesSection(visualEngine: visualEngine)
                     }
 
@@ -425,13 +389,6 @@ struct VisualDisplayView: View {
     /// Hue drift of the un-synced macOS look (turns per second).
     private static let baseHueRate: Float = 0.03
 
-    /// Tells the footage service which picture is on screen (the image whose crossfade just started,
-    /// or the first image).
-    private func noteDisplayedImage() {
-        // Atomic read: the two @Published mirrors (image, metadata) have no ordering guarantee.
-        ArchiveFootageService.shared.displayedImage(visualEngine.imageBuffer.loadCurrentWithMetadata().metadata)
-    }
-
     var body: some View {
         GeometryReader { geometry in
             ZStack {
@@ -459,11 +416,11 @@ struct VisualDisplayView: View {
                     // Status overlay (top corners), hidden with the controls (-LiminalHideControls).
                     if !DebugLaunchOptions.hideControls { VStack {
                         HStack {
-                            // Total cached images count
+                            // Saved pictures count
                             HStack(spacing: 4) {
                                 Image(systemName: "photo.stack")
                                     .font(.caption2)
-                                Text("\(visualEngine.totalCachedCount)")
+                                Text("\(visualEngine.poolCount)")
                                     .font(.caption2.monospacedDigit())
                             }
                             .padding(.horizontal, 8)
@@ -479,10 +436,10 @@ struct VisualDisplayView: View {
                 } else {
                     // Placeholder
                     VStack(spacing: 12) {
-                        if visualEngine.isGenerating || transitionManager.isMorphing {
+                        if transitionManager.isMorphing {
                             ProgressView()
                                 .scaleEffect(1.5)
-                            Text(transitionManager.isMorphing ? "Morphing..." : "Generating...")
+                            Text("Morphing...")
                                 .font(.caption)
                                 .foregroundStyle(.white.opacity(0.6))
                         } else {
@@ -517,22 +474,18 @@ struct VisualDisplayView: View {
                     let cut = started ? visualEngine.reveal.flatMap { r in
                         r.isDrop ? zoomStart + Float(r.downbeat - ArchiveFootageService.uptime()) : nil } : nil
                     sync.zoom.imageChanged(at: zoomStart, replacing: started, holdUntil: cut)
-                    noteDisplayedImage()
                 }
             } else {
-                // Image was cleared (e.g., cache cleared) - reset transition manager
+                // The pictures were cleared: reset the transition manager.
                 transitionManager.reset()
-                ArchiveFootageService.shared.displayedImage(nil)
             }
         }
-        // nextImage handler removed - preloading not needed with new morph architecture
         // Morphs trigger only when currentImage changes
         .onAppear {
             transitionManager.start()
             // Effects start when Play is pressed, not on appear
             if let image = visualEngine.currentImage {
                 transitionManager.setInitialImage(image)
-                noteDisplayedImage()
             }
         }
         .onChange(of: isPlaying) { _, playing in

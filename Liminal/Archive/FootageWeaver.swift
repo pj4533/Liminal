@@ -239,7 +239,7 @@ nonisolated struct FootageWeaver {
     }
 
     mutating func tick(elapsed t: Double, conditions c: Conditions, hasClip: Bool,
-                       matchingImageTransition: Bool = false, grid: LofiTakeGrid? = nil, ready: (Int) -> Bool) -> Decision {
+                       grid: LofiTakeGrid? = nil, ready: (Int) -> Bool) -> Decision {
         // A scheduled film edit is published in advance so the render loop can
         // crossfade on its exact clock even though the weaver ticks at 2 Hz.
         if let incoming = pieces.last, incoming.fill != nil, pieces.count == 2,
@@ -272,10 +272,7 @@ nonisolated struct FootageWeaver {
             let isReady = ready(last.slot)
             let since = holdSince ?? t
             let waited = t - since
-            // Give a speculative pair only a brief grace period. The current film
-            // stays visible and the next ordinary pick can take over if it fails.
-            let readyWait = matchingImageTransition ? min(timing.maxReadyWait, 1.5) : timing.maxReadyWait
-            if !isReady && waited >= readyWait {
+            if !isReady && waited >= timing.maxReadyWait {
                 pieces.removeLast()
                 pinnedRun = pinnedRunBeforePrepare
                 if var cur = pieces.last {
@@ -287,8 +284,7 @@ nonisolated struct FootageWeaver {
                 holdSince = nil
                 return .drop(slot: last.slot)
             }
-            let transitionHold = pieces.count == 2 && c.transitionRunning && !matchingImageTransition
-                && waited < timing.maxTransitionWait
+            let transitionHold = pieces.count == 2 && c.transitionRunning && waited < timing.maxTransitionWait
             if !isReady || transitionHold {
                 holdSince = since
                 postponeNewest(by: 1)

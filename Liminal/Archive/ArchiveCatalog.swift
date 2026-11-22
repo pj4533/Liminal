@@ -216,29 +216,6 @@ nonisolated enum ArchiveCatalog {
         return (edges + midpoints).max { $0.gap < $1.gap }?.start ?? 0
     }
 
-    /// Prefer the prepared start if it still fits. For a callback, look for a fresh
-    /// start within 24 seconds of the reference using stricter spacing where available.
-    static func pairedStart(referenceTime: Double, plannedStart: Double?, bounds: ClosedRange<Double>,
-                            shown: [Double], allowsCallback: Bool, rng: inout MusicRNG) -> Double? {
-        if let plannedStart, bounds.contains(plannedStart),
-           shown.allSatisfy({ abs($0 - plannedStart) >= 6 }) {
-            return plannedStart
-        }
-        guard allowsCallback, referenceTime.isFinite else { return nil }
-        let lo = max(bounds.lowerBound, referenceTime - 24)
-        let hi = min(bounds.upperBound, referenceTime + 24)
-        guard lo < hi else { return nil }
-        let ordered = shown.sorted()
-        for separation: Double in [20, 6] {
-            let ranges = freshRanges(in: lo...hi, shown: ordered, separation: separation)
-            if !ranges.isEmpty {
-                let weights = ranges.map { Float($0.upperBound - $0.lowerBound) }
-                return rng.range(ranges[rng.weighted(weights)])
-            }
-        }
-        return nil
-    }
-
     private static func freshRanges(in bounds: ClosedRange<Double>, shown: [Double],
                                     separation: Double) -> [ClosedRange<Double>] {
         var ranges: [ClosedRange<Double>] = []

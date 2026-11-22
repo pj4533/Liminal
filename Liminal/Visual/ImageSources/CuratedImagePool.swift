@@ -2,7 +2,7 @@
 //  CuratedImagePool.swift
 //  Liminal
 //
-//  The API-mode pictures on disk (docs/plans/image-api-mode.md 5, decision D39):
+//  The curated pictures on disk (docs/plans/image-api-mode.md 5, decision D39):
 //
 //    Application Support/Liminal/CuratedImageStore/
 //        <uuid>.jpg + <uuid>.json   an ImageStore with its own epoch key and no count cap
@@ -176,7 +176,7 @@ nonisolated final class CuratedImagePool: Sendable {
     init(root: URL, defaults: UserDefaults, directoryName: String = CuratedImagePool.directoryName,
          epochKey: String = CuratedImagePool.epochKey) {
         store = ImageStore(root: root, defaults: defaults, directoryName: directoryName, epochKey: epochKey,
-                           epoch: Self.epoch, maxImages: nil)
+                           epoch: Self.epoch)
         ledgerURL = store.directory.appendingPathComponent("ledger.json")
         tmpDirectory = store.directory.appendingPathComponent("tmp", isDirectory: true)
         var excluded = URLResourceValues()
@@ -430,7 +430,7 @@ nonisolated final class CuratedImagePool: Sendable {
         }, recorded: recorded)
     }
 
-    /// Deletes every picture and the ledger ("Clear images" in API mode).
+    /// Deletes every picture and the ledger ("Clear Curated Pictures").
     @discardableResult
     func clear() -> ImageStore.Usage {
         let removed = usage()

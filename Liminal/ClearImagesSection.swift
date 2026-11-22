@@ -2,7 +2,7 @@
 //  ClearImagesSection.swift
 //  Liminal
 //
-//  "Clear All Images" control shared by the macOS settings sheet and the
+//  "Clear Curated Pictures" control shared by the macOS settings sheet and the
 //  visionOS settings sheet. One path: VisualEngine.clearAllImages().
 //
 
@@ -25,15 +25,9 @@ struct ClearImagesSection: View {
         ByteCountFormatter.string(fromByteCount: usage?.bytes ?? 0, countStyle: .file)
     }
 
-    private var isAPI: Bool { visualEngine.imageSource == .api }
-
     private var usageLine: String {
-        guard let usage else { return isAPI ? "Counting saved pictures" : "Counting cached images" }
-        if isAPI {
-            return "\(usage.imageCount) curated \(usage.imageCount == 1 ? "picture" : "pictures") saved, \(sizeText)"
-        }
-        let noun = usage.imageCount == 1 ? "image" : "images"
-        return "\(usage.imageCount) cached \(noun), \(sizeText)"
+        guard let usage else { return "Counting saved pictures" }
+        return "\(usage.imageCount) curated \(usage.imageCount == 1 ? "picture" : "pictures") saved, \(sizeText)"
     }
 
     var body: some View {
@@ -45,7 +39,7 @@ struct ClearImagesSection: View {
                     if visualEngine.isClearing {
                         ProgressView().controlSize(.small)
                     } else {
-                        DestructiveLabel(title: isAPI ? "Clear Curated Pictures" : "Clear All Images", systemImage: "trash")
+                        DestructiveLabel(title: "Clear Curated Pictures", systemImage: "trash")
                     }
                 }
                 .frame(minHeight: ControlMetrics.buttonHeight)
@@ -56,12 +50,11 @@ struct ClearImagesSection: View {
             #endif
             .disabled(visualEngine.isClearing)
             .confirmationDialog(
-                isAPI ? "Delete all \(usage?.imageCount ?? 0) curated pictures (\(sizeText))?"
-                      : "Delete all \(usage?.imageCount ?? 0) images (\(sizeText))?",
+                "Delete all \(usage?.imageCount ?? 0) curated pictures (\(sizeText))?",
                 isPresented: $confirming,
                 titleVisibility: .visible
             ) {
-                Button(isAPI ? "Delete Curated Pictures" : "Delete All Images", role: .destructive) {
+                Button("Delete Curated Pictures", role: .destructive) {
                     Task {
                         await visualEngine.clearAllImages()
                         await refresh()
@@ -69,8 +62,7 @@ struct ClearImagesSection: View {
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text(isAPI ? "This cannot be undone. New pictures will be fetched from the collections."
-                           : "This cannot be undone. New images will be generated.")
+                Text("This cannot be undone. New pictures will be fetched from the collections.")
             }
 
             Text(usageLine)
@@ -78,8 +70,7 @@ struct ClearImagesSection: View {
                 .foregroundStyle(.secondary)
                 .wrapping()
 
-            Text(isAPI ? "Deletes the curated pictures saved on this device and their credits. AI images and settings are kept."
-                       : "Deletes every cached AI image and its metadata. Settings are kept.")
+            Text("Deletes the curated pictures saved on this device and their credits. Settings are kept.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .wrapping()
@@ -89,10 +80,7 @@ struct ClearImagesSection: View {
         .onReceive(NotificationCenter.default.publisher(for: .imageCacheCleared)) { _ in
             Task { await refresh() }
         }
-        .onChange(of: visualEngine.totalCachedCount) { _, _ in
-            Task { await refresh() }
-        }
-        .onChange(of: visualEngine.imageSource) { _, _ in
+        .onChange(of: visualEngine.poolCount) { _, _ in
             Task { await refresh() }
         }
     }

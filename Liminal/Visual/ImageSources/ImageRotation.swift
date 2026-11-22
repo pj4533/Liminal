@@ -2,7 +2,7 @@
 //  ImageRotation.swift
 //  Liminal
 //
-//  The two choices of API mode, kept apart (docs/plans/image-api-mode.md 4): which source the next
+//  The two choices of the curated feed, kept apart (docs/plans/image-api-mode.md 4): which source the next
 //  download comes from (ingest), and which stored picture is shown next (display). Pure and seeded.
 //
 

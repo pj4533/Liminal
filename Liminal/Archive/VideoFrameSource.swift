@@ -33,7 +33,6 @@ nonisolated final class VideoFrameSource: @unchecked Sendable {
         /// Host uptime at which the picture is at `start` (nil: when decoding begins). A piece is prepared
         /// ahead of its crossfade with an anchor in the near future or past, so picture and sound stay in step.
         var anchorUptime: Double? = nil
-        var pieceIndex: Int? = nil
     }
 
     let device: MTLDevice
@@ -61,15 +60,8 @@ nonisolated final class VideoFrameSource: @unchecked Sendable {
     private var loops = 0
     private var generation: UInt64 = 0
 
-    struct Reference: Sendable {
-        let url: URL
-        let mediaTime: Double
-        let pieceIndex: Int
-    }
-
     private struct Published {
         var texture: MTLTexture?
-        var reference: Reference?
         var ended = false
     }
     private let published = OSAllocatedUnfairLock(initialState: Published())
@@ -96,14 +88,6 @@ nonisolated final class VideoFrameSource: @unchecked Sendable {
 
     /// The newest finished stage texture (nil when nothing is playing). Lock read only.
     func latest() -> MTLTexture? { published.withLock { $0.texture } }
-
-    /// The raw source location of the latest frame that finished its video pass.
-    func reference(for pieceIndex: Int) -> Reference? {
-        published.withLock { frame in
-            guard !frame.ended, frame.reference?.pieceIndex == pieceIndex else { return nil }
-            return frame.reference
-        }
-    }
 
     /// True once the segment has played to its end (the service fades out early).
     var ended: Bool { published.withLock { $0.ended } }
@@ -226,7 +210,7 @@ nonisolated final class VideoFrameSource: @unchecked Sendable {
         if framesDecoded % 30 == 0, let textureCache { CVMetalTextureCacheFlush(textureCache, 0) }
         let dt = max(now - lastFrameTime, 1.0 / 60)
         lastFrameTime = now
-        encodePrepass(pb, segment: s, dt: dt, mediaTime: CMSampleBufferGetPresentationTimeStamp(frame).seconds)
+        encodePrepass(pb, segment: s, dt: dt)
         if framesDecoded == 1 || framesDecoded % 300 == 0 {
             LMLog.visual.info("📼 footage frame \(self.framesDecoded) media=\(String(format: "%.2f", CMSampleBufferGetPresentationTimeStamp(frame).seconds), privacy: .public)s \(CVPixelBufferGetWidth(pb))x\(CVPixelBufferGetHeight(pb))")
         }
@@ -263,7 +247,7 @@ nonisolated final class VideoFrameSource: @unchecked Sendable {
         var black: Float, white: Float, blend: Float, slowK: Float, motionK: Float, crop: Float, hasPrev: Float, pad: Float
     }
 
-    private func encodePrepass(_ pb: CVPixelBuffer, segment s: Segment, dt: Double, mediaTime: Double) {
+    private func encodePrepass(_ pb: CVPixelBuffer, segment s: Segment, dt: Double) {
         guard let pipeline, let (src, keepAlive) = sourceTexture(pb),
               let cb = commandQueue.makeCommandBuffer(), let enc = cb.makeComputeCommandEncoder() else { return }
         let prevIndex = (writeIndex + 2) % 3
@@ -281,13 +265,12 @@ nonisolated final class VideoFrameSource: @unchecked Sendable {
         enc.dispatchThreadgroups(groups, threadsPerThreadgroup: tg)
         enc.endEncoding()
         let gen = generation
-        let reference = s.pieceIndex.map { Reference(url: s.url, mediaTime: mediaTime, pieceIndex: $0) }
         cb.addCompletedHandler { [weak self] _ in
             _ = keepAlive   // the CVMetalTexture (and its pixel buffer) live until the GPU is done
             guard let self else { return }
             self.queue.async {
                 guard gen == self.generation, self.segment != nil else { return }
-                self.published.withLock { $0.texture = out; $0.reference = reference }
+                self.published.withLock { $0.texture = out }
             }
         }
         cb.commit()

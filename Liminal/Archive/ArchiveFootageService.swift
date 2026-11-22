@@ -65,17 +65,6 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
         var audio: AudioState?
         var pendingAudio: AudioState?
         var attemptedAudioPiece: Int?
-        var preparedImage: ImagePairing?
-        var displayedImage: ImagePairing?
-        var nextImageUptime: Double?
-        var pairedPieces: [UUID: Int] = [:]
-    }
-
-    private struct ImagePairing {
-        let imageID: UUID
-        let reference: ImageMetadata.ArchiveReference
-        let expiresAt: Double
-        let allowsCallback: Bool
     }
 
     /// A piece's sound (plan 4, A27).
@@ -211,7 +200,6 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
             s.audio = nil
             s.pendingAudio = nil
             s.attemptedAudioPiece = nil
-            s.pairedPieces.removeAll()
             return true
         }
         guard go else { return }
@@ -222,13 +210,7 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
     }
 
     func stop() {
-        shared.withLock {
-            $0.wantsRun = false
-            $0.preparedImage = nil
-            $0.displayedImage = nil
-            $0.nextImageUptime = nil
-            $0.pairedPieces.removeAll()
-        }
+        shared.withLock { $0.wantsRun = false }
         halt()
     }
 
@@ -415,131 +397,6 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
         }
     }
 
-    struct ImageReference: Sendable {
-        let jpeg: Data
-        let clipID: String
-        let sourceTime: Double
-        let width: Int
-        let height: Int
-        var plannedStart: Double? = nil
-        var cachedSince: Date? = nil
-    }
-
-    /// Timer hints are advisory. The render paths separately report actual reveals.
-    func expectNextImage(after interval: Double) {
-        shared.withLock {
-            $0.nextImageUptime = Self.uptime() + interval
-            $0.preparedImage = nil
-        }
-    }
-
-    func queuedImage(_ metadata: ImageMetadata?) {
-        shared.withLock { s in
-            guard let metadata, let reference = metadata.archiveReference,
-                  reference.plannedStart != nil, let due = s.nextImageUptime else {
-                s.preparedImage = nil
-                return
-            }
-            s.preparedImage = ImagePairing(imageID: metadata.id, reference: reference, expiresAt: due + 1,
-                                           allowsCallback: false)
-        }
-    }
-
-    func displayedImage(_ metadata: ImageMetadata?) {
-        shared.withLock { s in
-            let nextID = s.preparedImage?.imageID
-            s.pairedPieces = s.pairedPieces.filter { $0.key == metadata?.id || $0.key == nextID }
-            if let metadata, let reference = metadata.archiveReference {
-                s.displayedImage = ImagePairing(imageID: metadata.id, reference: reference,
-                                                expiresAt: Self.uptime() + 18, allowsCallback: true)
-            } else {
-                s.displayedImage = nil
-            }
-        }
-    }
-
-    private func imagePairingCandidates(now: Double, lead: Double) -> [ImagePairing] {
-        shared.withLock { s in
-            var candidates: [ImagePairing] = []
-            if let prepared = s.preparedImage, let due = s.nextImageUptime,
-               now >= due - lead, now <= prepared.expiresAt {
-                candidates.append(prepared)
-            }
-            if let displayed = s.displayedImage, now <= displayed.expiresAt { candidates.append(displayed) }
-            return candidates.filter { s.pairedPieces[$0.imageID] == nil }
-        }
-    }
-
-    var isPlayingForImageGeneration: Bool {
-        shared.withLock { $0.running && $0.enabled && !$0.disabling }
-    }
-
-    /// Take the most visible piece with a completed frame. Read its source time
-    /// from the decoder so the snapshot still matches under pre-roll and crossfades.
-    func imageReference() async -> ImageReference? {
-        guard isPlayingForImageGeneration else { return nil }
-        let clips = await availableClips()
-        let now = Self.uptime()
-        let (runStart, candidates) = shared.withLock { s -> (Double, [(FootagePiece, Float)]) in
-            guard s.running, s.enabled, !s.disabling else { return (s.startUptime, []) }
-            return (s.startUptime, s.pieces.map { ($0, $0.weight(at: now - s.startUptime)) })
-        }
-        if let planned = await plannedReference(clips: clips, avoiding: Set(candidates.map { $0.0.clipID })),
-           shared.withLock({ $0.running && $0.enabled && !$0.disabling && $0.startUptime == runStart }) {
-            return planned
-        }
-        for (piece, weight) in candidates.sorted(by: { $0.1 > $1.1 }) where weight > 0 {
-            guard !Task.isCancelled, sources.indices.contains(piece.slot),
-                  let frame = sources[piece.slot].reference(for: piece.index),
-                  var reference = await Self.captureReference(frame, clipID: piece.clipID) else { continue }
-            reference.cachedSince = clips.first(where: { $0.id == piece.clipID })?.added
-            let sameRun = shared.withLock { $0.running && $0.enabled && !$0.disabling && $0.startUptime == runStart }
-            return sameRun ? reference : nil
-        }
-        return nil
-    }
-
-    /// Plan a fresh excerpt from a different, already cached title. Nothing is
-    /// reserved or downloaded for this plan, so a slow request never holds playback.
-    private func plannedReference(clips: [ArchiveClip], avoiding: Set<String>) async -> ImageReference? {
-        guard !Task.isCancelled, isPlayingForImageGeneration else { return nil }
-        let available = clips.filter { $0.duration >= 36 && !avoiding.contains($0.id) }
-        let curated = available.filter { ArchiveSeedList.pinnedIDs.contains($0.id) }
-        var rng = MusicRNG(seed: UInt64.random(in: 0...UInt64.max))
-        guard let clip = FootageWeaver.chooseClip(curated.isEmpty ? available : curated, avoiding: [], rng: &rng) else {
-            return nil
-        }
-        let start = max(4, ArchiveCatalog.segmentStart(duration: clip.duration, length: min(52, clip.duration * 0.7),
-                                                       avoid: clip.shownStarts, rng: &rng))
-        guard clip.shownStarts.allSatisfy({ abs($0 - start) >= 6 }) else { return nil }
-        let frame = VideoFrameSource.Reference(url: url(for: clip), mediaTime: start + 2, pieceIndex: -1)
-        guard var reference = await Self.captureReference(frame, clipID: clip.id) else { return nil }
-        reference.plannedStart = start
-        reference.cachedSince = clip.added
-        return reference
-    }
-
-    static func captureReference(_ frame: VideoFrameSource.Reference, clipID: String) async -> ImageReference? {
-        guard frame.mediaTime.isFinite, frame.mediaTime >= 0 else { return nil }
-        let generator = AVAssetImageGenerator(asset: AVURLAsset(url: frame.url))
-        generator.appliesPreferredTrackTransform = true
-        generator.maximumSize = CGSize(width: 640, height: 640)
-        let tolerance = CMTime(seconds: 0.05, preferredTimescale: 600)
-        generator.requestedTimeToleranceBefore = tolerance
-        generator.requestedTimeToleranceAfter = tolerance
-        let time = CMTime(seconds: frame.mediaTime, preferredTimescale: 600)
-        guard let result = try? await generator.image(at: time), !Task.isCancelled else { return nil }
-        let image = result.image
-        // Deliberately omit the film's color. The generated palette comes entirely from the prompt.
-        guard let gray = CGContext(data: nil, width: image.width, height: image.height,
-                                   bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceGray(),
-                                   bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return nil }
-        gray.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
-        guard let grayscale = gray.makeImage(), let jpeg = ImageStore.encodeJPEG(grayscale, quality: 0.86) else { return nil }
-        return ImageReference(jpeg: jpeg, clipID: clipID, sourceTime: result.actualTime.seconds,
-                              width: image.width, height: image.height)
-    }
-
     // MARK: - Render loop API
 
     /// The footage for this frame, and the picture shown under it (for the tint). Cheap: one lock,
@@ -684,12 +541,8 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
                     endAudio(fade: max(0.035, end - elapsed), matching: a.token)
                 }
             }
-            let pairings = availableImagePairings(now: now, clips: clips, weaver: weaver)
-            if grid == nil, !pairings.isEmpty { weaver.hurry(at: elapsed) }
-            let incoming = weaver.current?.index
-            let matchesSwap = shared.withLock { s in incoming.map { s.pairedPieces.values.contains($0) } ?? false }
             let decision = weaver.tick(elapsed: elapsed, conditions: cond, hasClip: !clips.isEmpty,
-                                       matchingImageTransition: matchesSwap, grid: grid) { [sources] slot in
+                                       grid: grid) { [sources] slot in
                 sources[slot].latest() != nil
             }
             switch decision {
@@ -701,7 +554,6 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
             case .drop(let slot):
                 sources[slot].stop()
                 let dropped = weaver.pieceCount - 1
-                shared.withLock { $0.pairedPieces = $0.pairedPieces.filter { $0.value != dropped } }
                 let droppedToken = shared.withLock { s -> Int? in
                     if s.pendingAudio?.pieceIndex == dropped { s.pendingAudio = nil }
                     if s.attemptedAudioPiece == dropped { s.attemptedAudioPiece = nil }
@@ -710,7 +562,7 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
                 if let droppedToken { endAudio(fade: 2, matching: droppedToken) }
                 LMLog.visual.warning("📼 piece dropped slot=\(slot) (no frame); the current piece holds")
             case .prepare(let r):
-                _ = prepare(r, clips: clips, pairings: pairings, weaver: &weaver,
+                _ = prepare(r, clips: clips, weaver: &weaver,
                             rng: &rng, elapsed: elapsed, startUptime: start, followsFills: grid != nil)
             }
             let pieces = weaver.pieces
@@ -745,29 +597,8 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
         }
     }
 
-    private func availableImagePairings(now: Double, clips: [ArchiveClip], weaver: FootageWeaver)
-        -> [(ImagePairing, ArchiveClip)] {
-        let candidates = imagePairingCandidates(now: now, lead: weaver.timing.lead + 0.5)
-        guard !candidates.isEmpty else { return [] }
-        let eligible = weaver.eligibleClips(clips)
-        let onScreen = Set(weaver.pieces.map(\.clipID))
-        return candidates.compactMap { pairing in
-            let ref = pairing.reference
-            guard !onScreen.contains(ref.clipID),
-                  let clip = eligible.first(where: { $0.id == ref.clipID }),
-                  ref.cachedSince == nil || ref.cachedSince == clip.added,
-                  ref.sourceTime >= 0, ref.sourceTime < clip.duration else { return nil }
-            if !pairing.allowsCallback {
-                guard let start = ref.plannedStart, start >= 0, start < clip.duration,
-                      clip.shownStarts.allSatisfy({ abs($0 - start) >= 6 }) else { return nil }
-            }
-            return (pairing, clip)
-        }
-    }
-
-    /// Start the next decoder at the existing deadline. A pairing can pick its
-    /// source and start time, but a missing match uses the regular picker immediately.
-    private func prepare(_ r: FootageWeaver.Request, clips: [ArchiveClip], pairings: [(ImagePairing, ArchiveClip)],
+    /// Start the next decoder at the existing deadline.
+    private func prepare(_ r: FootageWeaver.Request, clips: [ArchiveClip],
                          weaver: inout FootageWeaver, rng: inout MusicRNG,
                          elapsed: Double, startUptime: Double, followsFills: Bool) -> FootagePiece? {
         let rate = Double(r.rate)
@@ -785,41 +616,22 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
             return (length, min(preroll + (length + margin) * rate, usable))
         }
 
-        var match: (imageID: UUID, clip: ArchiveClip, start: Double, kind: String)?
         let different = clips.filter { $0.id != weaver.current?.clipID }
         let pool = r.fill != nil && !different.isEmpty ? different : clips
         let sufficient = pool.filter { $0.duration >= (r.length + 2) * rate + preroll + 1 }
         let candidates = followsFills && !sufficient.isEmpty ? sufficient : pool
-        for (pairing, clip) in pairings where candidates.contains(where: { $0.id == clip.id }) {
-            let ref = pairing.reference
-            let plan = segment(for: clip)
-            let required = min(plan.sourceLength, preroll + (plan.length + 8) * rate)
-            let latest = clip.duration - required + preroll
-            guard latest >= preroll,
-                  let start = ArchiveCatalog.pairedStart(referenceTime: ref.sourceTime, plannedStart: ref.plannedStart,
-                                                         bounds: preroll...latest, shown: clip.shownStarts,
-                                                         allowsCallback: pairing.allowsCallback, rng: &rng) else { continue }
-            match = (pairing.imageID, clip, start, start == ref.plannedStart ? "planned" : "callback")
-            break
-        }
-
         let audioClips = r.sound ? candidates.filter(\.hasAudio) : []
         let eligible = audioClips.isEmpty ? candidates : audioClips
-        guard let clip = match?.clip ?? weaver.chooseClipForPlayback(eligible, rng: &rng) else {
+        guard let clip = weaver.chooseClipForPlayback(eligible, rng: &rng) else {
             weaver.prepareFailed()
             return nil
         }
         let plan = segment(for: clip)
-        let readStart = match.map { $0.start - preroll }
-            ?? ArchiveCatalog.segmentStart(duration: clip.duration, length: plan.sourceLength,
-                                           avoid: clip.shownStarts.map { $0 - preroll }, rng: &rng)
+        let readStart = ArchiveCatalog.segmentStart(duration: clip.duration, length: plan.sourceLength,
+                                                    avoid: clip.shownStarts.map { $0 - preroll }, rng: &rng)
         let segStart = readStart + preroll
         let sourceLength = min(plan.sourceLength, clip.duration - readStart)
         let length = plan.length
-        if let match {
-            shared.withLock { $0.pairedPieces[match.imageID] = r.index }
-            LMLog.visual.info("📼🖼️ \(match.kind, privacy: .public) pairing \(clip.id, privacy: .public) at \(segStart, format: .fixed(precision: 2), privacy: .public)s")
-        }
         var piece = r.piece(clipID: clip.id, segmentStart: segStart, length: length, sound: false)
         let wantsSound = r.sound && clip.hasAudio
         if wantsSound, ArchiveAudioCuePlan(piece: piece, clipDuration: clip.duration) != nil {
@@ -829,7 +641,7 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
         weaver.didPrepare(piece)
         sources[r.slot].play(.init(url: url, start: readStart, length: sourceLength, rate: r.rate,
                                    black: clip.black, white: clip.white,
-                                   anchorUptime: startUptime + r.start - preroll / rate, pieceIndex: r.index))
+                                   anchorUptime: startUptime + r.start - preroll / rate))
         let aspect = Float(clip.width) / Float(max(clip.height, 1))
         shared.withLock { $0.aspects[r.slot] = aspect }
         LMLog.visual.info("📼 piece #\(r.index) slot=\(r.slot) recipe=\(r.recipe.name, privacy: .public) id=\(clip.id, privacy: .public) title=\"\(clip.title, privacy: .public)\" segment=\(String(format: "%.1f", segStart), privacy: .public)s rate=\(String(format: "%.2f", r.rate), privacy: .public) warp=\(String(format: "%.2f", r.warp), privacy: .public) level=\(String(format: "%.2f", r.level), privacy: .public)+\(String(format: "%.2f", r.swell), privacy: .public) length=\(String(format: "%.1f", length), privacy: .public)s fade=\(String(format: "%.1f", r.fadeIn), privacy: .public)s sound=\(piece.sound) (wanted \(r.sound), audio=\(clip.hasAudio)) starts \(String(format: "%.1f", r.start), privacy: .public)s at \(String(format: "%.1f", elapsed), privacy: .public)s")

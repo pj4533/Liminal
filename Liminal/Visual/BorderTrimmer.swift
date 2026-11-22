@@ -2,11 +2,11 @@
 //  BorderTrimmer.swift
 //  Liminal
 //
-//  Safety net for film-scan style borders (docs/decisions/images.md D18).
+//  Safety net for scan-style white borders (mounts, paper margins).
 //  Samples a strip on each side; if all four strips are near-uniform and
 //  near-white while the interior is not, crops inward to the content.
-//  Near-black edges are deliberately left alone: flashNight, biolumNight and the
-//  macro falloff produce black surroundings on purpose, and cropping them would
+//  Near-black edges are deliberately left alone: night scenes and dark studio
+//  photographs have black surroundings on purpose, and cropping them would
 //  cut into real content.
 //
 

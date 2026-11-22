@@ -2,9 +2,9 @@
 //  ImageRepeatTests.swift
 //  LiminalTests
 //
-//  API mode never shows a picture twice while a new one is available (decision D48): the display
+//  A curated picture is never shown twice while a new one is available (decision D48): the display
 //  rotation, the first frame, catalogue aliases across providers and the perceptual fingerprint.
-//  No network, no Gemini.
+//  No network.
 //
 
 import Foundation
@@ -108,9 +108,9 @@ struct ImageIdentityTests {
         let nasa = ImageCandidate.stub(provider: "nasa", id: "as08-14-2383")
         let commons = ImageCandidate.stub(provider: "wikimedia", id: "File:NASA-Apollo8-Dec24-Earthrise AS08-14-2383HR.jpg")
         #expect(ImageIdentity.isKnown(commons, in: ImageIdentity.aliases(of: nasa)))
-        let gemini = ImageCandidate.stub(provider: "nasa", id: "s65-34661")
+        let mission = ImageCandidate.stub(provider: "nasa", id: "s65-34661")
         #expect(ImageIdentity.isKnown(ImageCandidate.stub(provider: "wikimedia", id: "File:S65-34661.jpg"),
-                                      in: ImageIdentity.aliases(of: gemini)))
+                                      in: ImageIdentity.aliases(of: mission)))
         #expect(ImageIdentity.aliases(providerID: "wikimedia", itemID: "File:Pillars PIA15985 big.png").contains("~nasa:PIA15985"))
     }
 
@@ -243,7 +243,7 @@ struct ImageRepeatPoolTests {
         pool.markShown(copy.id)
         let removed = pool.backfillFingerprints()
         #expect(removed == [copy.id])
-        #expect(pool.count == 2 && pool.store.imageCount() == 2)
+        #expect(pool.count == 2 && pool.store.entries().count == 2)
         #expect(pool.ledger.shown[original.id]?.lastShown == 3)
         #expect(pool.ledger.candidates[copy.source!.candidateKey]?.rejected?.hasPrefix("duplicate") == true)
         #expect(pool.backfillFingerprints().isEmpty)   // nothing left to do
