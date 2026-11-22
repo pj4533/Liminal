@@ -81,3 +81,92 @@ enum DialogueHookMetrics {
         }
     }
 }
+
+/// The 16-bar arc's measurements (D126 part 2, C-D11 and C-D12): onsets per bar and per section,
+/// gate lengths, where the line is stated and how much of it the outro covers.
+enum DialogueArcMetrics {
+    /// Sections by bar of the loop: intro 1-2, chop beat 3-6, build 7-8, breakdown 9-12, outro 13-16.
+    static let sections: [(name: String, bars: Range<Int>)] = [("intro", 0..<2), ("chopBeat", 2..<6), ("build", 6..<8),
+                                                                ("breakdown", 8..<12), ("outro", 12..<16)]
+
+    struct Metrics {
+        var onsets = [Int](repeating: 0, count: 16)
+        /// Mean onsets per bar of each section.
+        var density: [String: Double] = [:]
+        /// Onsets in the last two beats of bar 8.
+        var buildTail = 0
+        /// chopBeat and build hits with a gate of at most 2 and at most 1 sixteenth (one-shots count as long).
+        var gateAtMost2 = 0.0
+        var gateAtMost1 = 0.0
+        /// Median sounding length of sub-line hits, in sixteenths.
+        var medianSubLineSteps = 0.0
+        /// chopBeat hits on 8th positions.
+        var chopEighths = 0.0
+        /// The line's first statement: bar and step (nil: none in bars 1-2).
+        var introStep: Int?
+        /// Share of the line's frames the outro's hits cover, in source order.
+        var outroCoverage = 0.0
+        var outroInOrder = false
+        /// The restatement's (step, fragment, source start) hits.
+        var outroWalk: [[Int]] = []
+    }
+
+    static func metrics(_ events: [DialogueEvent], loop: Int, motif: DialogueMotif?, sixteenth: Double) -> Metrics {
+        var m = Metrics()
+        var placed: [(s: Int, e: DialogueEvent)] = []
+        for e in events {
+            let s = (e.block - loop * 4) * 64 + e.slot
+            guard s >= 0, s < 256 else { continue }
+            placed.append((s, e))
+            m.onsets[s / 16] += 1
+        }
+        placed.sort { $0.s < $1.s }
+        for sec in sections { m.density[sec.name] = Double(sec.bars.map { m.onsets[$0] }.reduce(0, +)) / Double(sec.bars.count) }
+        m.buildTail = placed.filter { $0.s >= 7 * 16 + 8 && $0.s < 8 * 16 }.count
+        let busy = placed.filter { (2 * 16..<8 * 16).contains($0.s) && $0.e.piece != 0 }
+        if !busy.isEmpty {
+            m.gateAtMost2 = Double(busy.filter { ($0.e.gateSteps ?? 99) <= 2 }.count) / Double(busy.count)
+            m.gateAtMost1 = Double(busy.filter { ($0.e.gateSteps ?? 99) <= 1 }.count) / Double(busy.count)
+        }
+        let chop = placed.filter { (2 * 16..<6 * 16).contains($0.s) }
+        if !chop.isEmpty { m.chopEighths = Double(chop.filter { $0.s % 2 == 0 }.count) / Double(chop.count) }
+        if let motif {
+            let lengths = placed.filter { $0.e.piece.map(motif.isSubLine) ?? false }
+                .map { ($0.e.drySeconds ?? motif.seconds($0.e.piece!)) / sixteenth }.sorted()
+            if !lengths.isEmpty { m.medianSubLineSteps = lengths[lengths.count / 2] }
+            let line = motif.line.frames
+            let outro = placed.filter { $0.s >= 12 * 16 }
+            var covered = IndexSet()
+            for (_, e) in outro {
+                if e.piece == 0 { covered.insert(integersIn: line) }
+                else if let r = e.sourceFrames { covered.insert(integersIn: max(line.lowerBound, r.lowerBound)..<min(line.upperBound, max(line.lowerBound, r.upperBound))) }
+            }
+            // The share of the line's speech (its pieces: the line's own lead-in before its first onset and
+            // the room tone each piece's onset trim leaves out are not speech) the outro plays.
+            var speech = IndexSet()
+            for p in motif.pieces { speech.insert(integersIn: motif.fragments[p].frames) }
+            m.outroCoverage = Double(covered.intersection(speech).count) / Double(max(1, speech.count))
+            // The restatement (bars 14 and 15, and bar 16 before its tag) walks the line in source order:
+            // at most two steps back (a stutter of the signature's second half before the whole signature,
+            // and one word repeated after the walk).
+            let walk = outro.filter { (13 * 16..<15 * 16 + 8).contains($0.s) && $0.e.cell != .repair }
+            let starts = walk.compactMap { $0.e.sourceFrames?.lowerBound ?? ($0.e.piece == 0 ? line.lowerBound : nil) }
+            m.outroWalk = walk.map { [$0.s, $0.e.piece ?? -1, $0.e.sourceFrames?.lowerBound ?? -1] }
+            m.outroInOrder = !starts.isEmpty && zip(starts, starts.dropFirst()).filter { $1 < $0 }.count <= 2
+        }
+        m.introStep = placed.first { $0.e.piece == 0 && $0.s < 32 }?.s
+        return m
+    }
+
+    /// A 16-row trigger grid with gates: `4/2` fragment 4 held two sixteenths, `4` a one-shot, `4/c` choked.
+    static func grid(_ events: [DialogueEvent], loop: Int) -> [String] {
+        var cells = [[String]](repeating: [String](repeating: ".", count: 16), count: 16)
+        for e in events {
+            let s = (e.block - loop * 4) * 64 + e.slot
+            guard s >= 0, s < 256 else { continue }
+            let gate = e.gateEnd == "choke" ? "/c" : (e.gateEnd == "natural" ? "" : e.gateSteps.map { "/\(Int($0))" } ?? "")
+            cells[s / 16][s % 16] = "\(e.piece ?? -1)\(gate)"
+        }
+        return cells.enumerated().map { b, row in "bar \(String(format: "%2d", b + 1)): " + row.map { $0.padding(toLength: 5, withPad: " ", startingAt: 0) }.joined() }
+    }
+}

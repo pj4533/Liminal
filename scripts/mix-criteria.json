@@ -76,9 +76,9 @@
      "cases": ["ref", "long", "fast", "same", "transcribe"], "requires": ["footage", "dialogue"], "bounds": {}},
     {"id": "C-D8", "description": "At least 90 percent of accents are 50 ms or more from a kick attack in grammar mode; at least 50 percent in motif mode, whose pieces sit on the beat and eighth grid by design (statements on downbeats), where the take's kicks also sit", "level": "warn",
      "cases": ["ref", "long", "fast", "same", "transcribe"], "requires": ["footage", "dialogue"], "bounds": {"fractionMin": 0.9, "motifFractionMin": 0.5}},
-    {"id": "C-D9", "description": "Motif mode: every bar of every 16-bar loop has a chop onset; the full line plays at most twice per loop; at least 60 percent of events are sub-line pieces; every loop has repeat-stutter and split-with-pause cells; occupancy 0.30 to 0.62", "level": "fail",
+    {"id": "C-D9", "description": "Motif mode: every bar of every 16-bar loop has a chop onset; the full line plays at most twice per loop; at least 60 percent of events are sub-line pieces; every loop has the arc's cells (intro, chop beat, build, breakdown, outro; D126 part 2); occupancy 0.30 to 0.62", "level": "fail",
      "cases": ["ref", "long", "fast", "same", "transcribe"], "requires": ["footage", "dialogue"],
-     "bounds": {"emptyBarsMax": 0, "fullLineMax": 2, "subLineShareMin": 0.6, "cellsEveryLoop": ["stutter", "splitPause"], "occupancy": [0.30, 0.62]}}
+     "bounds": {"emptyBarsMax": 0, "fullLineMax": 2, "subLineShareMin": 0.6, "cellsEveryLoop": ["intro", "chopBeat", "build", "breakdown", "outro"], "occupancy": [0.30, 0.62]}}
   ],
   "distortion": {
     "description": "Gates G1 to G7 of docs/plans/mix-distortion.md section 4.1, evaluated by scripts/distortion-report.py --strict on the reference capture (seed 2077, 72 BPM, 32 bars, private drums, film reel). path is a key path into that report; a gate whose metric is absent is skipped. G1 and G2 are engineering targets (no sourced audibility threshold for clipper reduction exists); each basis names the source it leans on. A change needs a dated reason in docs/decisions/music.md (D121).",

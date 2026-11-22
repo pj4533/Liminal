@@ -106,7 +106,9 @@ struct DialogueTightnessTests {
         // the step rather than cut into the word; half its loudest peak comes with the stressed one.
         // Those start on the step (their audible lead is checked with the rest) and are counted apart.
         let weakLead = all.filter { !$0.line && $0.weakLead }
-        #expect(Double(weakLead.count) <= 0.08 * Double(all.count), "\(weakLead.count) weak-lead hits of \(all.count)")
+        // The 16-bar arc (D126 part 2) walks the line's first words in source order in its build and outro,
+        // where weak lead words are commonest: 11 percent of hits against 4 percent with the hook form.
+        #expect(Double(weakLead.count) <= 0.12 * Double(all.count), "\(weakLead.count) weak-lead hits of \(all.count)")
         let pieces = all.filter { !$0.line }
         let errors = pieces.filter { !$0.weakLead }.map { abs($0.attackMs) }
         let median = DialogueTightnessMetrics.percentile(errors, 0.5), p95 = DialogueTightnessMetrics.percentile(errors, 0.95)

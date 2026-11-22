@@ -109,8 +109,9 @@ nonisolated enum DialogueMotifTuning {
     /// anchor to land on the snare"; verification pass of 21 November 2026).
     enum HookRole: String, Sendable { case s, r, t }
     static let hookTemplates: [[(HookRole, Int)]] = [
-        // Push: the signature twice, answered on the bar's last backbeat.
-        [(.s, 0), (.s, 3), (.r, 6), (.s, 16), (.s, 19), (.t, 22), (.r, 28)],
+        // Push: the signature twice, answered on the backbeat. On 8ths since D126 part 2 (the D125
+        // dotted push on steps 3 and 19 put a third of the chop beat's stabs on off-sixteenths).
+        [(.s, 0), (.s, 6), (.r, 12), (.s, 16), (.t, 22), (.r, 28)],
         // Offbeat: the call on the "and", the answer on the fourth beat.
         [(.s, 2), (.r, 8), (.s, 18), (.t, 24), (.r, 28)],
         // Snare answer.
@@ -156,6 +157,17 @@ nonisolated enum DialogueMotifTuning {
     static let weakLeadPeakShare: Float = 0.25
     /// A rendered pad's accent replaces the source one only within this many seconds of it.
     static let renderedAccentRange: ClosedRange<Double> = -0.050...0.020
+    /// The line's statement tries these sixteenths after its slot, never an off-sixteenth (D126 part 2:
+    /// the intro states the whole line on the downbeat so the listener understands it).
+    static let lineSteps = [0, 4, 8, 16]
+    /// Onsets per bar of the chop beat's groove cell (plan D126 section 3D: 5 to 7).
+    static let grooveHits = 6
+    /// A groove bar has at most this many onsets on consecutive sixteenths, and a beat without one.
+    static let grooveRun = 3
+    /// Variants per section of the 16-bar arc (intro, build, breakdown, outro; the groove is the hook template).
+    static let arcVariants = 3
+    /// Consecutive loops' arcs differ in at least this many of their five fields (C-D12).
+    static let arcChange = 2
     /// Coverage repair tries these sixteenths of an empty bar, in order.
     static let repairSlots = [8, 4, 12, 6, 10, 14, 2, 1, 3, 5, 7, 9, 11, 13, 15]
 }
@@ -222,6 +234,11 @@ nonisolated struct DialogueMotifCell: Sendable, Equatable {
         /// cut `gateLeadSeconds` before the step `gate` steps after its own, or at a syllable valley
         /// just before that. nil plays the piece to its natural end (a one-shot).
         var gate: Int? = nil
+        /// Exactly this many sixteenths after the previous placed hit (a stutter on consecutive
+        /// sixteenths, which chokes the hit before it).
+        var follow: Int? = nil
+        /// With `after`: only 8th positions (the outro's restatement walks the line on the 8ths).
+        var onEighths = false
     }
     let kind: DialogueCell
     let bar: Int
@@ -239,6 +256,50 @@ nonisolated struct DialogueMotifHook: Sendable, Equatable {
     let third: Int
     /// The hook cell's items (slots 0 to 31).
     let items: [DialogueMotifCell.Item]
+}
+
+/// The 16-bar arc of one loop (D126 part 2; user direction of 21 November 2026: "introduce the
+/// sample in its entirety and then start messing with it ... build up, breakdown, outro ... never the
+/// same twice"). Each field picks a section's variant; `groove` is the hook template the chop beat is built on.
+nonisolated struct DialogueArc: Sendable, Equatable {
+    var intro: Int
+    var groove: Int
+    var build: Int
+    var breakdown: Int
+    var outro: Int
+
+    func differences(_ o: DialogueArc) -> Int {
+        [intro != o.intro, groove != o.groove, build != o.build, breakdown != o.breakdown, outro != o.outro].filter { $0 }.count
+    }
+
+    var name: String { "I\(intro) G\(groove) B\(build) K\(breakdown) O\(outro)" }
+}
+
+/// The take's modal kick and snare steps over a 2-bar cell (0...31): the steps a confident hit
+/// lands on in at least half of the take's 2-bar pairs. The chop beat's stabs lock to them.
+nonisolated struct DialogueMotifDrums: Sendable, Equatable {
+    var kicks: [Int]
+    var snares: [Int]
+
+    /// A boom-bap pattern for plans without landmarks.
+    static let boomBap = DialogueMotifDrums(kicks: [0, 10, 16, 26], snares: [4, 12, 20, 28])
+
+    init(kicks: [Int], snares: [Int]) { self.kicks = kicks; self.snares = snares }
+
+    init(snapshot: DialogueTransportSnapshot) {
+        func modal(_ marks: [DialogueLandmark]) -> [Int] {
+            var counts = [Int](repeating: 0, count: 32)
+            for m in marks where m.confidence >= DialogueTuning.landmarkConfidence {
+                let step = Int((m.beat * 4).rounded())
+                counts[((step % 32) + 32) % 32] += 1
+            }
+            let pairs = max(1, Int(DialogueTransportSnapshot.takeBeats / 8))
+            return (0..<32).filter { counts[$0] * 2 >= pairs }
+        }
+        let snares = modal(snapshot.snares)
+        let kicks = modal(snapshot.kicks).filter { !snares.contains($0) }
+        self = kicks.isEmpty && snares.isEmpty ? .boomBap : DialogueMotifDrums(kicks: kicks, snares: snares)
+    }
 }
 
 /// The motif of one 16-bar loop.
@@ -269,6 +330,9 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
     /// is a prefix of its pad's render, so a stab and the word it was cut from share one level and
     /// the renderer runs the chain once per pad rather than once per gate length.
     var renders: [Int: AVAudioPCMBuffer] = [:]
+    /// The loop's arc, and the previous loop's (which a fresh line in the same loop must also avoid).
+    var arc: DialogueArc? = nil
+    var priorArc: DialogueArc? = nil
 
     var line: DialogueMotifFragment { fragments[0] }
     var sampleRate: Double { source.sampleRate }
@@ -302,19 +366,19 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
     /// this film offers none. Nil when there is no line at all.
     static func resolve(loop: Int, source: DialogueSource, analysis: DialogueAnalysis, hasBank: Bool,
                         transcript: DialogueTranscript?, memory: DialoguePerformanceMemory, seed: UInt64,
-                        beatDuration: Double) -> DialogueMotif? {
+                        beatDuration: Double, drums: DialogueMotifDrums = .boomBap) -> DialogueMotif? {
         if let current = memory.motif, current.loop == loop {
             if let transcript, !current.usedTranscript, current.source.contentID == source.contentID,
                current.source.sourceStart == source.sourceStart,
                let recut = make(loop: loop, source: source, analysis: analysis, transcript: transcript, memory: memory,
-                                seed: current.seed, beatDuration: beatDuration, line: current.lineUnit, recutOf: current) {
+                                seed: current.seed, beatDuration: beatDuration, line: current.lineUnit, recutOf: current, drums: drums) {
                 return recut
             }
             // A loop that only carried the previous line takes a fresh line from a later cue in the
             // same loop, so one film with no usable line cannot hold one line across two loops.
             if current.carried, current.source.contentID != source.contentID,
                let fresh = make(loop: loop, source: source, analysis: analysis, transcript: transcript, memory: memory,
-                                seed: seed, beatDuration: beatDuration) {
+                                seed: seed, beatDuration: beatDuration, drums: drums) {
                 return fresh
             }
             return current
@@ -326,11 +390,11 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
         // transcript every line is `acousticInterest`, so the order is the acoustic one of before.
         func own(_ minimum: Float) -> DialogueMotif? {
             make(loop: loop, source: source, analysis: analysis, transcript: transcript, memory: memory, seed: seed,
-                 beatDuration: beatDuration, minimumInterest: minimum)
+                 beatDuration: beatDuration, minimumInterest: minimum, drums: drums)
         }
         func striking() -> DialogueMotif? {
             fromCrate(loop: loop, excluding: source.contentID, memory: memory, seed: seed, beatDuration: beatDuration,
-                      minimumInterest: DialogueMotifTuning.strikingInterest, transcribedOnly: true)
+                      minimumInterest: DialogueMotifTuning.strikingInterest, transcribedOnly: true, drums: drums)
         }
         if transcript == nil, let dug = striking() { return dug }
         if let fresh = own(DialogueMotifTuning.plainInterest) { return fresh }
@@ -339,27 +403,28 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
         if let fresh = own(0) { return fresh }
         // This film has no usable line (music under the narration, say): dig a fresh line from the
         // crate of recent films, newest first, before ever repeating the last loop's line.
-        if let dug = fromCrate(loop: loop, excluding: source.contentID, memory: memory, seed: seed, beatDuration: beatDuration) {
+        if let dug = fromCrate(loop: loop, excluding: source.contentID, memory: memory, seed: seed, beatDuration: beatDuration, drums: drums) {
             return dug
         }
         // Every line of this film and the crate has been played (after many hours): reuse the line
         // played longest ago rather than carrying the last loop's line.
         if let recycled = make(loop: loop, source: source, analysis: analysis, transcript: transcript, memory: memory,
-                               seed: seed, beatDuration: beatDuration, recycle: true) {
+                               seed: seed, beatDuration: beatDuration, recycle: true, drums: drums) {
             return recycled
         }
-        if let previous = memory.motif { return previous.carried(to: loop, seed: seed, memory: memory) }
+        if let previous = memory.motif { return previous.carried(to: loop, seed: seed, memory: memory, drums: drums) }
         return nil
     }
 
     /// A fresh line from the crate of recent films (newest first), never this cue's own film.
     static func fromCrate(loop: Int, excluding contentID: String, memory: DialoguePerformanceMemory, seed: UInt64,
-                          beatDuration: Double, minimumInterest: Float = 0, transcribedOnly: Bool = false) -> DialogueMotif? {
+                          beatDuration: Double, minimumInterest: Float = 0, transcribedOnly: Bool = false,
+                          drums: DialogueMotifDrums = .boomBap) -> DialogueMotif? {
         for entry in memory.motifCrate.reversed() where entry.source.contentID != contentID {
             if transcribedOnly, entry.transcript == nil { continue }
             if let dug = make(loop: loop, source: entry.source, analysis: entry.analysis, transcript: entry.transcript,
                               memory: memory, seed: seed, beatDuration: beatDuration, minimumInterest: minimumInterest,
-                              transcribedOnly: transcribedOnly) {
+                              transcribedOnly: transcribedOnly, drums: drums) {
                 return dug
             }
         }
@@ -367,22 +432,25 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
     }
 
     /// The same line and pieces, arranged for another loop on another hook template.
-    func carried(to loop: Int, seed: UInt64, memory: DialoguePerformanceMemory) -> DialogueMotif {
+    func carried(to loop: Int, seed: UInt64, memory: DialoguePerformanceMemory, drums: DialogueMotifDrums = .boomBap) -> DialogueMotif {
         let loopSeed = seed ^ UInt64(bitPattern: Int64(loop)) &* 0x9E37_79B9
+        // The same line again: the groove changes (the template) and two more sections, so 16 bars
+        // never repeat exactly (C-D1, C-D12).
         let arranged = Self.arrange(fragments: fragments, pieces: pieces, halves: halves, reorderAllowed: reorderAllowed,
                                     seed: loopSeed, lineSeconds: seconds(0), sampleRate: sampleRate,
-                                    hookSeed: memory.cycleSeed ?? seed, loop: loop, avoidTemplate: hook?.template)
+                                    hookSeed: memory.cycleSeed ?? seed, loop: loop, avoidTemplate: hook?.template,
+                                    drums: drums, avoidArc: arc, carried: true)
         return DialogueMotif(loop: loop, source: source, analysis: analysis, lineUnit: lineUnit, lineKey: lineKey,
                              fragments: fragments, pieces: pieces, halves: halves, bank: bank, usedTranscript: usedTranscript,
                              reorderAllowed: reorderAllowed, cells: arranged.cells, carried: true, seed: loopSeed, interest: interest,
-                             hook: arranged.hook, renders: renders)
+                             hook: arranged.hook, renders: renders, arc: arranged.arc, priorArc: arc)
     }
 
     /// Chooses the best line (or `line` when given), cuts it into pieces and arranges the loop.
     static func make(loop: Int, source: DialogueSource, analysis: DialogueAnalysis, transcript: DialogueTranscript?,
                      memory: DialoguePerformanceMemory, seed: UInt64, beatDuration: Double, line wanted: Int? = nil,
                      recycle: Bool = false, minimumInterest: Float = 0, transcribedOnly: Bool = false,
-                     recutOf previous: DialogueMotif? = nil) -> DialogueMotif? {
+                     recutOf previous: DialogueMotif? = nil, drums: DialogueMotifDrums = .boomBap) -> DialogueMotif? {
         guard let f = analysis.features, !analysis.units.isEmpty, analysis.contentID == source.contentID,
               let samples = source.buffer.floatChannelData?[0] else { return nil }
         var units = analysis.units
@@ -468,9 +536,13 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
         // A transcript re-cut keeps the hook: the new signature and response are the pieces that
         // overlap the old ones most.
         let anchors = previous?.hook.map { [previous!.fragments[$0.signature].frames, previous!.fragments[$0.response].frames] } ?? []
+        // A re-cut keeps the arc; a new line avoids the previous loop's arc (or, replacing a carried
+        // line inside its loop, the arc that one avoided).
+        let prior = previous?.priorArc ?? memory.motif.flatMap { $0.loop == loop ? $0.priorArc : $0.arc }
         let arranged = arrange(fragments: fragments, pieces: cut.pieces, halves: cut.halves, reorderAllowed: reorderAllowed,
                                seed: loopSeed, lineSeconds: Double(line.frames.count) / rate, sampleRate: rate,
-                               hookSeed: memory.cycleSeed ?? seed, loop: loop, anchors: anchors)
+                               hookSeed: memory.cycleSeed ?? seed, loop: loop, anchors: anchors, drums: drums,
+                               keepArc: previous?.arc, avoidArc: prior)
         // The arranged pieces (and the line) take their accents from their renders; a piece only coverage
         // repair may pick keeps its source accent and renders when played.
         let used = Set(arranged.cells.flatMap { $0.items.map(\.fragment) } + [0])
@@ -481,7 +553,8 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
         return DialogueMotif(loop: loop, source: source, analysis: analysis, lineUnit: line.id, lineKey: key,
                              fragments: fragments, pieces: cut.pieces, halves: cut.halves, bank: bank,
                              usedTranscript: lineWords.count >= 2, reorderAllowed: reorderAllowed, cells: arranged.cells,
-                             carried: false, seed: loopSeed, interest: lineInterest, hook: arranged.hook, renders: rendered.renders)
+                             carried: false, seed: loopSeed, interest: lineInterest, hook: arranged.hook, renders: rendered.renders,
+                             arc: arranged.arc, priorArc: prior)
     }
 
     /// A line's words for the said-once rule: lowercased letters, digits and spaces.
@@ -631,6 +704,8 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
             },
             "cells": cells.map { ["kind": $0.kind.rawValue, "bar": $0.bar, "bars": $0.bars, "variant": $0.variant,
                                   "items": $0.items.map { [$0.fragment, $0.slot] }] as [String: Any] },
+            "arc": arc.map { ["intro": $0.intro, "groove": $0.groove, "build": $0.build, "breakdown": $0.breakdown,
+                              "outro": $0.outro, "name": $0.name] as [String: Any] } as Any,
             "hook": hook.map { ["template": $0.template, "signature": $0.signature, "response": $0.response, "third": $0.third,
                                 "items": $0.items.map { [$0.fragment, $0.slot] }] as [String: Any] } as Any,
         ]
@@ -644,6 +719,7 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
     func hookSummary(events: [DialogueEvent]) -> String {
         func quote(_ id: Int) -> String { "\"\(fragments.indices.contains(id) ? (fragments[id].text ?? "#\(id)") : "#\(id)")\"" }
         var out = "interest=\(String(format: "%.2f", interest)) line=\"\(text ?? "-")\""
+        if let arc { out += " arc=\(arc.name.replacingOccurrences(of: " ", with: ","))" }
         if let hook {
             out += " template=\(hook.template) S=\(quote(hook.signature)) R=\(quote(hook.response)) T=\(quote(hook.third))"
         }
@@ -1039,13 +1115,117 @@ nonisolated extension DialogueMotif {
         return h[1]
     }
 
-    /// The loop's eight 2-bar cells around one hook cell H (D125): the statement (the full line, then
-    /// H's second bar), H, H with an echo throw, a stutter fill into the halfway drop, H (or the second
-    /// full line), a split-with-pause drop-out, the return and the turnaround. Only the template
-    /// (rotating every `hookLoops` loops from `hookSeed`) and the breakdown cell are seeded.
+    /// The loop's arc (D126 part 2): seeded from the loop seed; a re-cut keeps `keep`. It differs
+    /// from `avoid` (the previous loop's) in at least `arcChange` fields; a carried loop (the same
+    /// line again) changes the groove and `arcChange` more.
+    static func chooseArc(seed: UInt64, groove: Int, keep: DialogueArc?, avoid: DialogueArc?, carried: Bool) -> DialogueArc {
+        if let keep { return DialogueArc(intro: keep.intro, groove: groove, build: keep.build, breakdown: keep.breakdown, outro: keep.outro) }
+        var rng = MusicRNG(seed: seed ^ 0xA2C0_0126)
+        let n = DialogueMotifTuning.arcVariants
+        var arc = DialogueArc(intro: rng.int(0...(n - 1)), groove: groove, build: rng.int(0...(n - 1)),
+                              breakdown: rng.int(0...(n - 1)), outro: rng.int(0...(n - 1)))
+        guard let avoid else { return arc }
+        let needed = DialogueMotifTuning.arcChange + (carried ? 1 : 0)
+        // Change the fields still equal to the previous arc, in a seeded order, until enough differ.
+        var order: [WritableKeyPath<DialogueArc, Int>] = [\.intro, \.build, \.breakdown, \.outro]
+        for k in stride(from: order.count - 1, to: 0, by: -1) { order.swapAt(k, rng.int(0...k)) }
+        for path in order where arc.differences(avoid) < needed && arc[keyPath: path] == avoid[keyPath: path] {
+            arc[keyPath: path] = (arc[keyPath: path] + 1 + rng.int(0...(n - 2))) % n
+        }
+        return arc
+    }
+
+    /// The chop beat's 2-bar groove cell (D126 part 2): the hook template's skeleton (S, R and T on
+    /// fixed steps, R answering on a snare step), filled to `grooveHits` onsets per bar with short
+    /// stabs locked to the drums: free kick steps take the signature's head at 1/16, the 8th after a
+    /// skeleton hit repeats it at 1/16, free snare steps take the response at 1/8. At most `grooveRun`
+    /// onsets on consecutive sixteenths and a beat without an onset in every bar. Skeleton hits hold
+    /// 1/8 (less when the next hit is nearer), one hit per cell holds three sixteenths (a word and a
+    /// syllable) and the cell's last response plays out.
+    static func groove(template: [(DialogueMotifTuning.HookRole, Int)], s: Int, r: Int, t: Int, sa: Int, ra: Int,
+                       drums: DialogueMotifDrums, reorderAllowed: Bool, fragments: [DialogueMotifFragment]) -> [DialogueMotifCell.Item] {
+        typealias Item = DialogueMotifCell.Item
+        var hits: [Int: (fragment: Int, gate: Int?, skeleton: Bool)] = [:]
+        for (role, step) in template { hits[step] = (role == .s ? s : (role == .r ? r : t), nil, true) }
+        func fits(_ step: Int) -> Bool {
+            guard hits[step] == nil, step >= 0, step < 32 else { return false }
+            let bar = (step / 16) * 16
+            var on = Set(hits.keys.filter { $0 >= bar && $0 < bar + 16 })
+            on.insert(step)
+            // No more than `grooveRun` consecutive sixteenths.
+            var run = 0
+            for k in bar..<(bar + 16) {
+                run = on.contains(k) ? run + 1 : 0
+                if run > DialogueMotifTuning.grooveRun { return false }
+            }
+            // A beat (four steps) without an onset somewhere in the bar.
+            return (bar...(bar + 12)).contains { a in (a..<(a + 4)).allSatisfy { !on.contains($0) } }
+        }
+        func count(_ bar: Int) -> Int { hits.keys.filter { $0 / 16 == bar }.count }
+        func head(_ f: Int) -> Int { f == s ? sa : (f == r ? ra : f) }
+        // A line that may not be reordered keeps source order inside each bar: before the bar's first
+        // signature only the signature's head plays.
+        func answer(_ step: Int) -> Int {
+            if reorderAllowed || fragments[r].order <= fragments[s].order { return r }
+            let bar = (step / 16) * 16
+            return hits.contains { $0.key >= bar && $0.key < step && $0.value.fragment == s } ? r : sa
+        }
+        for bar in 0..<2 {
+            let target = DialogueMotifTuning.grooveHits
+            let lo = bar * 16, hi = lo + 16
+            for step in drums.kicks where step >= lo && step < hi && count(bar) < target && fits(step) {
+                hits[step] = (sa, 1, false)
+            }
+            for step in hits.filter({ $0.value.skeleton && $0.key >= lo && $0.key < hi }).keys.sorted()
+            where count(bar) < target && fits(step + 2) && step + 2 < hi {
+                hits[step + 2] = (head(hits[step]!.fragment), 1, false)
+            }
+            for step in drums.snares where step >= lo && step < hi && count(bar) < target && fits(step) {
+                hits[step] = (answer(step), 2, false)
+            }
+            for step in stride(from: lo, to: hi, by: 2) where count(bar) < target - 1 && fits(step) {
+                hits[step] = (sa, 1, false)
+            }
+        }
+        let steps = hits.keys.sorted()
+        let lastResponse = steps.last { hits[$0]!.fragment == r && hits[$0]!.skeleton }
+        var held = false
+        return steps.enumerated().map { k, step in
+            let h = hits[step]!
+            let space = (k + 1 < steps.count ? steps[k + 1] : 32) - step
+            var gate: Int?
+            var fragment = h.fragment
+            if let g = h.gate {
+                gate = min(g, max(1, space))
+            } else if step == lastResponse {
+                gate = nil
+            } else if space <= 2 {
+                gate = max(1, space)
+            } else if !held, space >= 3, h.fragment == s {
+                // The cell's one "word and a syllable": the signature held three sixteenths.
+                gate = 3
+                held = true
+                fragment = s
+            } else {
+                gate = h.fragment == r ? min(space, 4) : 2
+            }
+            return Item(fragment: fragment, slot: step, fixed: true, gate: gate)
+        }
+    }
+
+    /// The loop's 16-bar arc (D126 part 2; user direction of 21 November 2026), cells on the
+    /// score's sections: the intro states the whole line on bar 1's downbeat with a seeded tag in bar
+    /// 2; the chop beat plays the 2-bar groove cell twice (bars 3-6, the second with a new last
+    /// beat); the build doubles the density into the halfway drop (bars 7-8); the breakdown holds one
+    /// or two words a bar with echo throws (bars 9-12, a reversed pickup into bar 13); the outro keeps
+    /// the return's one quiet piece in bar 13, restates the line in bars 14-15 with some parts
+    /// repeated, and tags bar 16. Each section has seeded variants (`DialogueArc`), so no two
+    /// consecutive loops play the same arc.
     static func arrange(fragments: [DialogueMotifFragment], pieces: [Int], halves: [Int: [Int]], reorderAllowed: Bool,
                         seed: UInt64, lineSeconds: Double, sampleRate: Double, hookSeed: UInt64, loop: Int,
-                        anchors: [Range<Int>] = [], avoidTemplate: Int? = nil) -> (cells: [DialogueMotifCell], hook: DialogueMotifHook) {
+                        anchors: [Range<Int>] = [], avoidTemplate: Int? = nil, drums: DialogueMotifDrums = .boomBap,
+                        keepArc: DialogueArc? = nil, avoidArc: DialogueArc? = nil,
+                        carried: Bool = false) -> (cells: [DialogueMotifCell], hook: DialogueMotifHook, arc: DialogueArc) {
         var rng = MusicRNG(seed: seed ^ 0x4D07_1F00)
         func seconds(_ id: Int) -> Double { Double(fragments[id].frames.count) / sampleRate }
         let roles = hookRoles(fragments: fragments, pieces: pieces, halves: halves, reorderAllowed: reorderAllowed,
@@ -1059,8 +1239,19 @@ nonisolated extension DialogueMotif {
         let pair = zip(pieces, pieces.dropFirst()).min { seconds($0.0) + seconds($0.1) < seconds($1.0) + seconds($1.1) }
         let (splitA, splitB) = split.flatMap { halves[$0] }.map { ($0[0], $0[1]) } ?? pair.map { ($0.0, $0.1) } ?? (s, r)
         typealias Item = DialogueMotifCell.Item
-        func at(_ f: Int, _ slot: Int, _ e: Item.Effect = .none, gain: Float = 0) -> Item {
-            Item(fragment: f, slot: slot, gainDB: gain, effect: e, fixed: true)
+        func at(_ f: Int, _ slot: Int, _ e: Item.Effect = .none, gain: Float = 0, gate: Int? = nil) -> Item {
+            Item(fragment: f, slot: slot, gainDB: gain, effect: e, fixed: true, gate: gate)
+        }
+        /// An unfixed hit: it may move one 8th later when its step is taken or too early.
+        func near(_ f: Int, _ slot: Int, _ e: Item.Effect = .none, gate: Int? = nil) -> Item {
+            Item(fragment: f, slot: slot, effect: e, gate: gate)
+        }
+        /// The next 8th after the previous hit ends, played out.
+        func chain(_ f: Int, from slot: Int, _ e: Item.Effect = .none, gate: Int? = nil) -> Item {
+            Item(fragment: f, slot: slot, after: 0, effect: e, gate: gate, onEighths: true)
+        }
+        func follow(_ f: Int, _ steps: Int = 1, gate: Int? = 1) -> Item {
+            Item(fragment: f, slot: 0, fixed: true, gate: gate, follow: steps)
         }
 
         var mix = MusicRNG(seed: hookSeed ^ 0x600C_ED00)
@@ -1069,49 +1260,108 @@ nonisolated extension DialogueMotif {
         // A carried loop (the same line again: the films have no fresh one) never keeps the trigger
         // rhythm too, or 16 bars repeat exactly (C-D1; the `same` matrix case read 0.04 difference).
         if template == avoidTemplate { template = (template + 1) % DialogueMotifTuning.hookTemplates.count }
-        let vocabulary: Set<Int> = [s, r, t, sa, ra]
-        let hook = gated(DialogueMotifTuning.hookTemplates[template].map { role, step in
-            at(role == .s ? s : (role == .r ? r : t), step)
-        }, cellSteps: 32, response: r, vocabulary: vocabulary)
-        let barA = hook.filter { $0.slot < 16 }, barB = hook.filter { $0.slot >= 16 }
-        var echoed = hook
-        echoed[echoed.count - 1].effect = .echoThrow
-        let sHome = barA.first { $0.fragment == s }?.slot ?? 0
-        let rHome = barB.first { $0.fragment == r }?.slot ?? 24
+        let arc = chooseArc(seed: seed, groove: template, keep: keepArc, avoid: avoidArc, carried: carried)
+        let g = groove(template: DialogueMotifTuning.hookTemplates[template], s: s, r: r, t: t, sa: sa, ra: ra, drums: drums,
+                       reorderAllowed: reorderAllowed, fragments: fragments)
+        let barA = g.filter { $0.slot < 16 }
+        let last = pieces.last ?? r
         // The return's short piece carries a real word when the line has a short one (it stays short:
         // at -3 dB a long piece reads as a quiet chop, C-B8's loudness spread).
         let shorts = [sa, s, splitB, ra] + pieces
         let worded = shorts.filter { fragments[$0].weight > 0 && seconds($0) <= DialogueMotifTuning.returnPieceSeconds }
         let short = (worded.isEmpty ? shorts : worded).min { seconds($0) < seconds($1) } ?? s
 
-        let statement = [Item(fragment: 0, slot: 0)] + barB
-        let secondStatement = rng.chance(DialogueMotifTuning.secondStatementChance)
-        let cells: [(DialogueCell, [Item])] = [
-            // The reveal: the full line, then the hook's answer bar.
-            (.statement, statement),
-            (.hook, hook),
-            (.hook, echoed),
-            // Bar 8, the phrase end into the halfway drop: the signature stuttered.
-            (.stutter, barA + [at(s, 16), at(sa, 18), at(sa, 20), at(r, 24, .echoThrow)]),
-            secondStatement ? (.statement, statement) : (.hook, hook),
-            // The drop-out: the signature once, the split piece with a pause, the response thrown.
-            (.splitPause, [at(s, sHome), at(splitA, 8), at(splitB, 12, .echoThrow), at(r, rHome, .echoThrow)]),
-            // The return's first bar carries one short, lower piece late in the bar (the lead's hook
-            // opens it); the second bar is the hook's answer.
-            (.returnOpen, [at(short, 12, gain: DialogueMotifTuning.returnPieceDB)] + barB),
-            // The turnaround: the hook's call, a reversed pickup into bar 16, the signature's head
-            // three times, the response, and the signature landing on the next loop's downbeat.
-            (.turnaround, barA + [Item(fragment: ra, slot: 16, effect: .reversed, fixed: true),
-                                  Item(fragment: sa, slot: 16), Item(fragment: sa, slot: 16, after: 0), Item(fragment: sa, slot: 16, after: 0),
-                                  at(r, 24), Item(fragment: s, slot: 32, landing: true)]),
-        ]
-        let arranged = cells.enumerated().map { k, c in
-            // The drop-out keeps its words whole (a word, a pause); every other cell holds its hook
-            // pieces for their gates (D126).
-            DialogueMotifCell(kind: c.0, bar: 2 * k, bars: 2, variant: template,
-                              items: c.0 == .splitPause ? c.1 : gated(c.1, cellSteps: 32, response: r, vocabulary: vocabulary))
+        // Intro (bars 1-2): the whole line on the downbeat, then a tag on bar 2's backbeat.
+        let tag: [Item]
+        switch arc.intro {
+        case 0: tag = [near(last, 28, .echoThrow)]
+        case 1: tag = [near(s, 24, gate: 2), near(s, 28, gate: 2)]
+        default: tag = [near(r, 28, .filtered)]
         }
-        return (arranged, DialogueMotifHook(template: template, signature: s, response: r, third: t, items: hook))
+        let intro = [Item(fragment: 0, slot: 0)] + tag
+
+        // Chop beat (bars 3-6): the groove twice; the second time its last beat turns.
+        let turn: [Item]
+        switch rng.int(0...2) {
+        // The backbeat answer stays on step 28.
+        case 0: turn = [at(r, 28, gate: 1), at(ra, 29, gate: 1), at(ra, 30, gate: 2)]
+        case 1: turn = [at(r, 28, .echoThrow, gate: 2)]
+        default: turn = [at(r, 28, gate: 2), at(sa, 30, gate: 2)]
+        }
+        let second = g.filter { $0.slot < 28 } + turn
+
+        // Build (bars 7-8): bar 7 is the groove's call with one more stab, bar 8 doubles it into the drop.
+        var seven = barA
+        if let free = stride(from: 0, to: 16, by: 2).first(where: { k in !seven.contains { abs($0.slot - k) <= 1 } }) {
+            seven.append(at(sa, free, gate: 1))
+            seven.sort { $0.slot < $1.slot }
+        }
+        let eight: [Item]
+        switch arc.build {
+        case 0:
+            // Halving: a quarter, two 8ths, then 16ths, answered on the last 8th.
+            eight = [at(s, 16, gate: 4), at(s, 20, gate: 2), at(s, 22, gate: 2)] + (24...29).map { at(sa, $0, gate: 1) } + [at(r, 30, gate: 1)]
+        case 1:
+            // Ladder: the line's first words, one more each beat, in source order.
+            let w = (0..<3).map { pieces[min($0, pieces.count - 1)] }
+            eight = [at(w[0], 16, gate: 2), at(w[0], 20, gate: 1), at(w[1], 22, gate: 2),
+                     at(w[0], 24, gate: 1), at(w[1], 25, gate: 1), at(w[2], 26, gate: 2),
+                     at(w[0], 28, gate: 1), at(w[1], 29, gate: 1), at(w[2], 30, gate: 1)]
+        default:
+            // Ping-pong: the signature's head and the response's on alternate 16ths in beats 3 and 4.
+            eight = [at(s, 16, gate: 2), at(r, 20, gate: 2)] + (24...30).map { at($0 % 2 == 0 ? sa : ra, $0, gate: 1) }
+        }
+        // Every variant's last stab ends a sixteenth before the drop, so the breakdown's first word can
+        // start its consonant just before bar 9's downbeat (the next cue's plan cannot choke it).
+        let build = seven + eight
+
+        // Breakdown (bars 9-12, one cell): a word or two a bar, held, with echo throws; the split
+        // syllable with a pause in bar 11; a reversed pickup into bar 13.
+        let first = pieces.first ?? s
+        var breakdown: [Item]
+        switch arc.breakdown {
+        case 0: breakdown = [near(s, 0, .echoThrow), near(r, 24, .echoThrow), near(splitA, 40), near(splitB, 44, .echoThrow), near(t, 52)]
+        case 1: breakdown = [near(s, 0, .echoThrow), near(r, 20, .filtered), near(splitA, 40), near(splitB, 44, .echoThrow), near(s, 48, .echoThrow)]
+        default: breakdown = [near(first, 0, .echoThrow), near(s, 24, .echoThrow), near(splitA, 40), near(splitB, 44, .echoThrow), near(r, 52)]
+        }
+        breakdown.append(Item(fragment: ra, slot: 64, effect: .reversed, fixed: true))
+
+        // Outro (bars 13-16, one cell): the return's quiet piece, the line again from bar 14, a tag.
+        var outro = [at(short, 12, gain: DialogueMotifTuning.returnPieceDB)]
+        switch arc.outro {
+        case 0:
+            // The line walked on the 8ths, the signature stuttered before it plays out.
+            for (k, p) in pieces.enumerated() {
+                if p == s {
+                    outro.append(k == 0 ? Item(fragment: sa, slot: 16, fixed: true, gate: 1) : chain(sa, from: 16, gate: 1))
+                    outro.append(follow(sa))
+                    outro.append(follow(p, 1, gate: nil))
+                } else {
+                    outro.append(k == 0 ? Item(fragment: p, slot: 16) : chain(p, from: 16))
+                }
+            }
+            // Then the signature once more, a 1/8 stab in bar 15 (or after a long line's walk).
+            outro.append(chain(s, from: 36, gate: 2))
+        case 1:
+            // The clean line, then its last word twice, thrown.
+            outro += [Item(fragment: 0, slot: 16), chain(last, from: 16, gate: 2), chain(last, from: 16, .echoThrow)]
+        default:
+            // The line, then its first words again.
+            outro += [Item(fragment: 0, slot: 16), chain(first, from: 16), chain(pieces.count > 1 ? pieces[1] : s, from: 16),
+                      chain(last, from: 36, gate: 2)]
+        }
+        // The tag's answer holds an 8th, so the next loop's line can start on its downbeat.
+        outro += [at(sa, 56, gate: 1), at(sa, 57, gate: 1), at(sa, 58, gate: 1), at(r, 60, gate: 2)]
+
+        let cells: [DialogueMotifCell] = [
+            DialogueMotifCell(kind: .intro, bar: 0, bars: 2, variant: arc.intro, items: intro),
+            DialogueMotifCell(kind: .chopBeat, bar: 2, bars: 2, variant: template, items: g),
+            DialogueMotifCell(kind: .chopBeat, bar: 4, bars: 2, variant: template, items: second),
+            DialogueMotifCell(kind: .build, bar: 6, bars: 2, variant: arc.build, items: build),
+            DialogueMotifCell(kind: .breakdown, bar: 8, bars: 4, variant: arc.breakdown, items: breakdown),
+            DialogueMotifCell(kind: .outro, bar: 12, bars: 4, variant: arc.outro, items: outro),
+        ]
+        return (cells, DialogueMotifHook(template: template, signature: s, response: r, third: t, items: g), arc)
     }
 }
 
@@ -1198,21 +1448,31 @@ nonisolated enum DialogueMotifPerformer {
                 let length = duration(item.fragment)
                 // The section's dry budget; the line statement, the turnaround's landing and the phrase-end
                 // stutter (its repeats choke each other, so they cost little) always play.
-                let stutterFill = cell.kind == .stutter && item.slot >= 16
+                // The build's stutters and any follow-on repeat (they choke each other, so they cost little) always play.
+                let stutterFill = (cell.kind == .stutter && item.slot >= 16) || cell.kind == .build || item.follow != nil
                 let budgeted = item.fragment != 0 && !item.landing && !stutterFill
                 if budgeted, item.gate == nil, drySeconds() + length > budget { continue }
                 let shift = firstInCell && placed.isEmpty ? DialogueMotifTuning.lateSlotShift : DialogueMotifTuning.slotShift
                 let candidates: [Int]
-                if let gap = item.after {
-                    // The first sixteenth at or after `slot` that leaves `gap` sixteenths after the previous event.
+                if let follow = item.follow {
+                    // Exactly `follow` sixteenths after the previous hit of this cell (a stutter), or not at all.
+                    guard let previous = placed.last, previous.sixteenth >= cellStart else { continue }
+                    candidates = [previous.sixteenth + follow].filter { $0 < cellEnd }
+                } else if let gap = item.after {
+                    // The first sixteenth (8th with `onEighths`) at or after `slot` that leaves `gap`
+                    // sixteenths after the previous event.
                     let needed = prevEnd + DialogueTuning.dryGapSeconds + Double(gap) * sixteenthSeconds(base)
                     var s = base
-                    while s < cellEnd, snapshot.gridTime(sixteenth: s) - offset < needed { s += 1 }
+                    while s < cellEnd, (item.onEighths && ((s % 2) + 2) % 2 != 0) || snapshot.gridTime(sixteenth: s) - offset < needed { s += 1 }
                     candidates = s < cellEnd ? [s] : []
+                } else if item.fragment == 0 {
+                    // The line is stated on a beat: its slot, a beat or two later, or the next bar (D126 part 2).
+                    candidates = DialogueMotifTuning.lineSteps.map { base + $0 }.filter { $0 < cellEnd }
                 } else if item.landing || item.fixed {
                     candidates = [base]
                 } else {
-                    candidates = Array(base...(base + shift)).filter { $0 < cellEnd }
+                    // Never an off-sixteenth: a hit moves by 8ths (D126 part 2, "always on beat").
+                    candidates = Array(stride(from: base, through: base + shift, by: 2)).filter { $0 < cellEnd }
                 }
                 var done = false
                 for s in candidates {
@@ -1304,7 +1564,9 @@ nonisolated enum DialogueMotifPerformer {
             let barStart = snapshot.time(beat: bar), barEnd = snapshot.time(beat: bar + 4)
             defer { bar += 4 }
             guard barEnd > hard, barStart < upper else { continue }
-            if placed.contains(where: { $0.start >= barStart && $0.start < barEnd }) { continue }
+            // A bar's onset is a hit's accent, the frame on its step: a downbeat hit starts its consonant
+            // just before the bar line, and a reversed pickup swells through the bar before its own.
+            if placed.contains(where: { $0.accent >= barStart && $0.accent < barEnd }) { continue }
             let barInLoop = Int(((bar - loopBeat) / 4).rounded())
             let returnBar = barInLoop == 12
             let s0 = Int((bar * 4).rounded())
@@ -1319,7 +1581,9 @@ nonisolated enum DialogueMotifPerformer {
             for (slot, f) in hookItems + generic {
                 let accent = snapshot.gridTime(sixteenth: s0 + slot)
                 let start = accent - motif.accentOffset(f)
-                let gated = gatedEnd(f, start: start, sixteenth: s0 + slot, gate: DialogueMotifTuning.repairGate, motif: motif, snapshot: snapshot)
+                // A breakdown bar's repair holds its word (the section's own vocabulary); elsewhere a 1/8 stab.
+                let repairGate: Int? = (8..<12).contains(barInLoop) ? nil : DialogueMotifTuning.repairGate
+                let gated = gatedEnd(f, start: start, sixteenth: s0 + slot, gate: repairGate, motif: motif, snapshot: snapshot)
                 var end = gated.end
                 guard start >= barStart, start < barEnd, start >= max(hard, floor) else { continue }
                 let previous = placed.lastIndex { $0.start < start }
@@ -1345,7 +1609,7 @@ nonisolated enum DialogueMotifPerformer {
                 }
                 var e = Placed(fragment: f, cell: .repair, sixteenth: s0 + slot, accent: accent, start: start, end: end,
                                gainDB: returnBar ? DialogueMotifTuning.returnPieceDB : 0, effect: .none, landing: false,
-                               gate: DialogueMotifTuning.repairGate, gateEnd: chokedSelf ? "choke" : gated.kind)
+                               gate: repairGate, gateEnd: chokedSelf ? "choke" : gated.kind)
                 e.choked = chokedSelf
                 placed.insert(e, at: next ?? placed.count)
                 break
@@ -1504,7 +1768,8 @@ nonisolated extension DialogueMotif {
             guard upper > lower else { continue }
             let loop = loopIndex(beat: section.lowerBound, snapshot: snapshot)
             guard let motif = resolve(loop: loop, source: source, analysis: analysis, hasBank: bank != nil, transcript: transcript,
-                                      memory: trial, seed: seed, beatDuration: snapshot.beatLength(at: section.lowerBound))
+                                      memory: trial, seed: seed, beatDuration: snapshot.beatLength(at: section.lowerBound),
+                                      drums: DialogueMotifDrums(snapshot: snapshot))
             else { return nil }
             if trial.cycleSeed == nil { trial.cycleSeed = seed }
             let part = DialogueMotifPerformer.perform(motif, snapshot: snapshot, window: lower..<upper, owned: section,

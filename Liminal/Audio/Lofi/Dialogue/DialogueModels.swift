@@ -512,6 +512,9 @@ nonisolated enum DialogueCell: String, Sendable, CaseIterable {
     case statement, stutter, splitPause, reorder, callAnswer, sparse, returnOpen, turnaround, repair
     /// The loop's repeating 2-bar hook cell (D125).
     case hook
+    /// The 16-bar arc's sections (D126 part 2): the whole line, the chop beat, the build into the
+    /// halfway drop, the breakdown and the outro's restatement.
+    case intro, chopBeat, build, breakdown, outro
 }
 
 nonisolated enum DialogueFamily: String, Sendable, CaseIterable {
@@ -520,6 +523,8 @@ nonisolated enum DialogueFamily: String, Sendable, CaseIterable {
     case statement, stutter, splitPause, reorder, callAnswer, sparse, returnOpen, turnaround
     // Appended last: ids are indices, mirrored in scripts/mixlib/cadence.py (D125).
     case hook
+    // D126 part 2, appended in the same way.
+    case intro, chopBeat, build, breakdown, outro
     var id: UInt64 { UInt64(Self.allCases.firstIndex(of: self)!) }
 }
 

@@ -72,8 +72,8 @@ private func run(_ shape: MotifShape, seed: UInt64, takes: Int = 2,
         for half in 0..<2 {
             let cue = take * 2 + half
             let film = shape.films[cue % shape.films.count]
-            // `preRoll`: the second cue's bed starts this long before bar 9, as live cues do.
-            let window = (snapshot.time(beat: Double(32 * half)) - (half == 1 ? preRoll : 0))..<snapshot.time(beat: Double(32 * (half + 1)))
+            // `preRoll`: each cue's bed starts this long before its section, as live cues do.
+            let window = (snapshot.time(beat: Double(32 * half)) - preRoll)..<snapshot.time(beat: Double(32 * (half + 1)))
             guard let planned = DialogueMotif.plan(source: film.source, analysis: film.analysis, bank: film.bank,
                                                    transcript: film.transcript, snapshot: snapshot, window: window,
                                                    earliestStart: earliest?(snapshot, half) ?? window.lowerBound,
@@ -88,9 +88,10 @@ private func run(_ shape: MotifShape, seed: UInt64, takes: Int = 2,
     return result
 }
 
-/// Bars (0...15 of the loop) of each event's start.
+/// Bars (0...15 of the loop) of each event's onset: its accent, the frame on the step (a downbeat hit's
+/// consonant starts a few milliseconds before the bar line; D126 part 2).
 private func bars(_ loop: MotifRun.Loop) -> [Int: [DialogueEvent]] {
-    Dictionary(grouping: loop.events) { Int((loop.snapshot.beat(time: $0.startTime) / 4 + 1e-9).rounded(.down)) }
+    Dictionary(grouping: loop.events) { Int((loop.snapshot.beat(time: $0.accentTime) / 4 + 1e-9).rounded(.down)) }
 }
 
 struct DialogueMotifTests {
@@ -133,57 +134,77 @@ struct DialogueMotifTests {
         }
     }
 
-    /// The hook form (D125, user direction of 21 November 2026: "it sounds too random ... it needs to
-    /// feel intentional"): one 2-bar hook cell repeats through the loop on fixed steps.
-    @Test(arguments: MotifShape.all) fileprivate func everyLoopRepeatsOneHookCell(_ shape: MotifShape) throws {
+    /// The 16-bar arc (D126 part 2; user direction of 21 November 2026: "introduce the sample in its
+    /// entirety and then start messing with it ... build up, breakdown, outro ... never the same twice"):
+    /// the whole line on bar 1's downbeat, a chop beat of short gated stabs locked with the drums, a
+    /// build into the halfway drop, a sparse breakdown and an outro that restates the line (C-D11, C-D12).
+    /// Replaces the D125 hook-cell checks (one 2-bar hook repeated through the loop).
+    @Test(arguments: MotifShape.all) fileprivate func everyLoopPlaysTheArc(_ shape: MotifShape) throws {
         for seed in Self.seeds {
-            for (k, loop) in run(shape, seed: seed).loops.enumerated() {
+            let r = run(shape, seed: seed, takes: 3, preRoll: 0.7)
+            for (k, loop) in r.loops.enumerated() {
                 let motif = try #require(loop.motif)
-                let hook = try #require(motif.hook)
-                let label = "\(shape) seed \(seed) loop \(k) line '\(motif.text ?? "-")'"
-                let kinds = motif.cells.map(\.kind)
-                let hookCells = kinds.filter { $0 == .hook }.count
-                #expect(hookCells >= (kinds[4] == .statement ? 2 : 3), "\(label): cells \(kinds)")
-                // Every hook cell plays only the hook's own (step, piece) hits, and the two hook cells of
-                // the first cue play the same pattern.
-                let phrase = loop.snapshot.phraseAtOrigin
-                let items = Set(hook.items.map { DialogueHookMetrics.Hit(step: $0.slot, fragment: $0.fragment) })
-                var sets: [Int: Set<DialogueHookMetrics.Hit>] = [:]
-                for e in loop.events where e.cell == .hook {
-                    let s = (e.block - phrase) * 64 + e.slot
-                    sets[s / 32, default: []].insert(DialogueHookMetrics.Hit(step: s % 32, fragment: e.piece ?? -1))
+                let label = "\(shape) seed \(seed) loop \(k) line '\(motif.text ?? "-")' arc \(motif.arc?.name ?? "-")"
+                #expect(motif.cells.map(\.kind) == [.intro, .chopBeat, .chopBeat, .build, .breakdown, .outro], "\(label)")
+                let index = loop.snapshot.phraseAtOrigin / 4
+                let m = DialogueArcMetrics.metrics(loop.events, loop: index, motif: motif, sixteenth: loop.snapshot.beatDuration / 4)
+                let detail = "\(label): onsets \(m.onsets)"
+                // Intro: the whole line on bar 1's downbeat.
+                #expect(m.introStep == 0, "\(detail), line on step \(m.introStep ?? -1)")
+                // Chop beat: 5 to 7 onsets a bar, short gates, on the 8ths or the drums' steps.
+                let chop = try #require(m.density["chopBeat"])
+                #expect((5.0...7.0).contains(chop), "\(detail)")
+                #expect(m.gateAtMost2 >= 0.7 && m.gateAtMost1 >= 0.25, "\(detail): gates <=2 \(m.gateAtMost2), <=1 \(m.gateAtMost1)")
+                #expect(m.medianSubLineSteps <= 2, "\(detail): sub-line median \(m.medianSubLineSteps) steps")
+                #expect(m.chopEighths >= 0.8, "\(detail): \(m.chopEighths) on 8ths")
+                // Bars 5-6 replay bars 3-4 but for their last beat.
+                let bars = DialogueHookMetrics.loopHits(loop.events, loop: index)
+                func cell(_ b: Int) -> Set<DialogueHookMetrics.Hit> {
+                    Set((bars[b] + bars[b + 1].map { .init(step: $0.step + 16, fragment: $0.fragment) }).filter { $0.step < 28 })
                 }
-                for (cell, set) in sets { #expect(set.isSubset(of: items), "\(label): cell \(cell) \(set) off the hook \(items)") }
-                #expect(sets[1] != nil && sets[1] == sets[2], "\(label): bars 3-6 differ")
-                let m = DialogueHookMetrics.metrics(DialogueHookMetrics.loopHits(loop.events, loop: phrase / 4))
-                #expect(m.signatureShare >= 0.6, "\(label): signature \(m.signatureShare)")
-                #expect(m.distinctRhythms <= 10, "\(label): \(m.distinctRhythms) rhythms")
-                #expect(m.exactBarRepeats >= 0.3, "\(label): exact bars \(m.exactBarRepeats)")
-                #expect(m.cellVsBest >= 0.4, "\(label): cellVsBest \(m.cellVsBest)")
+                #expect(cell(2) == cell(4), "\(detail): bars 3-4 \(cell(2)) against 5-6 \(cell(4))")
+                // Build: bar 8 busier than bar 7, which is as busy as the chop beat; 16ths into the drop.
+                #expect(m.onsets[7] > m.onsets[6] && Double(m.onsets[6]) >= chop.rounded(.down), "\(detail)")
+                #expect(m.buildTail >= 6, "\(detail): \(m.buildTail) onsets in bar 8's last two beats")
+                // Breakdown: a word or two a bar.
+                let breakdown = try #require(m.density["breakdown"])
+                #expect(breakdown <= 2 && breakdown <= 0.4 * chop, "\(detail)")
+                // Outro: the line again, in source order.
+                #expect(m.outroCoverage >= 0.95 && m.outroInOrder, "\(detail): outro covers \(m.outroCoverage), in order \(m.outroInOrder) \(m.outroWalk)")
+            }
+            // Never the same twice: consecutive loops' arcs differ in at least two sections.
+            let arcs = r.loops.compactMap { $0.motif?.arc }
+            #expect(arcs.count == 3)
+            for (a, b) in zip(arcs, arcs.dropFirst()) {
+                #expect(a.differences(b) >= DialogueMotifTuning.arcChange, "\(shape) seed \(seed): \(a.name) then \(b.name)")
             }
         }
     }
 
-    /// Variation sits at the phrase ends (bars 8 and 16), the drop-out (11-12) and the return (13).
-    @Test(arguments: MotifShape.all) fileprivate func variationSitsAtPhraseEnds(_ shape: MotifShape) throws {
-        for seed in Self.seeds {
-            for (k, loop) in run(shape, seed: seed).loops.enumerated() {
-                let motif = try #require(loop.motif)
-                let hook = try #require(motif.hook)
-                let label = "\(shape) seed \(seed) loop \(k)"
-                let bars = DialogueHookMetrics.loopHits(loop.events, loop: loop.snapshot.phraseAtOrigin / 4)
-                let barB = Set(hook.items.filter { $0.slot >= 16 }.map { DialogueHookMetrics.Hit(step: $0.slot - 16, fragment: $0.fragment) })
-                #expect(Set(bars[7]) != barB && Set(bars[15]) != barB, "\(label): a phrase end plays the hook")
-                #expect(bars[10].count + bars[11].count < hook.items.count, "\(label): the drop-out is as busy as the hook")
-                let cells = Set(loop.events.compactMap(\.cell))
-                for kind in [DialogueCell.stutter, .splitPause, .turnaround, .returnOpen, .hook] {
-                    #expect(cells.contains(kind), "\(label): no \(kind) in \(cells)")
-                }
-                // The stutter repeats one piece back to back.
-                let stutter = loop.events.filter { $0.cell == .stutter }
-                #expect(zip(stutter, stutter.dropFirst()).contains { $0.piece == $1.piece }, "\(label): no repeated piece")
-            }
+    /// The arc's variants are seeded: the same seed gives the same arc, a transcript re-cut keeps it, and
+    /// a carried loop (the same line again) changes the groove and at least two more sections.
+    @Test func theArcIsSeededKeptByARecutAndChangedByACarriedLoop() throws {
+        let film = MotifShape.all[1].films[0]
+        var names: Set<String> = []
+        for seed: UInt64 in [1, 2, 3, 5, 8, 13] {
+            var memory = DialoguePerformanceMemory()
+            memory.cycleSeed = seed
+            let a = try #require(DialogueMotif.make(loop: 2, source: film.source, analysis: film.analysis, transcript: nil,
+                                                    memory: memory, seed: seed, beatDuration: 60 / 72.0))
+            let b = try #require(DialogueMotif.make(loop: 2, source: film.source, analysis: film.analysis, transcript: nil,
+                                                    memory: memory, seed: seed, beatDuration: 60 / 72.0))
+            let arc = try #require(a.arc)
+            #expect(arc == b.arc)
+            names.insert(arc.name)
+            memory.setMotif(a, statements: 0)
+            let recut = try #require(DialogueMotif.resolve(loop: 2, source: film.source, analysis: film.analysis, hasBank: true,
+                                                           transcript: film.transcript, memory: memory, seed: seed, beatDuration: 60 / 72.0))
+            #expect(recut.usedTranscript && recut.arc == arc, "seed \(seed): \(arc.name) re-cut as \(recut.arc?.name ?? "-")")
+            let carried = a.carried(to: 3, seed: seed, memory: memory)
+            let next = try #require(carried.arc)
+            #expect(next.groove != arc.groove && next.differences(arc) >= DialogueMotifTuning.arcChange + 1, "seed \(seed): \(arc.name) then \(next.name)")
         }
+        #expect(names.count >= 3, "\(names)")
     }
 
     /// The hook's signature is the line's strongest word ("Sally", "LSD"), and it is the loop's most
@@ -202,13 +223,17 @@ struct DialogueMotifTests {
                 if motif.text?.contains("LSD") == true { #expect(signature.contains("LSD"), "\(label)"); seen.insert("LSD") }
                 let pieces = loop.events.compactMap(\.piece).filter { $0 != 0 }
                 let counts = Dictionary(grouping: pieces, by: { $0 }).mapValues(\.count)
-                // Within one hit of the most played piece: gated hits (D126) leave room for one more
-                // response in some loops.
-                #expect((counts[hook.signature] ?? 0) >= (counts.values.max() ?? 0) - 1, "\(label): counts \(counts)")
+                // The signature and its head (the chop beat's 1/16 stabs, D126 part 2) are played at least as
+                // often as any other piece.
+                let head = DialogueMotif.headHalf(hook.signature, fragments: motif.fragments, halves: motif.halves)
+                let group = Set([hook.signature, head])
+                let own = group.map { counts[$0] ?? 0 }.reduce(0, +)
+                #expect(own >= (counts.filter { !group.contains($0.key) }.values.max() ?? 0), "\(label): counts \(counts)")
+                // The signature keeps its home steps: the chop beat's two cells and the build's first bar.
                 let phrase = loop.snapshot.phraseAtOrigin
                 let steps = loop.events.filter { $0.piece == hook.signature }.map { ((($0.block - phrase) * 64 + $0.slot) % 32) }
                 let modal = Dictionary(grouping: steps, by: { $0 }).values.map(\.count).max() ?? 0
-                #expect(modal >= 5, "\(label): signature at most \(modal) times on one step")
+                #expect(modal >= 3, "\(label): signature at most \(modal) times on one step")
             }
         }
         #expect(seen == ["Sally", "LSD"], "\(seen)")
@@ -240,7 +265,7 @@ struct DialogueMotifTests {
                 guard hook.response != hook.signature else { continue }
                 let phrase = loop.snapshot.phraseAtOrigin
                 var answered: [Int: Bool] = [:]
-                for e in loop.events where e.cell == .hook {
+                for e in loop.events where e.cell == .chopBeat {
                     let s = (e.block - phrase) * 64 + e.slot
                     answered[s / 32, default: false] = answered[s / 32, default: false]
                         || (e.piece == hook.response && [4, 12].contains(s % 16))
@@ -250,7 +275,7 @@ struct DialogueMotifTests {
         }
     }
 
-    /// A cue whose bed starts before bar 9 (live windows open about 0.7 s early) plays the hook's
+    /// A cue whose bed starts before bar 9 (live windows open about 0.7 s early) plays the breakdown's
     /// downbeat hit on bar 9's step 0: the section's first piece may start before its downbeat.
     @Test(arguments: MotifShape.all) fileprivate func aCueOpeningBeforeBarNinePlaysTheDownbeatHit(_ shape: MotifShape) throws {
         var checked = 0
@@ -262,11 +287,12 @@ struct DialogueMotifTests {
             }
             for (k, loop) in r.loops.enumerated() {
                 let motif = try #require(loop.motif)
-                let hook = try #require(motif.hook)
-                guard motif.cells[4].kind == .hook, let down = hook.items.first(where: { $0.slot == 0 }) else { continue }
+                // The breakdown opens bar 9 with its held word on the downbeat (D126 part 2).
+                let breakdown = try #require(motif.cells.first { $0.kind == .breakdown })
+                let down = try #require(breakdown.items.first { $0.slot == 0 })
                 let bars = DialogueHookMetrics.loopHits(loop.events, loop: loop.snapshot.phraseAtOrigin / 4)
                 #expect(bars[8].contains(DialogueHookMetrics.Hit(step: 0, fragment: down.fragment)),
-                        "\(shape) seed \(seed) loop \(k): bar 9 \(bars[8]), hook \(hook.items.map { [$0.fragment, $0.slot] })")
+                        "\(shape) seed \(seed) loop \(k): bar 9 \(bars[8]), breakdown \(breakdown.items.map { [$0.fragment, $0.slot] })")
                 checked += 1
             }
         }
@@ -342,7 +368,7 @@ struct DialogueMotifTests {
                       motif.pieces.count >= 2 else { continue }
                 #expect(!motif.reorderAllowed, "'\(motif.text ?? "-")'")
                 checked += 1
-                for cell in motif.cells where cell.kind == .hook {
+                for cell in motif.cells where cell.kind == .chopBeat {
                     for bar in 0..<2 {
                         // New source positions only: a repeat of a piece already heard (or of its half) is a stutter.
                         var order: [Int] = []

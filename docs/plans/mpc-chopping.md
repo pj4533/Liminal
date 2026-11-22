@@ -60,7 +60,7 @@ Status: plan. Numbers marked *start* are tuning hypotheses exposed as named cons
 >
 > 1. **Tight.** A chop's sound starts on its step: pads start at the waveform onset, the word's attack lands on the step, and the step follows the drummer's own hit, never a neighbour's (D126, done).
 > 2. **Short and gated.** Every hit is held for a gate in sixteenths and cut before the next step, so the same pad can play as a stab, a syllable, a word or the whole phrase (D126, done for the D125 arrangement).
-> 3. **The 16-bar arc.** Intro (the whole line on the downbeat), chop beat, build, breakdown and outro, varied by seed (plan of 21 November 2026, part 2; not yet implemented).
+> 3. **The 16-bar arc.** Intro (the whole line on the downbeat), chop beat, build, breakdown and outro, varied by seed (D126 part 2, done; the gates' hold-through past a fragment and the C-D10 to C-D12 capture criteria remain).
 
 ## 1. Goals and non-goals
 

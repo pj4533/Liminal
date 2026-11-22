@@ -54,6 +54,7 @@ struct DialogueHookProbeTests {
             ("mixed-transcript-84", 84, [Self.film(Self.mixed, id: "hp-mix-t", transcribed: true)]),
         ]
         var sums: [String: [Metrics]] = [:]
+        var arcs: [String: [DialogueArcMetrics.Metrics]] = [:]
         for (name, bpm, films) in shapes {
             for seed: UInt64 in [1, 2, 3, 5, 8, 13] {
                 var memory = DialoguePerformanceMemory()
@@ -82,9 +83,14 @@ struct DialogueHookProbeTests {
                     if let hook = motif.hook {
                         emit("HOOK-PROBE   hook template=\(hook.template) S=\(hook.signature) R=\(hook.response) T=\(hook.third)")
                     }
+                    let a = DialogueArcMetrics.metrics(events, loop: take, motif: motif, sixteenth: beat / 4)
+                    arcs[name, default: []].append(a)
                     if seed <= 2 {
-                        for row in DialogueHookMetrics.grid(bars) { emit("HOOK-PROBE   \(row)") }
+                        for row in DialogueArcMetrics.grid(events, loop: take) { emit("HOOK-PROBE   \(row)") }
                     }
+                    emit("HOOK-PROBE   arc onsets=\(a.onsets.map(String.init).joined(separator: ",")) " + DialogueArcMetrics.sections.map { String(format: "%@=%.1f", $0.name, a.density[$0.name] ?? 0) }.joined(separator: " ")
+                         + String(format: " buildTail=%d gate<=2=%.2f gate<=1=%.2f subLineSteps=%.1f chop8ths=%.2f introStep=%@ outroCover=%.2f inOrder=%@",
+                                  a.buildTail, a.gateAtMost2, a.gateAtMost1, a.medianSubLineSteps, a.chopEighths, a.introStep.map(String.init) ?? "-", a.outroCoverage, a.outroInOrder ? "yes" : "no"))
                     emit(String(format: "HOOK-PROBE   metrics cellRepeat=%.2f cellRhythm=%.2f cellVsBest=%.2f fourBar=%.2f exactBar=%.2f signature=%.2f focalStep=%.2f rhythms=%d fragsPer4=%.1f steps=%d hits=%d",
                                  m.cellRepeat, m.cellRhythm, m.cellVsBest, m.fourBarRepeat, m.exactBarRepeats, m.signatureShare, m.focalConsistency,
                                  m.distinctRhythms, m.fragmentsPer4, m.distinctSteps, m.hits))
@@ -97,6 +103,13 @@ struct DialogueHookProbeTests {
                          name, list.count, mean(\.cellRepeat), mean(\.cellRhythm), mean(\.cellVsBest), mean(\.fourBarRepeat), mean(\.exactBarRepeats),
                          mean(\.signatureShare), mean(\.focalConsistency), mean { Double($0.distinctRhythms) }, mean(\.fragmentsPer4),
                          mean { Double($0.distinctSteps) }, mean { Double($0.hits) }))
+        }
+        for (name, list) in arcs.sorted(by: { $0.key < $1.key }) {
+            func mean(_ k: (DialogueArcMetrics.Metrics) -> Double) -> Double { list.map(k).reduce(0, +) / Double(list.count) }
+            emit("HOOK-PROBE SUMMARY-ARC \(name) n=\(list.count) " + DialogueArcMetrics.sections.map { s in String(format: "%@=%.2f", s.name, mean { $0.density[s.name] ?? 0 }) }.joined(separator: " ")
+                 + String(format: " buildTail=%.1f gate<=2=%.2f gate<=1=%.2f subLineSteps=%.2f chop8ths=%.2f introOnStep0=%.2f outroCover=%.2f",
+                          mean { Double($0.buildTail) }, mean(\.gateAtMost2), mean(\.gateAtMost1), mean(\.medianSubLineSteps), mean(\.chopEighths),
+                          mean { $0.introStep == 0 ? 1 : 0 }, mean(\.outroCoverage)))
         }
     }
 
