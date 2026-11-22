@@ -437,3 +437,81 @@ In the build (bars 7-8) unmarked same-piece pairs fell from 0.295 to 0.013 (fixt
 The macOS and visionOS Simulator builds succeed. A 200 s macOS app run (automation flags, offline footage) played 4 loops with `chopRepeat` 0 to 1 of 19 to 22 chop-beat pairs and 5 to 7 pieces a loop, on the laid, rush, drunk and ahead feels.
 
 **Not checked.** Nothing was heard by ear or on the device. Whether the ghost-pocket stabs and the drunk and ahead feels sit right is for the user's ear, as is the C-B8 and C-B9 movement. Ghost notes come only from soft snares (hats and "other" landmarks are not read), and the take's fills (`LofiFillDetector`) are not used to thin the chop beat.
+
+## D128. Strummed hooks played off the drums in the guitar and harp phrases, with one echo throw (2026-11-22)
+
+**Direction.** The user asked to "expand the number of instruments that are strummed, like more guitars", with patterns "a little bit more complicated, like not single notes, but rather sometimes a strummed chord", and for "lo-fi guitars or acoustic instruments" with "a very high bar". "There were a couple of times when it hits just right, but that was mostly due to echo." The model was Wu-Tang: "RZA and GZA ... bring out the like sort of solo or minimal strumming and work that into the beat and play it off of the drums." And: "Don't overdo it though ... We can't let this like take over and stand out or get too messy. You need to leave space in the mix, but it needs to be a little bit more."
+
+**Found first** (source, at 5d21cdc):
+
+- The guitar played one phrase in four, and 60 percent of the time that was the breakdown, where `LofiGuitarPhrasing`'s sparse rule allows no strum. Most takes had no strum at all.
+- A strum was two or three triad tones glued under a melody note: no seventh or ninth, no velocity shape, no choke, nothing independent of the melody, and nothing in the guitar code read the drums.
+- Every note rang for the program's release (0.28 to 0.32 s), so a choked stab was impossible. Every lead-stem note sent at least 44 percent to the echo, so "echo only on the last stab" was impossible too.
+- The lead gain is normalized on the loudest 400 ms of the dry lead, so louder strums would have turned the melody down.
+- The dialogue chops follow a fixed 16-bar arc (D126 part 2, D127). Guitar phrase 1 is take bars 5-8 (the chop beat and the build) and phrase 2 is take bars 9-12 (the breakdown, one or two held words a bar).
+- The mix margins are thin (D118): C-B5 and C-B11 sat within 0.1 dB of their limits on some cases.
+
+**Craft research.** RZA used guitar "like it was a sound he was going to sample" (Yoram Vazan); one strum as the main stab of a beat ("Incarcerated Scarfaces" takes the first strum of "Wang Dang Doodle"); exact repetition; and the documented failure case of too much played guitar (*8 Diagrams*, "trying to do too much of this guitar stuff"). So the hook is a few sampled-sounding gestures, never continuous comping, and it must not step on the chops, which act as the vocal.
+
+**Instruments.**
+
+| Candidate | Decision |
+|---|---|
+| Black And Green Guitars, black Hofner Club hollowbody, p layer (CC0 1.0) | Added as **Hollowbody Soul** (`hofner`, stage 2). Passed the gate: tuning within 0.6 cents after retune, non-harmonic hiss -76 to -102 dBFS, 2-5 kHz share -32.2 dB in the render probe, loudness -0.01 LU against the Steinway Grand. See `docs/lofi-samples.md`. |
+| Same library, green Gretsch hollowbody, p layer (CC0 1.0) | Rejected for hiss: its quiet upper recordings, once level matched, leave a 4-8 kHz floor of -50 to -67 dBFS at 1.8-2.2 s against the -65 dBFS limit, and its a5 is the brightest guitar root measured (-14.4 dB). No substitute was added, so the planned "Hollowbody Ballad" row does not exist. |
+| Concert Harp, Folk Harp (bundled) | Now strum: slow rolled chords, in the breakdown only (see below). |
+| Kayageum (Freesound pack 1534, CC0) | Deferred. The originals need a Freesound login, the previews are lossy and peak over full scale, and nobody has heard it. A candidate for a pass with the user's login and ear. |
+| Robohymn "quiet strat chords" (CC0) | Deferred. Fixed voicings need their own playback path, every file needs its own tuning correction, the sets are 45 to 52 MB each and raw DI. The synthesized strum gives harmony-correct chords from the single-note banks instead. |
+| Shinyguitar `mute_strings*`, Emilyguitar `muted*` (CC0) | Not now. They are bright noise bursts (2-5 kHz share -14 to -32 dB) in the chops' band. Dead strokes are made from the pitched samples, very short and damped. A candidate if the user wants more "chk". |
+| Ukulele, banjo, ganjo, sitar, Dan Tranh, Hungarian zither, Carbonthief triads, GPL guitars, Philharmonia, Pianobook; more nylon or steel sets | Rejected in research: off the vibe, an unclear or incompatible licence, or no new colour. |
+
+**Design.**
+
+- **Primitives.** `LofiScore.Part.strum`, `Note.damp` (a per-note choke in `LofiSampleBank.add` and `LofiSynth`), `LofiScore.strumEvents`, and `LofiPreset.Strum` (`.pick` for the guitars, `.roll` for the harps). `.strum` notes render into the lead's accent buffer: the lead's filters, gain curve and phrase gain, but never the gain measurement or the compressor reference. So the melody's level is bit-identical with the hook on or off.
+- **Voicings** (`LofiStrumVoicing`). Root, third, fifth, seventh and ninth of the phrase's own chord, snapped into its scale; strings 3 to 9 semitones apart; the third always, the seventh when the chord has four classes; never a plain major triad; MIDI 45 to 72, the top string under the melody.
+- **Strokes** (`LofiStrum`). Choked stabs (3-4 strings, 6-11 ms apart, a quarter beat, 25 ms damp), dyads, up-strokes, dead strokes, held chords (4-5 strings) and harp rolls (40-70 ms a string). Per-string level `L / sqrt(N)` with a taper, so an event's power does not grow with its string count.
+- **Richer melody strums** (`LofiGuitarPhrasing`). Opening and landing notes strum up to four strings with sevenths. Everything else in D114 is unchanged and its tests pass with no bound loosened.
+- **The hook line** (`LofiStrumHook`, scored last; nothing else in the phrase sees it). Five archetypes: A lone stab in bars 0 and 2; B call and answer an inversion lower; C a down-up "chk-a" with an optional dead-stroke pickup; D a held chord, then its top three strings as a stab; E a dyad hook. One sixteenth X is chosen for the statement against the drums (`LofiStrumDrums`: the take's kicks, full snares and ghost notes on the drummer's own swung grid) and repeated exactly. It is never on a snare, step 0 or 15, nor within 40 ms of a full snare, nor (low strings) within 30 ms of a kick, nor within a quarter beat of a melody or shell onset. There is nothing in a bar with three melody notes and nothing in the phrase's last bar. Even takes play A-C and odd takes D-E, so consecutive takes never repeat an archetype.
+- **Turn-taking with the chops.** The score cannot see the chops, so it follows the arc. In the breakdown (take bars 9-12) the hook answers the snare (the 8th after it) or pushes into a kick. In take bars 5-8 (the chop beat) it plays only with a kick or on an even gap, at most twice.
+- **Echo.** One event per phrase, the statement's last if it starts by beat 10.5, is thrown into the echo. Everything else sends almost nothing, and the choke opens the space duck again before the first echo tap. `LofiEffects`, the space chain, `LofiWetTone` and every existing row's echo values are unchanged.
+
+**Tuned in stage 5** (one change, one capture each, against hook-off twins of the same build):
+
+1. **Send mapping.** `0.10 + 1.25 * send` gave a thrown stab's first echo 0.6 to 4.9 dB *louder* than the stab and a plain stab's 10 to 17 dB under (targets 6-12 and at least 18 under). It is now `0.032 + 0.33 * send`: a plain stab sends 0.065, a thrown one 0.329. After the change the thrown echoes sit 6.6 to 10.7 dB under and the plain ones at least 20.6 dB under.
+2. **Harps in take bars 5-8: off.** A thrown harp roll there rings into the chop beat. The chops sat only 0.8 dB over it in 1-4 kHz (median, p10 -7.1 dB; target 6 and 3). `harpChance` is now (0, 0.70): harps roll only in the breakdown.
+3. **Position-1 gain 0.71 (-3 dB).** A guitar's thrown stab in take bars 5-8 overlapped the chops with a p10 of 1.8 dB (target 3). The chop beat is the foreground there, so the hook plays 3 dB under its breakdown level. After the change the median is 12.2 dB and the p10 4.7 dB.
+
+The level L, the colours, the site scores and the guitar's position-1 chance (0.60) were not changed. With the three changes above every capture criterion held.
+
+**Measuring the hook alone.** `scripts/strum-report.py --off` subtracts the hook-off capture of the same build. The drums and chops of such a pair are sample-identical. The echo cannot be read from the wet stem's difference: the stab keys the space duck, and the duck's few dB on the melody's echo is louder than a plain stab's own echo (a plain stab first read 3 dB "under" that way). So the echo is the hook's part of the raw returns, scaled by the wet stem's gain over the returns at that moment (`docs/mix-verification.md`, strum report).
+
+**Score level** (`LofiStrumTests`, seeds 0..<48 by 16 phrases; no timing / synthetic boom-bap with ghosts and 0.08-beat swing; every installed take is also tested): all of S1-S12 pass in all three conditions. S13: `LofiGuitarPhrasingTests` and `preparationStaysInsideItsBudget` pass. Distribution (`LofiStrumProbeTests/hookDistribution`, after the tuning):
+
+| | No timing | Boom-bap |
+|---|---|---|
+| Share of all bars with a hook event (S4, 8-22 %) | 11.9 % | 10.9 % |
+| Hook phrases: guitar position 1, position 2, harp | 21/71, 121/121, 24/96 | 5/71, 121/121, 24/96 |
+| Events per hook phrase | 2: 125, 3: 34, 4: 5, 5: 2 | 2: 109, 3: 34, 4: 5, 5: 2 |
+| Events of 3 or more strings (S5, at least 60 %), mean strings | 78 %, 3.29 | 83 %, 3.36 |
+| Sites | answer 275, push 65, gap 32, with kick 10 | answer 275, push 65, with kick 10 |
+| Archetypes A/B/C/D/E | 49/22/13/53/29 | 45/22/13/53/17 |
+| Phrases with a throw | 115 of 166 | 94 of 150 |
+
+**Capture level** (private drums; forced programs as in stage 1; "before" is 1359ae5, "off" the final build with `strumHook=off`):
+
+| Capture | Hook phrases, events | Lead gain on - off | Dry / wet vs off, LU | Master vs before | C-B5 | C-B6 min before → after | C-B7 | C-B11 before → after | Thrown / plain echo under stab | Chops over hook 1-4 kHz |
+|---|---|---|---|---|---|---|---|---|---|---|
+| g1 Nylon Strum, position 1 | p1: 2 | 0.000 dB | -0.71 / -0.06 | +0.04 | 5.30 | 18.67 → 18.67 | 3.76 | -2.15 → -2.03 | 7.5 / ≥21.7 | median 12.2, p10 4.7 |
+| g2 Nylon Strum, breakdown | p2: 3, p6: 2 | 0.000 | ≤ 0.00 / ≤ -0.02 | +0.00 | 5.88 | 16.35 → 16.33 | 3.47 | -2.16 → -2.16 | 10.7 / ≥24.9 | no overlap |
+| g3 Flatwound Tape, breakdown | p2: 3, p6: 2 | 0.000 | ≤ -0.08 / ≤ -0.07 | +0.00 | 6.51 | 9.41 → 9.48 | 3.29 | -5.17 → -4.86 | 8.4 / ≥21.1 | no overlap |
+| g4 Archtop Jazz, no film | p2: 3 | 0.000 | -1.21 / -1.15 | -0.06 | 6.23 | 19.62 → 19.71 | 1.25 (warn before: 1.03) | 1.61 → 1.61 | none / ≥20.9 | no chops |
+| h1 Concert Harp (+ Archtop Acoustic in p1) | p1: 2, p6: 2 | 0.000 | ≤ -0.15 / ≤ -0.05 | -0.01 | 5.35 | 17.59 → 17.75 | 3.74 | -1.54 → -0.95 | 9.1, 7.8 / ≥21.4 | median 8.8, p10 4.0 |
+| n1 Hollowbody Soul, breakdown | p2: 3, p6: 2 | 0.000 | p2 -3.29, p6 -0.02 / p2 -2.95, p6 -0.15 | (no before) | 6.01 | n/a | 2.66 warn, the same with the hook off | n/a | 6.6 / ≥20.6 | no overlap |
+
+Negative dry and wet deltas come from the gating of the integrated loudness: the short stabs add quiet blocks. No hook onset fell within 60 ms of a chop onset in any capture (C6), none within 40 ms of a snare, and all sat on answer or with-kick sites (C7). The dry stem's 2-5 kHz share rose at most 0.72 dB (C8, limit 1.5). C-B1, C-M2, C-M6 and C-M9 pass as before. The next phrase's first two beats of wet were -1.90 to +0.02 dB against off (C9, limit +1.5). The dialogue's C-B8 SII mean and p10 are within 0.001 of before, the 1-4 kHz SNR within 0.03 dB, and C-B9 keeps its state in every film case (C5). In g1 and h1 every position-1 event meets a dry chop (warn above 50 percent). That is expected on the chop beat, and the 1-4 kHz margin above covers it.
+
+**Matrix** (`mix-matrix.sh --strict`, five cases against the stage 1 baseline): fail-level failures ref C-B8, C-B9 (before the same); long C-B8 (same); fast C-B2, C-B8 (same); same C-B9 (before C-B8, C-B9: C-B8 now passes at 0.33); nofilm none. No new fail-level failure (C1). nofilm's C-B7 moved from pass to warn (3.25 to 2.96 dB). The long case has hook events in 9.4 % of its 64 bars (C10). The longer guitar list changes some draws: ref and same now play Hollowbody Soul in their second breakdown (was Flatwound Tape); long plays Archtop Jazz and Archtop Acoustic in its third and fourth breakdowns (was Archtop Acoustic and Steel Acoustic); fast plays Flatwound Tape in its second breakdown (was Archtop Jazz); same's third breakdown is Flatwound Tape (was Archtop Jazz).
+
+**Left open.** `LofiPadTests/phraseBoundaryBreathIsBridgedByTheTail` fails at seed 2077 phrase 6 with a 6.73 dB dip (limit 6). It has failed since the Hollowbody Soul row was added: the longer guitar list moves seed 2077 to a Folk Harp phrase followed by a Flatwound Tape breakdown. It read 6.74 dB before stage 5. Neither of those rows is the new one, and stage 5 may not change existing rows' space values. `LofiStemChainTests/installedTakesLandInsideTheDrumBusTargets` fails as before.
+
+**Not heard.** Nobody has listened to any of this, on the Mac or on the device. Every verdict above is a measurement. Whether the stabs sit "just right", whether the throw's echo is the moment the user liked, whether the hollowbody fits the vibe and whether position 1 reads as clutter is for the user's ear. If position 1 is too much, `LofiStrumHook.Tuning.variationChance` switches it off without touching the breakdown hook.

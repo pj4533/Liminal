@@ -512,6 +512,25 @@ extension LofiStrumTests {
         Self.checkAmounts("installed", bars: bars, hookBars: hookBars, events: events)
     }
 
+    /// Stage 5 tuning (D128): harps roll only in the breakdown, and a hook in take bars 5-8 (the chop
+    /// beat) plays at `variationGain` while the breakdown's plays at unity.
+    @Test func harpsRollOnlyInTheBreakdownAndTheChopBeatHookIsQuieter() throws {
+        var variationHooks = 0
+        for condition in try Self.conditions(installed: false) {
+            for scored in Self.scores(condition) {
+                let strums = scored.score.notes.filter { $0.part == .strum }
+                guard !strums.isEmpty else { continue }
+                let name = "\(condition.name) seed \(scored.seed) phrase \(scored.phrase)"
+                if scored.score.preset.strum == .roll { #expect(scored.position == 2, "\(name)") }
+                if scored.position == 1 { variationHooks += 1 }
+                let gain: Float = scored.position == 1 ? LofiStrumHook.Tuning.variationGain : 1
+                #expect(strums.allSatisfy { $0.gain == gain }, "\(name)")
+            }
+        }
+        #expect(LofiStrumHook.Tuning.harpChance.variation == 0)
+        #expect(variationHooks > 0)
+    }
+
     @Test func theHookStaysOutOfPianoAndPizzicatoAndCanBeSwitchedOff() {
         let condition = DrumCondition(name: "none", timing: nil, beatSeconds: 60.0 / 72, seeds: [3])
         // A forced guitar in the breakdown always strums; the same phrase without the hook has none.

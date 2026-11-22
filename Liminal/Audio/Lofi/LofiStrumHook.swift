@@ -106,9 +106,13 @@ nonisolated enum LofiStrumHook {
         /// Beats between gestures (an up-stroke or a pickup belongs to its stab).
         static let spacing = 1.0
         /// How often a hook plays: guitars in take bars 5-8 (position 1; always in position 2), and
-        /// harps in positions 1 and 2.
+        /// harps in positions 1 and 2. A harp roll rings into the chop beat of take bars 5-8 and sat level
+        /// with the chops in 1-4 kHz there (D128 stage 5), so harps play hooks only in the breakdown.
         static let variationChance: Float = 0.60
-        static let harpChance: (variation: Float, breakdown: Float) = (0.50, 0.70)
+        static let harpChance: (variation: Float, breakdown: Float) = (0, 0.70)
+        /// Gain of a hook in take bars 5-8 (position 1), where the chop beat is the foreground: 3 dB
+        /// under the breakdown's, so a stab that meets a chop sits at least 3 dB under it in 1-4 kHz.
+        static let variationGain: Float = 0.71
         /// Archetype C's dead-stroke pickup.
         static let pickupChance: Float = 0.35
         /// Programs with `fingerstyle` under this lean to strummed archetypes (A, B, C).

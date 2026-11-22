@@ -291,14 +291,21 @@ nonisolated struct LofiScore: Sendable, Equatable {
                                       windowEnd: rest.lowerBound, take: phrase / 4, sessionSeed: drift.seed,
                                       random: phraseRandom.fork(2_512))
         let tone = lead.isEmpty ? 0.42 : lead.reduce(0) { $0 + $1.color } / Double(lead.count)
-        return score.addingStrum(hook, tone: tone, beatSeconds: max(0.001, beatSeconds))
+        let gain = phrase % 4 == 1 ? LofiStrumHook.Tuning.variationGain : 1
+        return score.addingStrum(hook, tone: tone, beatSeconds: max(0.001, beatSeconds), gain: gain)
     }
 
     /// This score with the notes of `events` added as `.strum` notes (`LofiStrum.notes`, coloured
-    /// from the melody's `tone`) and the events recorded. Everything else is unchanged.
-    func addingStrum(_ events: [LofiStrum.Event], tone: Double, beatSeconds: Double) -> Self {
+    /// from the melody's `tone`, at `gain`) and the events recorded. Everything else is unchanged.
+    func addingStrum(_ events: [LofiStrum.Event], tone: Double, beatSeconds: Double, gain: Float = 1) -> Self {
         guard !events.isEmpty else { return self }
-        let added = events.flatMap { LofiStrum.notes(for: $0, tone: tone, beatSeconds: beatSeconds) }
+        let added = events.flatMap { event in
+            LofiStrum.notes(for: event, tone: tone, beatSeconds: beatSeconds).map { note in
+                var note = note
+                note.gain = gain
+                return note
+            }
+        }
         let merged = (notes + added).sorted { lhs, rhs in
             if lhs.beat != rhs.beat { return lhs.beat < rhs.beat }
             if lhs.part != rhs.part { return lhs.part.rawValue < rhs.part.rawValue }

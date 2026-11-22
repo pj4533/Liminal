@@ -149,7 +149,7 @@ pre-master = staging x (lofi + footage)   [pre-master] -> glue (Apple, bypassed 
           -> output [master]
 ```
 
-`fx-color-raw.wav`, `fx-echo-raw.wav` and `fx-room-raw.wav` are renderer working files written by the test; the analysis does not read them. They can be ignored (and deleted from a kept capture to save 120 MB).
+`fx-color-raw.wav`, `fx-echo-raw.wav` and `fx-room-raw.wav` are renderer working files written by the test; `mix-report.py` does not read them, but `strum-report.py --off` does (its hook-alone echo, C9). Otherwise they can be deleted from a kept capture to save 120 MB.
 
 ### Tap table
 
@@ -234,7 +234,7 @@ Plots and matrices use the order drums, bass, mids, lead, space, dialogue, bed, 
 | `masterInputGainDb`, `masterGlueThresholdDb`, `masterGlueRatio`, `masterClipThresholdDb` | numbers | override the finisher drive while choosing the master settings |
 | `guitarProgram`, `pluckProgram` | a program name, case and spaces ignored (`nylonstrum`, `concertharp`) | force every take's guitar or plucked-string program (D128); the harness passes a `LofiScore.Audition` to `LofiRenderer.render`, so the score never reads the hooks. An unknown name fails the capture. `manifest.diagnostics.audition` records the values |
 | `guitarSlot` | `1` or `2` | play the guitar in take phrase 1 (bars 5-8) or 2 (bars 9-12, the breakdown); the plucked string takes the other |
-| `strumHook` | `off` | turn off the strummed hook line (D128; stored now, used once the hook line exists) |
+| `strumHook` | `off` | turn off the strummed hook line (D128). An on/off pair of the same build differs only in the hook: drums and chops are sample-identical |
 
 Example, a capture with on-device transcription:
 
@@ -656,7 +656,9 @@ Reference figures, 20 November 2026 (seed 2077, 72 BPM, 32 bars, private drums, 
 
 ## Strum report
 
-`scripts/strum-report.py CAPTURE [--baseline DIR] [--off DIR] [--json OUT]` measures the guitar and harp phrases (D128, `docs/decisions/music.md`). Per phrase: program, section, take position, lead, ornament and `strum` note counts, melody-attached ornament strums (two or more ornaments within 120 ms under a lead note), strum events (`strum` notes grouped by onsets within 120 ms) with their strings, bars, distance to the nearest confident kick and full snare landmark, site, nearest chop onset and overlap with dry chops, the dry and wet loudness of the phrase (wet over the phrase plus two beats), the dry stem's 2-5 kHz share, the lead gain from `musicLevels`, and each event's first echo under its dry stab in the wet stem (a lower bound for plain stabs, since the wet stem also carries the melody's echo). With `--baseline` (the before capture with the same seed and forced program) and `--off` (the same build with `--hook strumHook=off`) it prints a PASS, FAIL, WARN or N/A line for each of the plan's capture criteria C2 to C10, reading C-B1, C-B5 to C-B11, C-M2, C-M6 and C-M9 from each capture's `report/mix-report.json`. It exits 1 when a criterion fails.
+`scripts/strum-report.py CAPTURE [--baseline DIR] [--off DIR] [--json OUT]` measures the guitar and harp phrases (D128, `docs/decisions/music.md`). Per phrase: program, section, take position, lead, ornament and `strum` note counts, melody-attached ornament strums (two or more ornaments within 120 ms under a lead note), strum events (`strum` notes grouped by onsets within 120 ms) with their strings, bars, distance to the nearest confident kick and full snare landmark, site, nearest chop onset and overlap with dry chops, the dry and wet loudness of the phrase (wet over the phrase plus two beats), the dry stem's 2-5 kHz share, the lead gain from `musicLevels`, and each event's first echo under its dry stab in the wet stem (a lower bound, since the wet stem also carries the melody's echo).
+
+With `--off` the hook is also measured on its own, as this capture minus the hook-off one. The hook's dry signal is `dry.wav` on minus off. Its echo cannot be read from `wet.wav` on minus off: the stab keys the space duck, and the duck's few dB on the melody's own echo is louder than a plain stab's echo. So the script takes the hook's part of the raw returns (`fx-echo-raw`, `fx-room-raw` and `fx-color-raw`, on minus off), finds its peak 0.6 to 2 beats after the stab, and adds the wet stem's gain over those raw returns in the same window. C9 is judged on that hook-alone ratio, and C6 on the chops over the hook's dry signal in 1-4 kHz. The whole-stem values are printed as INFO lines. So keep the raw return files in captures that are used for C9. With `--baseline` (the before capture with the same seed and forced program) and `--off` (the same build with `--hook strumHook=off`) it prints a PASS, FAIL, WARN or N/A line for each of the plan's capture criteria C2 to C10, reading C-B1, C-B5 to C-B11, C-M2, C-M6 and C-M9 from each capture's `report/mix-report.json`. It exits 1 when a criterion fails.
 
 ## Solo stems for listening
 

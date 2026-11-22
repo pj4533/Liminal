@@ -461,10 +461,11 @@ nonisolated enum LofiRenderer {
     /// Scale invariant, so the dry stem itself reproduces it.
     /// Phrase-local start frames of the scored lead notes: the onsets that key the space duck.
     /// Send level of a `.strum` note: `velocity * (strumSendFloor + strumSendScale * send)`. A plain
-    /// stab (send 0.10) sends 0.225, a thrown one (0.90) 1.225 (D128); lead and ornament notes keep
-    /// `0.44 + 0.72 * send`.
-    static let strumSendFloor: Float = 0.10
-    static let strumSendScale: Float = 1.25
+    /// stab (send 0.10) sends 0.065, a thrown one (0.90) 0.329, 14 dB more (D128: the thrown stab's
+    /// first echo 6-12 dB under the stab, a plain stab's at least 18 dB under). Lead and ornament notes
+    /// keep `0.44 + 0.72 * send`.
+    static let strumSendFloor: Float = 0.032
+    static let strumSendScale: Float = 0.33
 
     /// One string of a strum at `velocity`, with its damp and colour and no extra gain.
     private static func strumString(_ note: LofiScore.Note, velocity: Float) -> LofiScore.Note {

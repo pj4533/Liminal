@@ -158,7 +158,47 @@ class Landmarks:
         return "gap" if not busy else "other"
 
 
-def measure(path):
+def isolated_stems(cap, off_path):
+    """The hook's own dry and wet signal: this capture minus the hook-off capture of the same build.
+
+    The drums and chops of an on/off pair are sample-identical, so the difference is the strum notes
+    plus the small changes they cause downstream (the space duck and the lead bus). Returns
+    (None, None) when the pair does not line up."""
+    if off_path is None:
+        return None, None
+    off = Capture(Path(off_path))
+    if off.rate != cap.rate or off.manifest.get("seed") != cap.manifest.get("seed"):
+        return None, None
+    out = []
+    for name in ("dry", "wet"):
+        a, b = cap.stem(name), off.stem(name)
+        if a is None or b is None or a.shape != b.shape:
+            return None, None
+        out.append(np.asarray(a, dtype=np.float64) - np.asarray(b, dtype=np.float64))
+    return out[0], out[1]
+
+
+def raw_returns(cap, off_path):
+    """The effect returns before the space chain (echo + room + colour, the renderer's working files):
+    (this capture's sum, the hook's part of it = on minus off). The hook's echo at mix level is its part
+    of the raw returns times the wet stem's gain over those returns at that moment. The wet stem's own
+    on-minus-off difference is dominated by the space duck the stab keys, so it cannot carry the echo."""
+    if off_path is None:
+        return None, None
+    off = Capture(Path(off_path))
+    total, diff = None, None
+    for name in ("fx-echo-raw", "fx-room-raw", "fx-color-raw"):
+        a, b = cap.stem(name), off.stem(name)
+        if a is None or b is None or a.shape != b.shape:
+            return None, None
+        a = np.asarray(a, dtype=np.float64)
+        total = a if total is None else total + a
+        d = a - np.asarray(b, dtype=np.float64)
+        diff = d if diff is None else diff + d
+    return total, diff
+
+
+def measure(path, off_path=None):
     cap = Capture(Path(path))
     rate, beat, bar = cap.rate, cap.beat_frames, cap.bar_frames
     score = cap.score or []
@@ -167,6 +207,8 @@ def measure(path):
     dry, wet = cap.stem("dry"), cap.stem("wet")
     chops_stem = cap.stem("dialogue-chops")
     master = cap.stem("master")
+    hook_dry, hook_wet = isolated_stems(cap, off_path)
+    raw_total, raw_hook = raw_returns(cap, off_path) if hook_dry is not None else (None, None)
     chop_rows = cap.chops()
     chop_onsets = np.array(sorted(int(c["frame"]) for c in chop_rows if c.get("frame") is not None), dtype=np.int64)
     chop_dry = cap.chop_intervals(dry=True) if chop_rows else []
@@ -225,6 +267,20 @@ def measure(path):
             ev["dryPeakDb"] = rnd(dry_peak)
             audible = finite(dry_peak) and finite(echo_peak) and dry_peak > -90 and echo_peak > -120
             ev["echoUnderDryDb"] = rnd(dry_peak - echo_peak) if audible else None
+            if hook_dry is not None:
+                # The same ratio on the hook alone (on minus off): the stab's own echo under the stab.
+                iso_dry = envelope_db(hook_dry, rate, start, start + int(0.15 * rate))
+                ev["hookDryPeakDb"] = rnd(iso_dry)
+                ev["hookEchoUnderDryDb"] = None
+                if raw_total is not None:
+                    w0, w1 = start + int(0.6 * beat), min(len(wet), start + int(2.0 * beat))
+                    e_wet = float(np.mean(np.asarray(wet[w0:w1], dtype=np.float64) ** 2)) if w1 > w0 else 0
+                    e_raw = float(np.mean(raw_total[w0:w1] ** 2)) if w1 > w0 else 0
+                    raw_echo = envelope_db(raw_hook, rate, w0, w1)
+                    if e_wet > 0 and e_raw > 0 and finite(iso_dry) and finite(raw_echo) and iso_dry > -90:
+                        iso_echo = raw_echo + float(db10(e_wet / e_raw))
+                        ev["hookEchoPeakDb"] = rnd(iso_echo)
+                        ev["hookEchoUnderDryDb"] = rnd(iso_dry - iso_echo)
             events.append(ev)
         events_all += events
         lv = levels.get(i, {})
@@ -251,7 +307,7 @@ def measure(path):
     # C6: dry lead under the chops in 1-4 kHz while a hook event and a dry chop overlap.
     overlap = None
     if events_all and chops_stem is not None and dry is not None and chop_dry:
-        diffs = []
+        diffs, iso = [], []
         hop = int(0.010 * rate)
         for e in events_all:
             dry_end = e["end"] if e["thrown"] else min(e["end"], e["frame"] + int(0.6 * beat))
@@ -269,9 +325,16 @@ def measure(path):
                 pc = (c[: m * hop] ** 2).reshape(m, hop).mean(axis=1)
                 keep = pc > 1e-9
                 diffs += list(db10(pc[keep]) - db10(np.maximum(pd[keep], 1e-14)))
+                if hook_dry is not None:
+                    h = bandpass(hook_dry[max(0, lo - pre):hi], rate, 1000, 4000)[lo - max(0, lo - pre):]
+                    ph = (h[: m * hop] ** 2).reshape(m, hop).mean(axis=1)
+                    iso += list(db10(pc[keep]) - db10(np.maximum(ph[keep], 1e-14)))
         if diffs:
             overlap = {"hops": len(diffs), "chopsOverDryMedianDb": rnd(np.median(diffs)),
                        "chopsOverDryP10Db": rnd(np.percentile(diffs, 10))}
+            if iso:
+                overlap["chopsOverHookMedianDb"] = rnd(np.median(iso))
+                overlap["chopsOverHookP10Db"] = rnd(np.percentile(iso, 10))
 
     bars_total = int(round(cap.scored_frames / bar))
     bars_with = sum(len(p["barsWithEvent"]) for p in phrases)
@@ -299,6 +362,11 @@ def measure(path):
     plain = [e["echoUnderDryDb"] for e in events_all if not e["thrown"] and finite(e["echoUnderDryDb"])]
     summary["echoThrownUnderDryDb"] = [rnd(x) for x in thrown]
     summary["echoPlainUnderDryDbMin"] = rnd(min(plain)) if plain else None
+    if hook_dry is not None:
+        th = [e["hookEchoUnderDryDb"] for e in events_all if e["thrown"] and finite(e.get("hookEchoUnderDryDb"))]
+        pl = [e["hookEchoUnderDryDb"] for e in events_all if not e["thrown"] and finite(e.get("hookEchoUnderDryDb"))]
+        summary["hookEchoThrownUnderDryDb"] = [rnd(x) for x in th]
+        summary["hookEchoPlainUnderDryDbMin"] = rnd(min(pl)) if pl else None
     return {"summary": summary, "phrases": phrases, "events": events_all,
             "criteria": criteria_values(report_doc)}
 
@@ -412,7 +480,15 @@ def compare(cur, base, off):
     if hooked and s["chops"]:
         v.check("C6", s["chopOnsetCoincidence"] <= 0.15, f"onsets within 60 ms of a chop {s['chopOnsetCoincidence']:.1%}")
         ov = s.get("chopOverlap1to4k")
-        if ov:
+        if ov and ov.get("chopsOverHookMedianDb") is not None:
+            # With --off the hook's own dry signal is measured; the whole dry lead (melody included)
+            # is printed for reference.
+            v.check("C6", ov["chopsOverHookMedianDb"] >= 6 and ov["chopsOverHookP10Db"] >= 3,
+                    f"chops over the hook's dry signal in 1-4 kHz median {ov['chopsOverHookMedianDb']} dB, "
+                    f"p10 {ov['chopsOverHookP10Db']} dB")
+            v.add("C6", "INFO", f"chops over the whole dry lead (melody included) median {ov['chopsOverDryMedianDb']} dB, "
+                                f"p10 {ov['chopsOverDryP10Db']} dB")
+        elif ov:
             v.check("C6", ov["chopsOverDryMedianDb"] >= 6 and ov["chopsOverDryP10Db"] >= 3,
                     f"chops over dry lead in 1-4 kHz median {ov['chopsOverDryMedianDb']} dB, p10 {ov['chopsOverDryP10Db']} dB")
         v.check("C6", s["chopTimeOverlapShare"] <= 0.5, f"events overlapping a dry chop {s['chopTimeOverlapShare']:.1%}",
@@ -444,8 +520,18 @@ def compare(cur, base, off):
     # C9: echo.
     if hooked:
         th, pl = s["echoThrownUnderDryDb"], s["echoPlainUnderDryDbMin"]
-        v.check("C9", all(6 <= x <= 12 for x in th) if th else None, f"thrown echo under dry stab {th} dB (6 to 12)")
-        v.check("C9", pl >= 18 if finite(pl) else None, f"plain echo under dry stab, min {pl} dB (at least 18)")
+        if "hookEchoThrownUnderDryDb" in s:
+            # The hook alone (on minus off). The whole-stem ratio below also carries the melody's own
+            # echo and room, so it is a lower bound and printed for reference.
+            hth, hpl = s["hookEchoThrownUnderDryDb"], s["hookEchoPlainUnderDryDbMin"]
+            v.check("C9", all(6 <= x <= 12 for x in hth) if hth else None,
+                    f"thrown echo under its dry stab (hook alone) {hth} dB (6 to 12)")
+            v.check("C9", hpl >= 18 if finite(hpl) else None,
+                    f"plain echo under its dry stab (hook alone), min {hpl} dB (at least 18)")
+            v.add("C9", "INFO", f"whole stems: thrown {th} dB, plain min {pl} dB")
+        else:
+            v.check("C9", all(6 <= x <= 12 for x in th) if th else None, f"thrown echo under dry stab {th} dB (6 to 12)")
+            v.check("C9", pl >= 18 if finite(pl) else None, f"plain echo under dry stab, min {pl} dB (at least 18)")
         if off:
             op = by_phrase(off)
             n = [(p["phrase"], p["nextTwoBeatsWetDb"] - op[p["phrase"]]["nextTwoBeatsWetDb"]) for p in hooked
@@ -487,11 +573,12 @@ def print_measure(m):
               f"{p['leadNotes']:4d} {p['ornamentNotes']:3d} {p['strumNotes']:5d} {p['attachedOrnamentStrums']:3d} "
               f"{p['events']:3d} {p['leadGainDb']!s:>8} {p['dryLufs']!s:>8} {p['wetLufs']!s:>8} {p['dryShare2to5kDb']!s:>6}")
     if m["events"]:
-        print("  events: phrase bar beat strings thrown site kickMs snareMs chopMs echoUnderDry")
+        print("  events: phrase bar beat strings thrown site kickMs snareMs chopMs echoUnderDry [hookEchoUnderDry]")
         for e in m["events"]:
             print(f"    p{e['phrase']} bar {e['bar']} beat {e['beatInPhrase']} x{e['strings']} "
                   f"{'thrown' if e['thrown'] else 'plain '} {e.get('site') or e.get('inferredSite')} "
-                  f"{e.get('kickMs')} {e.get('snareMs')} {e['chopOnsetMs']} {e['echoUnderDryDb']}")
+                  f"{e.get('kickMs')} {e.get('snareMs')} {e['chopOnsetMs']} {e['echoUnderDryDb']}"
+                  + (f" [{e['hookEchoUnderDryDb']}]" if "hookEchoUnderDryDb" in e else ""))
     c = m.get("criteria")
     if c:
         print("  mix report: " + ", ".join(f"{k} {v['status']}" for k, v in c.items()))
@@ -507,7 +594,7 @@ def main():
     for p in (args.capture, args.baseline, args.off):
         if p is not None and not (p / "manifest.json").is_file():
             ap.error(f"{p} has no manifest.json")
-    cur = measure(args.capture)
+    cur = measure(args.capture, args.off)
     base = measure(args.baseline) if args.baseline else None
     off = measure(args.off) if args.off else None
     print_measure(cur)
