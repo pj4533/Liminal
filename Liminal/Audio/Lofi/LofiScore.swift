@@ -279,10 +279,19 @@ nonisolated struct LofiScore: Sendable, Equatable {
         let virtualRecord = LofiVirtualRecord.choose(from: lead, before: min(15.5, ending + 1.25), section: section,
                                                      program: preset.sampleGroup, seed: edits.next(),
                                                      protectedUntil: protected)
-        return .init(section: section, tonic: tonic, chordRoot: (tonic + chordDegree) % 12, scale: scale, notes: notes,
-                     preset: preset, endingRest: rest, virtualRecord: virtualRecord, bassVoice: voice,
-                     bassAnchors: bass.anchors, bassSweep: bass.sweep,
-                     bassThrowKit: LofiBassThrowSend.kit(seed: seed, phrase: phrase))
+        let score = Self(section: section, tonic: tonic, chordRoot: (tonic + chordDegree) % 12, scale: scale, notes: notes,
+                         preset: preset, endingRest: rest, virtualRecord: virtualRecord, bassVoice: voice,
+                         bassAnchors: bass.anchors, bassSweep: bass.sweep,
+                         bassThrowKit: LofiBassThrowSend.kit(seed: seed, phrase: phrase))
+        // The strummed hook (D128) comes last and yields to everything above: nothing scored so far sees it.
+        guard audition.hook, preset.strum != .none else { return score }
+        let hook = LofiStrumHook.make(lead: lead, ornaments: ornaments, texture: texture, harmony: harmony,
+                                      chordDegree: chordDegree, position: phrase % 4, preset: preset, timing: timing,
+                                      timingStartBeat: timingStartBeat, beatSeconds: max(0.001, beatSeconds),
+                                      windowEnd: rest.lowerBound, take: phrase / 4, sessionSeed: drift.seed,
+                                      random: phraseRandom.fork(2_512))
+        let tone = lead.isEmpty ? 0.42 : lead.reduce(0) { $0 + $1.color } / Double(lead.count)
+        return score.addingStrum(hook, tone: tone, beatSeconds: max(0.001, beatSeconds))
     }
 
     /// This score with the notes of `events` added as `.strum` notes (`LofiStrum.notes`, coloured

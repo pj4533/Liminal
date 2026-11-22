@@ -140,6 +140,7 @@ nonisolated enum DialogueCueCoordinator {
             let request = LofiPlayback.Request(seed: info.seed, index: phrase, options: info.options)
             let score = LofiScore.make(seed: request.compositionSeed, section: request.section, drift: LofiDrift(seed: info.seed),
                                        startBeat: Double(phrase) * LofiClock.beats, pinnedScale: info.options.scale,
+                                       timing: info.timing, timingStartBeat: request.drumStartBeat,
                                        beatSeconds: info.beatDuration)
             let base = Double(k) * LofiClock.beats
             notes += score.notes.filter { $0.part.playsLead }.map { (base + $0.beat)...(base + $0.beat + $0.length) }

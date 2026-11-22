@@ -10,7 +10,7 @@ extension LofiScore {
         var pluckProgram: String?
         /// The take phrase (1 or 2) that plays the guitar; the plucked string takes the other.
         var guitarSlot: Int?
-        /// The strummed hook line. Stored only for now.
+        /// The strummed hook line (`LofiStrumHook`); false scores the phrase without it.
         var hook: Bool = true
 
         static let none = Self()

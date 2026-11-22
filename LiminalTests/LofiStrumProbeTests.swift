@@ -100,4 +100,41 @@ struct LofiStrumProbeTests {
         }
         Attachment.record(lines.joined(separator: "\n") + "\n", named: "strum-probe.txt")
     }
+
+    /// The hook's distribution for the D128 record: seeds 0..<48 by 16 phrases with no timing and with
+    /// the swung boom-bap field of `LofiStrumTests`.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["LIMINAL_STRUM_PROBE"] != nil))
+    func hookDistribution() throws {
+        var lines: [String] = []
+        for condition in try LofiStrumTests.conditions(installed: false) {
+            let all = LofiStrumTests.scores(condition)
+            let hooked = all.filter { !$0.score.strumEvents.isEmpty }
+            let events = hooked.flatMap(\.score.strumEvents)
+            let strumming = all.filter { $0.score.preset.strum != .none }
+            let bars = hooked.reduce(0) { $0 + Set($1.score.strumEvents.map(\.bar)).count }
+            func histogram<T: Hashable>(_ values: [T], _ label: (T) -> String) -> String {
+                Dictionary(grouping: values, by: { $0 }).map { "\(label($0.key))=\($0.value.count)" }.sorted().joined(separator: " ")
+            }
+            Self.log(String(format: "STRUM-PROBE hook %@ phrases %d strumming %d hooked %d (guitar p1 %d/%d, p2 %d/%d, harp %d/%d) share of bars %.3f",
+                            condition.name, all.count, strumming.count, hooked.count,
+                            hooked.filter { $0.score.preset.family == .guitar && $0.position == 1 }.count,
+                            strumming.filter { $0.score.preset.family == .guitar && $0.position == 1 }.count,
+                            hooked.filter { $0.score.preset.family == .guitar && $0.position == 2 }.count,
+                            strumming.filter { $0.score.preset.family == .guitar && $0.position == 2 }.count,
+                            hooked.filter { $0.score.preset.strum == .roll }.count,
+                            strumming.filter { $0.score.preset.strum == .roll }.count,
+                            Double(bars) / Double(all.count * 4)), into: &lines)
+            Self.log("STRUM-PROBE hook \(condition.name) events per phrase " + histogram(hooked.map(\.score.strumEvents.count)) { "\($0)" }, into: &lines)
+            Self.log("STRUM-PROBE hook \(condition.name) gestures per phrase " + histogram(hooked.map { LofiStrumTests.gestures($0.score.strumEvents).count }) { "\($0)" }, into: &lines)
+            Self.log("STRUM-PROBE hook \(condition.name) bars with events " + histogram(hooked.map { Set($0.score.strumEvents.map(\.bar)).count }) { "\($0)" }, into: &lines)
+            Self.log("STRUM-PROBE hook \(condition.name) strings per event " + histogram(events.map(\.strings.count)) { "\($0)" }
+                     + String(format: " mean %.2f", Double(events.map(\.strings.count).reduce(0, +)) / Double(max(1, events.count))), into: &lines)
+            Self.log("STRUM-PROBE hook \(condition.name) kinds " + histogram(events.map(\.kind)) { "\($0)" }, into: &lines)
+            Self.log("STRUM-PROBE hook \(condition.name) sites " + histogram(events.map(\.site)) { "\($0)" }, into: &lines)
+            Self.log("STRUM-PROBE hook \(condition.name) archetypes " + histogram(hooked.map { $0.score.strumEvents[0].archetype }) { "ABCDE".map(String.init)[$0] }, into: &lines)
+            Self.log("STRUM-PROBE hook \(condition.name) steps " + histogram(events.map(\.step)) { String(format: "%02d", $0) }, into: &lines)
+            Self.log("STRUM-PROBE hook \(condition.name) thrown \(events.filter(\.thrown).count) of \(hooked.count) phrases", into: &lines)
+        }
+        Attachment.record(lines.joined(separator: "\n") + "\n", named: "strum-hook-probe.txt")
+    }
 }
