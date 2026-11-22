@@ -1,5 +1,5 @@
 #!/bin/bash
-# Rebuild the Lo-Fi lead sample groups added on 2026-11-19 (D114) from their CC0 sources.
+# Rebuild the Lo-Fi lead sample groups added on 2026-11-19 (D114) and 2026-11-22 (D128) from their CC0 sources.
 #
 #   scripts/lofi-sample-recipes.sh <group> <source-dir> [out-dir]
 #
@@ -17,6 +17,7 @@
 #   archtop   sfzinstruments/karoryfer.shinyguitar 57243cca                   Samples/acoustic
 #   jazzbox   sfzinstruments/karoryfer.shinyguitar 57243cca                   Samples/electric
 #   flatwound sfzinstruments/karoryfer.emilyguitar b4920dc6                   notes
+#   hofner    sfzinstruments/karoryfer.black-and-green-guitars b3b3249d       Samples/black/ord
 #   bass-upright    sfzinstruments/karoryfer.sneakybass cc1a67e5 (CC0)       Samples/finger (all files in one folder)
 #   bass-flatwound  sfzinstruments/karoryfer.swagbass 9d10fcae (CC0)         notes
 #
@@ -26,7 +27,8 @@
 #
 # Every pair is SOURCE-NAME=MIDI with MIDI the measured concert pitch (prepare refuses a file
 # more than 50 cents away). VCSL Kawai, VCSL Folk Harp and Osiris files sound an octave above
-# their labels, so a file labelled C2 becomes MIDI 48. To add a group, add a case and run
+# their labels, so a file labelled C2 becomes MIDI 48; Black And Green Guitars files sound an
+# octave below theirs, so `twang_c4` becomes MIDI 48. To add a group, add a case and run
 # `scripts/prepare-lofi-samples.py measure` on the result.
 set -euo pipefail
 group="$1"
@@ -113,6 +115,14 @@ case "$group" in
     # toward a small amp with a fourth-order 3.5 kHz low-pass.
     add '{}_p_rr1.wav' a2=45 eb3=51 a3=57 c4=60 eb4=63 gb4=66 c5=72
     opts=(--lowpass 3500 --order 4) ;;
+  hofner)
+    # The black Hofner Club hollowbody, softest layer (p), round robin 1, retuned (the files sit up to 12 cents off).
+    # The recordings are 1.25 to 2.3 s, so notes are kept to 1.45 s with a 0.35 s tail. a5 (MIDI 69) is skipped: its
+    # 7th partial near 3.1 kHz leaves 2.4 percent of the note's energy in 2-5 kHz, brighter than any bundled
+    # Karoryfer guitar root. The green Gretsch from the same library was rejected for tail hiss (D128).
+    add 'twang_{}_p_rr1.wav' a3=45 c4=48 eb4=51 gb4=54 a4=57 c5=60 eb5=63 gb5=66 c6=72
+    python3 -I "$prep" prepare --group hofner --retune --lowpass 6000 --duration 1.45 --fade 0.35 --out "$out" "${args[@]}"
+    exit 0 ;;
   *)
     echo "unknown group: $group" >&2
     exit 2 ;;

@@ -76,6 +76,34 @@ Each archive or repository's own licence text was checked on 2026-11-19.
 The FreePats FSBS Electric Guitar Clean #2 (Jazz, bridge pickup, CC0 1.0) was also prepared and then left out. Its notes keep 11 to 16 dB-relative energy between 2 and 5 kHz even after a fourth-order 2 kHz low-pass, about 15 dB more than every other program. The Shinyguitar pickup set covers the jazz tone instead. The [instrument source survey](research/instrument-sources.md) lists further candidates and the sources that were rejected.
 
 
+## Additions on 2026-11-22 (D128)
+
+The user asked for more strummed instruments that keep the Lo-Fi feel, with a very high bar. One sample group was added from the CC0 [Black And Green Guitars](https://github.com/sfzinstruments/karoryfer.black-and-green-guitars) library (commit b3b3249d), by the same maker as Shinyguitar and Emilyguitar. Nobody has listened to it yet. It was accepted on measurements only. Its files are bundled so `LofiSampleBank` loads them as the `hofner` group, and no program plays it yet.
+
+`scripts/lofi-sample-recipes.sh hofner` rebuilds it with the D114 preparation plus `--retune`, a 6 kHz low-pass, and notes kept to 1.45 s with a 0.35 s tail, because the recordings are 1.25 to 2.3 s long. The library's files sound an octave below their labels, so `twang_c4` is bundled as MIDI 48. The nine files total about 0.8 MB.
+
+| Programs | Group | Recording choice | Source notes |
+| --- | --- | --- | --- |
+| none yet | `hofner` | Black Hofner Club hollowbody (`Samples/black/ord`), softest layer (p), round robin 1, 6 kHz roll-off. `a5` (MIDI 69) is skipped as too bright | [45](https://github.com/sfzinstruments/karoryfer.black-and-green-guitars/blob/b3b3249d37dc977a1a297bd2dc053e6d9b6b805c/Samples/black/ord/twang_a3_p_rr1.wav), [48](https://github.com/sfzinstruments/karoryfer.black-and-green-guitars/blob/b3b3249d37dc977a1a297bd2dc053e6d9b6b805c/Samples/black/ord/twang_c4_p_rr1.wav), [51](https://github.com/sfzinstruments/karoryfer.black-and-green-guitars/blob/b3b3249d37dc977a1a297bd2dc053e6d9b6b805c/Samples/black/ord/twang_eb4_p_rr1.wav), [54](https://github.com/sfzinstruments/karoryfer.black-and-green-guitars/blob/b3b3249d37dc977a1a297bd2dc053e6d9b6b805c/Samples/black/ord/twang_gb4_p_rr1.wav), [57](https://github.com/sfzinstruments/karoryfer.black-and-green-guitars/blob/b3b3249d37dc977a1a297bd2dc053e6d9b6b805c/Samples/black/ord/twang_a4_p_rr1.wav), [60](https://github.com/sfzinstruments/karoryfer.black-and-green-guitars/blob/b3b3249d37dc977a1a297bd2dc053e6d9b6b805c/Samples/black/ord/twang_c5_p_rr1.wav), [63](https://github.com/sfzinstruments/karoryfer.black-and-green-guitars/blob/b3b3249d37dc977a1a297bd2dc053e6d9b6b805c/Samples/black/ord/twang_eb5_p_rr1.wav), [66](https://github.com/sfzinstruments/karoryfer.black-and-green-guitars/blob/b3b3249d37dc977a1a297bd2dc053e6d9b6b805c/Samples/black/ord/twang_gb5_p_rr1.wav), [72](https://github.com/sfzinstruments/karoryfer.black-and-green-guitars/blob/b3b3249d37dc977a1a297bd2dc053e6d9b6b805c/Samples/black/ord/twang_c6_p_rr1.wav) |
+
+Measured on the bundled files:
+
+- **Tuning:** the raw files sat between -8 and +12 cents from their roots. After `--retune`, every root measures within 0.6 cents.
+- **Level:** body -10.0 to -12.1 dBFS, peak -2.5 to -3.7 dBFS. There are no clipped runs. The largest high-frequency transients fall inside the pick attack (28 to 57 ms), so there are no clicks.
+- **Brightness (2-5 kHz share of the first second):** -40 dB or darker from MIDI 45 to 57, -25 dB at 60 and 63, -17.7 dB at 66 and -19.8 dB at 72. The upper roots are no brighter than the bundled Archtop Acoustic and Archtop Jazz roots in the same register (-17.2 to -19.8 dB). The skipped `a5` read -16.1 dB, with 76 percent of that band on its 7th partial near 3.1 kHz.
+- **Hiss:** the non-harmonic floor in 4-8 kHz between 1.0 and 1.3 s is -76 to -102 dBFS.
+
+Rejected from the same library:
+
+- **The green Gretsch hollowbody, p layer:** rejected for hiss. The upper recordings are very quiet (body -44 to -54 dBFS raw), so level matching raises the recording's floor with them. Between 1.8 and 2.2 s, the non-harmonic floor in 4-8 kHz reads -50 to -67 dBFS at MIDI 57 to 72. Every bundled guitar reads -92 dBFS or lower there. That hiss sits under the 2.4 s ring, which is the reason to use the Gretsch at all. Its `a5` root also read -14.4 dB in 2-5 kHz, a sustained 5th partial near 2.2 kHz and brighter than any bundled guitar root.
+- **Other files:** the mf and f layers, the `fb`, `btb`, hammer-on and staccato articulations, and the other round robins were not used.
+
+### Black And Green Guitars credit
+
+The repository's `LICENSE` ("Creative Commons Legal Code, CC0 1.0 Universal") was read on 2026-11-22 at commit b3b3249d. Its `readme.txt` reads "Royalty-free for all commercial and non-commercial use. Copyright 2022 Karoryfer Lecolds." and credits the recordings to Brian Wood. Like Shinyguitar's signature note, its note about the digital signature covers only the Sforzando bank XML, which is not used.
+
+- "Black And Green Guitars by Karoryfer Lecolds, recorded by Brian Wood, CC0 1.0, github.com/sfzinstruments/karoryfer.black-and-green-guitars" (commit b3b3249d).
+
 ## Bass body samples
 
 The sampled bass body (the synthesized sub owns everything below 160 Hz, see `docs/plans/bass-tone-redo.md` 2 and D119) uses two CC0 kits. The `round` tone (one of the three that rotate every 16 bars, D120) plays the flatwound `long` files (the `ghost` files for ghosts) as its body and the first 80 ms of the flatwound `short` files as its strike; the `upright` tone plays the upright `long` files from their onset (an upright ghost is the long note at ghost velocity) with a synthesized strike; the `synth` tone uses no files. The upright `short` files are no longer played (the frozen throw send still reads them on upright takes). They are bundled as `LofiBass-<kit>-<stroke>-<midi>[-<rr>].wav`, which `LofiSampleBank` ignores because it reads only the `LofiLead` prefix. `scripts/lofi-sample-recipes.sh bass-upright` and `bass-flatwound` rebuild them. Both libraries sound an octave below their file labels (Sneakybass `e2` is E1, Swagbass `a1` is A0), so the bundled MIDI roots are 28 to 39 and 21 to 33. Preparation uses `--prefix LofiBass --retune`: 32 kHz mono, 25 Hz high-pass, 5 kHz low-pass, body matched to -10 dBFS under a -2.5 dBFS peak ceiling, and each file resampled by its measured pitch error. All 35 bundled files measure within 2.2 cents of their root.

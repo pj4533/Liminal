@@ -47,6 +47,9 @@ nonisolated struct LofiSampleBank: Sendable {
 
     func count(for preset: LofiPreset) -> Int { groups[preset.sampleGroup]?.count ?? 0 }
 
+    /// Every bundled recording of a group, ordered by root then layer; empty for an unknown group.
+    func samples(in group: String) -> [Sample] { groups[group] ?? [] }
+
     private static func load(_ url: URL, root: Int, layer: Int, recordedRoot: Int) throws -> Sample {
         let file = try AVAudioFile(forReading: url, commonFormat: .pcmFormatFloat32, interleaved: false)
         let format = file.processingFormat

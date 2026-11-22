@@ -203,6 +203,31 @@ struct LofiCompositionTests {
         #expect(amplitude(near: 261.63) > 5 * amplitude(near: 130.81), "\(group)")
     }
 
+    /// The Hofner hollowbody (D128) is bundled at measured concert pitch, one layer, short enough to choke.
+    @Test func hollowbodyGroupIsBundledAtConcertPitch() throws {
+        let samples = LofiSampleBank.bundled.samples(in: "hofner")
+        #expect(samples.map(\.root) == [45, 48, 51, 54, 57, 60, 63, 66, 72])
+        for sample in samples {
+            #expect(sample.recordedRoot == sample.root && sample.layer == 2 && sample.rate == 32_000)
+            #expect(sample.pcm.count <= Int(1.46 * sample.rate))
+            // The fundamental must dominate the octave below; a label an octave off would invert this.
+            let fundamental = 440 * pow(2, Double(sample.root - 69) / 12)
+            let body = Array(sample.pcm[Int(0.1 * sample.rate)..<Int(0.5 * sample.rate)])
+            func amplitude(_ frequency: Double) -> Double {
+                var real = 0.0, imaginary = 0.0
+                for (index, value) in body.enumerated() {
+                    let phase = 2 * Double.pi * frequency * Double(index) / sample.rate
+                    let window = 0.5 - 0.5 * cos(2 * Double.pi * Double(index) / Double(body.count))
+                    real += Double(value) * window * cos(phase)
+                    imaginary += Double(value) * window * sin(phase)
+                }
+                return hypot(real, imaginary)
+            }
+            #expect(amplitude(fundamental) > 5 * amplitude(fundamental / 2), "hofner \(sample.root)")
+        }
+        #expect(LofiSampleBank.bundled.samples(in: "gretsch").isEmpty)
+    }
+
     @Test func virtualRecordsKeepTheirProvenanceAndEditOnlyThePlannedGap() throws {
         var styles = Set<LofiVirtualRecord.Edit.Style>()
         for seed in 0..<32 as Range<UInt64> {
