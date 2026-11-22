@@ -70,7 +70,8 @@ nonisolated struct LofiSampleBank: Sendable {
         let hold = clock.frame(at: note.length)
         let rate = clock.sampleRate
         let speed = sample.rate / rate * pow(2, Double(note.midi - sample.recordedRoot) / 12)
-        let release = max(1, Int(preset.release * rate))
+        // A damped note is choked after its hold instead of ringing for the program's release.
+        let release = note.damp > 0 ? max(1, Int(note.damp * rate)) : max(1, Int(preset.release * rate))
         let attack = max(1, Int(max(0.003, preset.attack) * rate))
         let count = min(hold + release, left.count - start)
         guard count > 1 else { return }

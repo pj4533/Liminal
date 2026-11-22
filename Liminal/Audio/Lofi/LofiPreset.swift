@@ -5,6 +5,9 @@ import Foundation
 /// tone, wow and space, so a new recording or a new effect amount is one line (D114).
 nonisolated struct LofiPreset: Equatable, Sendable {
     enum Family: Int, CaseIterable, Sendable { case piano, strings, guitar }
+    /// How the program strums a chord (`LofiStrum`, D128): a pick (guitars: stabs, dyads, up-strokes,
+    /// dead strokes and held chords), a harpist's roll (slow, ringing, low to high), or not at all.
+    enum Strum: Int, Sendable { case none, pick, roll }
 
     struct Space: Sendable {
         let taps: (left: Double, right: Double)
@@ -32,6 +35,8 @@ nonisolated struct LofiPreset: Equatable, Sendable {
     /// Level trim in dB on the phrase's instrument stems after the instrument balance, from the D114
     /// per-program loudness match (integrated level of dry, mids and effects against the Steinway Grand), -6 to +2 dB.
     let levelDB: Float
+    /// The program's strum (`Strum`): `.pick` for every guitar, `.roll` for the two harps.
+    let strum: Strum
 
     /// `audition` forces a guitar or plucked-string program and the guitar's middle phrase for A/B
     /// captures; with `.none` the draw is the seed's own. Phrases 0 and 3 of a take never change.
@@ -64,7 +69,7 @@ nonisolated struct LofiPreset: Equatable, Sendable {
     private init(_ name: String, _ sampleGroup: String, _ family: Family, _ brightness: Double, _ movement: Double,
                  _ attack: Double, _ release: Double, _ gain: Float, _ taps: (Double, Double),
                  _ feedback: Float, _ diffusion: Float, _ particles: Float, _ stereo: Float,
-                 fingerstyle: Double = 0, level: Float = 0) {
+                 fingerstyle: Double = 0, level: Float = 0, strum: Strum? = nil) {
         self.name = name
         self.sampleGroup = sampleGroup
         self.family = family
@@ -76,13 +81,14 @@ nonisolated struct LofiPreset: Equatable, Sendable {
         self.space = Space(taps: taps, feedback: feedback, diffusion: diffusion, particles: particles, stereo: stereo)
         self.fingerstyle = fingerstyle
         self.levelDB = min(2, max(-6, level))
+        self.strum = strum ?? (family == .guitar ? .pick : .none)
     }
 
     static func == (lhs: Self, rhs: Self) -> Bool { lhs.name == rhs.name }
 
     // Columns: name, sample group, family, brightness, movement (wow), attack, release, gain,
     // echo taps (beats), echo feedback, room (diffusion), grains (particles), stereo; then the
-    // guitar's fingerstyle lean and the loudness-match trim.
+    // guitar's fingerstyle lean, the loudness-match trim and the strum (guitars pick, harps roll).
     // Acoustic and lo-fi pianos only. "Felt" and "tape" rows are darker, softer at the hammer,
     // wobblier and wetter; "close" rows are drier; the rest sit in between (D114).
     static let keys: [Self] = [
@@ -111,9 +117,9 @@ nonisolated struct LofiPreset: Equatable, Sendable {
         .init("Pizzicato Cello", "cellopluck", .strings, 0.50, 0.19, 0.006, 0.29, 0.55, (0.75, 1.5), 0.53, 1.12, 0.86, 0.60,
               level: -0.2),
         .init("Concert Harp", "harp", .strings, 0.51, 0.16, 0.004, 0.29, 0.51, (1, 1.75), 0.51, 1.18, 0.88, 0.61,
-              level: 0.7),
+              level: 0.7, strum: .roll),
         .init("Folk Harp", "folkharp", .strings, 0.44, 0.20, 0.004, 0.30, 0.51, (0.75, 1.5), 0.50, 1.14, 0.84, 0.58,
-              level: -1.2)
+              level: -1.2, strum: .roll)
     ]
 
     /// Clean guitars only, never distorted. They play guitar figures, not keyboard lines.

@@ -5,7 +5,10 @@ import Foundation
 ///
 /// - strums: chord tones under a melody note, staggered 8 to 25 ms. A down-strum (low to high)
 ///   anticipates the beat so the melody string still speaks on its onset; an occasional up-strum
-///   (high to low) starts on the melody and trails the lower strings after it.
+///   (high to low) starts on the melody and trails the lower strings after it. Opening and landing
+///   notes strum up to four strings voiced by `LofiStrumVoicing` (sevenths included, D128); a
+///   down-strum leans on its low strings (1.10 to 0.90 of the drawn level), an up-strum sounds only
+///   the top two or three strings at 0.8, and a four-string strum is scaled by 0.85.
 /// - fingerpicking: a low chord tone plucked with the first note, and broken-chord figures that
 ///   rise through the gap after a landing note.
 /// - double stops: one chord tone a third to a sixth under the melody.
@@ -22,11 +25,22 @@ nonisolated enum LofiGuitarPhrasing {
     /// Ornament level relative to the melody note it decorates.
     static let innerVoice: ClosedRange<Float> = 0.56...0.70
     static let graceLevel: Float = 0.52
+    /// Strings of a strum on an opening or landing note (D128; three before).
+    static let fullStrumStrings = 4
+    /// Down-strum taper from the string next to the melody to the lowest string.
+    static let downTaper: (top: Float, low: Float) = (0.90, 1.10)
+    static let upStrumLevel: Float = 0.8
+    static let fourStringScale: Float = 0.85
+
+    /// `chord` is role ordered (root, third, fifth, seventh): the strums voice all of it, while the
+    /// double stops, thumb notes and broken chords keep to the triad.
 
     static func ornaments(lead: [LofiScore.Note], section: LofiScore.Section, chord: [Int], scale: [Int],
                           fingerstyle: Double, beatSeconds: Double, random: MusicRNG) -> [LofiScore.Note] {
         guard !lead.isEmpty, !chord.isEmpty else { return [] }
         var rng = random.fork(2_406)
+        let triad = Array(chord.prefix(3))
+        let voicingClasses = LofiStrumVoicing.classes(fromRoleOrdered: chord)
         let beat = max(0.05, beatSeconds)
         func beats(ms: Double) -> Double { ms / 1000 / beat }
         let fingerpicked = rng.chance(Float(fingerstyle))
@@ -39,7 +53,7 @@ nonisolated enum LofiGuitarPhrasing {
             var tones: [Int] = []
             var ceiling = top - 3
             while tones.count < count, ceiling >= lowestPitch {
-                guard let pitch = (lowestPitch...ceiling).reversed().first(where: { chord.contains($0 % 12) })
+                guard let pitch = (lowestPitch...ceiling).reversed().first(where: { triad.contains($0 % 12) })
                 else { break }
                 tones.append(pitch)
                 ceiling = pitch - 3
@@ -55,21 +69,40 @@ nonisolated enum LofiGuitarPhrasing {
                              velocity: note.velocity * level, color: note.color - 0.04, send: note.send))
         }
 
-        func strum(_ note: LofiScore.Note, ring: Double, previousEnd: Double, strings: Int) {
-            let tones = chordTones(below: note.midi, count: strings)
+        /// The strings under `note`, next to the melody first: a voiced chord for a full strum (four
+        /// strings, else three), the triad's two nearest tones otherwise.
+        func strumTones(under note: LofiScore.Note, full: Bool) -> [Int] {
+            guard full else { return chordTones(below: note.midi, count: 2) }
+            for strings in [fullStrumStrings, 3] {
+                let voiced = LofiStrumVoicing.voicing(classes: voicingClasses, strings: strings, floor: lowestPitch,
+                                                      ceiling: note.midi - 3, avoid: note.midi, random: &rng)
+                if !voiced.isEmpty { return voiced.reversed() }
+            }
+            return chordTones(below: note.midi, count: 3)
+        }
+
+        func strum(_ note: LofiScore.Note, ring: Double, previousEnd: Double, full: Bool) {
+            let tones = strumTones(under: note, full: full)
             guard !tones.isEmpty else { return }
             let spread = beats(ms: rng.range(strumSpread))
             let up = rng.chance(0.25)
+            let level = rng.rangeF(innerVoice)
+            if up {
+                // An up-stroke catches only the top strings, lighter.
+                for (k, pitch) in tones.prefix(full ? 3 : 2).enumerated() {
+                    add(pitch, at: note.beat + Double(k + 1) * spread, length: ring,
+                        level: level * upStrumLevel, from: note)
+                }
+                return
+            }
+            let strings = tones.count >= 4 ? fourStringScale : 1
             for (k, pitch) in tones.enumerated() {
-                // tones[0] is the string next to the melody; tones.last the lowest.
-                let level = rng.rangeF(innerVoice)
-                if up {
-                    add(pitch, at: note.beat + Double(k + 1) * spread, length: ring, level: level, from: note)
-                } else {
-                    let onset = note.beat - Double(k + 1) * spread
-                    if onset >= previousEnd - 0.2 {
-                        add(pitch, at: onset, length: ring + Double(k + 1) * spread, level: level, from: note)
-                    }
+                // tones[0] is the string next to the melody; tones.last the lowest, struck hardest.
+                let u = tones.count > 1 ? Float(k) / Float(tones.count - 1) : 0.5
+                let taper = downTaper.top + (downTaper.low - downTaper.top) * u
+                let onset = note.beat - Double(k + 1) * spread
+                if onset >= previousEnd - 0.2 {
+                    add(pitch, at: onset, length: ring + Double(k + 1) * spread, level: level * taper * strings, from: note)
                 }
             }
         }
@@ -122,7 +155,7 @@ nonisolated enum LofiGuitarPhrasing {
                 }
             } else {
                 if index == 0 || landing || rng.chance(0.30) {
-                    strum(note, ring: ring, previousEnd: previousEnd, strings: index == 0 || landing ? 3 : 2)
+                    strum(note, ring: ring, previousEnd: previousEnd, full: index == 0 || landing)
                 } else if rng.chance(0.45), let third = chordTones(below: note.midi, count: 1).first,
                           note.midi - third <= 9 {
                     add(third, at: note.beat, length: ring, level: rng.rangeF(innerVoice), from: note)

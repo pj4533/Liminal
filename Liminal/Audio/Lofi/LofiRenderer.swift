@@ -60,19 +60,26 @@ nonisolated enum LofiRenderer {
         let leadSampleCount: Int
         let tail: Tail
         let effectReturns: [AVAudioPCMBuffer]
+        /// The phrase's dry lead gain (`leadGain(for:)`, melody and ornaments only) and the instrument
+        /// balance times the program trim that follows it.
+        var leadGain: Float = 1
+        var instrumentTrim: Float = 1
     }
 
     static func render(seed: UInt64, section: LofiScore.Section, options: LofiOptions, sampleRate: Double,
                        drift: LofiDrift, startBeat: Double, drums: LofiDrumTake? = nil,
                        drumStartBeat: Int = 0, carry: Tail? = nil, samples: LofiSampleBank = .bundled,
-                       captureEffects: Bool = false, audition: LofiScore.Audition = .none) throws -> Phrase {
+                       captureEffects: Bool = false, audition: LofiScore.Audition = .none,
+                       revise: ((LofiScore) -> LofiScore)? = nil) throws -> Phrase {
         let clock = drums?.clock ?? LofiClock(tempo: options.safeTempo, sampleRate: sampleRate)
         // A take with landmarks drives bass placement through its timing field; otherwise the old kicks.
         let timing = drums.flatMap { $0.landmarks.isEmpty ? nil : $0.timing }
-        let score = LofiScore.make(seed: seed, section: section, drift: drift, startBeat: startBeat,
+        let made = LofiScore.make(seed: seed, section: section, drift: drift, startBeat: startBeat,
                                    pinnedScale: options.scale, kickBeats: drums?.bassAnchors(startBeat: drumStartBeat) ?? [],
                                    timing: timing, timingStartBeat: drumStartBeat, beatSeconds: clock.beatDuration,
                                    audition: audition)
+        // `revise` is a test seam (a hand-made strum on a scored phrase); nil in the app.
+        let score = revise?(made) ?? made
         let n = clock.frameCount
         let bass = try stereoBuffer(clock: clock)
         let dry = try stereoBuffer(clock: clock)
@@ -104,21 +111,36 @@ nonisolated enum LofiRenderer {
             try Task.checkCancellation()
             switch note.part {
             case .bass: addBass(note, score: score, clock: clock, samples: samples, left: left, right: right)
+            case .strum:
+                // The strummed hook (D128) renders beside the melody in the accent buffer: the lead's
+                // filters and gain curve and the phrase's lead gain, but never the gain measurement or
+                // the compressor's reference, so the melody's level is the same with the hook or without.
+                // Its send is mostly its own: a plain stab sends little, a thrown one about 15 dB more.
+                let sample = samples.sample(for: score.preset, midi: note.midi, velocity: note.velocity)
+                let level = note.velocity * note.gain
+                let dryNote = Self.strumString(note, velocity: level)
+                let send = Self.strumString(note, velocity: level * (Self.strumSendFloor + Self.strumSendScale * note.send))
+                var accent = leadAccent ?? (quiet, quiet)
+                addInstrument(dryNote, sample: sample, score: score, clock: clock, into: &accent)
+                leadAccent = accent
+                addInstrument(send, sample: sample, score: score, clock: clock, into: &leadSend)
             case .lead, .texture, .ornament:
                 let sample = samples.sample(for: score.preset, midi: note.midi, velocity: note.velocity)
                 // A revealed return note scales its whole send, the fixed part included, so the
                 // score's 40 percent reduction is a 40 percent lower send level.
                 let floor: Float = note.gain == LofiScore.returnRevealGain ? 0.44 * LofiScore.returnRevealSend : 0.44
-                let send = LofiScore.Note(part: note.part, midi: note.midi, beat: note.beat, length: note.length,
+                var send = LofiScore.Note(part: note.part, midi: note.midi, beat: note.beat, length: note.length,
                              velocity: note.velocity * (note.part.playsLead ? floor + 0.72 * note.send : note.send), color: note.color)
+                send.damp = note.damp
                 if note.part.playsLead {
                     if note.part == .lead, sample != nil { leadSampleCount += 1 }
                     addInstrument(note, sample: sample, score: score, clock: clock, into: &lead)
                     addInstrument(send, sample: sample, score: score, clock: clock, into: &leadSend)
                     if note.gain != 1 {
                         var accent = leadAccent ?? (quiet, quiet)
-                        let extra = LofiScore.Note(part: .lead, midi: note.midi, beat: note.beat, length: note.length,
+                        var extra = LofiScore.Note(part: .lead, midi: note.midi, beat: note.beat, length: note.length,
                                                    velocity: note.velocity * (note.gain - 1), color: note.color)
+                        extra.damp = note.damp
                         addInstrument(extra, sample: sample, score: score, clock: clock, into: &accent)
                         leadAccent = accent
                     }
@@ -408,7 +430,8 @@ nonisolated enum LofiRenderer {
         }
         return Phrase(bass: bass, dry: dry, texture: textureBuffer, wet: wetBuffer, fallbackWet: fallbackWet,
                       clock: clock, score: score, leadSampleCount: leadSampleCount,
-                      tail: Tail(clock: clock, left: tailL, right: tailR), effectReturns: effectReturns)
+                      tail: Tail(clock: clock, left: tailL, right: tailR), effectReturns: effectReturns,
+                      leadGain: dryLeadGain, instrumentTrim: trim)
     }
 
     /// A per-beat automation value interpolated linearly to every frame (the value at beat `b`
@@ -437,6 +460,21 @@ nonisolated enum LofiRenderer {
     /// The space duck of a phrase (`LofiStemChains.spaceDuck`) keyed by its dry lead at `gain`.
     /// Scale invariant, so the dry stem itself reproduces it.
     /// Phrase-local start frames of the scored lead notes: the onsets that key the space duck.
+    /// Send level of a `.strum` note: `velocity * (strumSendFloor + strumSendScale * send)`. A plain
+    /// stab (send 0.10) sends 0.225, a thrown one (0.90) 1.225 (D128); lead and ornament notes keep
+    /// `0.44 + 0.72 * send`.
+    static let strumSendFloor: Float = 0.10
+    static let strumSendScale: Float = 1.25
+
+    /// One string of a strum at `velocity`, with its damp and colour and no extra gain.
+    private static func strumString(_ note: LofiScore.Note, velocity: Float) -> LofiScore.Note {
+        var string = LofiScore.Note(part: .strum, midi: note.midi, beat: note.beat, length: note.length,
+                                    velocity: velocity, color: note.color, send: note.send)
+        string.damp = note.damp
+        return string
+    }
+
+    /// Melody onsets only: the strummed hook and the ornaments never key the space duck's onsets.
     static func leadOnsets(_ score: LofiScore, clock: LofiClock) -> [Int] {
         score.notes.filter { $0.part == .lead }.map { clock.frame(at: $0.beat) }
     }

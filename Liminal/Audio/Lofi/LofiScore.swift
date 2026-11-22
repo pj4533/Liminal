@@ -120,11 +120,13 @@ nonisolated struct LofiScore: Sendable, Equatable {
     /// `ornament` is the lead instrument's own extra strings (guitar strums, double stops, grace
     /// notes and broken chords, `LofiGuitarPhrasing`). It renders with the lead but is never part
     /// of the melody line, so the hook, its spacing and its register stay exactly as scored.
+    /// `strum` is the strummed hook line (`LofiStrum`, D128): chord strings played off the drums,
+    /// rendered with the lead's chain but kept out of the phrase's lead gain and compressor reference.
     enum Part: Int, Sendable {
-        case texture, bass, lead, ornament
+        case texture, bass, lead, ornament, strum
 
         /// Rendered into the lead stem.
-        var playsLead: Bool { self == .lead || self == .ornament }
+        var playsLead: Bool { self == .lead || self == .ornament || self == .strum }
     }
     enum Section: Int, Sendable { case theme, answer, breakdown, returnTheme, variation }
 
@@ -151,6 +153,9 @@ nonisolated struct LofiScore: Sendable, Equatable {
         /// How hard a bass note is struck on its kick, 0 to 1 (`LofiBassVoice`): the strike layer, the body's
         /// filter opening and the level accent. 0 is a plain warm tone.
         var strike: Float = 0
+        /// Seconds of release after the hold: a hand choking the strings (`LofiStrum`). 0 keeps the
+        /// program's own release.
+        var damp: Double = 0
     }
 
     /// A structural bass accent whose audible attack was placed on a played kick (phrase-local beats).
@@ -188,6 +193,9 @@ nonisolated struct LofiScore: Sendable, Equatable {
     var bassSweep: ClosedRange<Double>? = nil
     /// The sample kit of the frozen D116 throw send (`LofiBassThrowSend.kit`).
     var bassThrowKit: LofiBassSamples.Kit = .upright
+    /// The strummed hook's events (D128), for diagnostics, tests and the capture manifest. Their
+    /// notes are the score's `.strum` notes.
+    var strumEvents: [LofiStrum.Event] = []
 
     static let phrasesPerForm = 8
     /// The return's first two lead notes are revealed: +3 dB dry (+1.5 dB before mix calibration; a
@@ -250,7 +258,7 @@ nonisolated struct LofiScore: Sendable, Equatable {
         // Guitar programs add their own strings around the unchanged melody.
         let ornaments = preset.family == .guitar
             ? LofiGuitarPhrasing.ornaments(lead: lead, section: section,
-                                           chord: harmony.notes(for: chordDegree, intervals: [0, 3, 7]),
+                                           chord: harmony.notes(for: chordDegree, intervals: [0, 3, 7, 10]),
                                            scale: harmony.pitches(in: LofiGuitarPhrasing.lowestPitch...72),
                                            fingerstyle: preset.fingerstyle, beatSeconds: beatSeconds,
                                            random: phraseRandom.fork(2_407))
@@ -275,6 +283,22 @@ nonisolated struct LofiScore: Sendable, Equatable {
                      preset: preset, endingRest: rest, virtualRecord: virtualRecord, bassVoice: voice,
                      bassAnchors: bass.anchors, bassSweep: bass.sweep,
                      bassThrowKit: LofiBassThrowSend.kit(seed: seed, phrase: phrase))
+    }
+
+    /// This score with the notes of `events` added as `.strum` notes (`LofiStrum.notes`, coloured
+    /// from the melody's `tone`) and the events recorded. Everything else is unchanged.
+    func addingStrum(_ events: [LofiStrum.Event], tone: Double, beatSeconds: Double) -> Self {
+        guard !events.isEmpty else { return self }
+        let added = events.flatMap { LofiStrum.notes(for: $0, tone: tone, beatSeconds: beatSeconds) }
+        let merged = (notes + added).sorted { lhs, rhs in
+            if lhs.beat != rhs.beat { return lhs.beat < rhs.beat }
+            if lhs.part != rhs.part { return lhs.part.rawValue < rhs.part.rawValue }
+            return lhs.midi < rhs.midi
+        }
+        return .init(section: section, tonic: tonic, chordRoot: chordRoot, scale: scale, notes: merged,
+                     preset: preset, endingRest: endingRest, virtualRecord: virtualRecord, bassVoice: bassVoice,
+                     bassAnchors: bassAnchors, bassSweep: bassSweep, bassThrowKit: bassThrowKit,
+                     strumEvents: strumEvents + events)
     }
 
     /// The onset of the second melodic cell: the largest gap among the first notes ends the first cell.

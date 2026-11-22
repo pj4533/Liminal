@@ -235,6 +235,7 @@ struct LofiMixRenderTests {
                                               "on": clock.frame(at: note.beat) + i * clock.frameCount,
                                               "off": clock.frame(at: note.beat + note.length) + i * clock.frameCount,
                                               "send": note.send, "color": note.color]
+                    if note.part == .strum { row["damp"] = note.damp }
                     if note.part == .bass {
                         row["stroke"] = String(describing: note.stroke)
                         row["strike"] = note.strike
@@ -247,6 +248,13 @@ struct LofiMixRenderTests {
                     return row
                 },
             ]
+            // The strummed hook's events (D128); `beat` is phrase-local, `site` the `LofiStrum.Site` raw value.
+            events["strumEvents"] = phrase.score.strumEvents.map { event -> [String: Any] in
+                ["bar": event.bar, "step": event.step, "beat": event.beat, "kind": String(describing: event.kind),
+                 "down": event.down, "strings": event.strings, "spreadMs": event.spreadMs, "length": event.length,
+                 "thrown": event.thrown, "site": event.site.rawValue, "archetype": event.archetype,
+                 "on": clock.frame(at: event.beat) + i * clock.frameCount]
+            }
             if let edit = phrase.score.virtualRecord {
                 events["virtualRecord"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(edit))
             }
