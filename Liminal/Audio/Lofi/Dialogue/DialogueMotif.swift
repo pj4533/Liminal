@@ -166,7 +166,7 @@ nonisolated enum DialogueMotifTuning {
     /// downbeat and one ghost-note pocket; the chop beat stays on 8ths otherwise).
     static let grooveOffEighths = 2
     /// A groove bar whose drummer plays on at least this many of its sixteenths takes one stab less.
-    static let busyBarSteps = 11
+    static let busyBarSteps = 13
     /// The seeded spread of the fill sites' scores (D127): two loops on one template fill different steps.
     static let grooveJitter = 1.2
     /// The largest feel offset (`DialogueFeel`), inside the 25 ms a step may sit off the drummer's grid.

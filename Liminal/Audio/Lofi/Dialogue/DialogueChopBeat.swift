@@ -60,6 +60,8 @@ nonisolated extension DialogueMotif {
         case push
         /// On a kick (only when nothing better fits).
         case kick
+        /// With a snare that is not the template's backbeat answer (low; a busy take's last resort).
+        case snare
     }
 
     /// The cuts a groove draws from, by role: the signature's (whole, head and tail), the response's,
@@ -90,6 +92,7 @@ nonisolated extension DialogueMotif {
             case .answer: list = [ra, rb, t, r, sb] + others
             case .ghost, .push: list = ([sb, rb, sa, ra] + others).sorted { (seconds($0), $0) < (seconds($1), $1) }
             case .kick: list = [sa, s, sb]
+            case .snare: list = [ra, rb, sa, sb] + others
             }
             var seen = Set<Int>()
             return list.filter { seen.insert($0).inserted }
@@ -179,7 +182,7 @@ nonisolated extension DialogueMotif {
                 if d.kick[k] { return .kick }
                 if d.ghost[k] { return .ghost }
                 if !d.snare[k], k >= 2, d.snare[k - 2] { return .answer }
-                return d.snare[k] ? nil : .gap
+                return d.snare[k] ? .snare : .gap
             }
             func score(_ k: Int, _ s: FillSite) -> Double {
                 var x: Double
@@ -188,7 +191,8 @@ nonisolated extension DialogueMotif {
                 case .answer: x = 2.6
                 case .ghost: x = k % 2 == 0 ? 1.8 : 1.2
                 case .push: x = 2.4
-                case .kick: x = k % 16 == 0 ? 0.6 : -1.5
+                case .kick: x = k % 16 == 0 ? 0.6 : -0.6
+                case .snare: x = 0.3
                 }
                 // Leave the drummer's busiest beat to the drums.
                 if (k % 16) / 4 == busiest { x -= 1.4 }
@@ -242,7 +246,7 @@ nonisolated extension DialogueMotif {
             switch site {
             case .gap: gate = rng.chance(0.7) ? 1 : 2
             case .answer: gate = rng.chance(0.5) ? 1 : 2
-            case .ghost, .push, .kick: gate = 1
+            case .ghost, .push, .kick, .snare: gate = 1
             }
             hits[step]!.fragment = pick
             hits[step]!.gate = gate
