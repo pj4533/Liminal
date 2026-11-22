@@ -19,6 +19,8 @@ xcodebuild test -scheme Liminal -destination 'platform=macOS' \
 
 For dialogue chop work run the `Dialogue*` suites. `DialogueHookProbeTests` prints each loop's trigger grid (row = bar, column = sixteenth, cell = fragment id), the hook metrics of `LiminalTests/DialogueHookMetrics.swift` and the ranked lines; xcodebuild does not echo the test host's output, so read it from the result bundle with `xcrun xcresulttool export attachments --path <xcresult> --output-path <dir>` (D125).
 
+For guitar programs, `LofiStrumProbeTests` renders eight phrases per guitar program (72 BPM, 48 kHz, the program forced by the audition) against eight Steinway Grand phrases and prints integrated level, loudest 400 ms and 2-5 kHz share (`STRUM-PROBE` lines). It is skipped unless the test runner sees `LIMINAL_STRUM_PROBE`: pass `TEST_RUNNER_LIMINAL_STRUM_PROBE=1` to `xcodebuild test`, then read the attachment as above (D128).
+
 For bass, chords or mix work add the suites that pin the bass line and voice, the pad, the stem chains and the render (`docs/plans/bass-and-pads.md` 5.1):
 
 ```sh

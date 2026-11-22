@@ -129,6 +129,8 @@ nonisolated struct LofiPreset: Equatable, Sendable {
         .init("Archtop Jazz", "jazzbox", .guitar, 0.30, 0.16, 0.006, 0.30, 0.48, (1, 1.5), 0.48, 1.04, 0.76, 0.48,
               fingerstyle: 0.3, level: 0.3),
         .init("Flatwound Tape", "flatwound", .guitar, 0.26, 0.46, 0.008, 0.32, 0.48, (1, 1.5), 0.55, 1.16, 0.96, 0.54,
-              fingerstyle: 0.6, level: 0.7)
+              fingerstyle: 0.6, level: 0.7),
+        .init("Hollowbody Soul", "hofner", .guitar, 0.50, 0.30, 0.005, 0.26, 0.50, (0.75, 1.5), 0.52, 1.10, 0.86, 0.52,
+              fingerstyle: 0.30, level: 0)
     ]
 }

@@ -87,10 +87,11 @@ struct LofiCompositionTests {
             "steel": [46, 52, 55, 58, 61, 64, 68],
             "archtop": [45, 48, 54, 57, 60, 63, 66, 72],
             "jazzbox": [45, 48, 54, 57, 60, 63, 66, 72],
-            "flatwound": [45, 51, 57, 60, 63, 66, 72]
+            "flatwound": [45, 51, 57, 60, 63, 66, 72],
+            "hofner": [45, 48, 51, 54, 57, 60, 63, 66, 72]
         ]
         let everyProgram = (0..<400).map { LofiPreset.selection(seed: 32, phrase: $0) }
-        #expect(Set(everyProgram.map(\.name)).count == 20)
+        #expect(Set(everyProgram.map(\.name)).count == 21)
         #expect(Set(everyProgram.map(\.family)) == [.piano, .strings, .guitar])
         let removed: Set<String> = ["fmkeys", "vibes", "marimba", "organ", "bassrec", "psaltery"]
         #expect(everyProgram.allSatisfy { !removed.contains($0.sampleGroup) })
@@ -171,7 +172,7 @@ struct LofiCompositionTests {
         #expect(unmoved(locked) == unmoved(grid))
     }
 
-    @Test(arguments: ["kawai", "osiris", "uprightkw", "nylon", "steel", "archtop", "jazzbox", "flatwound", "upright"])
+    @Test(arguments: ["kawai", "osiris", "uprightkw", "nylon", "steel", "archtop", "jazzbox", "flatwound", "upright", "hofner"])
     func sampledProgramsPlayTheirIntendedOctave(group: String) throws {
         let program = try #require((0..<400).map { LofiPreset.selection(seed: 32, phrase: $0) }
             .first { $0.sampleGroup == group })
