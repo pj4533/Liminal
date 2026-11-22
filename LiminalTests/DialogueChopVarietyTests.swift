@@ -163,4 +163,65 @@ struct DialogueChopVarietyTests {
                     "\(asset.entry.name): kick \(chop.onKick), same \(chop.samePieceUnmarked), least \(chop.leastPer2Bars)")
         }
     }
+
+    /// A line that may not be reordered drops a fill site no cut fits, on any drum pattern, and keeps
+    /// each bar's new pieces in source order (the app run of 22 November 2026 crashed on a dropped site).
+    @Test func aLineThatMayNotBeReorderedDropsSitesSafelyOnAnyDrums() throws {
+        let fixture = DialogueFixtures.speech(DialogueFixtures.Options(seconds: 16, seed: 7, sentences: [
+            "we did not stop the car that night.", "I don't know where the river goes.",
+            "the station was empty in the morning.", "nobody wanted to go home.",
+        ]))
+        let film = DialogueHookProbeTests.film(fixture, id: "cv-negated", transcribed: true)
+        var patterns: [DialogueMotifDrums] = [.boomBap,
+            DialogueMotifDrums(kicks: [0, 3, 6, 9, 10, 16, 19, 22, 25, 26], snares: [4, 12, 20, 28],
+                               ghosts: [1, 2, 5, 7, 8, 11, 13, 14, 15, 17, 18, 21, 23, 24, 27, 29, 30, 31]),
+            DialogueMotifDrums(kicks: [0, 16], snares: [4, 12, 20, 28], ghosts: [2, 6, 10, 14, 18, 22, 26, 30])]
+        let assets = LofiDrumLibrary.assets()
+        for k in 0..<min(4, assets.count) {
+            patterns.append(DialogueMotifDrums(snapshot: try DialogueChopVarietyProbeTests.takeSnapshot(assets[k * assets.count / 4], take: 0)))
+        }
+        var checked = 0
+        for drums in patterns {
+            for seed: UInt64 in 1...12 {
+                guard let motif = DialogueMotif.make(loop: Int(seed), source: film.source, analysis: film.analysis, transcript: film.transcript,
+                                                     memory: DialoguePerformanceMemory(), seed: seed, beatDuration: 60 / 78.0, drums: drums),
+                      !motif.reorderAllowed else { continue }
+                checked += 1
+                for cell in motif.cells where cell.kind == .chopBeat {
+                    #expect(cell.items.allSatisfy { motif.fragments.indices.contains($0.fragment) })
+                    for bar in 0..<2 {
+                        var order: [Int] = []
+                        for item in cell.items.sorted(by: { $0.slot < $1.slot }) where item.slot / 16 == bar && item.slot < 28 {
+                            let o = motif.fragments[item.fragment].order
+                            if !order.contains(o) { order.append(o) }
+                        }
+                        #expect(order == order.sorted(), "'\(motif.text ?? "-")' bar \(bar): \(order)")
+                    }
+                }
+            }
+        }
+        #expect(checked > 0)
+    }
+
+    /// A line whose roles collapse onto one piece (the response is the signature, no halves): every
+    /// cut equals the hit before it, so each fill site is dropped. The groove keeps its skeleton and
+    /// never reads a dropped site (the app run of 22 November 2026 crashed here).
+    @Test(arguments: [true, false]) func aOnePieceLineDropsItsFillWithoutCrashing(_ reorder: Bool) {
+        func fragment(_ id: Int, _ kind: DialogueMotifFragment.Kind, _ frames: Range<Int>) -> DialogueMotifFragment {
+            DialogueMotifFragment(id: id, kind: kind, order: id == 0 ? 0 : id - 1, parent: nil, frames: frames,
+                                  accentFrame: frames.lowerBound, fadeIn: 0, fadeOut: 0, text: nil)
+        }
+        let fragments = [fragment(0, .line, 0..<48_000), fragment(1, .piece, 0..<20_000)]
+        let v = DialogueMotif.GrooveVocabulary(s: 1, r: 1, t: 1, sa: 1, ra: 1, pieces: [1], halves: [:])
+        for template in DialogueMotifTuning.hookTemplates {
+            for drums in [DialogueMotifDrums.boomBap, DialogueMotifDrums(kicks: [0, 16], snares: [4, 12, 20, 28], ghosts: [2, 6, 10, 14])] {
+                for seed: UInt64 in 1...6 {
+                    let items = DialogueMotif.groove(template: template, vocabulary: v, drums: drums, reorderAllowed: reorder,
+                                                     fragments: fragments, sampleRate: 48_000, seed: seed)
+                    #expect(items.filter(\.skeleton).count == template.count)
+                    #expect(items.allSatisfy { $0.fragment == 1 })
+                }
+            }
+        }
+    }
 }

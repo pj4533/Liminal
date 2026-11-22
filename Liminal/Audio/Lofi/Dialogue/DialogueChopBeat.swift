@@ -215,11 +215,14 @@ nonisolated extension DialogueMotif {
 
         // Pieces, in time order: the site's preferred cut that differs from the hits on either side.
         let steps = hits.keys.sorted()
+        // A site no cut fits (a line that may not be reordered) is dropped; it stays out of every later
+        // lookup (an app run of 22 November 2026 crashed on a removed site still in `steps`).
+        var dropped = Set<Int>()
         func orderOK(_ step: Int, _ fragment: Int) -> Bool {
             guard !reorderAllowed else { return true }
             let bar = (step / 16) * 16
             var orders: [Int] = []
-            for k in steps where k >= bar && k < bar + 16 {
+            for k in steps where k >= bar && k < bar + 16 && !dropped.contains(k) {
                 let f = k == step ? fragment : hits[k]!.fragment
                 guard f >= 0 else { continue }
                 let o = fragments[f].order
@@ -228,10 +231,11 @@ nonisolated extension DialogueMotif {
             return orders == orders.sorted()
         }
         var rotation: [FillSite: Int] = [:]
-        for (i, step) in steps.enumerated() where !hits[step]!.skeleton {
+        for step in steps where !hits[step]!.skeleton {
             let site = hits[step]!.site!
-            let prev = i > 0 ? hits[steps[i - 1]]!.fragment : -1
-            let next = i + 1 < steps.count ? hits[steps[i + 1]]!.fragment : hits[steps[0]]!.fragment
+            let live = steps.filter { !dropped.contains($0) }
+            let prev = live.last { $0 < step }.map { hits[$0]!.fragment } ?? -1
+            let next = (live.first { $0 > step } ?? live.first { $0 != step }).map { hits[$0]!.fragment } ?? -1
             var list = v.preferred(site, fragments: fragments, sampleRate: sampleRate)
             // A seeded start in the list for each kind of site, advancing as it is used, so two gaps
             // in a bar do not take the same cut.
@@ -240,7 +244,7 @@ nonisolated extension DialogueMotif {
             let pool = list + v.preferred(.gap, fragments: fragments, sampleRate: sampleRate)
             let pick = pool.first { $0 != prev && $0 != next && orderOK(step, $0) }
                 ?? pool.first { $0 != prev && orderOK(step, $0) }
-            guard let pick else { hits[step] = nil; continue }
+            guard let pick else { dropped.insert(step); continue }
             rotation[site] = start + 1 + (list.firstIndex(of: pick) ?? 0)
             let gate: Int
             switch site {
@@ -252,6 +256,7 @@ nonisolated extension DialogueMotif {
             hits[step]!.gate = gate
         }
 
+        for step in dropped { hits[step] = nil }
         let placed = hits.keys.sorted()
         let lastResponse = placed.last { hits[$0]!.fragment == v.r && hits[$0]!.skeleton }
         var held = false
