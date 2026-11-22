@@ -98,8 +98,6 @@ nonisolated enum DialogueMotifTuning {
     static let tailAfterBedSeconds = 1.75
     /// The first piece of a late plan may move this far to stay in its bar.
     static let lateSlotShift = 6
-    /// A statement in the breakdown (the second and last full line) with this chance.
-    static let secondStatementChance: Float = 0.45
     /// Hook templates (D125): (role, step) in the 2-bar hook cell, bar B = steps 16 to 31. Roles are
     /// `s` the signature (the line's strongest word), `r` the response and `t` a third piece. One
     /// template holds for `hookLoops` loops (the words change every loop, the trigger rhythm with
@@ -1078,34 +1076,6 @@ nonisolated extension DialogueMotif {
         return (s, r, t)
     }
 
-    /// Gates of a cell's hook pieces (D126; user direction of 21 November 2026: "shorter chops that
-    /// are always on beat but triggered, repeated, held"). A stutter repeat holds one sixteenth; a
-    /// hit one or two steps before the next holds to it; otherwise the signature and the third are
-    /// 1/8 stabs, the response a quarter-note word, and the cell's last response plays out (the
-    /// answer heard whole). The line, the reversed pickup, the landing and pieces outside the hook's
-    /// vocabulary (the return's quiet piece) keep their natural length.
-    static func gated(_ items: [DialogueMotifCell.Item], cellSteps: Int, response: Int, vocabulary: Set<Int>) -> [DialogueMotifCell.Item] {
-        let playable = items.indices.filter { !items[$0].landing && items[$0].fragment != 0 }
-        let lastResponse = playable.last { items[$0].fragment == response }
-        return items.enumerated().map { k, item in
-            var out = item
-            guard item.fragment != 0, !item.landing, item.effect != .reversed, item.gainDB == 0,
-                  vocabulary.contains(item.fragment) else { return out }
-            // A stutter's repeats, and the hit that opens one, hold one sixteenth.
-            if item.after != nil || (k + 1 < items.count && items[k + 1].after != nil) { out.gate = 1; return out }
-            let next = items[(k + 1)...].first { !$0.landing }?.slot ?? cellSteps
-            let space = next - item.slot
-            if space <= 2 {
-                out.gate = max(1, space)
-            } else if item.fragment == response {
-                out.gate = k == lastResponse ? nil : min(space, 4)
-            } else {
-                out.gate = 2
-            }
-            return out
-        }
-    }
-
     /// The half of a piece its stutters repeat: the first half when the cut splits a word ("Sall-")
     /// or nothing carries text, else the half with the stronger word ("LSD." rather than "of").
     static func headHalf(_ piece: Int, fragments: [DialogueMotifFragment], halves: [Int: [Int]]) -> Int {
@@ -1566,10 +1536,15 @@ nonisolated enum DialogueMotifPerformer {
             guard barEnd > hard, barStart < upper else { continue }
             // A bar's onset is a hit's accent, the frame on its step: a downbeat hit starts its consonant
             // just before the bar line, and a reversed pickup swells through the bar before its own.
-            if placed.contains(where: { $0.accent >= barStart && $0.accent < barEnd }) { continue }
+            // The bar is measured on the drummer's step grid, not the straight bar line: a downbeat
+            // step the drummer plays ahead (a negative offset) has its accent just before `barStart`,
+            // and counting it in the previous bar made the breakdown's downbeat word (and the intro
+            // line) look missing, so repair added a stab on step 2 that choked it (live log, D126 check).
+            let s0 = Int((bar * 4).rounded())
+            let gridStart = snapshot.gridTime(sixteenth: s0), gridEnd = snapshot.gridTime(sixteenth: s0 + 16)
+            if placed.contains(where: { $0.accent >= gridStart - 1e-6 && $0.accent < gridEnd - 1e-6 }) { continue }
             let barInLoop = Int(((bar - loopBeat) / 4).rounded())
             let returnBar = barInLoop == 12
-            let s0 = Int((bar * 4).rounded())
             // The hook's own items for this bar first (same step, same piece), so a repaired bar is
             // on-pattern (D125); then recurring pieces on the generic slots, rotating so repairs do
             // not always pick the same cut.

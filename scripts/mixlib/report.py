@@ -795,9 +795,12 @@ MASTER_DRIVERS = ("C-M1", "C-M2", "C-M3", "C-M4", "C-M5", "C-M6", "C-M7", "C-M8"
 def _bound_text(bounds):
     parts = []
     for k, v in bounds.items():
-        if isinstance(v, (list, tuple)):
+        if isinstance(v, (list, tuple)) and len(v) == 2 and all(isinstance(x, (int, float)) for x in v):
             lo, hi = v
             parts.append(f"{k} {fmt(lo)} to {fmt(hi)}")
+        elif isinstance(v, (list, tuple)):
+            # A list of names (C-D9's cellsEveryLoop since D126 part 2), not a range.
+            parts.append(f"{k} {', '.join(str(x) for x in v)}")
         elif k.endswith("Max"):
             parts.append(f"{k[:-3]} <= {fmt(v)}")
         elif k.endswith("Min"):

@@ -456,7 +456,16 @@ def measure_motif(cap, ev):
     for w in range(int(cap.scored_frames / loop_frames + 1e-3)):
         a = w * loop_frames
         inside = [e for e in ev if a <= e["frame"] < a + loop_frames]
-        onsets = [sum(1 for e in inside if a + k * cap.bar_frames <= e["frame"] < a + (k + 1) * cap.bar_frames) for k in range(16)]
+
+        # A piece's bar is the bar of its step (block and slot, D126 check): a downbeat hit starts its
+        # consonant before the bar line, and a drummer ahead of the beat puts even its accent there.
+        def bar_of(e):
+            r = e["raw"]
+            if r.get("block") is not None and r.get("slot") is not None:
+                return (int(r["block"]) * 64 + int(r["slot"])) // 16 - 16 * w
+            return int((e["frame"] - a) // cap.bar_frames)
+        stepped = [e for e in ev if (a - cap.bar_frames) <= e["frame"] < a + loop_frames + cap.bar_frames]
+        onsets = [sum(1 for e in stepped if bar_of(e) == k) for k in range(16)]
         frags = {f["id"]: f for f in (motifs.get(w) or {}).get("fragments", [])}
         pieces = [e["raw"].get("piece") for e in inside if e["raw"].get("piece") is not None]
         sub = [bool(frags.get(p, {}).get("subLine")) for p in pieces]

@@ -52,22 +52,23 @@ private struct MotifRun {
 }
 
 /// A drum take with a few milliseconds of push and drag on every sixteenth.
-private func grooved(_ snapshot: DialogueTransportSnapshot, seed: UInt64) -> DialogueTransportSnapshot {
+/// `push` moves every 8th position by that many beats (negative: a drummer playing ahead).
+private func grooved(_ snapshot: DialogueTransportSnapshot, seed: UInt64, push: Double = 0) -> DialogueTransportSnapshot {
     var s = snapshot
     var rng = MusicRNG(seed: seed)
-    s.grooveOffsets = (0..<DialogueTransportSnapshot.takeSixteenths).map { k in (k % 2 == 1 ? 0.03 : 0) + rng.range(-0.01...0.01) }
+    s.grooveOffsets = (0..<DialogueTransportSnapshot.takeSixteenths).map { k in (k % 2 == 1 ? 0.03 : push) + rng.range(-0.01...0.01) }
     return s
 }
 
 /// Plays `takes` loops in 8-bar cues against carried memory, as the coordinator does.
 private func run(_ shape: MotifShape, seed: UInt64, takes: Int = 2,
-                 earliest: ((DialogueTransportSnapshot, Int) -> Double)? = nil, preRoll: Double = 0) -> MotifRun {
+                 earliest: ((DialogueTransportSnapshot, Int) -> Double)? = nil, preRoll: Double = 0, push: Double = 0) -> MotifRun {
     var memory = DialoguePerformanceMemory()
     var result = MotifRun()
     let beat = 60 / shape.bpm
     for take in 0..<takes {
         let snapshot = grooved(DialogueFixtures.snapshot(bpm: shape.bpm, origin: 0.5 + Double(take) * 64 * beat,
-                                                         phraseAtOrigin: 4 * take, takeIndex: take, seed: 3), seed: seed &+ UInt64(take))
+                                                         phraseAtOrigin: 4 * take, takeIndex: take, seed: 3), seed: seed &+ UInt64(take), push: push)
         var loop = MotifRun.Loop(snapshot: snapshot)
         for half in 0..<2 {
             let cue = take * 2 + half
@@ -90,8 +91,15 @@ private func run(_ shape: MotifShape, seed: UInt64, takes: Int = 2,
 
 /// Bars (0...15 of the loop) of each event's onset: its accent, the frame on the step (a downbeat hit's
 /// consonant starts a few milliseconds before the bar line; D126 part 2).
+/// Bars are on the drummer's step grid, as coverage repair measures them: a downbeat played ahead of
+/// the straight bar line belongs to its own bar.
 private func bars(_ loop: MotifRun.Loop) -> [Int: [DialogueEvent]] {
-    Dictionary(grouping: loop.events) { Int((loop.snapshot.beat(time: $0.accentTime) / 4 + 1e-9).rounded(.down)) }
+    let s = loop.snapshot
+    return Dictionary(grouping: loop.events) { e in
+        let straight = Int((s.beat(time: e.accentTime) / 4 + 1e-9).rounded(.down))
+        // The grid bar is the straight one or the next, whichever downbeat the accent has reached.
+        return s.gridTime(sixteenth: 16 * (straight + 1)) <= e.accentTime + 1e-6 ? straight + 1 : straight
+    }
 }
 
 struct DialogueMotifTests {
@@ -109,6 +117,22 @@ struct DialogueMotifTests {
                 // Typical density 2 to 4 onsets per bar.
                 let mean = Double(loop.events.count) / 16
                 #expect((1.8...4.5).contains(mean), "\(shape) seed \(seed) loop \(k): \(mean) onsets per bar")
+            }
+        }
+    }
+
+    /// Coverage repair measures a bar on the drummer's step grid (D126 check, live log of 21 November
+    /// 2026): a drummer ahead of the bar line put the downbeat's accent before the straight bar start,
+    /// so the intro line's bar and the breakdown's downbeat word looked empty and repair added a stab
+    /// on step 2 that choked the held word.
+    @Test(arguments: MotifShape.all) fileprivate func repairNeverFillsABarWhoseDownbeatIsPlayedAhead(_ shape: MotifShape) throws {
+        for seed in Self.seeds {
+            for (k, loop) in run(shape, seed: seed, preRoll: 0.7, push: -0.04).loops.enumerated() {
+                let byBar = bars(loop)
+                for (bar, events) in byBar where events.contains(where: { $0.cell == .repair }) {
+                    #expect(events.allSatisfy { $0.cell == .repair },
+                            "\(shape) seed \(seed) loop \(k) bar \(bar % 16 + 1): repair beside \(events.map { "\($0.cell?.rawValue ?? "-")@\($0.slot)" })")
+                }
             }
         }
     }
