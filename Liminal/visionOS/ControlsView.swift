@@ -59,7 +59,7 @@ struct ControlsView: View {
         .onAppear {
             RecordingController.shared.scheduleDebugRecording(audio: audioEngine)
             controlsVisible = true
-            audioEngine.apply(settings)
+            audioEngine.options = settings.lofiOptions
             applyDebugLaunchOptions()
             if let id = DebugLaunchOptions.controlsScroll {
                 Task { try? await Task.sleep(nanoseconds: 800_000_000); proxy.scrollTo(id, anchor: .top) }
@@ -67,11 +67,10 @@ struct ControlsView: View {
         }
         }
         .onDisappear { controlsVisible = false }
-        .onChange(of: settings.style) { _, newValue in audioEngine.style = newValue }
-        .onChange(of: settings.pinnedScale) { _, newValue in audioEngine.pinnedScale = newValue }
+        .onChange(of: settings.lofiOptions) { _, options in audioEngine.options = options }
         .onChange(of: settings.imageSource) { _, source in visualEngine.setImageSource(source) }
-        .onChange(of: audioEngine.isPlaybackReady ? audioEngine.musicMode : nil, initial: true) { _, playingMode in
-            if playingMode != nil { visualEngine.start(music: audioEngine) } else { visualEngine.stop() }
+        .onChange(of: audioEngine.isPlaybackReady, initial: true) { _, playing in
+            if playing { visualEngine.start(music: audioEngine) } else { visualEngine.stop() }
         }
         .archiveFootageSettings(settings, audioEngine: audioEngine)
     }
@@ -82,7 +81,7 @@ struct ControlsView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Liminal")
                 .font(.extraLargeTitle2)
-            Text("Generative ambient music with evolving visuals")
+            Text("Lo-fi beats with old film and evolving visuals")
                 .font(.title3)
                 .foregroundStyle(.secondary)
                 .wrapping()
@@ -139,7 +138,7 @@ struct ControlsView: View {
 
     private var musicSection: some View {
         ControlSection(title: "Music", systemImage: "music.note") {
-            MusicModeControls(settings: settings, audio: audioEngine)
+            MusicControls(settings: settings)
         }
     }
 
@@ -189,6 +188,7 @@ struct ControlsView: View {
 
     private var imagesSectionContent: some View {
         ControlSection(title: "Images & Storage", systemImage: "photo.stack") {
+            ImageSourceControls(settings: settings)
             APIStatusRow(source: visualEngine.imageSource, apiStatus: visualEngine.sourceStatus)
             ImageCreditLine(metadata: visualEngine.currentMetadata)
             ClearImagesSection(visualEngine: visualEngine)
@@ -196,14 +196,13 @@ struct ControlsView: View {
             // No destructive role: its red title is unreadable on glass; the icon is red instead.
             Button {
                 settings.resetToDefaults()
-                audioEngine.apply(settings)
             } label: {
                 DestructiveLabel(title: "Reset All Settings", systemImage: "arrow.counterclockwise")
                     .frame(minHeight: ControlMetrics.buttonHeight)
             }
             .buttonStyle(.bordered)
             .buttonBorderShape(.roundedRectangle(radius: 20))
-            Text("Restores style, density, space, echo, scale, visual and footage settings to their defaults.")
+            Text("Restores tempo, scale, visual and footage settings to their defaults.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .wrapping()

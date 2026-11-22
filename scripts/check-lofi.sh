@@ -34,7 +34,7 @@ parser.add_argument("--wait-lock", default=1200, type=int, metavar="SECONDS",
 parser.add_argument("--capture-attempts", default=4, type=int, choices=range(1, 9), metavar="N",
                     help="Capture again when a tap drops a block under machine load (default 4 attempts)")
 parser.add_argument("--hook", action="append", default=[], metavar="KEY=VALUE",
-                    help="Capture hook option passed to LofiCaptureHooks (repeatable), e.g. masterProfile=ambient")
+                    help="Capture hook option passed to LofiCaptureHooks (repeatable), e.g. masterInputGainDb=4")
 parser.add_argument("--max-true-peak", type=float, help="Pass through to analyze-lofi.py (default: the manifest's master ceiling, else -1.5)")
 parser.add_argument("--next-drum-name", help="Use a second installed performance at the 16-bar switch")
 parser.add_argument("--transcribe", action="store_true",
@@ -58,7 +58,7 @@ if args.drum_name and not args.private_drums:
     parser.error("--drum-name requires --private-drums")
 if args.footage and not args.footage.is_file():
     parser.error("footage path does not exist")
-hooks = {"masterProfile": "lofi"}
+hooks = {}
 for item in args.hook:
     key, sep, value = item.partition("=")
     if not sep or not key:

@@ -39,12 +39,12 @@ struct LofiMasterCharacterizationTests {
         #expect(peaks.allSatisfy { abs($0 - exact) < 0.001 })
     }
 
-    @Test func combinedMasterLeavesHeadroomAndDoesNotBoostQuietMaterial() throws {
+    @Test func fallbackMasterLeavesHeadroomAndDoesNotBoostQuietMaterial() throws {
         let archive = ArchiveVoice.BufferSource()
         let lofi = ArchiveVoice.BufferSource()
-        let master = LofiMasterBus(archiveAndAmbient: archive, lofi: lofi)
-        // The default profile is the legacy Ambient chain; the finisher only adds its constant delay.
-        #expect(master.profile == .ambient && master.activeChain == .ambient)
+        // The Apple glue and sample limiter that run when the finisher cannot be instantiated.
+        let master = LofiMasterBus(archive: archive, lofi: lofi, forceFinisherFallback: true)
+        #expect(master.chain == .fallback)
         let audio = AudioEngine()
         audio.output = master.output
         let av = audio.avEngine

@@ -208,9 +208,8 @@ nonisolated struct MusicReactor {
 // MARK: - DEBUG sync log (-LiminalSyncLog YES)
 
 enum MusicSyncLog {
-    /// One `🎼 SYNC ...` line: reactor state | resulting uniforms (ratio to un-modulated) | last mood and activity sent.
-    static func line(reactor: MusicReactor, state: MusicState, uniforms u: EffectsUniforms, neutral n: EffectsUniforms,
-                     mood: VisualMood?, activity: Float) -> String {
+    /// One `🎼 SYNC ...` line: reactor state | resulting uniforms (ratio to un-modulated).
+    static func line(reactor: MusicReactor, state: MusicState, uniforms u: EffectsUniforms, neutral n: EffectsUniforms) -> String {
         let m = reactor.modulation
         func f(_ x: Float, _ d: Int = 2) -> String { String(format: "%.\(d)f", x) }
         func ratio(_ x: Float, _ y: Float) -> String { y > 1e-6 ? String(format: "x%.2f", x / y) : "x-" }
@@ -223,10 +222,6 @@ enum MusicSyncLog {
             + " bloom=\(f(u.bloomAmount, 3)) vib=\(f(u.vibranceAmount, 3))(\(ratio(u.vibranceAmount, n.vibranceAmount)))"
             + " fb=\(f(u.feedbackMix, 3)) warp=\(f(u.feedbackWarpAmount, 3)) chrom=\(f(u.chromaticAmount, 4))(\(ratio(u.chromaticAmount, n.chromaticAmount)))"
             + " reach=\(f(m.ghostReach)) gtd=\(f(u.ghostTapMaxDistance, 3)) burst=\(m.ghostBurstSerial)"
-        var moodPart = "mood -"
-        if let mood {
-            moodPart = "mood b=\(f(mood.brightness)) w=\(f(mood.warmth)) s=\(f(mood.saturation)) e=\(f(mood.energy)) [\(mood.moodWords.joined(separator: ","))]"
-        }
-        return "🎼 SYNC \(react) | \(unis) | \(moodPart) act=\(f(activity))"
+        return "🎼 SYNC \(react) | \(unis)"
     }
 }

@@ -75,7 +75,7 @@ struct LofiMixRenderTests {
 
     @MainActor private func capture(_ config: Config, receiver: URL, session: URLSession) async throws {
         try FileManager.default.createDirectory(at: config.out, withIntermediateDirectories: true)
-        LofiCaptureHooks.begin(options: config.hooks ?? ["masterProfile": "lofi"])
+        LofiCaptureHooks.begin(options: config.hooks ?? [:])
         defer { LofiCaptureHooks.end() }
         let audio = AudioEngine()
         let format = AudioKit.Settings.audioFormat
@@ -86,8 +86,8 @@ struct LofiMixRenderTests {
         let bus = LofiBus(gain: 1, dialogue: archive.chopOutput)
         let duck = bus.duckTargets
         archive.attachMusicDuck(lead: duck.lead, mids: duck.mids, space: duck.space)
-        let mix = MixBus(layers: [archive.strip], delayTime: 1.7)
-        let master = LofiMasterBus(archiveAndAmbient: mix.output, lofi: bus.output)
+        let mix = ArchiveMixBus(strip: archive.strip, seed: config.seed)
+        let master = LofiMasterBus(archive: mix.output, lofi: bus.output)
         var limiterID = "system-dynamics-and-peak-limiter"
         var limiterNode = master.limiter.avAudioNode
         #if DEBUG
@@ -279,8 +279,8 @@ struct LofiMixRenderTests {
         let finalFile = try Self.file("master", format: format, directory: config.out)
         let work = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4096))
 
-        let conductor = MusicConductor(layers: [], mix: mix, seed: config.seed, pinned: config.scale, archive: archive)
-        conductor.beginOffline(archiveBeatDuration: clock.beatDuration, pattern: .choose(seed: config.seed, phrase: 0))
+        let conductor = ArchiveConductor(mix: mix, voice: archive)
+        conductor.beginOffline(beatDuration: clock.beatDuration, pattern: .choose(seed: config.seed, phrase: 0))
         for player in bus.players { player.play() }
         // In the two-take audition the film is audible through each drum fill.
         let cueBeats: [Double]
@@ -433,8 +433,8 @@ struct LofiMixRenderTests {
                 cueIndex += 1
             }
             if cursor > 0 && cursor < scoreFrames && cursor.isMultiple(of: clock.frameCount) {
-                mix.syncDelay(toBeatDuration: clock.beatDuration,
-                              pattern: .choose(seed: config.seed, phrase: cursor / clock.frameCount), now: time)
+                mix.syncEcho(beatDuration: clock.beatDuration,
+                             pattern: .choose(seed: config.seed, phrase: cursor / clock.frameCount), now: time)
             }
             if cursor == nextControl {
                 conductor.advance(to: time)

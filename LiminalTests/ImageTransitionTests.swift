@@ -158,16 +158,6 @@ struct ImageTransitionTests {
         #expect(TransitionStyle(name: "Kaleidoscope") == .kaleidoscope)
     }
 
-    @Test func musicChordLandsOnTheSwap() {
-        for style in Self.styles {
-            let spec = TransitionSpec.pinned(style, seed: 0)
-            // The conductor changes chord at half the posted duration.
-            let chordAt = Float(spec.musicDuration / 2)
-            #expect(abs(chordAt - spec.swapCentre * spec.duration) < 1e-4)
-        }
-        #expect(TransitionSpec.classic.musicDuration == 1.5)
-    }
-
     @Test func freshHoldIsAnchoredToTheTransitionEnd() {
         // Classic 1.5 s: the judged timings (1.5 / 4.5 / 11).
         let c = EffectLook(intensity: 0.5, imageAge: 4.4, transitionDuration: 1.5)

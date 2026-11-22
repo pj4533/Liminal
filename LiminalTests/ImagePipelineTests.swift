@@ -415,14 +415,4 @@ struct ImageAnalysisTests {
         #expect(ImageUpscaler.isSquare(width: 1010, height: 1000))
         #expect(!ImageUpscaler.isSquare(width: 1500, height: 1000))
     }
-
-    @Test func apiPictureMoodComesFromItsSource() {
-        let source = ImageCollections.bundled.sources.first { $0.id == "loc-highsmith-roadside" }!
-        let meta = ImageMetadata(id: UUID(), createdAt: Date(), spec: source.promptSpec, model: "api.loc", pixelWidth: 60,
-                                 pixelHeight: 40, mimeType: "image/jpeg", dominantColors: [RGB(r: 0.9, g: 0.3, b: 0.2)],
-                                 measuredBrightness: 0.3, measuredSaturation: 0.6)
-        let mood = VisualMoodBuilder.mood(metadata: meta, image: nil)
-        #expect(mood.moodWords == ["electric", "playful", "architecture"])
-        #expect(abs(mood.brightness - 0.3) < 1e-6)
-    }
 }

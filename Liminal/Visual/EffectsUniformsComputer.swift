@@ -248,19 +248,6 @@ enum EffectsUniformsComputer {
         static let ghostTapMaxDistance: Float = 0.08
     }
 
-    // MARK: - Visual activity (visuals -> music)
-
-    /// How busy the picture is, 0...1, sent to `GenerativeEngine.setVisualActivity` (plan 2.3).
-    /// Computed without music on purpose (C12) so music cannot feed back into itself; follows the
-    /// clarity drive so the music calms with the picture (effects-balance plan 5).
-    static func visualActivity(time: Float, transitionProgress: Float, look: EffectLook = EffectLook(),
-                               transition: TransitionSpec = .classic) -> Float {
-        let d = look.drive(time: time)
-        let v = 0.15 + 0.6 * d * (0.55 + 0.45 * distortionWave01(time: time))
-            + 0.5 * (transitionProgress > 0 ? transition.envelope(transitionProgress) : 0)
-        return min(max(v, 0), 1)
-    }
-
     // MARK: - Vibrance (final shader stage)
 
     /// Black-point pull-down at darkFactor 1. 0.03 crushed 4.3% of pixels in the prototype;
@@ -317,7 +304,7 @@ enum EffectsUniformsComputer {
     }
 
     /// Organic oscillation of the turbulence amplitude, 0...1: layered sine waves at irrational
-    /// frequency ratios. Also an input of `visualActivity`.
+    /// frequency ratios.
     static func distortionWave01(time: Float) -> Float {
         let phi: Float = 1.618034
         let wave = (sin(time * 0.04 * phi) + sin(time * 0.025) * 0.7 + sin(time * 0.06 / phi) * 0.4) / 2.1  // -1..1

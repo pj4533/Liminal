@@ -172,14 +172,13 @@ struct ArchiveVoiceRenderTests {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("archive-echo-\(UUID()).wav")
         defer {
             try? FileManager.default.removeItem(at: url)
-            try? FileManager.default.removeItem(at: url.deletingPathExtension().appendingPathExtension("score.json"))
         }
         var posted = false
-        try engine.renderOffline(seconds: 6, to: url, archiveBeatDuration: grid.beatDuration, configure: { engine in
-            engine.mix.dryBus.volume = 0
-            engine.mix.mutedReturns = ["reverb", "shimmer"]
+        try engine.renderOffline(seconds: 6, to: url, beatDuration: grid.beatDuration, configure: { engine in
+            engine.archiveMix.dryBus.volume = 0
+            engine.archiveMix.mutedReturns = ["reverb", "shimmer"]
         }, onStep: { t in
-            if !posted, t >= 1 { posted = true; engine.post(.archiveBegin(cue)) }
+            if !posted, t >= 1 { posted = true; engine.post(.begin(cue)) }
         })
         let file = try AVAudioFile(forReading: url)
         let pcm = try #require(AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)))
@@ -225,9 +224,9 @@ struct ArchiveVoiceRenderTests {
         defer { try? FileManager.default.removeItem(at: dir) }
         let url = dir.appendingPathComponent("blend.wav")
         var started = false, muted = false
-        try engine.renderOffline(seconds: 3.5, to: url, archiveBeatDuration: 0.8, onStep: { t in
-            if !started && t >= 0.2 { started = true; engine.post(.archiveBegin(cue)) }
-            if !muted && t >= 2.8 { muted = true; engine.post(.archiveGain(0)) }
+        try engine.renderOffline(seconds: 3.5, to: url, beatDuration: 0.8, onStep: { t in
+            if !started && t >= 0.2 { started = true; engine.post(.begin(cue)) }
+            if !muted && t >= 2.8 { muted = true; engine.post(.gain(0)) }
         })
         let file = try AVAudioFile(forReading: url)
         let buffer = try #require(AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)))
@@ -266,7 +265,7 @@ struct ArchiveVoiceRenderTests {
         #expect(peak(at: 3.25) < 0.0001)
     }
 
-    @Test(arguments: [false, true]) func cuePlaysFadesAndStops(syncedToLofi: Bool) throws {
+    @Test func cuePlaysFadesAndStops() throws {
         let engine = GenerativeEngine(seed: 3)
         let fmt = engine.archiveFormat
         let sr = fmt.sampleRate
@@ -279,23 +278,16 @@ struct ArchiveVoiceRenderTests {
         let cue = ArchiveVoice.Cue(buffer: buf, gain: 1, fadeIn: 1, label: "tone",
                                    activity: ArchiveAudioMath.activity(buf))
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("archive-voice-\(UUID().uuidString).wav")
-        defer {
-            try? FileManager.default.removeItem(at: url)
-            try? FileManager.default.removeItem(at: url.deletingPathExtension().appendingPathExtension("score.json"))
-        }
+        defer { try? FileManager.default.removeItem(at: url) }
         var begun = false, ended = false
         var playingAt5 = false
         var speechDetected = false
         let grid = LofiClock(tempo: 74, sampleRate: sr)
-        try engine.renderOffline(seconds: 14, to: url, archiveBeatDuration: syncedToLofi ? grid.beatDuration : nil, configure: { e in
-            if !syncedToLofi {
-                for l in e.layers { l.allStrips.forEach { $0.trim = 0 } }
-            }
-        }, onStep: { t in
-            if !begun, t >= 1 { begun = true; engine.post(.archiveBegin(cue)) }
+        try engine.renderOffline(seconds: 14, to: url, beatDuration: grid.beatDuration, onStep: { t in
+            if !begun, t >= 1 { begun = true; engine.post(.begin(cue)) }
             if t >= 5, !playingAt5 { playingAt5 = engine.archive.isPlaying && engine.archive.level > 0.99 }
             if t >= 5, engine.conductor.archiveActivity > 0.3 { speechDetected = true }
-            if !ended, t >= 6 { ended = true; engine.post(.archiveEnd(fade: 1)) }
+            if !ended, t >= 6 { ended = true; engine.post(.end(fade: 1)) }
         })
         #expect(playingAt5)
         #expect(speechDetected)
@@ -356,9 +348,8 @@ struct ArchiveVoiceRenderTests {
             let url = FileManager.default.temporaryDirectory.appendingPathComponent("chop-probe-\(UUID().uuidString).wav")
             defer {
                 try? FileManager.default.removeItem(at: url)
-                try? FileManager.default.removeItem(at: url.deletingPathExtension().appendingPathExtension("score.json"))
             }
-            try engine.renderOffline(seconds: seconds, to: url, archiveBeatDuration: beat, onStep: onStep)
+            try engine.renderOffline(seconds: seconds, to: url, beatDuration: beat, onStep: onStep)
             let file = try AVAudioFile(forReading: url)
             let pcm = try #require(AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)))
             try file.read(into: pcm)
@@ -382,22 +373,22 @@ struct ArchiveVoiceRenderTests {
             let engine = probe.engine
             if !begun, t >= 0.2 {
                 begun = true
-                engine.post(.archiveBegin(ArchiveVoice.Cue(buffer: bed, gain: 1, fadeIn: 0.1, label: "plan", token: 1)))
+                engine.post(.begin(ArchiveVoice.Cue(buffer: bed, gain: 1, fadeIn: 0.1, label: "plan", token: 1)))
             }
             // Posted before the chop timeline has started.
             if !planned, t >= 0.3 {
                 planned = true
-                engine.post(.archiveChops(.init(token: 1, revision: 0, chops: [early, queued, replaced].map(probe.chop))))
+                engine.post(.chops(.init(token: 1, revision: 0, chops: [early, queued, replaced].map(probe.chop))))
             }
             // Posted during playback, after the 2.2 s chop is queued and before 3.5 s is.
             if !replacing, t >= 2.3 {
                 replacing = true
-                engine.post(.archiveChops(.init(token: 1, revision: 1, replaceFrom: 2.5, chops: [probe.chop(at: replacement)])))
+                engine.post(.chops(.init(token: 1, revision: 1, replaceFrom: 2.5, chops: [probe.chop(at: replacement)])))
             }
             if !stalePosted, t >= 2.4 {
                 stalePosted = true
-                engine.post(.archiveChops(.init(token: 1, revision: 1, chops: [probe.chop(at: stale)])))
-                engine.post(.archiveChops(.init(token: 0, revision: 5, chops: [probe.chop(at: stale)])))
+                engine.post(.chops(.init(token: 1, revision: 1, chops: [probe.chop(at: stale)])))
+                engine.post(.chops(.init(token: 0, revision: 5, chops: [probe.chop(at: stale)])))
             }
         }
         for time in [early, queued, replacement] {
@@ -417,9 +408,9 @@ struct ArchiveVoiceRenderTests {
             if !begun, t >= 0.2 {
                 begun = true
                 // A slow 5 s fade-in: the old fade-coupled gain was about 0.05 of nominal at 1 s.
-                probe.engine.post(.archiveBegin(ArchiveVoice.Cue(buffer: bed, gain: 1, fadeIn: 5, label: "fade", token: 3)))
+                probe.engine.post(.begin(ArchiveVoice.Cue(buffer: bed, gain: 1, fadeIn: 5, label: "fade", token: 3)))
                 planned = true
-                probe.engine.post(.archiveChops(.init(token: 3, revision: 0, chops: [probe.chop(at: 1.0)])))
+                probe.engine.post(.chops(.init(token: 3, revision: 0, chops: [probe.chop(at: 1.0)])))
             }
             _ = planned
         }
@@ -457,13 +448,13 @@ struct ArchiveVoiceRenderTests {
         var countsWhileInert: (stored: Int, queued: Int)?
         let x = try probe.render(seconds: 3.2) { t in
             let engine = probe.engine
-            if t >= 0.2 { once("bed1") { engine.post(.archiveBegin(ArchiveVoice.Cue(buffer: bed, gain: 1, fadeIn: 0.1, label: "one", token: 1))) } }
+            if t >= 0.2 { once("bed1") { engine.post(.begin(ArchiveVoice.Cue(buffer: bed, gain: 1, fadeIn: 0.1, label: "one", token: 1))) } }
             // Cue 2's analysis finished before its bed: the plan reaches the voice while cue 1 plays.
-            if t >= 0.3 { once("plan2") { engine.post(.archiveChops(.init(token: 2, revision: 0, chops: [earlyChop, probe.chop(at: crossfade), adoptedChop]))) } }
-            if t >= 0.35 { once("plan1") { engine.post(.archiveChops(.init(token: 1, revision: 0, chops: [probe.chop(at: control)]))) } }
+            if t >= 0.3 { once("plan2") { engine.post(.chops(.init(token: 2, revision: 0, chops: [earlyChop, probe.chop(at: crossfade), adoptedChop]))) } }
+            if t >= 0.35 { once("plan1") { engine.post(.chops(.init(token: 1, revision: 0, chops: [probe.chop(at: control)]))) } }
             if t >= 1.2 { once("counts") { countsWhileInert = engine.archive.chopCounts } }
             // Bed 2 is posted at 1.3 s and adopts its stored plan at once; it sounds after bed 1's 0.27 s fade.
-            if t >= 1.3 { once("bed2") { engine.post(.archiveBegin(ArchiveVoice.Cue(buffer: bed, gain: 1, fadeIn: 0.1, label: "two", token: 2))) } }
+            if t >= 1.3 { once("bed2") { engine.post(.begin(ArchiveVoice.Cue(buffer: bed, gain: 1, fadeIn: 0.1, label: "two", token: 2))) } }
             if t > early + 0.03 && t < early + 0.45 && engine.archive.isMusicDucked { duckedBeforeAdoption = true }
             if t > adopted + 0.05 && t < adopted + 0.5 && engine.archive.isMusicDucked { duckedAfterAdoption = true }
         }
@@ -489,15 +480,15 @@ struct ArchiveVoiceRenderTests {
         var ducked = false
         let x = try probe.render(seconds: 2.8) { t in
             let engine = probe.engine
-            if t >= 0.2 { once("bed1") { engine.post(.archiveBegin(ArchiveVoice.Cue(buffer: bed, gain: 1, fadeIn: 0.1, label: "one", token: 1))) } }
-            if t >= 0.25 { once("plan1") { engine.post(.archiveChops(.init(token: 1, revision: 0, chops: [probe.chop(at: control)]))) } }
-            if t >= 0.3 { once("plan2") { engine.post(.archiveChops(.init(token: 2, revision: 0, chops: [firstChop]))) } }
+            if t >= 0.2 { once("bed1") { engine.post(.begin(ArchiveVoice.Cue(buffer: bed, gain: 1, fadeIn: 0.1, label: "one", token: 1))) } }
+            if t >= 0.25 { once("plan1") { engine.post(.chops(.init(token: 1, revision: 0, chops: [probe.chop(at: control)]))) } }
+            if t >= 0.3 { once("plan2") { engine.post(.chops(.init(token: 2, revision: 0, chops: [firstChop]))) } }
             // The footage service abandons cue 2; its still-running analysis then posts a refinement.
-            if t >= 0.5 { once("cancel") { engine.post(.archiveChopsCancel(token: 2)) } }
-            if t >= 0.6 { once("late") { engine.post(.archiveChops(.init(token: 2, revision: 1, replaceFrom: 1.7, chops: [lateChop]))) } }
+            if t >= 0.5 { once("cancel") { engine.post(.cancelChops(token: 2)) } }
+            if t >= 0.6 { once("late") { engine.post(.chops(.init(token: 2, revision: 1, replaceFrom: 1.7, chops: [lateChop]))) } }
             if t >= 0.8 { once("counts") { countsAfterLatePlan = engine.archive.chopCounts } }
             // Even a bed with that token (which the footage service never posts) cannot revive the plan.
-            if t >= 1.2 { once("bed2") { engine.post(.archiveBegin(ArchiveVoice.Cue(buffer: bed, gain: 1, fadeIn: 0.1, label: "two", token: 2))) } }
+            if t >= 1.2 { once("bed2") { engine.post(.begin(ArchiveVoice.Cue(buffer: bed, gain: 1, fadeIn: 0.1, label: "two", token: 2))) } }
             if t > first && t < late + 0.55 && engine.archive.isMusicDucked { ducked = true }
         }
         let counts = try #require(countsAfterLatePlan)
@@ -525,7 +516,7 @@ struct ArchiveVoiceRenderTests {
         let x = try probe.render(seconds: 3.4) { t in
             if !begun, t >= 0.2 {
                 begun = true
-                probe.engine.post(.archiveBegin(ArchiveVoice.Cue(buffer: bed, gain: 1, fadeIn: 0.1, label: "no speech", token: 1,
+                probe.engine.post(.begin(ArchiveVoice.Cue(buffer: bed, gain: 1, fadeIn: 0.1, label: "no speech", token: 1,
                                                                  transport: info)))
             }
         }
@@ -556,7 +547,7 @@ struct ArchiveVoiceRenderTests {
         let x = try probe.render(seconds: 7.9, beat: beat) { t in
             if !begun, t >= 0.2 {
                 begun = true
-                probe.engine.post(.archiveBegin(ArchiveVoice.Cue(buffer: bed, gain: 1, fadeIn: 0.1, label: "no speech", token: 1)))
+                probe.engine.post(.begin(ArchiveVoice.Cue(buffer: bed, gain: 1, fadeIn: 0.1, label: "no speech", token: 1)))
             }
             if !noted, t >= phraseAt {
                 noted = true

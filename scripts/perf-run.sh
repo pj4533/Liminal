@@ -112,7 +112,7 @@ sleep 2
 
 ARGS=(-LiminalAutoPlay YES -LiminalOpenDome YES -LiminalPerfLogInterval 1)
 [[ -n "$FREEZE" ]] && ARGS+=(-LiminalFreezeTime "$FREEZE")
-(( LOFI )) && ARGS+=(-audio.musicMode lofi -archive.enabled YES -LiminalAllowGeneration NO)
+(( LOFI )) && ARGS+=(-archive.enabled YES -LiminalAllowGeneration NO)
 (( SPLIT )) && ARGS+=(-LiminalPerfSplitPasses YES)
 [[ -n "$EXTRA" ]] && ARGS+=(${=EXTRA})
 log "launching with: ${ARGS[*]}"

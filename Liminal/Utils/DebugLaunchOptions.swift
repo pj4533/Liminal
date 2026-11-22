@@ -88,7 +88,7 @@ nonisolated enum DebugLaunchOptions {
     static let noEffects: Bool = defaults.bool(forKey: "LiminalNoEffects")
 
     /// -LiminalSyncLog YES: one "🎼 SYNC ..." line per second from each render loop (music -> visuals
-    /// reactor state, resulting uniforms, last mood/activity sent to the music).
+    /// reactor state and the resulting uniforms).
     static let syncLog: Bool = defaults.bool(forKey: "LiminalSyncLog")
 
     /// -LiminalSyncStrength <x>: multiply the music -> visuals amount (default 1; e.g. 3 to make the

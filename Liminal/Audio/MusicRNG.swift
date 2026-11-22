@@ -1,7 +1,7 @@
 import Foundation
 
-/// Deterministic SplitMix64 generator. One root per engine, forked per subsystem (decision D8),
-/// so adding a layer never changes the random stream of the others.
+/// Deterministic SplitMix64 generator. One root per seed, forked per subsystem,
+/// so adding a consumer never changes the random stream of the others.
 nonisolated struct MusicRNG: RandomNumberGenerator {
     private var state: UInt64
 

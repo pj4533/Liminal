@@ -14,16 +14,6 @@ nonisolated enum ScenePhase: UInt8, Sendable {
     case emerge, bloom, dissolve
 }
 
-/// Description of the current image, sent by the image pipeline (section 8 of docs/plans/music.md).
-nonisolated struct VisualMood: Sendable, Equatable {
-    var brightness: Float = 0.5      // mean luminance 0...1
-    var warmth: Float = 0.5          // 0 cool ... 1 warm
-    var saturation: Float = 0.5
-    var energy: Float = 0.5          // contrast / edge energy
-    var palette: [SIMD3<Float>] = [] // up to 5 dominant colours, linear RGB (reserved)
-    var moodWords: [String] = []     // free text from image metadata or prompt
-}
-
 /// One musical event, plain data.
 nonisolated struct MusicEvent: Sendable {
     enum Kind: UInt8, Sendable { case none, noteOn, chordChange, keyChange, sceneChange, layerEnter, layerExit, rareEvent }
@@ -105,8 +95,8 @@ nonisolated struct MusicState: Sendable {
     }
 }
 
-/// Single-writer, many-reader seqlock around a `MusicState` (decision D27).
-/// The writer (conductor queue) never blocks; readers never lock.
+/// Single-writer, many-reader seqlock around a `MusicState`.
+/// The writer (the Lo-Fi transport) never blocks; readers never lock.
 nonisolated final class MusicStateBus: @unchecked Sendable {
     private let sequence = Atomic<UInt64>(0)
     private let startUptimeNs = Atomic<UInt64>(0)
@@ -133,7 +123,7 @@ nonisolated final class MusicStateBus: @unchecked Sendable {
     /// Footage worker and dialogue coordinator. Not for render threads.
     func transport() -> LofiTransportInfo? { transportInfo.withLock { $0 } }
 
-    /// Conductor queue only.
+    /// The single writer (the Lo-Fi transport).
     func publish(_ state: MusicState) {
         let s = sequence.load(ordering: .relaxed)
         sequence.store(s &+ 1, ordering: .relaxed)
@@ -155,7 +145,7 @@ nonisolated final class MusicStateBus: @unchecked Sendable {
         return copy
     }
 
-    /// Conductor seconds on the same monotonic clock the realtime conductor uses (0 before start).
+    /// Seconds since the transport started on the host monotonic clock (0 before start).
     func now() -> Double {
         let start = startUptimeNs.load(ordering: .acquiring)
         let now = DispatchTime.now().uptimeNanoseconds

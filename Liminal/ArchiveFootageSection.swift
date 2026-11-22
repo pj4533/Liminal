@@ -3,7 +3,7 @@
 //  Liminal
 //
 //  "Archive Footage" settings section shared by the macOS control panel and the visionOS control
-//  window (docs/plans/archive-video.md 6, A27): on/off, change speed, the film's sound level, what is showing,
+//  window (docs/plans/archive-video.md 6, A27): on/off, the film's sound level, what is showing,
 //  the cache with a clear button, and the film source credit. Plus the modifier that pushes the
 //  settings into ArchiveFootageService and attaches the music engine.
 //
@@ -36,33 +36,14 @@ struct ArchiveFootageSection: View {
                             explanation: "Old film from the Internet Archive, always woven subtly into the scene.",
                             isOn: $settings.archiveEnabled)
 
-            if settings.musicMode == .lofi {
-                Text("Footage changes with the drum fills every eight bars. The cut is quicker at sixteen.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .wrapping()
-            } else {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Change speed").wrapping()
-                    Picker("Change speed", selection: $settings.archiveChangeSpeed) {
-                        ForEach(FootageChangeSpeed.allCases, id: \.self) { s in
-                            Text(s.title).tag(s)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    Text(settings.archiveChangeSpeed.explanation)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .wrapping()
-                }
-                .disabled(!settings.archiveEnabled)
-            }
+            Text("Footage changes with the drum fills every eight bars. The cut is quicker at sixteen.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .wrapping()
 
             ValueSlider(title: "Footage audio", value: $settings.archiveAudioLevel,
                         minimumLabel: "Off", maximumLabel: "Louder",
-                        explanation: settings.musicMode == .lofi ? "A clear echo repeats on the Lo-Fi beat, with a softer offbeat reflection."
-                            : "The film’s sound drifts between echo, reverb, and clearer voices at original or slowed speed. 0% is silent.")
+                        explanation: "A clear echo repeats on the beat, with a softer offbeat reflection.")
                 .disabled(!settings.archiveEnabled)
 
             dialogueUnderstanding
@@ -125,7 +106,7 @@ struct ArchiveFootageSection: View {
         }
     }
 
-    /// "Dialogue understanding" (plan 7): whether Lo-Fi chopping may use the on-device speech model.
+    /// "Dialogue understanding" (plan 7): whether dialogue chopping may use the on-device speech model.
     private var dialogueUnderstanding: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Dialogue understanding").wrapping()
@@ -168,25 +149,6 @@ extension DialogueTranscriptionMode {
     }
 }
 
-extension FootageChangeSpeed {
-    var title: String {
-        switch self {
-        case .slow: return "Slow"
-        case .medium: return "Medium"
-        case .fast: return "Fast"
-        }
-    }
-
-    /// The piece lengths of FootageWeaver.Timing.speed, in words.
-    var explanation: String {
-        switch self {
-        case .slow: return "A new piece of film drifts in every 20-30 seconds."
-        case .medium: return "A new piece of film drifts in every 12-20 seconds."
-        case .fast: return "A new piece of film drifts in every 8-12 seconds."
-        }
-    }
-}
-
 /// Pushes the "Archive Footage" settings into ArchiveFootageService and attaches the music engine.
 struct ArchiveFootageSettingsSync: ViewModifier {
     @ObservedObject var settings: SettingsService
@@ -197,7 +159,7 @@ struct ArchiveFootageSettingsSync: ViewModifier {
             .onAppear {
                 ArchiveFootageService.shared.attachMusic(audioEngine)
                 apply()
-                // Learn the speech model status once at launch, so the first Lo-Fi cue can use it.
+                // Learn the speech model status once at launch, so the first cue can use it.
                 // A Download model choice from an earlier launch resumes here (once per launch).
                 DialogueSpeechAssets.refreshStatus()
                 if settings.dialogueTranscription == .allowDownload { DialogueSpeechAssets.requestInstallIfAllowed() }

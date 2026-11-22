@@ -66,8 +66,8 @@ struct LofiLiveBusTests {
     /// still runs: tap buffers are 0.1 s at 48 kHz and arrive a few render calls late.
     private static let tapSlackSeconds = 0.5
 
-    /// Renders `seconds` through `engine` (beat-locked when `beat` is set) and returns the taps' channel 0.
-    private func render(_ engine: GenerativeEngine, seconds: Double, beat: Double?, taps: [Node],
+    /// Renders `seconds` through `engine` on an echo tempo of `beat` and returns the taps' channel 0.
+    private func render(_ engine: GenerativeEngine, seconds: Double, beat: Double, taps: [Node],
                         output: Node? = nil, configure: ((GenerativeEngine) -> Void)? = nil,
                         onStep: @escaping (Double) -> Void) throws -> [[Float]] {
         let rate = engine.archiveFormat.sampleRate
@@ -77,11 +77,10 @@ struct LofiLiveBusTests {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("live-bus-\(UUID().uuidString).wav")
         defer {
             try? FileManager.default.removeItem(at: url)
-            try? FileManager.default.removeItem(at: url.deletingPathExtension().appendingPathExtension("score.json"))
         }
         var installed = false
         var delivered: Int?
-        try engine.renderOffline(seconds: seconds + Self.tapSlackSeconds, to: url, archiveBeatDuration: beat,
+        try engine.renderOffline(seconds: seconds + Self.tapSlackSeconds, to: url, beatDuration: beat,
                                  configure: configure, onStep: { t in
             if !installed {
                 installed = true
@@ -129,14 +128,10 @@ struct LofiLiveBusTests {
         return 10 * log10(max(s / Double(i1 - i0), 1e-24))
     }
 
-    private func layersSilent(_ e: GenerativeEngine) {
-        for l in e.layers { l.allStrips.forEach { $0.trim = 0 } }
-    }
-
     // MARK: Film bed (user direction, 19 November 2026: keep the baseline effected bed)
 
     /// Four tones through the Lo-Fi bed: 60 Hz, 1 kHz, 2.2 kHz and 4 kHz, 0.6 s each. The bed keeps its
-    /// dark band-limiting (HPF 205-290 Hz, two low-pass stages at 2.1-3.2 kHz) and the Ambient master
+    /// dark band-limiting (HPF 205-290 Hz, two low-pass stages at 2.1-3.2 kHz) and the bed's master
     /// low-pass; plan 8.6's clarity pass is not applied.
     @Test func lofiBedKeepsItsDarkBaselineChain() throws {
         let engine = GenerativeEngine(seed: 11)
@@ -148,11 +143,10 @@ struct LofiLiveBusTests {
             return t < 2.4 ? 0.1 * Float(sin(2 * .pi * tones[k] * t)) : 0
         }
         var begun = false
-        let taps = try render(engine, seconds: 3, beat: 0.8, taps: [engine.archive.spectralSweep],
-                              configure: layersSilent) { t in
+        let taps = try render(engine, seconds: 3, beat: 0.8, taps: [engine.archive.spectralSweep]) { t in
             if !begun, t >= 0.2 {
                 begun = true
-                engine.post(.archiveBegin(ArchiveVoice.Cue(buffer: cue, gain: 1, fadeIn: 0.1, label: "tones", token: 1)))
+                engine.post(.begin(ArchiveVoice.Cue(buffer: cue, gain: 1, fadeIn: 0.1, label: "tones", token: 1)))
             }
         }
         // Cue time 0 is the first step at or after 0.2 s.
@@ -162,7 +156,7 @@ struct LofiLiveBusTests {
         let r60 = level(post, 0), r1k = level(post, 1), r4k = level(post, 3)
         #expect(r4k < r1k - 12, "4 kHz \(r4k - r1k) dB against 1 kHz")
         #expect(r60 < r1k - 20, "60 Hz \(r60 - r1k) dB against 1 kHz")
-        #expect(engine.mix.lowpass.$cutoffFrequency.parameter?.value == MixBus.ambientLowpassHz)
+        #expect(engine.archiveMix.lowpass.$cutoffFrequency.parameter?.value == ArchiveMixBus.lowpassHz)
         #expect(!engine.archive.presenceDip.isStarted)
     }
 
@@ -172,12 +166,11 @@ struct LofiLiveBusTests {
         let format = engine.archiveFormat
         let cue = try noise(format, seconds: 7, amplitude: 0.1, seed: 4)
         var begun = false
-        let mix = engine.mix
-        let x = try render(engine, seconds: 6.5, beat: 0.8, taps: [mix.dryBus, mix.delayReturn, mix.reverbReturn],
-                           configure: layersSilent) { t in
+        let mix = engine.archiveMix
+        let x = try render(engine, seconds: 6.5, beat: 0.8, taps: [mix.dryBus, mix.delayReturn, mix.reverbReturn]) { t in
             if !begun, t >= 0.2 {
                 begun = true
-                engine.post(.archiveBegin(ArchiveVoice.Cue(buffer: cue, gain: 1, fadeIn: 0.1, label: "noise", token: 1)))
+                engine.post(.begin(ArchiveVoice.Cue(buffer: cue, gain: 1, fadeIn: 0.1, label: "noise", token: 1)))
             }
         }
         let wet = zip(x[1], x[2]).map { $0 + $1 }
@@ -201,9 +194,8 @@ struct LofiLiveBusTests {
             let cue = ArchiveVoice.Cue(buffer: film, gain: gain, fadeIn: 0.1, label: "control",
                 chops: [1.0, 2.2].map { .init(articulation: .phrase, time: $0, source: 0..<Int(line.frameLength), speed: 1, buffer: line) })
             var begun = false
-            let x = try render(engine, seconds: 3.2, beat: 0.8, taps: [engine.mix.dryBus, engine.archive.chopOutput],
-                               configure: layersSilent) { t in
-                if !begun, t >= 0.2 { begun = true; engine.post(.archiveBegin(cue)) }
+            let x = try render(engine, seconds: 3.2, beat: 0.8, taps: [engine.archiveMix.dryBus, engine.archive.chopOutput]) { t in
+                if !begun, t >= 0.2 { begun = true; engine.post(.begin(cue)) }
             }
             bed.append(rmsDB(x[0], 0.6, 3.2, rate: rate))
             chops.append(rmsDB(x[1], 0.6, 3.2, rate: rate))
@@ -215,44 +207,6 @@ struct LofiLiveBusTests {
         }
         #expect(chops[1] > chops[0] + 60)
     }
-
-    /// Ambient (not beat-locked) bed for a steady noise cue, in three bands, against the render of the
-    /// previous code (the same test run on commit 2c85498, before the Lo-Fi bed values were added).
-    @Test func ambientBedIsUnchanged() throws {
-        let engine = GenerativeEngine(seed: 14)
-        let format = engine.archiveFormat
-        let rate = format.sampleRate
-        let cue = try noise(format, seconds: 7, amplitude: 0.1, seed: 7)
-        var begun = false
-        let taps = try render(engine, seconds: 6.5, beat: nil, taps: [engine.mix.output], configure: layersSilent) { t in
-            if !begun, t >= 0.2 {
-                begun = true
-                engine.post(.archiveBegin(ArchiveVoice.Cue(buffer: cue, gain: 1, fadeIn: 0.5, label: "ambient", token: 1)))
-            }
-        }
-        let x = taps[0]
-        func band(_ kinds: [LofiBiquad.Kind]) -> Double {
-            var y = x
-            var chain = LofiFilterChain(kinds, sampleRate: rate)
-            y.withUnsafeMutableBufferPointer { chain.process($0.baseAddress!, count: $0.count) }
-            return rmsDB(y, 2, 6.4, rate: rate)
-        }
-        let q = 0.7071067811865476
-        let levels = [band([.lowpass(hz: 300, q: q), .lowpass(hz: 300, q: q)]),
-                      band([.highpass(hz: 300, q: q), .highpass(hz: 300, q: q), .lowpass(hz: 3000, q: q), .lowpass(hz: 3000, q: q)]),
-                      band([.highpass(hz: 3000, q: q), .highpass(hz: 3000, q: q)])]
-        print("Ambient bed bands dB: \(levels)")
-        let reference = Self.ambientReference
-        for k in levels.indices {
-            #expect(abs(levels[k] - reference[k]) <= 0.5, "band \(k): \(levels[k]) dB, previous \(reference[k]) dB")
-        }
-        #expect(engine.mix.lowpass.$cutoffFrequency.parameter?.value == MixBus.ambientLowpassHz)
-        #expect(!engine.archive.presenceDip.isStarted)
-    }
-
-    /// Measured by `ambientBedIsUnchanged` on the code before this change (see its comment): below 300 Hz,
-    /// 300 Hz to 3 kHz and above 3 kHz. The candidate matched them to 1e-12 dB when this was written.
-    static let ambientReference: [Double] = [-58.20619275983071, -47.34996955040118, -59.425362567094496]
 
     // MARK: Music ducking (plan 8.5)
 
@@ -313,8 +267,8 @@ struct LofiLiveBusTests {
         let x = try render(engine, seconds: 4.2, beat: 0.8, taps: rig.faders + [engine.archive.bed], output: rig.output) { t in
             if step == 0 {
                 rig.play()
-                engine.post(.archiveBegin(ArchiveVoice.Cue(buffer: film, gain: 1, fadeIn: 0.1, label: "duck", token: 1)))
-                engine.post(.archiveChops(.init(token: 1, revision: 0, chops: [
+                engine.post(.begin(ArchiveVoice.Cue(buffer: film, gain: 1, fadeIn: 0.1, label: "duck", token: 1)))
+                engine.post(.chops(.init(token: 1, revision: 0, chops: [
                     try! chop(featured, seconds: featuredLength, role: .anchor, format: format),
                     try! chop(texture, seconds: 0.6, role: .texture, format: format),
                     try! chop(stab, seconds: 0.3, role: .stab, format: format)])))
@@ -361,8 +315,8 @@ struct LofiLiveBusTests {
             let x = try render(engine, seconds: 2.2, beat: 0.8, taps: rig.faders, output: rig.output) { t in
                 if step == 0 {
                     rig.play()
-                    engine.post(.archiveBegin(ArchiveVoice.Cue(buffer: film, gain: 1, fadeIn: 0.1, label: "reset", token: 1)))
-                    engine.post(.archiveChops(.init(token: 1, revision: 0, chops: [try! chop(0.8, seconds: 1.2, role: .head, format: format)])))
+                    engine.post(.begin(ArchiveVoice.Cue(buffer: film, gain: 1, fadeIn: 0.1, label: "reset", token: 1)))
+                    engine.post(.chops(.init(token: 1, revision: 0, chops: [try! chop(0.8, seconds: 1.2, role: .head, format: format)])))
                 }
                 if !released, t >= 1.3 {
                     released = true
@@ -396,9 +350,8 @@ struct LofiLiveBusTests {
                 chops: [.init(articulation: .phrase, time: 0.6, source: 0..<Int(probe.frameLength), speed: 1, buffer: probe)])
             var begun = false
             let archive = engine.archive
-            let x = try render(engine, seconds: 3.4, beat: 0.8, taps: [archive.chopDry, archive.chopEchoReturn, archive.chopRoomReturn],
-                               configure: layersSilent) { t in
-                if !begun, t >= 0.2 { begun = true; engine.post(.archiveBegin(cue)) }
+            let x = try render(engine, seconds: 3.4, beat: 0.8, taps: [archive.chopDry, archive.chopEchoReturn, archive.chopRoomReturn]) { t in
+                if !begun, t >= 0.2 { begun = true; engine.post(.begin(cue)) }
             }
             // Energies over the whole render (dB re the same reference).
             dry[hz] = rmsDB(x[0], 0, 3.4, rate: rate)

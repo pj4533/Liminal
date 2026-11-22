@@ -18,15 +18,15 @@ import Testing
         #expect(LofiCaptureHooks.taps.isEmpty)
         #expect(LofiCaptureHooks.reports.isEmpty)
         #expect(LofiCaptureHooks.files.isEmpty)
-        #expect(LofiCaptureHooks.option("masterProfile") == nil)
+        #expect(LofiCaptureHooks.option("masterInputGainDb") == nil)
         #expect(!ran)
     }
 
     @Test func roundTrip() {
-        LofiCaptureHooks.begin(options: ["masterProfile": "lofi", "transcription": "off"])
+        LofiCaptureHooks.begin(options: ["masterInputGainDb": "4", "transcription": "off"])
         defer { LofiCaptureHooks.end() }
         #expect(LofiCaptureHooks.isEnabled)
-        #expect(LofiCaptureHooks.option("masterProfile") == "lofi")
+        #expect(LofiCaptureHooks.option("masterInputGainDb") == "4")
         #expect(LofiCaptureHooks.option("missing") == nil)
 
         let node = AVAudioMixerNode()

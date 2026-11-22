@@ -80,25 +80,7 @@ struct ValueSlider: View {
     }
 }
 
-// MARK: - Style + scale pickers
-
-/// Segmented music style picker (Drift / Glass / Deep / Garden), labelled.
-struct StylePicker: View {
-    @Binding var style: MusicStyle.ID
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Style")
-            Picker("Style", selection: $style) {
-                ForEach(MusicStyle.ID.allCases, id: \.self) { style in
-                    Text(style.title).tag(style)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-        }
-    }
-}
+// MARK: - Scale picker
 
 /// "Scale" with a menu: "Auto (evolving)" or a pinned scale. The menu sits on its own line
 /// under the title so long names such as "Natural Minor (Aeolian)" never truncate.

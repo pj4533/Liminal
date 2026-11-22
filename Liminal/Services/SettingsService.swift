@@ -14,8 +14,6 @@ final class SettingsService: ObservableObject {
 
     private enum Keys {
         static let scale = "audio.scale"
-        static let style = "audio.style"
-        static let musicMode = "audio.musicMode"
         static let lofi = "audio.lofi"
         static let scaleAuto = "audio.scaleAuto"
         static let imageInterval = "visual.imageInterval"
@@ -39,7 +37,6 @@ final class SettingsService: ObservableObject {
     // MARK: - Default Values
 
     static let defaultScale: ScaleType = .pentatonicMajor
-    static let defaultStyle: MusicStyle.ID = .drift
     static let defaultScaleAuto: Bool = true
     static let defaultImageInterval: Double = 30.0
     static let defaultCacheOnly: Bool = false
@@ -56,15 +53,6 @@ final class SettingsService: ObservableObject {
         didSet { defaults.set(currentScale.rawValue, forKey: Keys.scale) }
     }
 
-    /// Music style (Drift, Glass, Deep, Garden).
-    @Published var style: MusicStyle.ID {
-        didSet { defaults.set(style.rawValue, forKey: Keys.style) }
-    }
-
-    @Published var musicMode: MusicMode {
-        didSet { defaults.set(musicMode.rawValue, forKey: Keys.musicMode) }
-    }
-
     /// "Images": AI (Gemini generation) or API (curated collections, D36). Read off the main actor
     /// through `ImageSource.current`, which uses the same key.
     @Published var imageSource: ImageSource {
@@ -75,7 +63,7 @@ final class SettingsService: ObservableObject {
         didSet { defaults.set(try? JSONEncoder().encode(lofi), forKey: Keys.lofi) }
     }
 
-    /// true = "Auto (evolving)" harmony; false = `currentScale` is pinned.
+    /// true = "Auto": the transport chooses the scale; false = `currentScale` is pinned.
     @Published var scaleAuto: Bool {
         didSet { defaults.set(scaleAuto, forKey: Keys.scaleAuto) }
     }
@@ -83,7 +71,10 @@ final class SettingsService: ObservableObject {
     /// The scale the engine should pin, or nil for Auto.
     var pinnedScale: ScaleType? { scaleAuto ? nil : currentScale }
 
-    /// Picker binding: nil = "Auto (evolving)", otherwise the pinned scale.
+    /// What the engine plays: the saved tempo and the pinned scale.
+    var lofiOptions: LofiOptions { LofiOptions(tempo: lofi.tempo, scale: pinnedScale) }
+
+    /// Picker binding: nil = "Auto", otherwise the pinned scale.
     var scaleSelection: Binding<ScaleType?> {
         Binding(get: { self.pinnedScale },
                 set: { newValue in
@@ -159,8 +150,6 @@ final class SettingsService: ObservableObject {
         let savedScaleName = defaults.string(forKey: Keys.scale) ?? Self.defaultScale.rawValue
         self.currentScale = ScaleType.allCases.first { $0.rawValue == savedScaleName } ?? Self.defaultScale
 
-        self.style = MusicStyle.ID(rawValue: defaults.string(forKey: Keys.style) ?? "") ?? Self.defaultStyle
-        self.musicMode = MusicMode(rawValue: defaults.string(forKey: Keys.musicMode) ?? "") ?? .ambient
         // -LiminalImageSource (DEBUG) wins; assigning in init does not run didSet, so it is not saved.
         self.imageSource = ImageSource.resolve(stored: defaults.string(forKey: Keys.imageSource),
                                                debugFlag: DebugLaunchOptions.imageSource)
@@ -189,15 +178,13 @@ final class SettingsService: ObservableObject {
         self.maxImagesPerHour = defaults.object(forKey: GenerationBudget.Keys.perHour) as? Int ?? GenerationBudget.defaultPerHour
         self.maxImagesPerDay = defaults.object(forKey: GenerationBudget.Keys.perDay) as? Int ?? GenerationBudget.defaultPerDay
 
-        LMLog.state.info("Settings loaded: scale=\(self.currentScale.rawValue), style=\(self.style.rawValue)")
+        LMLog.state.info("Settings loaded: scale=\(self.scaleAuto ? "auto" : self.currentScale.rawValue), tempo=\(self.lofi.tempo)")
     }
 
     // MARK: - Reset
 
     func resetToDefaults() {
         currentScale = Self.defaultScale
-        style = Self.defaultStyle
-        musicMode = .ambient
         imageSource = ImageSource.defaultSource
         lofi = LofiOptions()
         scaleAuto = Self.defaultScaleAuto

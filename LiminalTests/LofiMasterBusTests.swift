@@ -6,7 +6,7 @@ import Foundation
 import Testing
 @testable import Liminal
 
-/// Master bus profiles (plan sections 3.7 and 8.7) rendered through the real graph in manual mode.
+/// The master bus chains (plan sections 3.7 and 8.7) rendered through the real graph in manual mode.
 @MainActor
 @Suite(.serialized)
 struct LofiMasterBusTests {
@@ -143,57 +143,14 @@ struct LofiMasterBusTests {
         return result
     }
 
-    // MARK: Ambient
-
-    @Test func ambientProfileEqualsTheLegacyChainDelayedByTheFinisher() async throws {
-        let total = Int(Self.rate * 3.5)
-        let program = Self.stressProgram(total)
-
-        let candidate = Rig()
-        let master = LofiMasterBus(archiveAndAmbient: candidate.archive, lofi: candidate.lofi)
-        #expect(master.profile == .ambient && master.activeChain == .ambient)
-        try candidate.start(master.output)
-        defer { candidate.stop() }
-
-        // The chain as it was before the profiles: glue -> +3.3 dB -> sample limiter -> -4.8 dB.
-        let reference = Rig()
-        let input = Mixer(reference.archive, reference.lofi)
-        let glue = Compressor(input, threshold: -15, headRoom: 9, attackTime: 0.027, releaseTime: 0.27, masterGain: 0)
-        let trim = Fader(glue, gain: dbToGain(3.3))
-        let limiter = PeakLimiter(trim, attackTime: 0.005, decayTime: 0.06, preGain: 0)
-        let output = Fader(limiter, gain: dbToGain(-4.8))
-        try reference.start(output)
-        defer { reference.stop() }
-
-        for rig in [candidate, reference] {
-            try rig.schedule(rig.archive, program.archive)
-            try rig.schedule(rig.lofi, program.lofi)
-        }
-        let latency = master.finisher.latencyFrames
-        #expect(master.finisher.isOperational && latency > 0)
-        let new = try await candidate.render(total + latency)
-        let old = try await reference.render(total)
-        var error: Float = 0
-        for c in 0..<2 {
-            for i in 0..<total { error = max(error, abs(new[c][i + latency] - old[c][i])) }
-        }
-        let lead = max(vDSP.maximumMagnitude(Array(new[0][0..<latency])), vDSP.maximumMagnitude(Array(new[1][0..<latency])))
-        let peak = max(vDSP.maximumMagnitude(old[0]), vDSP.maximumMagnitude(old[1]))
-        print("Ambient profile versus legacy chain: max difference \(error), latency \(latency) frames, legacy peak \(Self.db(peak)) dBFS")
-        #expect(error <= 1e-5)
-        #expect(lead <= 1e-6)
-        #expect(peak > 0.1)
-    }
-
     // MARK: Lo-Fi
 
-    @Test func lofiProfileKeepsTheStressProgramUnderTheTruePeakCeilingAndRaisesQuietMaterial() async throws {
+    @Test func finisherKeepsTheStressProgramUnderTheTruePeakCeilingAndRaisesQuietMaterial() async throws {
         let total = Int(Self.rate * 4)
         let program = Self.stressProgram(total)
         let rig = Rig()
-        let master = LofiMasterBus(archiveAndAmbient: rig.archive, lofi: rig.lofi)
-        master.setProfile(.lofi, ramp: 0)
-        #expect(master.profile == .lofi && master.activeChain == .lofi)
+        let master = LofiMasterBus(archive: rig.archive, lofi: rig.lofi)
+        #expect(master.chain == .finisher)
         #expect(master.glue.avAudioNode.auAudioUnit.shouldBypassEffect)
         #expect(master.limiter.avAudioNode.auAudioUnit.shouldBypassEffect)
         try rig.start(master.output)
@@ -225,7 +182,7 @@ struct LofiMasterBusTests {
         let drive = master.lofiFinisherSettings.inputGainDB + LofiMasterBus.lofiStagingDB
         #expect(abs(drive - 2) < 1e-4)
         #expect(master.lofiFinisherSettings.clipThresholdDB == -2)
-        #expect(LofiMasterBus.lofiTargetLUFS == -14)
+        #expect(LofiMasterBus.targetLUFS == -14)
         #expect(abs(master.archiveTrim.gain - dbToGain(LofiMasterBus.lofiStagingDB)) < 1e-6)
         #expect(abs(master.lofiTrim.gain - dbToGain(LofiMasterBus.lofiStagingDB)) < 1e-6)
         #expect(quiet > drive - 1 && quiet < drive + 0.5)
@@ -235,43 +192,10 @@ struct LofiMasterBusTests {
         #expect(meters.limiterDB.max > 1)
     }
 
-    @Test func profileChangesWhileRenderingProduceNoStep() async throws {
-        let total = Int(Self.rate * 4.5)
-        let rig = Rig()
-        let master = LofiMasterBus(archiveAndAmbient: rig.archive, lofi: rig.lofi)
-        try rig.start(master.output)
-        defer { rig.stop() }
-        try rig.schedule(rig.lofi, Self.tone(total, amplitude: 0.3))
-        let toLofi = Int(Self.rate * 1.0), toAmbient = Int(Self.rate * 2.5)
-        var seen: [LofiMasterBus.Profile] = []
-        var requested = 0
-        let out = try await rig.render(total, chunk: 256) { rendered in
-            if requested == 0 && rendered >= toLofi { master.setProfile(.lofi, ramp: 0.03); requested = 1 }
-            if requested == 1 && rendered >= toAmbient { master.setProfile(.ambient, ramp: 0.03); requested = 2 }
-            if seen.last != master.activeChain { seen.append(master.activeChain) }
-            try await Task.sleep(for: .milliseconds(1))
-        }
-        #expect(seen == [.ambient, .lofi, .ambient])
-        #expect(!master.isSwitchingProfile)
-        let second = Int(Self.rate)
-        let steady = [Self.maximumStep(out, second / 2..<toLofi),
-                      Self.maximumStep(out, toLofi + second / 2..<toAmbient),
-                      Self.maximumStep(out, toAmbient + second / 2..<total)]
-        let largest = Self.maximumStep(out, 1..<total)
-        let levels = [Self.rms(out[0], second / 2..<toLofi), Self.rms(out[0], toLofi + second / 2..<toAmbient),
-                      Self.rms(out[0], toAmbient + second / 2..<total)].map(Self.db)
-        print("Profile switch: steady steps \(steady), largest \(largest), levels \(levels) dB")
-        #expect(largest <= (steady.max() ?? 0) + 0.02)
-        // Lo-Fi drives the same tone harder than the Ambient chain, and Ambient returns to its level.
-        #expect(levels[1] > levels[0] + 2)
-        #expect(abs(levels[2] - levels[0]) < 0.3)
-    }
-
     @Test func lofiChainDelaysByTheFinisherLatency() async throws {
         let total = 16_384
         let rig = Rig()
-        let master = LofiMasterBus(archiveAndAmbient: rig.archive, lofi: rig.lofi)
-        master.setProfile(.lofi, ramp: 0)
+        let master = LofiMasterBus(archive: rig.archive, lofi: rig.lofi)
         try rig.start(master.output)
         defer { rig.stop() }
         var impulse = [[Float](repeating: 0, count: total), [Float](repeating: 0, count: total)]
@@ -288,12 +212,12 @@ struct LofiMasterBusTests {
 
     // MARK: Capture hooks
 
-    @Test func captureHooksSelectTheProfileAndExportDynamicsAndTheTrace() async throws {
-        LofiCaptureHooks.begin(options: ["masterProfile": "lofi"])
+    @Test func captureHooksExportDynamicsAndTheTrace() async throws {
+        LofiCaptureHooks.begin(options: [:])
         defer { LofiCaptureHooks.end() }
         let rig = Rig()
-        let master = LofiMasterBus(archiveAndAmbient: rig.archive, lofi: rig.lofi)
-        #expect(master.profile == .lofi && master.activeChain == .lofi)
+        let master = LofiMasterBus(archive: rig.archive, lofi: rig.lofi)
+        #expect(master.chain == .finisher)
         #expect(LofiCaptureHooks.taps.contains { $0.name == "master-in" && $0.node === master.trim.avAudioNode })
         try rig.start(master.output)
         defer { rig.stop() }
@@ -328,23 +252,12 @@ struct LofiMasterBusTests {
         #expect((rows.map { $0[3] }.max() ?? 0) > 0)
     }
 
-    @Test func captureHooksCanSelectTheAmbientProfile() {
-        LofiCaptureHooks.begin(options: ["masterProfile": "ambient"])
-        defer { LofiCaptureHooks.end() }
-        let master = LofiMasterBus(archiveAndAmbient: ArchiveVoice.BufferSource(), lofi: ArchiveVoice.BufferSource())
-        #expect(master.profile == .ambient && master.activeChain == .ambient)
-        #expect(!master.glue.avAudioNode.auAudioUnit.shouldBypassEffect)
-        LofiCaptureHooks.runFinishers()
-        let dynamics = LofiCaptureHooks.reports["masterDynamics"] as? [String: Any]
-        #expect(dynamics?["profile"] as? String == "ambient")
-    }
-
     // MARK: Calibration
 
-    @Test func calibrationAimsAtTheProfileTargetAndHoldsUnderLimiterLoad() {
+    @Test func calibrationAimsAtTheChainTargetAndHoldsUnderLimiterLoad() {
         typealias Meter = LofiMasterMeter
         let light = Meter.LimiterLoad(meanDB: 0.8, p95DB: 2.0)
-        // Lo-Fi (target passed explicitly here): the sample peak no longer gates upward steps.
+        // With a limiter load (target passed explicitly here): the sample peak no longer gates upward steps.
         #expect(Meter.calibratedTrim(current: 0, observation: .init(lufs: -16, samplePeak: 0.89), target: -12, limiter: light) == 1)
         #expect(Meter.calibratedTrim(current: 0, observation: .init(lufs: -12.5, samplePeak: 0.5), target: -12, limiter: light) == 0)
         #expect(Meter.calibratedTrim(current: 0, observation: .init(lufs: -9, samplePeak: 0.5), target: -12, limiter: light) == -1)
@@ -368,23 +281,24 @@ struct LofiMasterBusTests {
         #expect(clipped.forcesDownward)
         #expect(Meter.calibratedTrim(current: 1.5, observation: .init(lufs: -17, samplePeak: 0.5), target: -14, limiter: clipped) == 1)
         #expect(Meter.calibratedTrim(current: 0, observation: .init(lufs: -11, samplePeak: 0.5), target: -14, limiter: clipped) == -1)
-        // Ambient keeps -18 LUFS and the sample-peak test.
+        // Without a limiter load (the fallback chain): -18 LUFS and the sample-peak test.
         #expect(Meter.calibratedTrim(current: 0, observation: .init(lufs: -23, samplePeak: 0.3)) == 1)
         #expect(Meter.calibratedTrim(current: 0, observation: .init(lufs: -16, samplePeak: 0.3)) == -0.8)
         #expect(Meter.calibratedTrim(current: 0, observation: .init(lufs: -23, samplePeak: 0.55)) == 0)
     }
 
-    @Test func busCalibrationFollowsTheActiveChainAndTheFinisherMeters() async throws {
-        let ambient = LofiMasterBus(archiveAndAmbient: ArchiveVoice.BufferSource(), lofi: ArchiveVoice.BufferSource())
-        ambient.applyObservation(.init(lufs: -23, samplePeak: 0.2))
-        #expect(ambient.calibrationOffsetDB == 1)
-        ambient.applyObservation(.init(lufs: -15, samplePeak: 0.2))
-        #expect(abs(ambient.calibrationOffsetDB - 0) < 1e-6)
+    @Test func busCalibrationFollowsTheChainAndTheFinisherMeters() async throws {
+        let fallback = LofiMasterBus(archive: ArchiveVoice.BufferSource(), lofi: ArchiveVoice.BufferSource(),
+                                     forceFinisherFallback: true)
+        #expect(fallback.chain == .fallback)
+        fallback.applyObservation(.init(lufs: -23, samplePeak: 0.2))
+        #expect(fallback.calibrationOffsetDB == 1)
+        fallback.applyObservation(.init(lufs: -15, samplePeak: 0.2))
+        #expect(abs(fallback.calibrationOffsetDB - 0) < 1e-6)
 
-        // Light program: the finisher barely limits, so Lo-Fi steps toward `lofiTargetLUFS` (-14).
+        // Light program: the finisher barely limits, so the trim steps toward `targetLUFS` (-14).
         let rig = Rig()
-        let lofi = LofiMasterBus(archiveAndAmbient: rig.archive, lofi: rig.lofi)
-        lofi.setProfile(.lofi, ramp: 0)
+        let lofi = LofiMasterBus(archive: rig.archive, lofi: rig.lofi)
         try rig.start(lofi.output)
         defer { rig.stop() }
         let frames = Int(Self.rate)
@@ -410,14 +324,13 @@ struct LofiMasterBusTests {
 
     // MARK: Fallback
 
-    @Test func nonOperationalFinisherFallsBackToTheAmbientChain() async throws {
+    @Test func nonOperationalFinisherFallsBackToTheAppleChain() async throws {
         let total = Int(Self.rate * 3.5)
         let program = Self.stressProgram(total)
         let rig = Rig()
-        let master = LofiMasterBus(archiveAndAmbient: rig.archive, lofi: rig.lofi, forceFinisherFallback: true)
+        let master = LofiMasterBus(archive: rig.archive, lofi: rig.lofi, forceFinisherFallback: true)
         #expect(!master.finisher.isOperational)
-        master.setProfile(.lofi, ramp: 0.05)
-        #expect(master.profile == .lofi && master.activeChain == .ambient)
+        #expect(master.chain == .fallback)
         #expect(!master.glue.avAudioNode.auAudioUnit.shouldBypassEffect)
         #expect(!master.limiter.avAudioNode.auAudioUnit.shouldBypassEffect)
         try rig.start(master.output)
@@ -429,5 +342,44 @@ struct LofiMasterBusTests {
         print("Fallback chain stress sample peak \(Self.db(sample)) dBFS")
         #expect(Self.db(sample) < LofiMasterBus.safetyTrimDB + 0.03)
         #expect(out.allSatisfy { $0.allSatisfy(\.isFinite) })
+    }
+
+    /// The fallback chain is the Apple glue and sample limiter: both branches at the staging gain, the
+    /// staging made up on the +3.3 dB trim, the -4.8 dB safety fader, and the finisher's pass-through delay.
+    @Test func fallbackChainEqualsTheAppleChainDelayedByThePassThrough() async throws {
+        let total = Int(Self.rate * 3.5)
+        let program = Self.stressProgram(total)
+
+        let candidate = Rig()
+        let master = LofiMasterBus(archive: candidate.archive, lofi: candidate.lofi, forceFinisherFallback: true)
+        #expect(master.chain == .fallback)
+        try candidate.start(master.output)
+        defer { candidate.stop() }
+
+        let reference = Rig()
+        let staging = dbToGain(LofiMasterBus.lofiStagingDB)
+        let input = Mixer(Fader(reference.archive, gain: staging), Fader(reference.lofi, gain: staging))
+        let glue = Compressor(input, threshold: -15, headRoom: 9, attackTime: 0.027, releaseTime: 0.27, masterGain: 0)
+        let trim = Fader(glue, gain: dbToGain(3.3 - LofiMasterBus.lofiStagingDB))
+        let limiter = PeakLimiter(trim, attackTime: 0.005, decayTime: 0.06, preGain: 0)
+        let output = Fader(limiter, gain: dbToGain(LofiMasterBus.safetyTrimDB))
+        try reference.start(output)
+        defer { reference.stop() }
+
+        for rig in [candidate, reference] {
+            try rig.schedule(rig.archive, program.archive)
+            try rig.schedule(rig.lofi, program.lofi)
+        }
+        let latency = master.finisher.latencyFrames
+        let new = try await candidate.render(total + latency)
+        let old = try await reference.render(total)
+        var error: Float = 0
+        for c in 0..<2 {
+            for i in 0..<total { error = max(error, abs(new[c][i + latency] - old[c][i])) }
+        }
+        let peak = max(vDSP.maximumMagnitude(old[0]), vDSP.maximumMagnitude(old[1]))
+        print("Fallback chain versus the Apple chain: max difference \(error), latency \(latency) frames, peak \(Self.db(peak)) dBFS")
+        #expect(error <= 1e-5)
+        #expect(peak > 0.1)
     }
 }

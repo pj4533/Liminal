@@ -72,7 +72,7 @@ struct WindowAccessor: NSViewRepresentable {
 // MARK: - Content View
 
 struct ContentView: View {
-    /// Width of the control panel. Wide enough for the style segments and "Natural Minor (Aeolian)".
+    /// Width of the control panel. Wide enough for "Natural Minor (Aeolian)" in the scale menu.
     static let panelWidth: CGFloat = 320
 
     @State private var showingSettings = false
@@ -99,7 +99,7 @@ struct ContentView: View {
         .background(WindowAccessor())
         .onAppear {
             // Apply saved settings to audio engine on launch
-            audioEngine.apply(settings)
+            audioEngine.options = settings.lofiOptions
 
             // DEBUG perf harness: -LiminalAutoPlay YES (always false in Release)
             DebugLaunchOptions.logApplied()
@@ -125,11 +125,10 @@ struct ContentView: View {
             #endif
         }
         // Settings -> AudioEngine: propagate changes immediately
-        .onChange(of: settings.style) { _, newValue in audioEngine.style = newValue }
-        .onChange(of: settings.pinnedScale) { _, newValue in audioEngine.pinnedScale = newValue }
+        .onChange(of: settings.lofiOptions) { _, options in audioEngine.options = options }
         .onChange(of: settings.imageSource) { _, source in visualEngine.setImageSource(source) }
-        .onChange(of: audioEngine.isPlaybackReady ? audioEngine.musicMode : nil, initial: true) { _, playingMode in
-            if playingMode != nil { visualEngine.start(music: audioEngine) } else { visualEngine.stop() }
+        .onChange(of: audioEngine.isPlaybackReady, initial: true) { _, playing in
+            if playing { visualEngine.start(music: audioEngine) } else { visualEngine.stop() }
         }
         .archiveFootageSettings(settings, audioEngine: audioEngine)
         .sheet(isPresented: $showingSettings) {
@@ -179,7 +178,7 @@ extension ContentView {
                 }
 
                 ControlSection(title: "Music", systemImage: "music.note") {
-                    MusicModeControls(settings: settings, audio: audioEngine)
+                    MusicControls(settings: settings)
                 }
 
                 ControlSection(title: "Visuals", systemImage: "sparkles") {
@@ -198,6 +197,7 @@ extension ContentView {
                     .id("archive")
 
                 ControlSection(title: "Images & Storage", systemImage: "photo.stack") {
+                    ImageSourceControls(settings: settings)
                     APIStatusRow(source: visualEngine.imageSource, apiStatus: visualEngine.sourceStatus)
                     ImageCreditLine(metadata: visualEngine.currentMetadata)
                     Button {
@@ -280,9 +280,8 @@ struct SettingsSheetView: View {
                     ControlSection(title: "Reset", systemImage: "arrow.counterclockwise") {
                         Button("Reset All Settings", role: .destructive) {
                             settings.resetToDefaults()
-                            audioEngine.apply(settings)
                         }
-                        Text("Restores style, density, space, echo, scale, visual and footage settings to their defaults.")
+                        Text("Restores tempo, scale, visual and footage settings to their defaults.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .wrapping()
@@ -302,8 +301,6 @@ struct SettingsSheetView: View {
 /// (not observable), so mutating it while SwiftUI evaluates `body` never invalidates the view.
 final class MusicSyncBox {
     var reactor = MusicReactor(strength: DebugLaunchOptions.syncStrength)
-    var lastMood: VisualMood?
-    var activity = VisualActivityThrottle()
     var lastLogSecond = -1
     /// Effect time at which the current image's crossfade began (nil before the first crossfade).
     var transitionStart: Float?
@@ -329,7 +326,7 @@ struct VisualDisplayView: View {
     @ObservedObject var visualEngine: VisualEngine
     @ObservedObject var settings: SettingsService
     let isPlaying: Bool
-    /// Plain reference, not observed: only its nonisolated bus and visual-input methods are used (C13).
+    /// Plain reference, not observed: only its nonisolated state bus is read.
     let music: GenerativeEngine
     @StateObject private var transitionManager = TimerDrivenCrossfade()
     @StateObject private var effectController = EffectController()
@@ -428,23 +425,11 @@ struct VisualDisplayView: View {
     /// Hue drift of the un-synced macOS look (turns per second).
     private static let baseHueRate: Float = 0.03
 
-    /// Visuals -> music: describe the image whose crossfade just started (or the first image).
-    private func postMood(for image: PlatformImage, imageChanged: Bool) {
-        // Atomic read: the two @Published mirrors (image, metadata) have no ordering guarantee (C10).
-        let buffer = visualEngine.imageBuffer
-        let snapshot = buffer.loadCurrentWithMetadata()
-        ArchiveFootageService.shared.displayedImage(snapshot.metadata)
-        if imageChanged { music.imageDidChange(transitionDuration: sync.transition.musicDuration) }
-        let cg = snapshot.image ?? image.cgImageRepresentation
-        Task {
-            let mood = await Task.detached(priority: .utility) {
-                VisualMoodBuilder.mood(metadata: snapshot.metadata, image: cg.map { ImageFraming.coverCrop($0) })
-            }.value
-            guard buffer.loadCurrentWithMetadata().generation == snapshot.generation else { return }
-            music.setVisualMood(mood)
-            sync.lastMood = mood
-            LMLog.visual.info("🎼 setVisualMood b=\(mood.brightness) w=\(mood.warmth) s=\(mood.saturation) e=\(mood.energy) words=\(mood.moodWords.joined(separator: ",")) imageDidChange=\(imageChanged)")
-        }
+    /// Tells the footage service which picture is on screen (the image whose crossfade just started,
+    /// or the first image).
+    private func noteDisplayedImage() {
+        // Atomic read: the two @Published mirrors (image, metadata) have no ordering guarantee.
+        ArchiveFootageService.shared.displayedImage(visualEngine.imageBuffer.loadCurrentWithMetadata().metadata)
     }
 
     var body: some View {
@@ -532,7 +517,7 @@ struct VisualDisplayView: View {
                     let cut = started ? visualEngine.reveal.flatMap { r in
                         r.isDrop ? zoomStart + Float(r.downbeat - ArchiveFootageService.uptime()) : nil } : nil
                     sync.zoom.imageChanged(at: zoomStart, replacing: started, holdUntil: cut)
-                    postMood(for: image, imageChanged: started)
+                    noteDisplayedImage()
                 }
             } else {
                 // Image was cleared (e.g., cache cleared) - reset transition manager
@@ -547,7 +532,7 @@ struct VisualDisplayView: View {
             // Effects start when Play is pressed, not on appear
             if let image = visualEngine.currentImage {
                 transitionManager.setInitialImage(image)
-                postMood(for: image, imageChanged: false)
+                noteDisplayedImage()
             }
         }
         .onChange(of: isPlaying) { _, playing in
@@ -564,13 +549,7 @@ struct VisualDisplayView: View {
         }
         // Log Ken Burns values periodically for debugging
         .onChange(of: effectController.time) { _, newTime in
-            // Visuals -> music activity (un-modulated oscillators, at most 2 Hz)
             let tp = Float(transitionManager.transitionProgress)
-            let activity = EffectsUniformsComputer.visualActivity(
-                time: Float(newTime), transitionProgress: tp,
-                look: currentLook(effectTime: DebugLaunchOptions.effectTime(Float(newTime))),
-                transition: sync.transition)
-            if let a = sync.activity.next(activity, at: newTime) { music.setVisualActivity(a) }
             // Archive footage: what the footage weaver listens to (about 2 Hz).
             if newTime - sync.lastFootageUpdate >= 0.5 || newTime < sync.lastFootageUpdate {
                 sync.lastFootageUpdate = newTime
@@ -611,7 +590,7 @@ struct VisualDisplayView: View {
             look: currentLook(effectTime: DebugLaunchOptions.effectTime(time)),
             transition: sync.transition)
         let line = MusicSyncLog.line(reactor: sync.reactor, state: music.musicState.read(), uniforms: params.uniforms,
-                                     neutral: neutral, mood: sync.lastMood, activity: sync.activity.lastSent)
+                                     neutral: neutral)
         LMLog.visual.info("\(line, privacy: .public)")
     }
 }

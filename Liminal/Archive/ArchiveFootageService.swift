@@ -89,14 +89,14 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
 
     /// Where the sound goes: the music engine's conductor (attached by the app; nil in harnesses).
     final class MusicSink: @unchecked Sendable {
-        let post: @Sendable (MusicControl) -> Void
+        let post: @Sendable (ArchiveControl) -> Void
         let format: AVAudioFormat
         let takeGrid: @Sendable () -> LofiTakeGrid?
         /// The Lo-Fi transport side channel (plan 3.6); nil outside Lo-Fi.
         let transport: @Sendable () -> LofiTransportInfo?
         init(format: AVAudioFormat, takeGrid: @escaping @Sendable () -> LofiTakeGrid?,
              transport: @escaping @Sendable () -> LofiTransportInfo? = { nil },
-             post: @escaping @Sendable (MusicControl) -> Void) {
+             post: @escaping @Sendable (ArchiveControl) -> Void) {
             self.format = format
             self.takeGrid = takeGrid
             self.transport = transport
@@ -175,7 +175,7 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
         if levelChanged {
             if let g = ArchiveAudioCuePlan.gain(level: level) {
                 let playing = shared.withLock { $0.audio.map { $0.begun && !$0.ended } ?? false }
-                if playing { music.withLock { $0 }?.post(.archiveGain(g)) }
+                if playing { music.withLock { $0 }?.post(.gain(g)) }
             } else {
                 shared.withLock { s in
                     s.pendingAudio = nil
@@ -248,7 +248,7 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
         cancelDialogue()
         // A cue still waiting for its bed may already have a plan at the conductor: drop it now rather
         // than when its wait loop next wakes.
-        if let pendingToken { music.withLock { $0 }?.post(.archiveChopsCancel(token: pendingToken)) }
+        if let pendingToken { music.withLock { $0 }?.post(.cancelChops(token: pendingToken)) }
         guard wasRunning else { return }
         sources.forEach { $0.stop() }
         shared.withLock { s in if !s.enabled { s.status = "Archive footage off" } }
@@ -317,7 +317,7 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
             guard !Task.isCancelled else { return }
             _ = await director.run(source: source, window: window, seed: seed, transport: sink.transport,
                                    isCurrent: { [weak self] in self?.isCurrentAudio(token) ?? false },
-                                   post: { sink.post(.archiveChops($0)) })
+                                   post: { sink.post(.chops($0)) })
         }
         let previous = dialogueTask.withLock { current -> Task<Void, Never>? in
             defer { current = (token, task) }
@@ -365,7 +365,7 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
             defer {
                 if !posted {
                     self.cancelDialogue(matching: token)
-                    sink.post(.archiveChopsCancel(token: token))
+                    sink.post(.cancelChops(token: token))
                 }
             }
             self.startDialogue(token: token, piece: piece, cue: cue, clip: clip, url: url, bed: buffer, due: due, sink: sink)
@@ -392,7 +392,7 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
                 guard s.running, s.wantsRun, !s.disabling, late < cue.fadeOutAt - cue.beginAt,
                       let g = ArchiveAudioCuePlan.gain(level: s.audioLevel) else { return false }
                 s.audio = AudioState(cue: cue, token: token, pieceIndex: piece.index, begun: true)
-                sink.post(.archiveBegin(ArchiveVoice.Cue(buffer: ready, gain: g,
+                sink.post(.begin(ArchiveVoice.Cue(buffer: ready, gain: g,
                     fadeIn: max(0.35, cue.fadeIn - max(late, 0)),
                     label: title, claritySeed: piece.seed, activity: activity, token: token,
                     transport: sink.transport())))
@@ -411,7 +411,7 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
             guard var a = s.audio, !a.ended, token == nil || a.token == token else { return }
             a.ended = true
             s.audio = a
-            if a.begun { sink?.post(.archiveEnd(fade: fade)) }
+            if a.begun { sink?.post(.end(fade: fade)) }
         }
     }
 

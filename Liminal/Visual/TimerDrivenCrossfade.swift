@@ -18,7 +18,9 @@ final class TimerDrivenCrossfade: ObservableObject {
 
     private let targetFPS: Double = 30
     /// Seconds of the running crossfade: the transition spec's duration (docs/plans/transitions.md 7.2).
-    private var crossfadeDuration: Double = VisualMoodBuilder.crossfadeDuration
+    /// Crossfade length when the caller does not choose one (seconds).
+    static let defaultDuration: Double = 1.5
+    private var crossfadeDuration: Double = TimerDrivenCrossfade.defaultDuration
 
     // MARK: - Published State
 
@@ -66,7 +68,7 @@ final class TimerDrivenCrossfade: ObservableObject {
     /// - Returns: true when a crossfade started (false for the first image and for the same image).
     @discardableResult
     /// - Parameter duration: asked only when a crossfade actually starts (the caller picks the transition there).
-    func transitionTo(_ newImage: PlatformImage, reveal: LofiImageReveal? = nil, duration: () -> Double = { VisualMoodBuilder.crossfadeDuration }) -> Bool {
+    func transitionTo(_ newImage: PlatformImage, reveal: LofiImageReveal? = nil, duration: () -> Double = { TimerDrivenCrossfade.defaultDuration }) -> Bool {
         guard let current = currentFrame else {
             currentFrame = newImage
             LMLog.visual.info("First image displayed (no transition needed)")

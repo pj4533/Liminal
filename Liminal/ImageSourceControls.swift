@@ -3,8 +3,8 @@
 //  Liminal
 //
 //  "Images: AI | API" (docs/plans/image-api-mode.md 7), shared by the macOS control panel and the
-//  visionOS control window, built like MusicModeControls. It sits directly under the Ambient / Lo-Fi
-//  picker. The switch reaches the engine through `.onChange` in ContentView / ControlsView.
+//  visionOS control window. It sits at the top of the Images & Storage section. The switch reaches
+//  the engine through `.onChange` in ContentView / ControlsView.
 //
 
 import SwiftUI

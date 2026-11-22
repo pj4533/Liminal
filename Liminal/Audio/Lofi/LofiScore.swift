@@ -1,11 +1,5 @@
 import Foundation
 
-nonisolated enum MusicMode: String, CaseIterable, Codable, Sendable {
-    case ambient, lofi
-
-    var title: String { self == .ambient ? "Ambient" : "Lo-Fi" }
-}
-
 nonisolated struct LofiOptions: Codable, Equatable, Sendable {
     var tempo = 69.0
     var scale: ScaleType? = nil

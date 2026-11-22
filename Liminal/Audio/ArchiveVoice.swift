@@ -9,7 +9,7 @@ import OSLog
 /// sound and speech band open up briefly, then settle back into the shared reverb and tape delay.
 nonisolated final class ArchiveVoice {
 
-    /// A decoded segment ready to play, posted with `MusicControl.archiveBegin`.
+    /// A decoded segment ready to play, posted with `ArchiveControl.begin`.
     struct Cue {
         let buffer: AVAudioPCMBuffer
         /// Linear gain on top of `baseTrim` ("Footage audio": 1 at the default 0.5, 2 at the top).
@@ -28,7 +28,7 @@ nonisolated final class ArchiveVoice {
         var transport: LofiTransportInfo? = nil
     }
 
-    /// A dialogue performance for one cue (plan 3.6, 6.3), posted with `MusicControl.archiveChops`.
+    /// A dialogue performance for one cue (plan 3.6, 6.3), posted with `ArchiveControl.chops`.
     /// Chop start times are transport seconds: host uptime live, conductor seconds in manual rendering.
     struct ChopPlan: @unchecked Sendable {
         let token: Int
@@ -102,7 +102,7 @@ nonisolated final class ArchiveVoice {
     /// baseline chain (user direction, 19 November 2026).
     let presenceDip: PeakingParametricEqualizerFilter
     let spectralSweep: Phaser
-    let strip: LayerStrip
+    let strip: ArchiveStrip
     /// The format every cue buffer must have (the engine's format when the graph was built).
     let format: AVAudioFormat
 
@@ -246,7 +246,7 @@ nonisolated final class ArchiveVoice {
     /// The newest cue token whose bed has begun; plans for older tokens are stale. Only chops with
     /// this token are queued (and duck anything): a plan for a later cue waits, inert, for its bed.
     private var currentCueToken: Int?
-    /// Cues the footage service abandoned after their analysis started (`archiveChopsCancel`). A late
+    /// Cues the footage service abandoned after their analysis started (`ArchiveControl.cancelChops`). A late
     /// plan for one of them is ignored. Tokens below the current cue are pruned (already stale).
     private var cancelledTokens: Set<Int> = []
     /// Highest plan revision stored per cue token.
@@ -267,8 +267,8 @@ nonisolated final class ArchiveVoice {
     /// Diagnostics and tests: chops stored but not yet on the player, and those queued.
     var chopCounts: (stored: Int, queued: Int) { (storedChops.count, queuedChops.count) }
 
-    /// The bed's context gain in Lo-Fi: 1.76, and 1.31 under a featured chop that ducks the bed (65 ms
-    /// down, 150 ms up, the baseline values); always 1 in Ambient. Called on every conductor step in Lo-Fi, so the
+    /// The bed's context gain while beat-locked: `LofiBed.contextGain`, and `underChopGain` under a featured
+    /// chop that ducks the bed (65 ms down, 150 ms up); 1 otherwise. Called on every conductor step, so the
     /// down ramp starts within half a step of 40 ms before the chop.
     private func blendSoundtrack(at time: Double) {
         let ahead = time + 0.01 + LofiBed.duckDown
@@ -444,8 +444,8 @@ nonisolated final class ArchiveVoice {
         spectralSweep = Phaser(presenceDip, notchMinimumFrequency: 200, notchMaximumFrequency: 1300,
                                notchWidth: 510, vibratoMode: 0, depth: 0.52, feedback: 0.12,
                                lfoBPM: 28, dryWetMix: 0.12)
-        strip = LayerStrip(source: source, filter: spectralSweep, trim: Self.baseTrim, reverb: Self.reverbSend,
-                           delay: Self.delaySend, pan: 0, dry: Self.dryGain)
+        strip = ArchiveStrip(source: spectralSweep, trim: Self.baseTrim, reverb: Self.reverbSend,
+                             delay: Self.delaySend, dry: Self.dryGain)
         setFilters(running: false)
         // Offline captures separate the dry chops and the filtered bed (before its strip).
         LofiCaptureHooks.tap("dialogue-dry", chopDry.avAudioNode)
@@ -718,7 +718,7 @@ nonisolated final class ArchiveVoice {
         setFilters(running: false)
     }
 
-    /// 10 Hz with the other strips.
+    /// 10 Hz from the conductor.
     func modulate(t: Double) {
         lastTime = t
         queueDueChops(at: t)
@@ -765,10 +765,8 @@ nonisolated final class ArchiveVoice {
         ParamRamp.set(highpass.$cutoffFrequency, Self.highpassHz - 110 * value, over: 0.12)
         ParamRamp.set(lowpass.$cutoffFrequency, cutoff, over: 0.12)
         ParamRamp.set(lowpass2.$cutoffFrequency, cutoff, over: 0.12)
-        if let dry = strip.dryGain {
-            let direct = Self.dryGain + (Self.clearDryGain - Self.dryGain) * value
-            ParamRamp.setGain(dry, direct, over: 0.12)
-        }
+        let direct = Self.dryGain + (Self.clearDryGain - Self.dryGain) * value
+        ParamRamp.setGain(strip.dryGain, direct, over: 0.12)
         strip.setSends(reverb: reverb, delay: echo, over: 0.12)
     }
 
@@ -789,9 +787,7 @@ nonisolated final class ArchiveVoice {
         ParamRamp.set(highpass.$cutoffFrequency, 290 - 85 * reveal, over: 0.12)
         ParamRamp.set(lowpass.$cutoffFrequency, cutoff, over: 0.12)
         ParamRamp.set(lowpass2.$cutoffFrequency, cutoff, over: 0.12)
-        if let dry = strip.dryGain {
-            ParamRamp.setGain(dry, 0.27 + 0.33 * reveal, over: 0.12)
-        }
+        ParamRamp.setGain(strip.dryGain, 0.27 + 0.33 * reveal, over: 0.12)
         strip.setSends(reverb: reverb, delay: echo, over: 0.12)
     }
 

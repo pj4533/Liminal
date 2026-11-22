@@ -167,9 +167,6 @@ nonisolated struct TransitionSpec: Sendable, Equatable {
     /// Progress at which half the picture has exchanged.
     var swapCentre: Float { (style.shape.s0 + style.shape.s1) / 2 }
 
-    /// Duration posted to `imageDidChange`: the conductor lands its chord change at half of it, i.e. on the swap.
-    var musicDuration: Double { Double(2 * swapCentre * duration) }
-
     /// Signed mask softness for the shader (`txSoft`): negative reverses the order.
     var shaderSoft: Float { (drop != nil ? 0.02 : style.shape.soft) * (flip ? -1 : 1) }
 

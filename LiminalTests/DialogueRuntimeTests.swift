@@ -550,16 +550,15 @@ struct DialogueRuntimeTests {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rearm-\(UUID().uuidString).wav")
         defer {
             try? FileManager.default.removeItem(at: url)
-            try? FileManager.default.removeItem(at: url.deletingPathExtension().appendingPathExtension("score.json"))
         }
-        try engine.renderOffline(seconds: seconds, to: url, archiveBeatDuration: Self.beat) { t in
-            if t >= 0.2 { once("bed") { engine.post(.archiveBegin(ArchiveVoice.Cue(buffer: bed, gain: 1, fadeIn: 0.1, label: "rearm", token: 1))) } }
-            if t >= 0.3 { once("stale") { engine.post(.archiveChops(stalePlan)) } }
+        try engine.renderOffline(seconds: seconds, to: url, beatDuration: Self.beat) { t in
+            if t >= 0.2 { once("bed") { engine.post(.begin(ArchiveVoice.Cue(buffer: bed, gain: 1, fadeIn: 0.1, label: "rearm", token: 1))) } }
+            if t >= 0.3 { once("stale") { engine.post(.chops(stalePlan)) } }
             if t >= first + 0.1 { once("queued") { queuedBefore = engine.archive.chopCounts.queued } }
             if t >= rearm { once("rearm") { engine.archive.reset(now: t) } }
             // The stale plan was still in flight across the restart, then the rebuild arrives.
-            if t >= rearm + 0.05 { once("late") { engine.post(.archiveChops(stalePlan)) } }
-            if t >= rearm + 0.1 { once("rebuild") { engine.post(.archiveChops(rebuildPlan)) } }
+            if t >= rearm + 0.05 { once("late") { engine.post(.chops(stalePlan)) } }
+            if t >= rearm + 0.1 { once("rebuild") { engine.post(.chops(rebuildPlan)) } }
             if t >= rearm + 0.3 { once("counts") { countsAfter = engine.archive.chopCounts } }
             if t > rearm + 0.05 && engine.archive.isMusicDucked { duckedAfterRearm = true }
         }

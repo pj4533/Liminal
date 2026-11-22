@@ -6,25 +6,29 @@ import Testing
 
 struct LofiProductionTests {
     #if os(macOS)
+    /// Runs on the device graph (silenced at its last node): the transport arms on real rendering.
     @Test @MainActor func routeResetRestartsPlaybackAndHonorsStop() async throws {
         let music = GenerativeEngine(seed: 71)
         let av = music.engine.avEngine
-        try av.enableManualRenderingMode(.offline, format: Settings.audioFormat, maximumFrameCount: 1024)
+        music.recordTap.volume = 0
         defer { music.shutdown() }
+        // The transport and the recovery task need the main actor after their sleeps. Other main-actor
+        // tests render for tens of seconds at a time beside this one, so a wall-clock deadline can pass
+        // before either has had one turn. Count polls instead: each sleep gives the main actor away.
+        func waitUntilPlaying() async throws {
+            var polls = 0
+            while !(av.isRunning && music.isPlaybackReady) && polls < 3000 {
+                try await Task.sleep(for: .milliseconds(20))
+                polls += 1
+            }
+        }
         music.start()
+        try await waitUntilPlaying()
         try #require(av.isRunning && music.isPlaybackReady)
 
         av.stop()
         NotificationCenter.default.post(name: .AVAudioEngineConfigurationChange, object: av)
-        // The recovery task needs the main actor after its 0.15 s sleep. Other main-actor tests render
-        // for tens of seconds at a time beside this one, so a wall-clock deadline can pass before the
-        // recovery has had one turn. Count polls instead: each sleep gives the main actor away, and
-        // the recovery is queued for it ahead of this test's next poll.
-        var polls = 0
-        while !av.isRunning && polls < 1500 {
-            try await Task.sleep(for: .milliseconds(20))
-            polls += 1
-        }
+        try await waitUntilPlaying()
         #expect(av.isRunning && music.isPlaybackReady)
 
         av.stop()
@@ -184,7 +188,7 @@ struct LofiArchiveRetimeTests {
     @Test func sharedOutputContainsBothProgramInputsAndAttenuatesAnOverload() throws {
         let archive = ArchiveVoice.BufferSource()
         let lofi = ArchiveVoice.BufferSource()
-        let master = LofiMasterBus(archiveAndAmbient: archive, lofi: lofi)
+        let master = LofiMasterBus(archive: archive, lofi: lofi)
         let audio = AudioEngine()
         audio.output = master.output
         let format = AudioKit.Settings.audioFormat
@@ -217,12 +221,13 @@ struct LofiArchiveRetimeTests {
                 peakR = max(peakR, abs(pcm[1][i]))
             }
         }
-        #expect(peakL > 0.2 && peakL < 0.85)
-        #expect(peakR > 0.2 && peakR < 0.85)
+        // The finisher holds the overload under its -1 dBTP ceiling.
+        #expect(peakL > 0.2 && peakL <= dbToGain(-1))
+        #expect(peakR > 0.2 && peakR <= dbToGain(-1))
     }
 
     @Test func archiveSwellsCycleThroughDistinctTempoDivisions() {
-        let patterns = (0..<10).map { MixBus.ArchiveEchoPattern.choose(seed: 16, phrase: $0) }
+        let patterns = (0..<10).map { ArchiveMixBus.EchoPattern.choose(seed: 16, phrase: $0) }
         #expect(Set(patterns.prefix(5).map(\.main)).count == 5)
         #expect(zip(patterns, patterns.dropFirst()).allSatisfy { $0 != $1 })
         for pattern in patterns {
@@ -259,16 +264,15 @@ struct LofiArchiveRetimeTests {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("archive-retime-\(UUID()).wav")
         defer {
             try? FileManager.default.removeItem(at: url)
-            try? FileManager.default.removeItem(at: url.deletingPathExtension().appendingPathExtension("score.json"))
         }
         var begun = false
         var switched = false
-        try engine.renderOffline(seconds: 5, to: url, archiveBeatDuration: 0.92, configure: { engine in
-            engine.mix.dryBus.volume = 0
-            engine.mix.mutedReturns = ["reverb", "shimmer"]
+        try engine.renderOffline(seconds: 5, to: url, beatDuration: 0.92, configure: { engine in
+            engine.archiveMix.dryBus.volume = 0
+            engine.archiveMix.mutedReturns = ["reverb", "shimmer"]
         }, onStep: { t in
-            if !begun, t >= 1.0 { begun = true; engine.post(.archiveBegin(cue)) }
-            if !switched, t >= 1.84 { switched = true; engine.mix.syncDelay(toBeatDuration: 0.68) }
+            if !begun, t >= 1.0 { begun = true; engine.post(.begin(cue)) }
+            if !switched, t >= 1.84 { switched = true; engine.archiveMix.syncEcho(beatDuration: 0.68) }
         })
         let file = try AVAudioFile(forReading: url)
         let rendered = try #require(AVAudioPCMBuffer(pcmFormat: file.processingFormat,

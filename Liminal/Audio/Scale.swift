@@ -1,7 +1,7 @@
 import Foundation
 
-/// Musical scale definitions for generative composition.
-/// Scales constrain note selection to musically coherent sets.
+/// The scales the Lo-Fi score can play in (a pinned scale or the transport's choice), as intervals
+/// above the tonic.
 nonisolated enum ScaleType: String, CaseIterable, Codable, Sendable {
     // MARK: - Western Modes
     case major = "Major (Ionian)"
@@ -196,77 +196,4 @@ nonisolated extension ScaleType {
         for i in intervals { m |= 1 << UInt16((tonic + i) % 12) }
         return m
     }
-
-    /// Index into `allCases` (published in `MusicState.modeIndex`).
-    var index: Int { ScaleType.allCases.firstIndex(of: self) ?? 0 }
-}
-
-/// A musical scale rooted at a specific note.
-nonisolated struct Scale {
-    let type: ScaleType
-    let rootMIDI: Int  // MIDI note number (60 = middle C)
-
-    /// Get all MIDI notes in this scale across a range of octaves
-    func notesInRange(lowMIDI: Int, highMIDI: Int) -> [Int] {
-        var notes: [Int] = []
-
-        // Start from lowest octave that could contain notes
-        let lowestOctaveRoot = (lowMIDI / 12) * 12
-
-        for octaveRoot in stride(from: lowestOctaveRoot, through: highMIDI, by: 12) {
-            for interval in type.intervals {
-                let note = octaveRoot + (rootMIDI % 12) + interval
-                if note >= lowMIDI && note <= highMIDI {
-                    notes.append(note)
-                }
-            }
-        }
-
-        return notes.sorted()
-    }
-
-    /// Convert MIDI note to frequency in Hz
-    static func midiToFrequency(_ midi: Int) -> Float {
-        // A4 (MIDI 69) = 440 Hz
-        return 440.0 * pow(2.0, Float(midi - 69) / 12.0)
-    }
-
-    /// MIDI note for a true scale degree (0 = root, negative and > count wrap by octaves).
-    /// Unlike indexing into `notesInRange`, degree 0 is always the root.
-    func midi(degree: Int, octave: Int) -> Int {
-        let intervals = type.intervals
-        let n = intervals.count
-        let o = Scale.floorDiv(degree, n)
-        return rootMIDI + octave * 12 + intervals[degree - o * n] + o * 12
-    }
-
-    /// Get frequency for a scale degree (0-indexed) in a specific octave
-    func frequencyForDegree(_ degree: Int, octave: Int) -> Float {
-        Scale.midiToFrequency(midi(degree: degree, octave: octave))
-    }
-
-    /// Fractional MIDI to frequency (for detune).
-    static func midiToFrequency(_ midi: Double) -> Float {
-        Float(440.0 * pow(2.0, (midi - 69) / 12.0))
-    }
-
-    static func floorDiv(_ a: Int, _ b: Int) -> Int {
-        a >= 0 ? a / b : -((-a + b - 1) / b)
-    }
-
-    /// Get a random note from the scale within a MIDI range
-    func randomNote(lowMIDI: Int, highMIDI: Int) -> Int {
-        let notes = notesInRange(lowMIDI: lowMIDI, highMIDI: highMIDI)
-        return notes.randomElement() ?? rootMIDI
-    }
-}
-
-// MARK: - Convenience
-
-nonisolated extension Scale {
-    /// Common scales for ambient music
-    static let cPentatonic = Scale(type: .pentatonicMajor, rootMIDI: 60)
-    static let aPentatonicMinor = Scale(type: .pentatonicMinor, rootMIDI: 57)
-    static let dDorian = Scale(type: .dorian, rootMIDI: 62)
-    static let gMixolydian = Scale(type: .mixolydian, rootMIDI: 55)
 }

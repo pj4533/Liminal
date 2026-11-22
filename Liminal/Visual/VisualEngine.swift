@@ -170,7 +170,6 @@ final class VisualEngine: ObservableObject {
         }
         return d
     }()
-    private var scheduledTimer: Timer?
     private var fillTask: Task<Void, Never>?
     @Published private(set) var stagedImage: ImageQueue.DisplayItem?
     private(set) var reveal: LofiImageReveal?
@@ -257,17 +256,13 @@ final class VisualEngine: ObservableObject {
     func start(music: GenerativeEngine) {
         stopScheduling()
         imageQueue.start()
-        if music.musicMode == .lofi {
-            if !imageBuffer.hasCurrent(), let initial = imageQueue.standbyImage(index: standbyIndex) {
-                imageQueue.showReserved(initial)
-                standbyIndex += 1
-            }
-            fillTask = Task { [weak self, weak music] in
-                guard let self, let music else { return }
-                await scheduleFills(on: music.musicState)
-            }
-        } else {
-            startScheduledAdvances()
+        if !imageBuffer.hasCurrent(), let initial = imageQueue.standbyImage(index: standbyIndex) {
+            imageQueue.showReserved(initial)
+            standbyIndex += 1
+        }
+        fillTask = Task { [weak self, weak music] in
+            guard let self, let music else { return }
+            await scheduleFills(on: music.musicState)
         }
         LMLog.visual.info("VisualEngine started")
     }
@@ -277,8 +272,6 @@ final class VisualEngine: ObservableObject {
         fillTask = nil
         stagedImage = nil
         reveal = nil
-        scheduledTimer?.invalidate()
-        scheduledTimer = nil
     }
 
     func stop() {
@@ -314,13 +307,6 @@ final class VisualEngine: ObservableObject {
         let plan = spec.drop
         LMLog.visual.info("🌀 TRANSITION drop style=\(spec.style.name, privacy: .public) colour=\(plan?.colour.name ?? "-", privacy: .public) finisher=\(plan?.finisher.name ?? "-", privacy: .public) build=\(String(format: "%.2f", build), privacy: .public)s strength=\(String(format: "%.2f", strength), privacy: .public) seed=\(String(format: "%.3f", spec.seed), privacy: .public)")
         return spec
-    }
-
-    /// Manually request the next image
-    func advance() {
-        guard fillTask == nil else { return }
-        ArchiveFootageService.shared.queuedImage(nil)
-        imageQueue.advance()
     }
 
     // MARK: - Cache
@@ -432,18 +418,6 @@ final class VisualEngine: ObservableObject {
             // The outgoing grid may still be published in the output latency window
             // at a take switch. Read the committed new grid after its first tick.
             do { try await Task.sleep(for: .seconds(max(0, cue.downbeat + 0.25 - now()))) } catch { return }
-        }
-    }
-
-    private func startScheduledAdvances() {
-        let interval = scheduledInterval
-        ArchiveFootageService.shared.expectNextImage(after: interval)
-        scheduledTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                guard let self, self.scheduledTimer != nil else { return }
-                ArchiveFootageService.shared.expectNextImage(after: interval)
-                self.imageQueue.advance()
-            }
         }
     }
 }
