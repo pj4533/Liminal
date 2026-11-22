@@ -8,7 +8,7 @@ struct VertexOut {
     float2 texCoord;
 };
 
-// MARK: - Simplex Noise (2D) - copied from DreamyEffects.metal
+// MARK: - Simplex Noise (2D)
 
 float3 mod289_v3(float3 x) {
     return x - floor(x * (1.0 / 289.0)) * 289.0;

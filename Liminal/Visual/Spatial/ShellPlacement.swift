@@ -84,7 +84,7 @@ extension ShellLayout {
     /// Breathing amplitude range, metres: calm at rest, up to the 3 cm comfort cap with the music.
     static let breathingCalm: Float = 0.02
 
-    /// Breathing amplitude for the frame: the slow geometry pulse and scene energy of the music push
+    /// Breathing amplitude for the frame: the slow geometry pulse and phrase energy of the music push
     /// it from 2 cm toward the 3 cm cap. `amount` is the music coupling's master wet (0 when "Sync
     /// visuals to music" is off or the music is silent).
     static func breathingAmplitude(amount: Float, energy: Float, pulseMotion: Float) -> Float {

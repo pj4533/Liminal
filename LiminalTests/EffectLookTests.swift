@@ -72,7 +72,6 @@ struct EffectLookTests {
             var m = MusicModulation()
             m.amount = Float.random(in: 0...3, using: &rng); m.energy = Float.random(in: 0...1, using: &rng)
             m.pulseColor = Float.random(in: 0...1, using: &rng); m.pulseMotion = Float.random(in: 0...1, using: &rng)
-            m.shimmer = Float.random(in: 0...1, using: &rng); m.air = Float.random(in: 0...1, using: &rng)
             m.ghostReach = Float.random(in: 0...1, using: &rng)
             let u = EffectsUniformsComputer.compute(time: t, music: m, look: EffectLook(intensity: i, imageAge: age))
             #expect(Self.strain(u) <= EffectLook.strainBudget(i) + 1e-4, "budget at t=\(t) I=\(i)")

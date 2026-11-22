@@ -50,7 +50,7 @@ nonisolated final class AtomicImageBuffer: @unchecked Sendable {
     private var currentID: UUID?
     func displayedID() -> UUID? { lock.withLock { currentID } }
 
-    /// Generation counter for depth maps - independent from image generation.
+    /// Generation counter for depth maps - independent from the image counter.
     nonisolated(unsafe) private var _depthGeneration: UInt64 = 0
 
     /// Metadata for `_current` (credit, measured saturation, openness). Protected by lock.

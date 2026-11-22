@@ -3,7 +3,7 @@
 //  Liminal
 //
 //  Per-render-loop smoothing state that turns MusicState snapshots into a MusicModulation
-//  (docs/plans/av-coupling.md 1.2, decisions C2-C8 in docs/decisions/av-coupling.md).
+//  (the coupling is described in docs/decisions/av-coupling.md).
 //  Owned by exactly one render loop (macOS VisualDisplayView, visionOS ImmersiveDomeView), never shared.
 //  Per call: about a dozen one-pole updates and a few `exp` calls, no allocation.
 //
@@ -12,21 +12,17 @@ import Foundation
 
 nonisolated struct MusicReactor {
 
-    // MARK: Tuning (starting values from the plan; see docs/decisions/av-coupling.md)
+    // MARK: Tuning
 
     static let amountTau: Float = 1.5
     static let energyTau: Float = 2.0
     static let brightTau: Float = 2.0
-    static let shimmerTau: Float = 1.0
-    static let airTau: Float = 1.5
     static let pulseColorAttack: Float = 0.09, pulseColorRelease: Float = 0.45
     static let pulseMotionAttack: Float = 0.18, pulseMotionRelease: Float = 0.90
     static let chordHueTau: Float = 4, keyHueTau: Float = 12
     static let chordHueRange: Float = 0.06, keyHueRange: Float = 0.10
     static let reachAttack: Float = 0.8, reachRelease: Float = 6, reachHold: Float = 2
-    /// `MusicState.shimmerLevel` is a linear gain that tops out near dbToGain(-8) = 0.4.
-    static let shimmerFullScale: Float = 0.4
-    /// Music snapshot older than this (conductor stopped) counts as not alive.
+    /// Music snapshot older than this (transport stopped) counts as not alive.
     static let staleAfter: Double = 0.5
     /// Longest step integrated at once (a hitch or a backgrounded app must not lurch the accumulators).
     static let maxStep: Float = 0.1
@@ -49,8 +45,6 @@ nonisolated struct MusicReactor {
     private var lastEffectTime: Float?
     private var amount: Float = 0
     private var energy: Float = 0.4
-    private var shimmer: Float = 0
-    private var air: Float = 0
     private var pulseColor: Float = 0
     private var pulseMotion: Float = 0
     private var chordHue: Float = 0
@@ -62,7 +56,7 @@ nonisolated struct MusicReactor {
     private var ghostReach: Float = 0
     private var reachHoldLeft: Float = 0
     private var ghostSerial: UInt32 = 0
-    private var lastScene: UInt32?
+    private var lastPhrase: UInt32?
 
     init(strength: Float = 1) { self.strength = strength }
 
@@ -77,7 +71,7 @@ nonisolated struct MusicReactor {
 
     /// - Parameters:
     ///   - state: latest bus snapshot (`music.musicState.read()`)
-    ///   - now: conductor seconds on the bus clock (`music.musicState.now()`), for aliveness and the onset envelope
+    ///   - now: transport seconds on the bus clock (`music.musicState.now()`), for aliveness and the onset envelope
     ///   - effectTime: the visual effect clock; its delta drives every smoother and accumulator, so the
     ///     reactor runs exactly as fast as the visuals. A repeated call with the same time returns the
     ///     cached result; a time that goes backwards (clock restarted) resets the reactor.
@@ -109,8 +103,6 @@ nonisolated struct MusicReactor {
         if alive {
             energy = Self.ease(energy, Self.clamp01(state.intensity), dt, Self.energyTau)
             bright = Self.ease(bright, Self.clamp01(state.brightness), dt, Self.brightTau)
-            shimmer = Self.ease(shimmer, Self.clamp01(state.shimmerLevel / Self.shimmerFullScale), dt, Self.shimmerTau)
-            air = Self.ease(air, Self.clamp01(state.level(.air)), dt, Self.airTau)
             let p = Self.clamp01(state.pulse(at: now, decay: 0.35))
             pulseColor = Self.follow(pulseColor, p, dt, Self.pulseColorAttack, Self.pulseColorRelease)
             pulseMotion = Self.follow(pulseMotion, p, dt, Self.pulseMotionAttack, Self.pulseMotionRelease)
@@ -118,13 +110,13 @@ nonisolated struct MusicReactor {
             let rel = (Int(state.chordRoot) - Int(state.tonic) + 24) % 12
             chordHueTarget = Self.chordHueRange * Float(Self.fifths(rel)) / 6
             keyHueTarget = Self.keyHueRange * Float(Self.fifths(Int(state.tonic) % 12)) / 6
-            // 6. Scene change -> ghost burst + reach swell.
-            if let ls = lastScene, ls != state.sceneIndex, a > 0.5 {
+            // 6. Phrase change -> ghost burst + reach swell.
+            if let lp = lastPhrase, lp != state.phraseIndex, a > 0.5 {
                 ghostSerial &+= 1
                 reachHoldLeft = Self.reachHold
             }
-            lastScene = state.sceneIndex
-            // Sample-timed kick candidates can seed an occasional trail in Lo-Fi. Use
+            lastPhrase = state.phraseIndex
+            // Sample-timed kick candidates can seed an occasional trail. Use
             // the audible timestamp, as a rendered sample can still be in the output path.
             if state.recordedBeatDuration > 0, a > 0.5 {
                 if state.lastOnsetTime != lastRhythmOnset {
@@ -170,8 +162,6 @@ nonisolated struct MusicReactor {
             pulseColor: pulseColor,
             fillAccent: state.lofiTakeGrid?.visualAccent(at: Double(state.startUptime) / 1e9 + now) ?? 0,
             pulseMotion: pulseMotion,
-            shimmer: shimmer,
-            air: air,
             hueBaseShift: Self.wrap(huePhase + wet * harmonyHue),
             motionLead: motionLead,
             ghostBurstSerial: ghostSerial,
@@ -213,9 +203,8 @@ enum MusicSyncLog {
         let m = reactor.modulation
         func f(_ x: Float, _ d: Int = 2) -> String { String(format: "%.\(d)f", x) }
         func ratio(_ x: Float, _ y: Float) -> String { y > 1e-6 ? String(format: "x%.2f", x / y) : "x-" }
-        let scene = "\(state.sceneKind)#\(state.sceneIndex)"
-        let react = "a=\(f(m.amount)) alive=\(reactor.alive ? 1 : 0) scene=\(scene) I=\(f(m.energy)) B=\(f(reactor.bright))"
-            + " pulse=\(f(m.pulseColor))/\(f(m.pulseMotion)) shim=\(f(m.shimmer)) air=\(f(m.air))"
+        let react = "a=\(f(m.amount)) alive=\(reactor.alive ? 1 : 0) phrase=\(state.phraseIndex) I=\(f(m.energy)) B=\(f(reactor.bright))"
+            + " pulse=\(f(m.pulseColor))/\(f(m.pulseMotion))"
             + " hue=\(f(m.hueBaseShift, 3))(\(reactor.harmonyHue >= 0 ? "+" : "")\(f(reactor.harmonyHue, 3))) lead=\(f(m.motionLead, 1))s"
             + " chord=\(state.chordRoot)/\(state.tonic)"
         let unis = "dist=\(f(u.distortionAmplitude, 4))(\(ratio(u.distortionAmplitude, n.distortionAmplitude)))"

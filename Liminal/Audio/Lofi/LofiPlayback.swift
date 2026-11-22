@@ -273,7 +273,6 @@ final class LofiPlayback {
         let now = stateBus.now()
         let take = current.breakAudio.drums
         let offset = max(0, frame - current.start)
-        let beat = Double(offset) / take.clock.framesPerBeat
         let takeFrame = current.request.drumPhraseIndex * take.clock.frameCount + Int(offset)
         while nextKickIndex < take.kicks.count, take.kicks[nextKickIndex].frame <= takeFrame {
             let kick = take.kicks[nextKickIndex]
@@ -291,23 +290,12 @@ final class LofiPlayback {
         let section = current.request.section
         state.startUptime = UInt64(transportOrigin * 1e9)
         state.time = now
-        state.sceneIndex = UInt32(truncatingIfNeeded: current.request.index)
-        state.sceneKind = section == .breakdown ? .stillness : .drift
-        state.scenePhase = .bloom
-        state.sceneProgress = Float(min(1, beat / LofiClock.beats))
+        state.phraseIndex = UInt32(truncatingIfNeeded: current.request.index)
         state.intensity = section == .breakdown ? 0.26 : 0.49
         state.brightness = 0.38
-        let absoluteBeat = Double(current.request.index) * LofiClock.beats + beat
-        state.density = LofiDrift(seed: current.request.seed).at(absoluteBeat).density * 0.65
         let score = current.music.score
         state.tonic = UInt8(score.tonic)
         state.chordRoot = UInt8(score.chordRoot)
-        state.scaleMask = score.scale.pitchClassMask(tonic: score.tonic)
-        let notes = score.notes.filter { $0.beat <= beat && beat < $0.beat + $0.length }
-        state.chordMask = notes.reduce(0) { $0 | (UInt16(1) << ($1.midi % 12)) }
-        state.setLevel(.pad, notes.contains { $0.part == .texture } ? 0.42 : 0)
-        state.setLevel(.drone, notes.contains { $0.part == .bass } ? 0.40 : 0)
-        state.setLevel(.lead, notes.contains { $0.part == .lead } ? 0.26 : 0)
         let takeStart = current.start - Int64(current.request.drumPhraseIndex * take.clock.frameCount)
         let nextTake = rendered.last.flatMap { $0.request.drumBreakIndex > current.request.drumBreakIndex ? $0.breakAudio : nil }
         state.lofiTakeGrid = LofiTakeGrid(origin: transportOrigin + Double(takeStart) / sampleRate + outputLatency,

@@ -639,7 +639,7 @@ final class EffectsMetalView: MTKView {
         LMLog.visual.info("🔄 Ghost taps reset")
     }
 
-    /// Music scene change: forward to the ghost tap manager (no-op unless the serial changed).
+    /// Music burst (a phrase change or a rhythm trail): forward to the ghost tap manager (no-op unless the serial changed).
     func requestGhostBurst(serial: UInt32) {
         ghostTapManager.requestBurst(serial: serial)
     }
@@ -656,7 +656,7 @@ struct EffectsMetalViewRepresentable: NSViewRepresentable {
     let uniforms: EffectsUniforms  // Single struct - matches visionOS pattern
     /// During a drop: the frame without a transition the draw switches to at the cut.
     var cutUniforms: EffectsUniforms? = nil
-    var ghostBurstSerial: UInt32 = 0  // MusicModulation.ghostBurstSerial (scene-change trail burst)
+    var ghostBurstSerial: UInt32 = 0  // MusicModulation.ghostBurstSerial (phrase-change or rhythm trail burst)
 
     func makeNSView(context: Context) -> EffectsMetalView {
         let view = EffectsMetalView()

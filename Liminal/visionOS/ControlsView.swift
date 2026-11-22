@@ -2,7 +2,8 @@
 //  ControlsView.swift
 //  Liminal
 //
-//  visionOS floating controls for audio/visual parameters.
+//  visionOS control window: playback and the immersive space, tempo and scale, the visual
+//  settings, archive footage, and the curated pictures with storage and reset.
 //
 
 #if os(visionOS)
@@ -36,18 +37,20 @@ struct ControlsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 header
-                // Three columns at the default size, two or one when the window is narrowed.
+                // Three columns at the default size, two or one when the window is narrowed. The
+                // footage section is the tallest, so it gets a column of its own and the other four
+                // pair up into columns of about its height.
                 // idealWidth: wrapping captions would otherwise report their one-line width and
                 // ViewThatFits would always fall back to the narrowest layout.
                 ViewThatFits(in: .horizontal) {
                     HStack(alignment: .top, spacing: 24) {
-                        column { playbackSection; imagesSection }
-                        column { musicSection; archiveSection }
-                        column { visualsSection }
+                        column { playbackSection; visualsSection }
+                        column { musicSection; imagesSection }
+                        column { archiveSection }
                     }
                     HStack(alignment: .top, spacing: 24) {
-                        column { playbackSection; visualsSection }
-                        column { musicSection; archiveSection; imagesSection }
+                        column { playbackSection; musicSection; visualsSection }
+                        column { archiveSection; imagesSection }
                     }
                     VStack(spacing: 24) {
                         playbackSection; musicSection; visualsSection; archiveSection; imagesSection
@@ -80,7 +83,7 @@ struct ControlsView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Liminal")
                 .font(.extraLargeTitle2)
-            Text("Lo-fi beats with old film and evolving visuals")
+            Text("Lo-fi beats with old film and curated pictures")
                 .font(.title3)
                 .foregroundStyle(.secondary)
                 .wrapping()

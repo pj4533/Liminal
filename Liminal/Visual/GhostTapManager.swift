@@ -78,7 +78,7 @@ final class GhostTapManager {
     private var taps: [GhostTap] = []
     private var lastSpawnTime: Float = 0
 
-    // Music scene-change burst (docs/plans/av-coupling.md 1.4, decision C8)
+    // Music burst (a phrase change or a rhythm trail), decision C8 in docs/decisions/av-coupling.md
     /// Burst taps only spawn while fewer than this many are active: the steady-state count at
     /// Echo = 1 (8 s lifetime / 2 s interval), so a burst never makes the shader run more taps than it already can.
     static let burstTapLimit = 4
@@ -149,7 +149,7 @@ final class GhostTapManager {
         burstDeadline = nil
     }
 
-    /// Music scene change: queue a burst of 2 taps when `serial` changed (cheap to call every frame).
+    /// Music burst (a phrase change or a rhythm trail): queue a burst of 2 taps when `serial` changed (cheap to call every frame).
     func requestBurst(serial: UInt32) {
         guard serial != lastBurstSerial else { return }
         lastBurstSerial = serial

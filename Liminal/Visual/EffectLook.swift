@@ -17,7 +17,7 @@ nonisolated struct EffectLook: Sendable, Equatable {
     var intensity: Float = EffectLook.defaultIntensity
     /// Seconds on the effect clock since the current image's crossfade began; nil before the first crossfade.
     var imageAge: Float? = nil
-    /// Seconds between images (the "image interval" setting); scales the fresh-image windows when short.
+    /// Seconds between images; scales the fresh-image windows when short.
     var imageInterval: Float = 30
     /// Seconds the current crossfade lasts (docs/plans/transitions.md 4): the fresh-image hold is anchored
     /// to its end, so a long transition still gets the same clear time after it. 1.5 = the classic timing.

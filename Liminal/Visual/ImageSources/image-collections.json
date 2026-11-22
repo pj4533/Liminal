@@ -11,7 +11,7 @@
    "image/jpeg",
    "image/png"
   ],
-  "userAgent": "Liminal/1.0 (ambient audiovisual app; curated public-domain imagery)",
+  "userAgent": "Liminal/1.0 (lo-fi audiovisual app; curated public-domain imagery)",
   "maxRequestsPerSecond": 1,
   "storeBudgetBytes": 3000000000,
   "minFreeBytes": 1000000000,
@@ -1791,7 +1791,7 @@
   },
   {
    "source": "Wikimedia Ansel Adams NARA series, Photochrom Zentralbibliothek Zuerich",
-   "reason": "Capped at 2000 px; candidate for a later upscale tier"
+   "reason": "Capped at 2000 px"
   },
   {
    "source": "Wikimedia Category:Googie architecture",

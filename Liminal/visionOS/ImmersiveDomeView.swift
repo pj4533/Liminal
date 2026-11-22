@@ -551,7 +551,7 @@ struct ImmersiveDomeView: View {
                 effectsRenderer?.gpuStats.beginFrame()
 
                 // Check for new images from AtomicImageBuffer (thread-safe)
-                // One atomic read of image and generation (C10).
+                // One atomic read of image and generation.
                 // DEBUG -LiminalShellCycle: switch to the next fixture image every N seconds.
                 if !Self.debugCycle.isEmpty, frameStartTime.timeIntervalSince(lastCycleSwitch) >= DebugLaunchOptions.shellCycleSeconds {
                     lastCycleSwitch = frameStartTime
@@ -669,7 +669,6 @@ struct ImmersiveDomeView: View {
                     intensity: DebugLaunchOptions.freezeTime != nil
                         ? intensityTarget : intensitySmoother.next(target: intensityTarget, time: effectTime),
                     imageAge: transitionStartEffectTime.map { effectTime - $0 }.flatMap { $0 >= 0 ? $0 : nil },
-                    imageInterval: Float(settings.imageInterval),
                     transitionDuration: transitionState.spec.duration,
                     freshFadeEnd: transitionState.spec.drop != nil ? transitionState.spec.duration : nil)
                 let footageFrame = footage.frame(image: cgImage)

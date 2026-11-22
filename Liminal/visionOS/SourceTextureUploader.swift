@@ -3,7 +3,7 @@
 //  Liminal
 //
 //  Builds a source-image texture OFF the main actor (docs/decisions/performance.md, image-change
-//  hitch). Decoding + downsampling a generated JPEG into 2048² BGRA takes 40-90 ms; on the
+//  hitch). Decoding + downsampling a picture's JPEG into 2048² BGRA takes 40-90 ms; on the
 //  @MainActor render loop that was one long frame at every image change.
 //
 //  Every image gets its OWN new texture (never an in-place overwrite), so a texture that an

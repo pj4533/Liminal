@@ -67,13 +67,6 @@ nonisolated enum DebugLaunchOptions {
         return files.isEmpty ? nil : files
     }()
 
-    /// -LiminalImageInterval <seconds>: use this image interval instead of the setting (not saved),
-    /// e.g. 10 to see many transitions in a short recording. Clamped to at least 4 s.
-    static let imageInterval: Double? = {
-        guard defaults.object(forKey: "LiminalImageInterval") != nil else { return nil }
-        return max(4, defaults.double(forKey: "LiminalImageInterval"))
-    }()
-
     /// -LiminalForceStereoFlatDepth YES (visionOS): always use the stereo ShaderGraph material and
     /// feed it a flat (constant mid-grey) depth map instead of the ML depth map, so the stereo path
     /// can be inspected deterministically (zero parallax) in the simulator.
@@ -301,7 +294,6 @@ nonisolated enum DebugLaunchOptions {
             || defaults.object(forKey: "LiminalPerfLogInterval") != nil || splitPasses
             || forceStereoFlatDepth || forceMonoMaterial || noEffects || syncLog
             || defaults.object(forKey: "LiminalSyncStrength") != nil || effectIntensity != nil
-            || imageInterval != nil
             || anyShellFlag
             || videoForce || videoLook != nil || videoMode != nil || videoFile != nil || videoMix != nil || videoSeed != nil
             || videoOffline || videoOff || controlsScroll != nil || controlsWidth != nil || videoOffAt != nil
@@ -320,7 +312,6 @@ nonisolated enum DebugLaunchOptions {
     static let testPattern = false
     static let testImagePath: String? = nil
     static let testImageDirectoryFiles: [URL]? = nil
-    static let imageInterval: Double? = nil
     static let forceStereoFlatDepth = false
     static let forceMonoMaterial = false
     static let noEffects = false
@@ -382,7 +373,6 @@ nonisolated enum DebugLaunchOptions {
                 LMLog.general.info("🧪 DEBUG FLAG applied: LiminalTestImage=\(p, privacy: .public) (fixed source image)")
             }
         }
-        if let s = imageInterval { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalImageInterval=\(s, format: .fixed(precision: 1))s (overrides the Image interval setting, not saved)") }
         if testPattern { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalTestPattern=YES (orientation test card replaces source images)") }
         if forceStereoFlatDepth { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalForceStereoFlatDepth=YES (stereo material + flat depth)") }
         if forceMonoMaterial { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalForceMonoMaterial=YES (mono UnlitMaterial)") }
@@ -394,7 +384,7 @@ nonisolated enum DebugLaunchOptions {
         if let c = dropColour { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalDropColour=\(c, privacy: .public)") }
         if let f = dropFinisher { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalDropFinisher=\(f, privacy: .public)") }
         if let l = dropLead { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalDropLead=\(l * 1000, format: .fixed(precision: 1)) ms") }
-        if dropOff { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalDropOff (bell reveals in Lo-Fi)") }
+        if dropOff { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalDropOff (bell reveals on every boundary)") }
         if shellYaw != 0 || shellPitch != 0 {
             LMLog.general.info("🧪 DEBUG FLAG applied: LiminalShellYaw=\(shellYaw, format: .fixed(precision: 1)) LiminalShellPitch=\(shellPitch, format: .fixed(precision: 1)) (scene rotated)")
         }

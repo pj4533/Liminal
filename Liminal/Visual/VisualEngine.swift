@@ -122,10 +122,6 @@ nonisolated struct LofiImageReveal: Sendable {
 @MainActor
 final class VisualEngine: ObservableObject {
 
-    // MARK: - Configuration
-
-    private var scheduledInterval: TimeInterval { SettingsService.shared.imageInterval }
-
     // MARK: - Atomic Image Buffer (for render loop - bypasses MainActor)
 
     /// Thread-safe buffer for the 90fps render loop.
@@ -259,14 +255,15 @@ final class VisualEngine: ObservableObject {
     func nextTransition(effectTime: Float, intensity: Float, energy: Float?, hasDepth: Bool) -> TransitionSpec {
         pickContext = (effectTime, intensity, energy, hasDepth)
         if let reveal { return reveal.spec }
-        return pickTransition(imageInterval: scheduledInterval)
+        return pickTransition()
     }
 
     /// The renderers' latest inputs to `nextTransition`; a Lo-Fi reveal is chosen ahead of its crossfade with these.
     private var pickContext: (effectTime: Float, intensity: Float, energy: Float?, hasDepth: Bool) =
         (0, DebugLaunchOptions.effectIntensity(setting: SettingsService.shared.effectIntensity), nil, false)
 
-    private func pickTransition(imageInterval: Double) -> TransitionSpec {
+    /// - Parameter imageInterval: seconds the picture stays (a bell reveal passes its 32 beats).
+    private func pickTransition(imageInterval: Double = 30) -> TransitionSpec {
         let c = pickContext
         let spec = transitionDirector.next(time: c.effectTime, intensity: c.intensity, energy: c.energy,
                                            hasDepth: c.hasDepth, imageInterval: Float(imageInterval))

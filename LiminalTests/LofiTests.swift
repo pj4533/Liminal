@@ -16,7 +16,7 @@ struct LofiTests {
         }
     }
 
-    @Test func compositionVariesWithinItsHarmonicFieldAndEvolvesToAnotherTake() {
+    @Test func compositionVariesWithinItsKeyAndEvolvesToAnotherTake() {
         let drift = LofiDrift(seed: 21)
         let theme = LofiScore.make(seed: 21, section: .theme, drift: drift, startBeat: 0)
         #expect(theme == LofiScore.make(seed: 21, section: .theme, drift: drift, startBeat: 0))

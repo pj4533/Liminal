@@ -262,7 +262,7 @@ nonisolated final class ImageQueue: ObservableObject, @unchecked Sendable {
         await MainActor.run { self.queuedCount = queued }
     }
 
-    /// Decodes one pool picture (lazily, one at a time). Never upscaled: the ingest gate already keeps
+    /// Decodes one pool picture (lazily, one at a time). Never enlarged: the ingest gate already keeps
     /// the 3:2 crop at 2000 x 1333 or more.
     private func makeDisplayItem(_ entry: ImageStore.Entry) -> DisplayItem? {
         guard let image = feed.pool.store.loadImage(entry) else { return nil }

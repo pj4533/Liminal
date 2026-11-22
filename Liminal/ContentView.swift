@@ -71,7 +71,8 @@ struct WindowAccessor: NSViewRepresentable {
 // MARK: - Content View
 
 struct ContentView: View {
-    /// Width of the control panel. Wide enough for "Natural Minor (Aeolian)" in the scale menu.
+    /// Width of the control panel: fits the longest scale name in the Scale menu and the three
+    /// Dialogue understanding segments on one line.
     static let panelWidth: CGFloat = 320
 
     @State private var showingSettings = false
@@ -255,7 +256,7 @@ struct SettingsSheetView: View {
             }
         }
         .frame(width: 440)
-        .frame(minHeight: 420, idealHeight: 560)
+        .frame(minHeight: 320, idealHeight: 380)
     }
 }
 
@@ -276,11 +277,11 @@ final class MusicSyncBox {
     var lastFootageUpdate: Double = 0
 
     /// The effect look for this frame (effects-balance plan 7.3).
-    func look(effectTime: Float, setting: Float, imageInterval: Double) -> EffectLook {
+    func look(effectTime: Float, setting: Float) -> EffectLook {
         let target = DebugLaunchOptions.effectIntensity(setting: setting)
         let i = DebugLaunchOptions.freezeTime != nil ? target : intensity.next(target: target, time: effectTime)
         let age = transitionStart.map { effectTime - $0 }.flatMap { $0 >= 0 ? $0 : nil }
-        return EffectLook(intensity: i, imageAge: age, imageInterval: Float(imageInterval),
+        return EffectLook(intensity: i, imageAge: age,
                           transitionDuration: transition.duration,
                           freshFadeEnd: transition.drop != nil ? transition.duration : nil)
     }
@@ -359,7 +360,7 @@ struct VisualDisplayView: View {
     }
 
     private func currentLook(effectTime: Float) -> EffectLook {
-        sync.look(effectTime: effectTime, setting: settings.effectIntensity, imageInterval: settings.imageInterval)
+        sync.look(effectTime: effectTime, setting: settings.effectIntensity)
     }
 
     /// Per-image vibrance factors (measured once per image, cached), blended across a crossfade

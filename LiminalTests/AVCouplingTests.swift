@@ -2,14 +2,14 @@ import Testing
 import Foundation
 @testable import Liminal
 
-/// Music -> visuals coupling checks (docs/plans/av-coupling.md section 5): the uniforms' caps under
+/// Music -> visuals coupling checks: the uniforms' caps under
 /// extreme modulation, the neutral modulation, and the reactor without music. Fast, no audio.
 @MainActor
 struct AVCouplingTests {
 
     @Test func capsHoldUnderExtremeInputs() {
         var m = MusicModulation()
-        m.amount = 10; m.energy = 1; m.pulseColor = 1; m.pulseMotion = 1; m.shimmer = 1; m.air = 1; m.ghostReach = 1
+        m.amount = 10; m.energy = 1; m.pulseColor = 1; m.pulseMotion = 1; m.ghostReach = 1
         for t in stride(from: Float(0), to: 2000, by: 7.3) {
             let u = EffectsUniformsComputer.compute(time: t, music: m)
             #expect(u.bloomAmount <= 0.72 + 1e-6)

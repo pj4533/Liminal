@@ -1,3 +1,10 @@
+//
+//  MusicControls.swift
+//  Liminal
+//
+//  The Music section shared by the macOS control panel and the visionOS control window.
+//
+
 import SwiftUI
 
 /// The Music section: tempo and scale.

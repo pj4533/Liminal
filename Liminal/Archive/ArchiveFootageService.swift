@@ -275,7 +275,7 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
         }
     }
 
-    /// Starts the dialogue work for a decoded cue beside the bed (plan 6.2). Lo-Fi only: it needs the
+    /// Starts the dialogue work for a decoded cue beside the bed (plan 6.2). It needs the
     /// take grid and the transport info. Utility priority, cancelled with the cue token.
     private func startDialogue(token: Int, piece: FootagePiece, cue: ArchiveAudioCuePlan, clip: ArchiveClip, url: URL,
                                bed: AVAudioPCMBuffer, due: Double, sink: MusicSink) {

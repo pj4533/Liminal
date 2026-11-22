@@ -186,7 +186,7 @@ nonisolated struct ReliefBlend: Sendable {
     private(set) var current: [Float]?
     private(set) var currentGeneration: UInt64 = 0
     private var arrival: Double?
-    /// Image generation the current field belongs to (set when the image changes).
+    /// Image counter value the current field belongs to (set when the image changes).
     private(set) var expectedGeneration: UInt64 = 0
 
     static let easeIn: Double = 0.6

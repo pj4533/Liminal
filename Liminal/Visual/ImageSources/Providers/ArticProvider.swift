@@ -57,7 +57,7 @@ nonisolated struct ArticProvider: ImageProvider {
               let url = URL(string: "\(Self.iiif)\(imageID)/full/\(Self.servedLongSide),/0/default.jpg") else {
             throw CandidateRejected(reason: "no image")
         }
-        // Served size: the native size fitted inside 3000 on the long side, never upscaled.
+        // Served size: the native size fitted inside 3000 on the long side, never enlarged.
         var w = c.width, h = c.height
         if let fw = w, let fh = h, max(fw, fh) > Self.servedLongSide {
             let scale = Double(Self.servedLongSide) / Double(max(fw, fh))

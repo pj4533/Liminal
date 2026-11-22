@@ -49,7 +49,7 @@ enum EffectsUniformsComputer {
     ///   - hasSaliencyMap: Whether a saliency texture is available
     ///   - ghostTapCount: Number of active ghost taps (0-8) for optimized shader loop
     ///   - vibrance: Per-image vibrance factors (ImageColorStats), blended across crossfades
-    ///   - music: Music -> visuals coupling from MusicReactor (docs/plans/av-coupling.md 1.3).
+    ///   - music: Music -> visuals coupling from MusicReactor.
     ///     `.neutral` gives the un-coupled output. This is the only place music becomes uniforms;
     ///     every modulated value is hard-clamped to the caps below whatever the inputs.
     ///   - look: Effect intensity setting and the current image's age (docs/plans/effects-balance.md).
@@ -162,17 +162,17 @@ enum EffectsUniformsComputer {
             hueBlendAmount: hueBlend,
             contrastBoost: 1.4 + tb.contrastAdd,
             saturationBoost: 1.3,
-            // Ghost taps travel 6% of image size - slow drift; swells to 8% after a music scene change
+            // Ghost taps travel 6% of image size - slow drift; swells to 8% after a phrase change
             ghostTapMaxDistance: min(max(0.06 + a * 0.02 * music.ghostReach, 0.06), Caps.ghostTapMaxDistance) * tb.ghostReachMul,
             saliencyInfluence: hasSaliencyMap ? 0.6 : 0,
             hasSaliencyMap: hasSaliencyMap ? 1.0 : 0.0,
             transitionProgress: transitionProgress,
             ghostTapCount: Float(ghostTapCount),
             chromaticAmount: chromaticBase * tb.chromaticMul + tb.chromaticAdd,
-            feedbackWarpAmount: min(max(0.03 + a * 0.01 * music.air, 0.03), Caps.feedbackWarp) * tb.feedbackWarpMul,
+            feedbackWarpAmount: 0.03 * tb.feedbackWarpMul,
             feedbackMix: feedback,
             bloomRadius: 0.04 * tb.bloomRadiusMul,
-            bloomAmount: min(max(bloomBase + a * (0.12 * music.pulseColor + 0.10 * music.shimmer + 0.18 * music.fillAccent), bloomBase),
+            bloomAmount: min(max(bloomBase + a * (0.12 * music.pulseColor + 0.18 * music.fillAccent), bloomBase),
                              Caps.bloom * bloomBase / 0.5) + tb.bloomAdd,
             stereoOffset: 0,
             logSphereAmount: logSphere,
@@ -232,7 +232,7 @@ enum EffectsUniformsComputer {
         }
     }
 
-    /// Hard limits (plan 1.3 cap column of av-coupling, tightened by effects-balance section 5).
+    /// Hard limits on what the music adds (tightened by effects-balance section 5).
     /// Warp and chromatic caps apply before the transition boost.
     enum Caps {
         static let distortionBase: Float = 0.10
@@ -244,7 +244,6 @@ enum EffectsUniformsComputer {
         static let feedbackMixRange: Float = 0.04    // music moves feedback mix at most this far from its base
         static let feedbackMixHigh: Float = 0.34
         static let feedbackMixTransition: Float = 0.72  // additive transition trails stop here (Afterimage pulls past it)
-        static let feedbackWarp: Float = 0.04
         static let ghostTapMaxDistance: Float = 0.08
     }
 

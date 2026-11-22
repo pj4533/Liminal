@@ -3,8 +3,8 @@ import SwiftUI
 import Combine
 import OSLog
 
-/// Persists user preferences using UserDefaults.
-/// Settings are automatically saved when changed and restored on launch.
+/// Persists user preferences using UserDefaults: tempo and scale, the visual settings and the footage
+/// settings. Each one is saved when changed and restored on launch.
 @MainActor
 final class SettingsService: ObservableObject {
 
@@ -16,7 +16,6 @@ final class SettingsService: ObservableObject {
         static let scale = "audio.scale"
         static let lofi = "audio.lofi"
         static let scaleAuto = "audio.scaleAuto"
-        static let imageInterval = "visual.imageInterval"
         static let syncVisualsToMusic = "visual.syncToMusic"
         static let effectIntensity = "visual.effectIntensity"
         static let depthStrength = "visual.depthStrength"
@@ -35,7 +34,6 @@ final class SettingsService: ObservableObject {
 
     static let defaultScale: ScaleType = .pentatonicMajor
     static let defaultScaleAuto: Bool = true
-    static let defaultImageInterval: Double = 30.0
     static let defaultSyncVisualsToMusic: Bool = true
     static let defaultEffectIntensity: Float = EffectLook.defaultIntensity
     static let defaultDepthStrength: Float = ShellLayout.defaultDepth
@@ -71,12 +69,8 @@ final class SettingsService: ObservableObject {
                 })
     }
 
-    @Published var imageInterval: Double {
-        didSet { defaults.set(imageInterval, forKey: Keys.imageInterval) }
-    }
-
-    /// "Sync visuals to music": music -> visuals coupling (docs/plans/av-coupling.md section 4).
-    /// Gates that direction only, with a 1.5 s fade.
+    /// "Sync visuals to music": the beat, phrase and harmony move the effects. Off fades the
+    /// coupling out over 1.5 s.
     @Published var syncVisualsToMusic: Bool {
         didSet { defaults.set(syncVisualsToMusic, forKey: Keys.syncVisualsToMusic) }
     }
@@ -124,9 +118,6 @@ final class SettingsService: ObservableObject {
         self.lofi = defaults.data(forKey: Keys.lofi).flatMap { try? JSONDecoder().decode(LofiOptions.self, from: $0) } ?? LofiOptions()
         self.scaleAuto = defaults.object(forKey: Keys.scaleAuto) as? Bool ?? Self.defaultScaleAuto
 
-        // -LiminalImageInterval (DEBUG) wins; assigning in init does not run didSet, so it is not saved.
-        self.imageInterval = DebugLaunchOptions.imageInterval
-            ?? defaults.object(forKey: Keys.imageInterval) as? Double ?? Self.defaultImageInterval
         self.syncVisualsToMusic = defaults.object(forKey: Keys.syncVisualsToMusic) as? Bool ?? Self.defaultSyncVisualsToMusic
         self.effectIntensity = min(max(defaults.object(forKey: Keys.effectIntensity) as? Float ?? Self.defaultEffectIntensity, 0), 1)
 
@@ -140,7 +131,7 @@ final class SettingsService: ObservableObject {
         self.dialogueTranscription = DialogueTranscriptionMode(rawValue: defaults.string(forKey: Keys.dialogueTranscription) ?? "")
             ?? DialogueTranscriptionMode.defaultMode
 
-        LMLog.state.info("Settings loaded: scale=\(self.scaleAuto ? "auto" : self.currentScale.rawValue), tempo=\(self.lofi.tempo)")
+        LMLog.state.info("Settings loaded: tempo=\(self.lofi.tempo, format: .fixed(precision: 0)) scale=\(self.scaleAuto ? "auto" : self.currentScale.rawValue, privacy: .public) sync=\(self.syncVisualsToMusic) intensity=\(self.effectIntensity, format: .fixed(precision: 2)) depth=\(self.depthStrength, format: .fixed(precision: 2)) footage=\(self.archiveEnabled) footageAudio=\(self.archiveAudioLevel, format: .fixed(precision: 2)) dialogue=\(self.dialogueTranscription.rawValue, privacy: .public)")
     }
 
     // MARK: - Reset
@@ -149,7 +140,6 @@ final class SettingsService: ObservableObject {
         currentScale = Self.defaultScale
         lofi = LofiOptions()
         scaleAuto = Self.defaultScaleAuto
-        imageInterval = Self.defaultImageInterval
         syncVisualsToMusic = Self.defaultSyncVisualsToMusic
         effectIntensity = Self.defaultEffectIntensity
         depthStrength = Self.defaultDepthStrength

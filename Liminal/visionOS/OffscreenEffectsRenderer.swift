@@ -80,7 +80,7 @@ final class OffscreenEffectsRenderer {
 
     private let ghostTapManager = GhostTapManager()
 
-    /// Music scene change: forward to the ghost tap manager (cheap compare; call every frame with
+    /// Music burst (a phrase change or a rhythm trail): forward to the ghost tap manager (cheap compare; call every frame with
     /// `MusicModulation.ghostBurstSerial`).
     func requestGhostBurst(serial: UInt32) {
         ghostTapManager.requestBurst(serial: serial)
