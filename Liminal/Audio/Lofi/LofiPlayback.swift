@@ -371,6 +371,11 @@ actor LofiPhraseBank {
         if seconds > 1 {
             LMLog.audio.info("Lo-Fi prepared phrase \(request.index) in \(seconds, format: .fixed(precision: 3)) s")
         }
+        let strums = phrase.score.strumEvents
+        if let first = strums.first {
+            let cells = strums.map { "\($0.bar).\($0.step)\($0.thrown ? "T" : "")x\($0.strings.count)" }
+            LMLog.audio.info("Lo-Fi strum hook phrase \(request.index): \(phrase.score.preset.name, privacy: .public) archetype \(first.archetype) events \(strums.count) [\(cells.joined(separator: " "), privacy: .public)]")
+        }
         return .init(take: take, phrase: phrase)
     }
 }

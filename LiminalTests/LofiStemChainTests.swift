@@ -154,8 +154,8 @@ struct LofiStemChainTests {
                 r = l   // the bass chain is mono
             }),
             ("lead", lead.filters, [120, 180, 350, 1_000, 2_800, 9_000], { l, r in
-                var none: (left: [Float], right: [Float])?
-                _ = LofiStemChains.applyLead(left: &l, right: &r, accent: &none, sampleRate: Self.rate, settings: lead)
+                var none: (left: [Float], right: [Float])?, noStrum: (left: [Float], right: [Float])?
+                _ = LofiStemChains.applyLead(left: &l, right: &r, accent: &none, strum: &noStrum, sampleRate: Self.rate, settings: lead)
             }),
             ("mids", LofiStemChains.Mids.standard.filters, [100, 160, 400, 1_600, 7_000], { l, r in
                 let silent = [Float](repeating: 0, count: l.count)

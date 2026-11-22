@@ -288,7 +288,19 @@ nonisolated enum LofiStrumHook {
             let v = voicing(random.chance(0.5) ? [4, 3] : [3, 4], floor: Tuning.stabFloor, ceiling: ceiling)
             guard !v.isEmpty else { return [] }
             let s = spread(.stab)
-            let answer = LofiStrumVoicing.inversionBelow(v, floor: Tuning.stabFloor)
+            var answer = LofiStrumVoicing.inversionBelow(v, floor: Tuning.stabFloor)
+            // A call already on the floor has no inversion below it, so the answer takes the chord's
+            // best voicing with a lower top string, or failing that drops the call's low string (a
+            // minor shell answers with its b3 and b7), instead of repeating the call.
+            if answer == v, let top = v.last {
+                let lower = LofiStrumVoicing.voicing(classes: chord, strings: v.count, floor: Tuning.stabFloor,
+                                                     ceiling: top - 1, random: &random)
+                if !lower.isEmpty {
+                    answer = lower
+                } else if let lighter = subset(v, top: v.count - 1, chord: chord) {
+                    answer = lighter
+                }
+            }
             return [stroke(0, .stab, v, stabLength, s, gesture: 0),
                     stroke(1, .stab, answer, LofiStrum.Tuning.answerLength, s, gesture: 1),
                     stroke(2, .stab, v, stabLength, s, gesture: 2)]

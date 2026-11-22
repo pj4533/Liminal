@@ -214,10 +214,12 @@ nonisolated enum LofiStemChains {
 
     /// Dry lead of one phrase plus its tail, in place. `accent` (the revealed notes' extra level,
     /// kept apart until the phrase gain is measured) gets the same filters and the same gain
-    /// trajectory, so compression never flattens a deliberate accent.
+    /// trajectory, so compression never flattens a deliberate accent. `strum` (the strummed hook,
+    /// D128) is a second such buffer, kept apart so the phrase balance can meter the phrase without it.
     @discardableResult
     static func applyLead(left: inout [Float], right: inout [Float],
-                          accent: inout (left: [Float], right: [Float])?, sampleRate: Double,
+                          accent: inout (left: [Float], right: [Float])?,
+                          strum: inout (left: [Float], right: [Float])?, sampleRate: Double,
                           settings: Lead = .standard) -> Stats {
         var stats = Stats()
         let count = min(left.count, right.count)
@@ -229,6 +231,11 @@ nonisolated enum LofiStemChains {
             var accentEQ = LofiFilterChain(settings.filters, sampleRate: sampleRate)
             accentEQ.process(left: &extra.left, right: &extra.right)
             accent = extra
+        }
+        if var extra = strum {
+            var strumEQ = LofiFilterChain(settings.filters, sampleRate: sampleRate)
+            strumEQ.process(left: &extra.left, right: &extra.right)
+            strum = extra
         }
         if settings.dynamicsEnabled {
             let reference = left.withUnsafeBufferPointer { l in
@@ -246,6 +253,11 @@ nonisolated enum LofiStemChains {
                 multiply(&extra.left, curve.gain)
                 multiply(&extra.right, curve.gain)
                 accent = extra
+            }
+            if var extra = strum {
+                multiply(&extra.left, curve.gain)
+                multiply(&extra.right, curve.gain)
+                strum = extra
             }
             stats.grMeanDb = curve.meanDB
             stats.grMaxDb = curve.maxDB

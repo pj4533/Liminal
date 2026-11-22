@@ -63,7 +63,10 @@ struct LofiArrangementTests {
                             "seed \(seed) phrase \(phrase) note \(note.beat): \(rise - kickFrame) frames, \(current.bassVoice)")
                     anchored += 1
                 }
-                #expect(current.notes.filter { $0.part != .bass } == plain.notes.filter { $0.part != .bass })
+                // The strummed hook (D128) is placed against the take's own kicks and snares, so it is the
+                // one other part that follows the timing field; everything else must not move.
+                #expect(current.notes.filter { $0.part != .bass && $0.part != .strum }
+                        == plain.notes.filter { $0.part != .bass && $0.part != .strum })
                 #expect(bass.allSatisfy { $0.beat >= 0 && $0.beat + $0.length <= LofiClock.beats })
             }
         }

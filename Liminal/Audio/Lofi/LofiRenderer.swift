@@ -106,6 +106,9 @@ nonisolated enum LofiRenderer {
         // A note's extra gain is kept apart until the phrase's lead gain is measured, so a revealed
         // note stands out instead of turning the whole phrase down.
         var leadAccent: (left: [Float], right: [Float])?
+        // The strummed hook's dry strings (D128): the accent buffer's path, kept apart so the phrase
+        // balance meters the phrase without them.
+        var strumDry: (left: [Float], right: [Float])?
         let upperVoices = Self.upperShellVoices(score)
         for (index, note) in score.notes.enumerated() where note.velocity > 0 {
             try Task.checkCancellation()
@@ -120,9 +123,9 @@ nonisolated enum LofiRenderer {
                 let level = note.velocity * note.gain
                 let dryNote = Self.strumString(note, velocity: level)
                 let send = Self.strumString(note, velocity: level * (Self.strumSendFloor + Self.strumSendScale * note.send))
-                var accent = leadAccent ?? (quiet, quiet)
-                addInstrument(dryNote, sample: sample, score: score, clock: clock, into: &accent)
-                leadAccent = accent
+                var strings = strumDry ?? (quiet, quiet)
+                addInstrument(dryNote, sample: sample, score: score, clock: clock, into: &strings)
+                strumDry = strings
                 addInstrument(send, sample: sample, score: score, clock: clock, into: &leadSend)
             case .lead, .texture, .ornament:
                 let sample = samples.sample(for: score.preset, midi: note.midi, velocity: note.velocity)
@@ -156,14 +159,19 @@ nonisolated enum LofiRenderer {
         let phrase = Int(startBeat / LofiClock.beats)
         // Lead and mids chains on the full phrase-plus-tail arrays, from silence, before any edge.
         let leadStats = LofiStemChains.applyLead(left: &lead.left, right: &lead.right, accent: &leadAccent,
-                                                 sampleRate: sampleRate)
+                                                 strum: &strumDry, sampleRate: sampleRate)
         let dryLeadGain = leadGain(for: lead, frames: n, sampleRate: sampleRate)
         if let leadAccent {
             vDSP_vadd(lead.left, 1, leadAccent.left, 1, &lead.left, 1, vDSP_Length(frames))
             vDSP_vadd(lead.right, 1, leadAccent.right, 1, &lead.right, 1, vDSP_Length(frames))
         }
         let sendGain = min(1.6, sqrtf(dryLeadGain / 1.23))
+        // The mids are matched to and ducked under the melody alone, so the hook never moves their level.
         let mids = finishTexture(&textureVoices, lead: lead, leadGain: dryLeadGain, score: score, clock: clock)
+        if let strumDry {
+            vDSP_vadd(lead.left, 1, strumDry.left, 1, &lead.left, 1, vDSP_Length(frames))
+            vDSP_vadd(lead.right, 1, strumDry.right, 1, &lead.right, 1, vDSP_Length(frames))
+        }
         let textureSend = textureVoices.shellSend
         textureVoices.shellSend = ([], [])
         let padSend = mids.padSend.left.isEmpty ? (left: quiet, right: quiet) : mids.padSend
@@ -346,6 +354,18 @@ nonisolated enum LofiRenderer {
         vDSP_vadd(meteredL, 1, wetChannels[0], 1, &meteredL, 1, count)
         vDSP_vsma(mids.meteredRight, 1, &meter, dryChannels[1], 1, &meteredR, 1, count)
         vDSP_vadd(meteredR, 1, wetChannels[1], 1, &meteredR, 1, count)
+        // The hook sits 3 to 10 dB under the melody (D128); metering it would let one stab turn the
+        // whole phrase, melody included, down by up to 3 dB, so the balance meters the phrase without it.
+        if let strumDry {
+            var level = -dryLeadGain
+            for channel in 0..<2 {
+                var strings = [Float](repeating: 0, count: n)
+                vDSP_vsmul(channel == 0 ? strumDry.left : strumDry.right, 1, &level, &strings, 1, count)
+                vDSP_vmul(strings, 1, envelope, 1, &strings, 1, count)
+                if channel == 0 { vDSP_vadd(meteredL, 1, strings, 1, &meteredL, 1, count) }
+                else { vDSP_vadd(meteredR, 1, strings, 1, &meteredR, 1, count) }
+            }
+        }
         balance.observe(meteredL, meteredR)
         // Store pre-limit samples so an overlapping tail goes through the linked knee only once.
         // fade = min(1, (tailCount - 1 - i) / tailFade)

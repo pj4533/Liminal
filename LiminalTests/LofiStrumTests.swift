@@ -531,6 +531,26 @@ extension LofiStrumTests {
         #expect(variationHooks > 0)
     }
 
+    /// Archetype B answers its call: the bar-1 stab is another voicing of the chord (an inversion lower,
+    /// or a lower top string when the call sits on the floor), not a repeat of the call.
+    @Test func theCallAndAnswerHookAnswersWithAnotherVoicing() throws {
+        var statements = 0, repeated = 0
+        for condition in try Self.conditions(installed: false) {
+            for scored in Self.scores(condition) {
+                let events = scored.score.strumEvents
+                guard events.first?.archetype == LofiStrumHook.Archetype.callAndAnswer.rawValue,
+                      let call = events.first(where: { $0.bar == 0 }), let answer = events.first(where: { $0.bar == 1 })
+                else { continue }
+                statements += 1
+                if answer.strings == call.strings { repeated += 1 }
+                #expect(answer.strings.last! <= call.strings.last!, "\(condition.name) seed \(scored.seed) phrase \(scored.phrase)")
+            }
+        }
+        print("STRUM call and answer: \(statements) statements, \(repeated) answers repeat the call")
+        #expect(statements > 0)
+        #expect(Double(repeated) <= 0.1 * Double(statements))
+    }
+
     @Test func theHookStaysOutOfPianoAndPizzicatoAndCanBeSwitchedOff() {
         let condition = DrumCondition(name: "none", timing: nil, beatSeconds: 60.0 / 72, seeds: [3])
         // A forced guitar in the breakdown always strums; the same phrase without the hook has none.

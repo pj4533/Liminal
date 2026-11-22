@@ -309,7 +309,8 @@ nonisolated extension LofiRenderer {
             guard !range.isEmpty else { return }
             mask.withUnsafeMutableBufferPointer { $0[range].update(repeating: true) }
         }
-        for note in score.notes where note.part.playsLead { mark(note, &leadOn) }
+        // The strummed hook (D128) is not in the lead this meters, so it never marks lead time either.
+        for note in score.notes where note.part.playsLead && note.part != .strum { mark(note, &leadOn) }
         for note in notes { mark(note, &midOn) }
         let rate = Float(clock.sampleRate)
         let high = expf(-2 * .pi * 400 / rate), low = 1 - expf(-2 * .pi * 3_000 / rate)
@@ -350,7 +351,7 @@ nonisolated extension LofiRenderer {
                 mask.withUnsafeMutableBufferPointer { vDSP_vfill(&one, $0.baseAddress! + a, 1, vDSP_Length(b - a)) }
             }
             var leadMask = [Float](repeating: 0, count: n)
-            for note in score.notes where note.part.playsLead {
+            for note in score.notes where note.part.playsLead && note.part != .strum {
                 let a = max(0, clock.frame(at: note.beat)), b = min(n, clock.frame(at: note.beat + note.length))
                 guard b > a else { continue }
                 leadMask.withUnsafeMutableBufferPointer { vDSP_vfill(&one, $0.baseAddress! + a, 1, vDSP_Length(b - a)) }
