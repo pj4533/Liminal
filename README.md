@@ -18,11 +18,11 @@ Liminal pairs evolving ambient music with surreal AI imagery, flowing visual eff
 
 ## See it in motion
 
-[![Play the 12-second Lo-Fi preview with stereo sound](docs/media/lofi-preview.jpg)](https://github.com/pj4533/Liminal/blob/main/docs/media/lofi-preview.mp4)
+[![Play the 17-second Lo-Fi preview with stereo sound](docs/media/lofi-preview.jpg)](https://github.com/pj4533/Liminal/blob/main/docs/media/lofi-preview.mp4)
 
-**[Play with sound · 12 seconds · 2.1 MB](https://github.com/pj4533/Liminal/blob/main/docs/media/lofi-preview.mp4)**
+**[Play with sound · 17 seconds · 2.5 MB](https://github.com/pj4533/Liminal/blob/main/docs/media/lofi-preview.mp4)**
 
-Lo-Fi at 72 BPM with AJ Hall’s drums, the warm sub bass slapping on the kicks under a held pad. When the drum fill starts, the picture breaks up into drifting macroblocks and gets heavier through the fill; on the first hit of the new drum loop it cuts straight to the next image with no fade in. The audio is the app’s own offline render, and the picture is two cached images passed through the app’s shader. Dialogue from *Ergot: The Story of a Parasitic Fungus* (Wellcome Collection, 1958) and *A Conversation on LSD* (1979) is cut into word pieces on the beat, with the films’ own soundtracks far behind as an effected bed. [Ergot](https://wellcomecollection.org/works/b92v49xa) · [A Conversation on LSD](https://archive.org/details/Timothy_Leary_Archives_198)
+Lo-Fi at about 69 BPM with AJ Hall’s drums and API pictures from public libraries and archives, recorded by the app itself running in the visionOS Simulator. Pictures from the Library of Congress and the National Archives come in through the app's public-domain image source, and no AI image is generated. The picture breaks up into drifting macroblocks as the drum fill builds, then cuts to the next image on the first hit of the new drum loop. Seven seconds later the chop beat begins: dialogue from *History of Marijuana Legislation, Part One* (KCRA-TV footage via the Center for Sacramento History) is cut into word pieces and played on the beat over the drums, bass and pad, with the film's own soundtrack far behind as an effected bed. [History of Marijuana Legislation](https://archive.org/details/VAM026) · Pictures: [*Oil Refinery in the Sunset*](https://commons.wikimedia.org/wiki/File:OIL_REFINERY_IN_THE_SUNSET_-_NARA_-_546384.jpg), John Vachon (Documerica, National Archives, public domain) · [*World's Fair. Fireworks IV*](https://www.loc.gov/item/2018750453/), Gottscho-Schleisner (Library of Congress, no known restrictions on publication)
 
 ## An atmosphere that keeps changing
 
