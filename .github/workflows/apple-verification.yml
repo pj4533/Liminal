@@ -39,6 +39,20 @@ jobs:
             -derivedDataPath "$RUNNER_TEMP/LiminalDerivedData" \
             -resultBundlePath verification/macos-build.xcresult \
             build 2>&1 | tee verification/macos-build.log
+      - name: Chop feel fixture measurements
+        if: ${{ !cancelled() && steps.mac_build.outcome == 'success' }}
+        run: |
+          set -o pipefail
+          xcodebuild test CODE_SIGNING_ALLOWED=NO -project Liminal.xcodeproj -scheme Liminal \
+            -destination 'platform=macOS,arch=arm64' -parallel-testing-enabled NO \
+            -derivedDataPath "$RUNNER_TEMP/LiminalDerivedData" \
+            -resultBundlePath verification/feel-metrics.xcresult \
+            -only-testing:LiminalTests/DialogueFeelMetricsTests \
+            2>&1 | tee verification/feel-metrics.log
+          xcrun xcresulttool export attachments --path verification/feel-metrics.xcresult \
+            --output-path verification/feel-attachments
+          python3 scripts/dialogue-feel-report.py verification/feel-attachments > verification/feel-summary.json
+          cat verification/feel-summary.json
       - name: Focused dialogue tests
         if: ${{ !cancelled() && steps.mac_build.outcome == 'success' }}
         run: |
