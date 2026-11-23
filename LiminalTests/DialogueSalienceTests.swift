@@ -192,9 +192,11 @@ struct DialogueSalienceTests {
                               text: "D M T", boundaryConfidence: 1, speechScore: 1, interferenceScore: 0,
                               stressAnchors: [], protectedSpans: [], tail: 0..<0, score: template.score,
                               fadeIn: 0, fadeOut: 0, onset: .burst, nuclei: 3, bandSNR: .zero, peakEnergy: 1)
-        let cut = try #require(cutter.cut(line, words: words, weights: DialogueLineInterest.wordWeights(words), salience: DialogueLineInterest.wordSalience(words)))
+        let attempted = cutter.cut(line, words: words, weights: DialogueLineInterest.wordWeights(words), salience: DialogueLineInterest.wordSalience(words))
+        let cut = try #require(attempted)
         #expect(cut.pieces.count == 1)
-        let units = try #require(cut.halves[try #require(cut.pieces.first)])
+        let first = try #require(cut.pieces.first)
+        let units = try #require(cut.halves[first])
         #expect(units.map { cut.fragments[$0].text ?? "" } == ["D", "M", "T"])
         #expect(units.allSatisfy { cut.fragments[$0].kind == .letter })
     }

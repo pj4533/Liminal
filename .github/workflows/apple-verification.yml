@@ -53,6 +53,15 @@ jobs:
             --output-path verification/feel-attachments
           python3 scripts/dialogue-feel-report.py verification/feel-attachments > verification/feel-summary.json
           cat verification/feel-summary.json
+      - name: Preserve chop feel measurements
+        if: ${{ !cancelled() && steps.mac_build.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: chop-feel-${{ github.sha }}
+          path: |
+            verification/feel-attachments/
+            verification/feel-summary.json
+          retention-days: 14
       - name: Focused dialogue tests
         if: ${{ !cancelled() && steps.mac_build.outcome == 'success' }}
         run: |
