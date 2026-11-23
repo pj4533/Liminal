@@ -62,6 +62,46 @@ nonisolated enum ImageRotation {
         return s
     }
 
+    // MARK: - Priority share (D130)
+
+    /// Stored pictures the priority share is measured over (newest first).
+    static let priorityWindow = 40
+
+    /// True when the next picture should come from a priority source: the share of priority pictures
+    /// in `recent` (the newest stored pictures, true = from a priority source) is below `target`. An
+    /// empty window is due; a target of 0 or less never is.
+    static func priorityDue(recent: [Bool], target: Double) -> Bool {
+        guard target > 0 else { return false }
+        guard !recent.isEmpty else { return true }
+        return Double(recent.filter { $0 }.count) / Double(recent.count) < target
+    }
+
+    /// One bag per group (priority sources and the rest), so each group keeps its own weighted draw
+    /// without replacement. Every pick is recorded in both histories, so the no-repeat rules span them.
+    struct PriorityBags: Sendable, Equatable {
+        /// The bag of the other sources, and the only bag while the governor is off.
+        var main = SourceBag()
+        var priority = SourceBag()
+    }
+
+    /// Next source under the priority share. `due` nil (no target, or no priority source active) is
+    /// exactly `nextSource` on `bags.main`. Otherwise the draw is limited to the available priority
+    /// sources when `due`, to the available others when not; when that group has nothing available,
+    /// every available source is allowed, so the governor never disables a source or stalls ingest.
+    static func nextSource(sources: [CuratedSource], bags: inout PriorityBags, available: Set<String>, due: Bool?,
+                           using rng: inout some RandomNumberGenerator) -> CuratedSource? {
+        guard let due else { return nextSource(sources: sources, bag: &bags.main, available: available, using: &rng) }
+        let priorityIDs = Set(sources.filter(\.isPriority).map(\.id))
+        let inGroup = available.filter { priorityIDs.contains($0) == due }
+        let group = inGroup.isEmpty ? available : inGroup
+        let fromPriorityBag = !group.isEmpty && group.isSubset(of: priorityIDs)
+        let pick = fromPriorityBag
+            ? nextSource(sources: sources, bag: &bags.priority, available: group, using: &rng)
+            : nextSource(sources: sources, bag: &bags.main, available: group, using: &rng)
+        if fromPriorityBag { bags.main.history = bags.priority.history } else { bags.priority.history = bags.main.history }
+        return pick
+    }
+
     /// Pinned ids first (shuffled), then search results in order; candidates whose key or catalogue
     /// alias (ImageIdentity) is in `seen` are skipped.
     static func nextCandidate(pinned: [ImageCandidate], searched: [ImageCandidate], seen: Set<String>,

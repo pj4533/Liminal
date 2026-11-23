@@ -41,6 +41,9 @@ nonisolated struct ImageCollections: Codable, Sendable {
         let hostGaps: [String: Double]
         let defaultHostGap: Double
         let openness: OpennessThresholds
+        /// Share of newly stored pictures that should come from `priority` sources (D130). Absent or 0
+        /// turns the governor off: every available source competes in one weighted bag, as before.
+        var priorityShare: Double?
     }
 
     nonisolated struct ProviderInfo: Codable, Sendable, Equatable {
@@ -122,8 +125,12 @@ nonisolated struct CuratedSource: Codable, Sendable, Equatable {
     var requiresKey: String?
     var allowClassification: [String]?
     var allowMonochrome: Bool?
+    /// One of the interest packs (D130): while priority pictures are under `defaults.priorityShare` of
+    /// the newest stored pictures, ingest draws from priority sources only.
+    var priority: Bool?
     let license: String
 
+    var isPriority: Bool { priority ?? false }
     var pinnedIDs: [String] { (pinned ?? []).map(\.value) }
 
     /// Every search this source can page through, in JSON order.

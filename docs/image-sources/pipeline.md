@@ -51,12 +51,23 @@ Log: `🖼️ [API] feed: 33 sources (loc-highsmith-roadside,…), offline=false
 - A source is unusable while its provider is backing off, or while the source is "dry" (it had nothing new to try within the last 30 minutes).
 - When only one source or provider is left, the rules give way.
 
+**Priority share (D130).** Sources marked `"priority": true` (the twelve interest packs) are held at `defaults.priorityShare` (0.6) of the pictures that are actually **stored**, not of the draws:
+
+- Before each draw, `ImageRotation.priorityDue` looks at the source ids of the newest 40 stored pictures (`CuratedImagePool.newestSourceIDs`). The packs are due when fewer than 60% of them come from priority sources; an empty pool is due.
+- When due, the draw is limited to the available priority sources; when not, to the available other sources. If that group has nothing available (all dry or backing off), every available source is allowed, so the share never disables a source or stalls ingest.
+- Each group has its own bag (`PriorityBags`), so weights still split the draws inside a group; every pick goes into both bags' histories, so the source and provider run rules span the two.
+- The share is measured on stored pictures because weight alone sets only the share of attempts: the packs are admitted less often (product shots, signage, people, undersized Commons files), and display shows every new picture once before any repeat (D48), so the shown share follows the stored share.
+- The governor is off (one bag, the pre-D130 sequence for a seed) when `priorityShare` is absent or 0, or when the active sources are all priority or all other (for example under `-LiminalImageProvider`).
+
+Log at start: `🖼️ [API] priority share 0.60 over the newest 40 stored: 12 priority sources (…)`.
+
 The ingest loop (`CuratedImageFeed.ingestLoop`) runs on a detached background-priority task and repeats these steps:
 
 | Condition | What happens |
 |---|---|
 | `-LiminalImageAPIOffline YES` | Ingest stops: `ingest off (-LiminalImageAPIOffline)` |
-| At least `unseenAhead` (36) never-shown pictures in the pool | Sleep 5 s and check again |
+| At least `unseenAhead` (36) never-shown pictures in the pool | Sleep 5 s and check again (not during a `-LiminalImageAPIPreview` run) |
+| `-LiminalImageAPIPreview <n>` and n candidates attempted, or every source dry | Log one summary line per source and `preview done`; ingest stops |
 | Less than `minFreeBytes` (1 GB) free on the volume | Sleep 60 s: `ingest paused: N bytes free` |
 | No usable source | Sleep 10 s |
 | Otherwise | Fetch one candidate from the next source, then sleep `ingestInterval` (4 s) |
@@ -338,10 +349,11 @@ All lines are in subsystem `com.saygoodnight.Liminal`, category `Visual`. Stream
 | `🖼️ [API] pool sweep removed N junk files` | Launch sweep found junk |
 | `🖼️ [API] ingest starting: N pictures, M never shown` / `ingest stopped` | Ingest loop |
 | `🖼️ [API] ingest off (-LiminalImageAPIOffline)` / `ingest paused: N bytes free` | Offline flag; low disk |
-| `🖼️ [API] <source> <queryKey>: N results, M new` | One search page fetched |
+| `🖼️ [API] <source> <queryKey>: N results, M new` | One search page fetched (`pinned` for a source's pin list) |
 | `🖼️ [API] <source>: nothing new to try for now` | Source dry for 30 min |
-| `🖼️ API image stored: source=… item=… size=WxH openness=… key=… license=… url=…` | A picture entered the pool |
-| `🖼️ API image rejected: source=… item=… reason=…` | Recorded as rejected, never retried |
+| `🖼️ API image stored: source=… item=… query="…" size=WxH openness=… key=… license=… url=…` | A picture entered the pool; `query` is `pinned` or the query key it came from |
+| `🖼️ API image rejected: source=… item=… query="…" stage=… reason=…` | Recorded as rejected, never retried. `stage` is `resolve` (rights, title, classification, no image), `size` (declared size, type, bytes), `download` or `gate` (decode, crop, openness, document, text, faces, duplicate) |
+| `🖼️ [API] preview <source>: requests= hits= new= attempted= rejected= stored= priority=` / `preview done (…)` | End of a `-LiminalImageAPIPreview` run |
 | `🖼️ API image shown: source=… item=… title=… creator=… license=… url=…` | On screen, with its credit |
 | `🖼️ [API] <provider> backing off N min: <error>` | Provider backoff |
 | `🖼️ [API] dropped <item>: the pool was cleared while it was fetched` | Clear during a fetch |
@@ -354,7 +366,7 @@ All lines are in subsystem `com.saygoodnight.Liminal`, category `Visual`. Stream
 | `📂 [ImageQueue] pool: N pictures` | First-frame load |
 | `🗑️ [ImageQueue] Clear Curated Pictures: removed N pictures` | Clear Curated Pictures |
 
-A quick tally from a saved log:
+`scripts/image-yield.py run.log [--urls] [--json out.json]` turns a saved log into a table per source and per query: requests, raw hits, new candidates, attempts, rejections by stage and reason, stored, shown, the admission rate, the stored item URLs (`--urls`), and the share of stored and shown pictures from priority sources (D130). A quick tally without it:
 
 ```sh
 grep -c "API image stored" run.log; grep -c "API image rejected" run.log; grep -c "API image shown" run.log
@@ -371,6 +383,7 @@ The flags are compiled out of Release builds and documented in [`development.md`
 | `-LiminalImageAPIOffline YES` | Pool only, no network; ingest off |
 | `-LiminalImageAPISeed <n>` | Seed the ingest and display rotations |
 | `-LiminalImageAPIFresh YES` | Use the empty `CuratedImageStore-Verify` pool. With `-LiminalImageAPIOffline YES`, reuse the previous verify pool |
+| `-LiminalImageAPIPreview <n>` | Bounded provenance preview (D130), only with `-LiminalImageAPIFresh YES`: ingest ignores the 36-unseen pause, stops after n candidates (stored + rejected) or when every source is dry, and logs a summary per source and `preview done`. Pacing, backoff and every gate are unchanged |
 
 Standard checks, from `development.md` and D41-D44:
 
@@ -384,9 +397,12 @@ Standard checks, from `development.md` and D41-D44:
     -only-testing:LiminalTests/CuratedImageFeedTests -only-testing:LiminalTests/ImageQueueTests \
     -only-testing:LiminalTests/ScanEdgeTrimmerTests -only-testing:LiminalTests/ImageRepeatRotationTests \
     -only-testing:LiminalTests/ImageIdentityTests -only-testing:LiminalTests/ImageFingerprintTests \
-    -only-testing:LiminalTests/ImageRepeatPoolTests -only-testing:LiminalTests/ImageRepeatFeedTests
+    -only-testing:LiminalTests/ImageRepeatPoolTests -only-testing:LiminalTests/ImageRepeatFeedTests \
+    -only-testing:LiminalTests/ImagePriorityRuleTests -only-testing:LiminalTests/ImagePriorityRotationTests \
+    -only-testing:LiminalTests/ImagePriorityFeedTests -only-testing:LiminalTests/ImagePriorityCollectionTests
   ```
 
+- **Yield of a source or pack** (D130): `-LiminalAutoPlay YES -LiminalImageAPIFresh YES -LiminalImageProvider <source id[,ids]> -LiminalImageAPIPreview 40 -LiminalImageAPISeed 1 -LiminalVideoOff YES` with the log streamed to a file, then `scripts/image-yield.py`. Without a provider filter it measures the priority share of the whole rotation.
 - **Repeats.** In a live log, `grep "API image shown" run.log | sed 's/.*item=\([^ ]*\) title.*/\1/' | sort | uniq -d` must print nothing while ingest is online.
 
 - **macOS live run.** Launch the built app with `-LiminalAutoPlay YES -LiminalImageAPIFresh YES -archive.enabled YES -LiminalVideoOffline YES`, stream the log, and look at the screen with Peekaboo. Expect at least six shown pictures from three sources in five minutes and credits in the panel. Add `-LiminalImageProvider <source-id>` to test one source.

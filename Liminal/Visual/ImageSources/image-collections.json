@@ -1,6 +1,6 @@
 {
  "version": 2,
- "updated": "2026-11-21",
+ "updated": "2026-11-23",
  "doc": "docs/research/visuals/image-apis/collections.md",
  "defaults": {
   "minLongSide": 2000,
@@ -36,7 +36,8 @@
    "monochromeSaturation": 0.025,
    "maxFaceArea": 0.015,
    "maxFaces": 4
-  }
+  },
+  "priorityShare": 0.6
  },
  "providers": {
   "loc": {
@@ -1758,6 +1759,491 @@
     "2019700416"
    ],
    "allowMonochrome": true
+  },
+  {
+   "id": "loc-highsmith-record-rooms",
+   "provider": "loc",
+   "enabled": true,
+   "priority": true,
+   "weight": 5,
+   "themes": [
+    "retro music",
+    "radio studios",
+    "recording studios",
+    "jukeboxes",
+    "record-era rooms"
+   ],
+   "collection": "carol-m-highsmith",
+   "queries": [
+    "radio studio",
+    "jukebox",
+    "recording studio",
+    "music store"
+   ],
+   "requireIIIF": true,
+   "useMasters": true,
+   "rejectTitleWords": [
+    "Mercury",
+    "Crosley",
+    "Rick Hall"
+   ],
+   "license": "loc rights_advisory (No known restrictions on publication)",
+   "pinned": [
+    "2011634401",
+    "2011632355",
+    "2011634841"
+   ],
+   "allowMonochrome": false
+  },
+  {
+   "id": "loc-highsmith-stations-and-domes",
+   "provider": "loc",
+   "enabled": true,
+   "priority": true,
+   "weight": 2,
+   "themes": [
+    "night transit",
+    "Streamline Moderne bus stations",
+    "neon marquees",
+    "observatory domes",
+    "science museums"
+   ],
+   "collection": "carol-m-highsmith",
+   "queries": [
+    "bus station",
+    "theater marquee",
+    "observatory",
+    "science museum"
+   ],
+   "requireIIIF": true,
+   "useMasters": false,
+   "rejectTitleWords": [
+    "dinosaur",
+    "Tyrannosaurus",
+    "Tyrannosauras",
+    "elk"
+   ],
+   "license": "loc rights_advisory (No known restrictions on publication)",
+   "pinned": [],
+   "allowMonochrome": false
+  },
+  {
+   "id": "commons-analog-machines",
+   "provider": "wikimedia",
+   "enabled": true,
+   "priority": true,
+   "weight": 3,
+   "themes": [
+    "analog computers",
+    "machine rooms",
+    "core memory",
+    "teletypes",
+    "planetarium projectors",
+    "human-machine interfaces"
+   ],
+   "searches": [
+    "analog computer filew:>1999 fileh:>1332",
+    "mainframe computer filew:>1999 fileh:>1332",
+    "computer terminal filew:>1999 fileh:>1332",
+    "magnetic core memory filew:>1999 fileh:>1332",
+    "patch panel filew:>1999 fileh:>1332",
+    "teletype filew:>1999 fileh:>1332",
+    "vacuum tube computer filew:>1999 fileh:>1332",
+    "planetarium projector filew:>1999 fileh:>1332"
+   ],
+   "rejectTitleWords": [
+    "logo",
+    "diagram",
+    "schematic",
+    "screenshot",
+    "portrait",
+    "advertisement",
+    "manual",
+    "page",
+    "package",
+    "Union Terminal",
+    "Ethernet",
+    "fibre",
+    "fiber",
+    "plaque",
+    "Opening",
+    "Schallwelle",
+    "optical"
+   ],
+   "license": "Per file: CC BY, CC BY-SA, CC0 or public domain, creator credited (D37)",
+   "pinned": [
+    "File:Analog Computer patch panel (6685104979).jpg",
+    "File:Early Analog Computer (2585352431).jpg",
+    "File:Vero Analog Computer.jpg",
+    "File:Mainframe Computer.jpg",
+    "File:CHM Artifacts Whirlwind (3188121417).jpg",
+    "File:Teletype, Intrepid Museum (7558594418).jpg",
+    "File:Geministar III at Cosmo Planetarium Shibuya.jpg",
+    "File:Magnetic-core memory (detail).jpg"
+   ],
+   "allowMonochrome": false
+  },
+  {
+   "id": "commons-record-machines",
+   "provider": "wikimedia",
+   "enabled": true,
+   "priority": true,
+   "weight": 3,
+   "themes": [
+    "retro music",
+    "tape machines",
+    "record grooves",
+    "cutting lathes",
+    "mixing desks",
+    "record shops",
+    "jukeboxes"
+   ],
+   "searches": [
+    "reel to reel tape recorder filew:>2000",
+    "vinyl record grooves",
+    "record cutting lathe",
+    "radio mixing console",
+    "recording studio control room",
+    "record shop",
+    "jukebox"
+   ],
+   "rejectTitleWords": [
+    "logo",
+    "label",
+    "cover",
+    "sleeve",
+    "advertisement",
+    "portrait",
+    "before-and-after",
+    "retouche",
+    "screw",
+    "taps",
+    "diagram",
+    "schema"
+   ],
+   "license": "Per file: CC BY, CC BY-SA, CC0 or public domain, creator credited (D37)",
+   "pinned": [
+    "File:BBC mixing desk at Hack Green Secret Nuclear bunker.jpg",
+    "File:Audio console at Studio di Fonologia Musicale RAI di Milano.jpg",
+    "File:Neumann VMS-70 Cutting Lathe, SAE Mastering, Phoenix, AZ.jpg",
+    "File:Beocord 1100 open reel tape recorder.jpg",
+    "File:Jukebox in Island Delights, Surf City 02.jpg",
+    "File:33rpm Record Grooves.JPG",
+    "File:US Record Store 1963.jpg"
+   ],
+   "allowMonochrome": false
+  },
+  {
+   "id": "commons-inner-worlds",
+   "provider": "wikimedia",
+   "enabled": true,
+   "priority": true,
+   "weight": 5,
+   "themes": [
+    "inner worlds",
+    "neurons",
+    "schlieren flows",
+    "caustics",
+    "thin films",
+    "pond life",
+    "moss",
+    "astronomical instruments"
+   ],
+   "searches": [
+    "Purkinje cells filew:>1999 fileh:>1332",
+    "schlieren photography filew:>1999 fileh:>1332",
+    "diatom micrograph filew:>1999 fileh:>1332",
+    "water caustics filew:>1999 fileh:>1332",
+    "soap film interference filew:>1999 fileh:>1332",
+    "microscope pond filew:>1999 fileh:>1332",
+    "pond reflection filew:>1999 fileh:>1332",
+    "duckweed filew:>1999 fileh:>1332",
+    "reeds reflection filew:>1999 fileh:>1332",
+    "moss macro filew:>1999 fileh:>1332",
+    "astronomical instrument"
+   ],
+   "rejectTitleWords": [
+    "portrait",
+    "diagram",
+    "chart",
+    "page",
+    "map",
+    "Article",
+    "HTML",
+    "Fig",
+    "figure"
+   ],
+   "license": "Per file: CC BY, CC BY-SA, CC0 or public domain, creator credited (D37)",
+   "pinned": [],
+   "allowMonochrome": false
+  },
+  {
+   "id": "commons-night-infrastructure",
+   "provider": "wikimedia",
+   "enabled": true,
+   "priority": true,
+   "weight": 3,
+   "themes": [
+    "cyberpunk night transit",
+    "subway platforms",
+    "trams in rain",
+    "laundromats at night",
+    "phone booths",
+    "canals and bridges after dark"
+   ],
+   "searches": [
+    "empty subway platform",
+    "tram rain",
+    "laundromat night",
+    "telephone booth night",
+    "industrial canal night",
+    "elevated railway night",
+    "railway bridge night"
+   ],
+   "rejectTitleWords": [
+    "diagram",
+    "map",
+    "plan",
+    "journal",
+    "portrait"
+   ],
+   "license": "Per file: CC BY, CC BY-SA, CC0 or public domain, creator credited (D37)",
+   "pinned": [],
+   "allowMonochrome": false
+  },
+  {
+   "id": "nasa-machine-rooms",
+   "provider": "nasa",
+   "enabled": true,
+   "priority": true,
+   "weight": 2,
+   "themes": [
+    "mission control",
+    "control rooms",
+    "tape racks",
+    "analog computing halls",
+    "1960s-70s machine rooms"
+   ],
+   "queries": [
+    {
+     "q": "mission control",
+     "yearStart": 1960,
+     "yearEnd": 1980
+    },
+    {
+     "q": "control console",
+     "yearStart": 1960,
+     "yearEnd": 1980
+    },
+    {
+     "q": "magnetic tape",
+     "yearStart": 1960,
+     "yearEnd": 1980
+    },
+    {
+     "q": "analog computer",
+     "yearStart": 1960,
+     "yearEnd": 1980
+    },
+    {
+     "q": "wind tunnel control room",
+     "yearStart": 1960,
+     "yearEnd": 1980
+    },
+    {
+     "q": "control room",
+     "yearStart": 1960,
+     "yearEnd": 1980
+    }
+   ],
+   "rejectTitleWords": [
+    "press conference",
+    "presidential",
+    "portrait",
+    "diagram",
+    "chart",
+    "crew",
+    "astronaut",
+    "visit",
+    "tour",
+    "ceremony"
+   ],
+   "license": "nasa",
+   "pinned": [],
+   "allowMonochrome": true
+  },
+  {
+   "id": "nasa-imagined-habitats",
+   "provider": "nasa",
+   "enabled": true,
+   "priority": true,
+   "weight": 3,
+   "themes": [
+    "science-fiction habitats",
+    "space settlements",
+    "Bernal spheres",
+    "torus interiors",
+    "1970s Ames space-colony art"
+   ],
+   "queries": [
+    {
+     "q": "space settlement",
+     "yearStart": 1960,
+     "yearEnd": 1980
+    },
+    {
+     "q": "Bernal sphere",
+     "yearStart": 1960,
+     "yearEnd": 1980
+    }
+   ],
+   "rejectTitleWords": [
+    "press conference",
+    "presidential",
+    "portrait",
+    "diagram",
+    "chart",
+    "crew",
+    "artist",
+    "model"
+   ],
+   "license": "nasa",
+   "pinned": [
+    "ARC-1975-AC75-2621",
+    "ARC-1978-AC78-0330-4",
+    "ARC-1976-AC76-1267",
+    "ARC-1975-AC75-1924",
+    "ARC-1976-AC76-1089",
+    "ARC-1976-AC76-0965"
+   ],
+   "allowMonochrome": false
+  },
+  {
+   "id": "dc-tichnor-stations",
+   "provider": "dc",
+   "enabled": true,
+   "priority": true,
+   "weight": 2,
+   "themes": [
+    "1930-45 linen postcards",
+    "city nights",
+    "railroad stations",
+    "radio stations",
+    "canoe lakes",
+    "Hudson River"
+   ],
+   "collection": "The Tichnor Brothers Collection",
+   "queries": [
+    "New York night",
+    "canoe lake",
+    "railroad station",
+    "Hudson River",
+    "radio station"
+   ],
+   "rejectTitleWords": [
+    "Greetings",
+    "views"
+   ],
+   "license": "Boston Public Library, reuse_allowed_ssi no restrictions",
+   "pinned": [],
+   "allowMonochrome": false
+  },
+  {
+   "id": "cma-quiet-water",
+   "provider": "cma",
+   "enabled": true,
+   "priority": true,
+   "weight": 2,
+   "themes": [
+    "quiet ponds",
+    "lakes",
+    "Barbizon and tonalist water",
+    "pond etchings"
+   ],
+   "queries": [
+    {
+     "q": "pond",
+     "type": "Painting"
+    },
+    {
+     "q": "pond",
+     "type": "Print"
+    },
+    {
+     "q": "lake",
+     "type": "Painting"
+    }
+   ],
+   "license": "CC0",
+   "pinned": [
+    124078,
+    128371,
+    320778,
+    147017
+   ],
+   "allowMonochrome": true
+  },
+  {
+   "id": "aic-rail-and-ponds",
+   "provider": "aic",
+   "enabled": true,
+   "priority": true,
+   "weight": 2,
+   "themes": [
+    "quiet ponds",
+    "Venetian reflections",
+    "twilight"
+   ],
+   "queries": [
+    {
+     "q": "pond",
+     "type": "Painting"
+    },
+    {
+     "q": "twilight"
+    }
+   ],
+   "license": "CC0 (AIC is_public_domain)",
+   "pinned": [
+    66892,
+    95993
+   ],
+   "allowMonochrome": false
+  },
+  {
+   "id": "met-water-and-nocturnes",
+   "provider": "met",
+   "enabled": true,
+   "priority": true,
+   "weight": 1,
+   "themes": [
+    "quiet ponds",
+    "Whistler nocturnes",
+    "19th-century railways"
+   ],
+   "queries": [
+    {
+     "q": "pond",
+     "departmentId": 11
+    },
+    {
+     "q": "nocturne",
+     "departmentId": 9
+    },
+    {
+     "q": "railway",
+     "departmentId": 19
+    }
+   ],
+   "allowClassification": [
+    "Paintings",
+    "Prints",
+    "Photographs",
+    "Drawings"
+   ],
+   "license": "CC0 when isPublicDomain",
+   "pinned": [],
+   "allowMonochrome": false
   }
  ],
  "rejected": [

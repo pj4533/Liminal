@@ -14,7 +14,7 @@ This folder documents the picture pipeline completely: how a picture travels fro
 | [adding-a-source.md](adding-a-source.md) | How to research a collection, write its JSON entry (every field), write a provider, test it with fixtures, and verify it live without touching the user's pool |
 | [research-history.md](research-history.md) | How the sources were found, from OpenPics to the 2026-11-21 research passes, and what was rejected and why |
 
-Decisions and measurements: [`decisions/images.md`](../decisions/images.md) D36-D45 and D48. The original plan: [`plans/image-api-mode.md`](../plans/image-api-mode.md) (implemented; parts have changed since, see the decisions).
+Decisions and measurements: [`decisions/images.md`](../decisions/images.md) D36-D45, D48 and D130 (interest packs and the priority share). The original plan: [`plans/image-api-mode.md`](../plans/image-api-mode.md) (implemented; parts have changed since, see the decisions).
 
 ## What the user sees
 
@@ -32,7 +32,7 @@ Fetching uses only free public APIs, so a verification run may use the network. 
 ```mermaid
 flowchart TD
     subgraph Ingest["Ingest (background task, one picture at a time)"]
-        A[Weighted source bag<br/>ImageRotation.nextSource] --> B[Pinned ids, cached search page,<br/>or next search page<br/>provider.search / pinned]
+        A[Weighted source bags, priority share D130<br/>ImageRotation.nextSource] --> B[Pinned ids, cached search page,<br/>or next search page<br/>provider.search / pinned]
         B --> C[Resolve: final URL, declared size,<br/>rights verdict and credit<br/>provider.resolve + ImageRights]
         C --> D[Pre-download gate:<br/>mime, 12 MB, 2000x1333 3:2 crop]
         D --> E[HTTPS download<br/>ImageHTTP: host gaps, offline,<br/>fallbackURL on 5xx]

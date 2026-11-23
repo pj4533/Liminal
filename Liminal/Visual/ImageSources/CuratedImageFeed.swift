@@ -36,14 +36,26 @@ nonisolated final class CuratedImageFeed: Sendable {
     private let providers: [String: any ImageProvider]
     private let http: ImageHTTP
     let offline: Bool
+    /// -LiminalImageAPIPreview: stop ingest after this many candidates (stored + rejected).
+    let previewLimit: Int?
 
     private struct Backoff: Sendable {
         var step = 0
         var until = Date.distantPast
     }
 
+    /// What one source did during a run (the -LiminalImageAPIPreview summary).
+    struct SourceTally: Sendable, Equatable {
+        var requests = 0
+        var hits = 0
+        var fresh = 0
+        var attempted = 0
+        var rejected = 0
+        var stored = 0
+    }
+
     private struct State: Sendable {
-        var bag = ImageRotation.SourceBag()
+        var bags = ImageRotation.PriorityBags()
         var ingestRNG: SeededRNG
         var displayRNG: SeededRNG
         var backoff: [String: Backoff] = [:]
@@ -55,6 +67,7 @@ nonisolated final class CuratedImageFeed: Sendable {
         var networkDown = false
         var ingested = 0
         var rejected = 0
+        var tallies: [String: SourceTally] = [:]
         var ingestTask: Task<Void, Never>?
     }
     private let state: Mutex<State>
@@ -69,18 +82,42 @@ nonisolated final class CuratedImageFeed: Sendable {
     init(collections: ImageCollections = .bundled, pool: CuratedImagePool = .makeDefault(),
          providers: [String: any ImageProvider] = ImageProviders.all(),
          offline: Bool = DebugLaunchOptions.imageAPIOffline, filter: [String]? = DebugLaunchOptions.imageProviders,
-         seed: UInt64? = DebugLaunchOptions.imageAPISeed) {
+         seed: UInt64? = DebugLaunchOptions.imageAPISeed, preview: Int? = DebugLaunchOptions.imageAPIPreview) {
         self.collections = collections
         self.pool = pool
         self.providers = providers
         self.offline = offline
+        previewLimit = preview
         sources = collections.activeSources(providers: Set(providers.keys), filter: filter)
         let d = collections.defaults
         http = ImageHTTP(userAgent: d.userAgent, offline: offline, hostGaps: d.hostGaps, defaultGap: d.defaultHostGap)
         let base = seed ?? UInt64.random(in: 0...UInt64.max)
         state = Mutex(State(ingestRNG: SeededRNG(seed: base), displayRNG: SeededRNG(seed: base &+ 0x5EED)))
         LMLog.visual.info("🖼️ [API] feed: \(self.sources.count) sources (\(self.sources.map(\.id).joined(separator: ","), privacy: .public)), offline=\(offline)")
+        if let share = governedShare {
+            let ids = sources.filter(\.isPriority).map(\.id)
+            LMLog.visual.info("🖼️ [API] priority share \(share, format: .fixed(precision: 2)) over the newest \(ImageRotation.priorityWindow) stored: \(ids.count) priority sources (\(ids.joined(separator: ","), privacy: .public))")
+        }
     }
+
+    /// The priority share target, or nil when the governor is off: no target, or no priority source
+    /// among the active ones (or only priority sources), D130.
+    var governedShare: Double? {
+        guard let share = collections.defaults.priorityShare, share > 0 else { return nil }
+        let priority = sources.filter(\.isPriority).count
+        return priority > 0 && priority < sources.count ? share : nil
+    }
+
+    /// Whether the next ingest draw should come from a priority source (nil: governor off).
+    func priorityDue() -> Bool? {
+        guard let share = governedShare else { return nil }
+        let priorityIDs = Set(sources.filter(\.isPriority).map(\.id))
+        let recent = pool.newestSourceIDs(ImageRotation.priorityWindow).map { priorityIDs.contains($0) }
+        return ImageRotation.priorityDue(recent: recent, target: share)
+    }
+
+    /// Per-source counts so far (requests, hits, attempts, rejections, stored pictures).
+    var tallies: [String: SourceTally] { state.withLock { $0.tallies } }
 
     private var sourceWeights: [String: Double] {
         Dictionary(uniqueKeysWithValues: sources.map { ($0.id, $0.weight) })
@@ -208,7 +245,11 @@ nonisolated final class CuratedImageFeed: Sendable {
                 LMLog.visual.info("🖼️ [API] ingest off (-LiminalImageAPIOffline)")
                 return
             }
-            if pool.unseenCount >= d.unseenAhead {
+            if let limit = previewLimit, state.withLock({ $0.ingested + $0.rejected }) >= limit {
+                finishPreview("limit reached")
+                return
+            }
+            if previewLimit == nil, pool.unseenCount >= d.unseenAhead {
                 try? await Task.sleep(for: .seconds(5))
                 continue
             }
@@ -223,10 +264,16 @@ nonisolated final class CuratedImageFeed: Sendable {
                     (s.backoff[src.provider]?.until ?? .distantPast) <= now && (s.dry[src.id] ?? .distantPast) <= now
                 }.map(\.id))
             }
+            let due = priorityDue()
             let next = state.withLock { s in
-                ImageRotation.nextSource(sources: sources, bag: &s.bag, available: available, using: &s.ingestRNG)
+                ImageRotation.nextSource(sources: sources, bags: &s.bags, available: available, due: due, using: &s.ingestRNG)
             }
             guard let source = next else {
+                // A preview whose every source has run dry (no backoff left to wait for) is over.
+                if previewLimit != nil, state.withLock({ s in sources.allSatisfy { (s.dry[$0.id] ?? .distantPast) > now } }) {
+                    finishPreview("every source is dry")
+                    return
+                }
                 try? await Task.sleep(for: .seconds(10))
                 continue
             }
@@ -234,6 +281,20 @@ nonisolated final class CuratedImageFeed: Sendable {
             try? await Task.sleep(for: .seconds(d.ingestInterval))
         }
         LMLog.visual.info("🖼️ [API] ingest stopped")
+    }
+
+    /// The -LiminalImageAPIPreview summary: one line per source, then "preview done".
+    private func finishPreview(_ why: String) {
+        let t = tallies
+        for source in sources {
+            let x = t[source.id] ?? SourceTally()
+            LMLog.visual.info("🖼️ [API] preview \(source.id, privacy: .public): requests=\(x.requests) hits=\(x.hits) new=\(x.fresh) attempted=\(x.attempted) rejected=\(x.rejected) stored=\(x.stored) priority=\(source.isPriority)")
+        }
+        LMLog.visual.info("🖼️ [API] preview done (\(why, privacy: .public)): \(self.pool.count) pictures stored")
+    }
+
+    private func tally(_ sourceID: String, _ body: (inout SourceTally) -> Void) {
+        state.withLock { s in body(&s.tallies[sourceID, default: SourceTally()]) }
     }
 
     private func backOff(_ provider: String, _ error: Error) {
@@ -261,13 +322,15 @@ nonisolated final class CuratedImageFeed: Sendable {
     private func ingestOne(from source: CuratedSource) async {
         guard let provider = providers[source.provider] else { return }
         let candidate: ImageCandidate
+        let origin: String
         do {
-            guard let c = try await nextCandidate(source: source, provider: provider) else {
+            guard let next = try await nextCandidate(source: source, provider: provider) else {
                 state.withLock { _ = $0.dry[source.id] = Date().addingTimeInterval(1800) }
                 LMLog.visual.info("🖼️ [API] \(source.id, privacy: .public): nothing new to try for now")
                 return
             }
-            candidate = c
+            candidate = next.0
+            origin = next.1
             succeeded(source.provider)
         } catch {
             // Stopping ingest (source switch, Stop, Clear) is not a provider failure.
@@ -284,9 +347,14 @@ nonisolated final class CuratedImageFeed: Sendable {
         let context = ResolveContext(targetLongSide: fetchTarget, maxBytes: d.maxBytes,
                                      institution: collections.institution(provider: source.provider),
                                      allowlist: collections.licenseAllowlist)
+        // Where a rejection happened: resolve (rights, title, classification, no image), size (declared
+        // size, type, bytes), download, gate (decode, crop, openness, document, text, faces, duplicate).
+        var stage = "resolve"
         do {
             let resolved = try await provider.resolve(candidate, source: source, context: context, http: http)
+            stage = "size"
             try Self.preDownloadGate(resolved, defaults: d)
+            stage = "download"
             let tmp = pool.tmpDirectory.appendingPathComponent(UUID().uuidString + ".download")
             defer { try? FileManager.default.removeItem(at: tmp) }
             do {
@@ -296,14 +364,16 @@ nonisolated final class CuratedImageFeed: Sendable {
             }
             succeeded(source.provider)
             try Task.checkCancellation()
+            stage = "gate"
             let metadata = try store(file: tmp, resolved: resolved, source: source, clearGeneration: clearGeneration)
             state.withLock { $0.ingested += 1 }
+            tally(source.id) { $0.attempted += 1; $0.stored += 1 }
             let o = metadata.openness
-            LMLog.visual.info("🖼️ API image stored: source=\(source.id, privacy: .public) item=\(candidate.itemID, privacy: .public) size=\(metadata.pixelWidth)x\(metadata.pixelHeight) openness=\(o?.openness ?? 0, format: .fixed(precision: 2)) key=\(o?.keyShare ?? 0, format: .fixed(precision: 2)) license=\(resolved.credit.license, privacy: .public) url=\(resolved.url.absoluteString, privacy: .public)")
+            LMLog.visual.info("🖼️ API image stored: source=\(source.id, privacy: .public) item=\(candidate.itemID, privacy: .public) query=\"\(origin, privacy: .public)\" size=\(metadata.pixelWidth)x\(metadata.pixelHeight) openness=\(o?.openness ?? 0, format: .fixed(precision: 2)) key=\(o?.keyShare ?? 0, format: .fixed(precision: 2)) license=\(resolved.credit.license, privacy: .public) url=\(resolved.url.absoluteString, privacy: .public)")
         } catch let rejection as CandidateRejected {
-            reject(candidate, source: source, reason: rejection.reason)
+            reject(candidate, source: source, origin: origin, stage: stage, reason: rejection.reason)
         } catch let error as ImageFetchError where error.isItemFailure {
-            reject(candidate, source: source, reason: error.description)
+            reject(candidate, source: source, origin: origin, stage: stage, reason: error.description)
         } catch let error where Self.isCancellation(error) {
             return
         } catch ImageStore.StoreError.staleClearGeneration {
@@ -319,14 +389,16 @@ nonisolated final class CuratedImageFeed: Sendable {
         return false
     }
 
-    private func reject(_ c: ImageCandidate, source: CuratedSource, reason: String) {
+    private func reject(_ c: ImageCandidate, source: CuratedSource, origin: String, stage: String, reason: String) {
         pool.recordRejected(c.key, reason: reason)
         state.withLock { $0.rejected += 1 }
-        LMLog.visual.info("🖼️ API image rejected: source=\(source.id, privacy: .public) item=\(c.itemID, privacy: .public) reason=\(reason, privacy: .public)")
+        tally(source.id) { $0.attempted += 1; $0.rejected += 1 }
+        LMLog.visual.info("🖼️ API image rejected: source=\(source.id, privacy: .public) item=\(c.itemID, privacy: .public) query=\"\(origin, privacy: .public)\" stage=\(stage, privacy: .public) reason=\(reason, privacy: .public)")
     }
 
-    /// Pinned ids first, then each query's cached page, then the next page of a query.
-    private func nextCandidate(source: CuratedSource, provider: any ImageProvider) async throws -> ImageCandidate? {
+    /// Pinned ids first, then each query's cached page, then the next page of a query. Returns the
+    /// candidate with its origin: "pinned" or the query key (provenance for the log, D130).
+    private func nextCandidate(source: CuratedSource, provider: any ImageProvider) async throws -> (ImageCandidate, String)? {
         // Candidate keys plus the catalogue aliases of stored pictures (D48).
         let seen = pool.knownIdentities
         if !source.pinnedIDs.isEmpty {
@@ -336,11 +408,14 @@ nonisolated final class CuratedImageFeed: Sendable {
                 let fetched = try await provider.pinned(source: source, ids: source.pinnedIDs, http: http)
                 pool.setList(key, fetched)
                 list = fetched
+                let fresh = fetched.filter { !ImageIdentity.isKnown($0, in: seen) }.count
+                tally(source.id) { $0.requests += 1; $0.hits += fetched.count; $0.fresh += fresh }
+                LMLog.visual.info("🖼️ [API] \(source.id, privacy: .public) pinned: \(fetched.count) results, \(fresh) new")
             }
             let pick = state.withLock { s in
                 ImageRotation.nextCandidate(pinned: list ?? [], searched: [], seen: seen, using: &s.ingestRNG)
             }
-            if let pick { return pick }
+            if let pick { return (pick, "pinned") }
         }
         let queries = state.withLock { s in source.allQueries.shuffled(using: &s.ingestRNG) }
         var oldestFetch = Date()
@@ -348,7 +423,7 @@ nonisolated final class CuratedImageFeed: Sendable {
             let key = "\(source.id)|\(query.key)"
             if let cached = pool.list(key) {
                 oldestFetch = min(oldestFetch, cached.fetched)
-                if let c = cached.candidates.first(where: { !ImageIdentity.isKnown($0, in: seen) }) { return c }
+                if let c = cached.candidates.first(where: { !ImageIdentity.isKnown($0, in: seen) }) { return (c, query.key) }
             }
             let cursor = pool.cursor(key)
             if cursor == .some("") { continue }   // no more pages
@@ -357,8 +432,9 @@ nonisolated final class CuratedImageFeed: Sendable {
             let fresh = page.candidates.filter { !ImageIdentity.isKnown($0, in: seen) }
             pool.setList(key, fresh)
             pool.setCursor(key, page.next)
+            tally(source.id) { $0.requests += 1; $0.hits += page.candidates.count; $0.fresh += fresh.count }
             LMLog.visual.info("🖼️ [API] \(source.id, privacy: .public) \(query.key, privacy: .public): \(page.candidates.count) results, \(fresh.count) new")
-            if let c = fresh.first { return c }
+            if let c = fresh.first { return (c, query.key) }
         }
         // Everything tried: after the refresh period, start the searches over (new uploads appear).
         if Date().timeIntervalSince(oldestFetch) > collections.defaults.candidateRefreshDays * 86_400 {

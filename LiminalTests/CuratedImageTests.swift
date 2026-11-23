@@ -115,8 +115,10 @@ struct ImageCollectionsTests {
         }
         // Monochrome only where it is the subject (early photographs, the lunar surface, 1960s aerials);
         // display still caps it at one picture in `monochromeEvery` (plan section 13.4, D45).
+        // The interest packs add 1960s-70s machine rooms and the pond etchings of cma-quiet-water (D130).
         let monochrome: Set<String> = ["cma-early-photographs", "apollo-archive", "nasa-lunar-orbit",
-                                       "nasa-cape-kennedy-aerials", "met-early-photographs"]
+                                       "nasa-cape-kennedy-aerials", "met-early-photographs",
+                                       "nasa-machine-rooms", "cma-quiet-water"]
         #expect(Set(c.sources.filter { $0.allowMonochrome == true }.map(\.id)).isSubset(of: monochrome.union(Self.locMonochrome)))
     }
 

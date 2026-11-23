@@ -84,12 +84,12 @@ Add an object to `sources` in `Liminal/Visual/ImageSources/image-collections.jso
 | `id` | string | yes | Unique, kebab-case, usually `<provider>-<theme>`. Stored in every picture's credit and used by `-LiminalImageProvider` |
 | `provider` | string | yes | A registered provider id: `loc`, `nasa`, `wikimedia`, `cma`, `met`, `dc`, `aic` (or `si` with a key) |
 | `enabled` | bool | yes | `false` keeps the entry without using it |
-| `weight` | number | yes | Copies in the ingest bag (`round(weight)`, at least 1) and a multiplier on display weight. Most sources are 1-3; the enabled total is 48 (2026-11-21) |
+| `weight` | number | yes | Copies in the ingest bag of its group (`round(weight)`, at least 1) and a multiplier on display weight. Most sources are 1-4; the enabled total is 92 (2026-11-22: 60 for the other sources, 32 for the priority packs) |
 | `themes` | [string] | yes | Documentation: what the source is for |
 | `license` | string | yes | Documentation: what the rights should be. The app always judges each item's own record |
 | `collection` | string | LoC, DC | LoC collection slug (`carol-m-highsmith`); Digital Commonwealth host collection facet ("The Tichnor Brothers Collection") |
 | `queries` | [string or object] | one of these three, or pins | Searches. A plain string, or `{"q": "...", "yearStart": 1965, "yearEnd": 1972}` (NASA), `{"q": "...", "type": "Print"}` (Cleveland; AIC with Painting, Photograph, Print, Drawing and Watercolor), `{"q": "...", "departmentId": 19}` (the Met) |
-| `searches` | [string] | | Commons free-text searches (`filetype:bitmap` is appended) |
+| `searches` | [string] | | Commons free-text searches (`filetype:bitmap` is appended). A string may end in CirrusSearch size keywords, passed through verbatim: `filew:>1999 fileh:>1332` keeps only files of at least 2000 x 1333, `filew:>2000` only wide ones; `filew:>=2000 fileh:>=1333` returns nothing (2026-11-22) |
 | `categories` | [string] | | Commons category names without `Category:` |
 | `pinned` | [string or number] | | Item ids tried before any search, in random order: LoC item ids, NASA ids, Commons `File:` titles, museum object ids |
 | `rejectTitleWords` | [string] | | Whole words, case-insensitive. A match rejects the item |
@@ -100,8 +100,9 @@ Add an object to `sources` in `Liminal/Visual/ImageSources/image-collections.jso
 | `allowClassification` | [string] | the Met | Classification allowlist; include `""` for departments that leave it empty (American Wing) |
 | `allowMonochrome` | bool | | Allow monochrome pictures (mean saturation under 0.025). Use only where grey or sepia is the subject; display still caps it at one in six |
 | `requiresKey` | string | | Documentation for keyed providers (`SMITHSONIAN_API_KEY`); enabled sources must not set it |
+| `priority` | bool | | One of the interest packs (D130). Priority sources together are held at `defaults.priorityShare` (0.6) of the newest 40 stored pictures; `weight` then splits the draws among them. A new priority source joins that share, a new ordinary source joins the other 40%. `ImagePriorityCollectionTests` lists the pack ids |
 
-Defaults and limits that apply to every source live in `defaults`: sizes, `maxBytes`, `hostGaps`, the `openness` thresholds, `recencyWindow`, `monochromeEvery`, `unseenAhead`, `ingestInterval` and `candidateRefreshDays`. The allowed rights labels live in `licenseAllowlist`. Change those only with a decision record, because they apply to every source.
+Defaults and limits that apply to every source live in `defaults`: sizes, `maxBytes`, `hostGaps`, the `openness` thresholds, `recencyWindow`, `monochromeEvery`, `unseenAhead`, `ingestInterval` and `candidateRefreshDays`, and `priorityShare` (D130). The allowed rights labels live in `licenseAllowlist`. Change those only with a decision record, because they apply to every source.
 
 An example, `dc-tichnor-postcards`:
 
@@ -190,7 +191,8 @@ The pipeline calls only free public APIs, so a verification run may use the netw
    - `API image shown: … license=… url=…`, then open a few of the URLs.
    - No `backing off` loops. If there are some, look at the error (429, 5xx, `blocked`) and add a host gap or a fallback.
 3. **Look at the screen.** Build, terminate the old process, relaunch, and capture with `/opt/homebrew/bin/peekaboo`. Check the 3:2 framing, that the film shows through, and the credit under **Now showing** in Images & Storage.
-4. **Run the whole rotation** without `-LiminalImageProvider` to see the new source in the mix, at its weight.
+   For a bounded, comparable measure add `-LiminalImageAPIPreview 40 -LiminalImageAPISeed 1 -LiminalVideoOff YES`: ingest stops after 40 candidates, and `scripts/image-yield.py <log> --urls` prints requests, hits, rejections by stage and reason, stored and shown per query, with each stored item's URL for review (D130). Several source ids of different providers can share one launch; the script splits them.
+4. **Run the whole rotation** without `-LiminalImageProvider` to see the new source in the mix, at its weight (and, for a priority source, the share with `image-yield.py`).
 5. **Offline reuse.** Run again with `-LiminalImageAPIOffline YES` added: the verify pool is reused and nothing is fetched.
 6. **Performance**, when the provider serves large files or the source is heavy: run `scripts/perf-run.sh --extra "-LiminalImageAPIFresh YES -LiminalImageProvider <id>"` and compare it with a run without the source (D42).
 7. **visionOS Simulator**, optionally: the launch line in [pipeline.md](pipeline.md#19-debug-flags-and-verification). The text and face checks do not run in the simulator.

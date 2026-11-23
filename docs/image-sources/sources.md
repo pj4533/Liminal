@@ -2,11 +2,11 @@
 
 [← Image sources](README.md) · [Pipeline](pipeline.md) · [Providers](providers.md) · [Adding a source](adding-a-source.md) · [Research history](research-history.md)
 
-Every source in `Liminal/Visual/ImageSources/image-collections.json` (version 2, updated 2026-11-21). 43 of 44 sources are enabled, with a total weight of 60. The JSON is the authority; this page was written from it on 2026-11-21. Measured sizes come from the research passes ([collections](../research/visuals/image-apis/collections.md), [other institutions](../research/visuals/image-apis/other-institutions.md), [new providers](../research/visuals/image-apis/new-providers.md)) and the live ingest runs (`decisions/images.md` D41-D44).
+Every source in `Liminal/Visual/ImageSources/image-collections.json` (version 2, updated 2026-11-23). 55 of 56 sources are enabled, with a total weight of 93: the 43 earlier sources keep their weights (60), and the twelve interest packs added with D130 (marked priority, weight 33) are held at 60% of stored pictures by the priority share ([pipeline.md](pipeline.md#1-which-source-is-next)). The JSON is the authority; this page was written from it on 2026-11-21 and extended on 2026-11-23. Measured sizes come from the research passes ([collections](../research/visuals/image-apis/collections.md), [other institutions](../research/visuals/image-apis/other-institutions.md), [new providers](../research/visuals/image-apis/new-providers.md)) and the live ingest runs (`decisions/images.md` D41-D44).
 
 How to read the columns:
 
-- **Weight** is how many times the source goes into the ingest rotation's bag (rounded, at least 1), and it also multiplies the display weight of its stored pictures. See [pipeline.md](pipeline.md#1-which-source-is-next).
+- **Weight** is how many times the source goes into its group's ingest bag (rounded, at least 1), and it also multiplies the display weight of its stored pictures. The priority packs and the other sources are separate groups (D130). See [pipeline.md](pipeline.md#1-which-source-is-next).
 - **Mono** says whether monochrome pictures may be stored (`allowMonochrome`). Even then, display shows at most one monochrome picture in six.
 - **Pins** is the number of pinned ids, which are tried before any search.
 - The licence shown in the app comes from each item's own record, never from the source's `license` note in the JSON (that field is documentation).
@@ -59,8 +59,20 @@ How to read the columns:
 | [`loc-popular-graphic-arts-moonlight`](#loc-popular-graphic-arts-moonlight) | loc | 1 | yes | no | 3 | 3 | 1850-1900 chromolithographs, moonlit lakes, sunsets |
 | [`loc-highsmith-space-fair`](#loc-highsmith-space-fair) | loc | 1 | yes | no | 4 | 4 | Highsmith: space centres, rockets, Ferris wheels, fireworks |
 | [`loc-matson-desert`](#loc-matson-desert) | loc | 1 | yes | yes | 3 | 4 | 1898-1946 Matson glass negatives, Sinai, Dead Sea |
+| [`loc-highsmith-record-rooms`](#loc-highsmith-record-rooms) | loc | 5 | yes | no | 3 | 4 | retro music, radio studios, recording studios, jukeboxes |
+| [`loc-highsmith-stations-and-domes`](#loc-highsmith-stations-and-domes) | loc | 2 | yes | no | 0 | 4 | night transit, Streamline Moderne bus stations, neon marquees, observatory domes |
+| [`commons-analog-machines`](#commons-analog-machines) | wikimedia | 3 | yes | no | 8 | 8 | analog computers, machine rooms, core memory, teletypes |
+| [`commons-record-machines`](#commons-record-machines) | wikimedia | 3 | yes | no | 7 | 7 | retro music, tape machines, record grooves, cutting lathes |
+| [`commons-inner-worlds`](#commons-inner-worlds) | wikimedia | 5 | yes | no | 0 | 11 | inner worlds, neurons, schlieren flows, caustics |
+| [`commons-night-infrastructure`](#commons-night-infrastructure) | wikimedia | 3 | yes | no | 0 | 7 | cyberpunk night transit, subway platforms, trams in rain, laundromats at night |
+| [`nasa-machine-rooms`](#nasa-machine-rooms) | nasa | 2 | yes | yes | 0 | 6 | mission control, control rooms, tape racks, analog computing halls |
+| [`nasa-imagined-habitats`](#nasa-imagined-habitats) | nasa | 3 | yes | no | 6 | 2 | science-fiction habitats, space settlements, Bernal spheres, torus interiors |
+| [`dc-tichnor-stations`](#dc-tichnor-stations) | dc | 2 | yes | no | 0 | 5 | 1930-45 linen postcards, city nights, railroad stations, radio stations |
+| [`cma-quiet-water`](#cma-quiet-water) | cma | 2 | yes | yes | 4 | 3 | quiet ponds, lakes, Barbizon and tonalist water, pond etchings |
+| [`aic-rail-and-ponds`](#aic-rail-and-ponds) | aic | 2 | yes | no | 2 | 2 | quiet ponds, Venetian reflections, twilight |
+| [`met-water-and-nocturnes`](#met-water-and-nocturnes) | met | 1 | yes | no | 0 | 3 | quiet ponds, Whistler nocturnes, 19th-century railways |
 
-Weight by provider (enabled sources): wikimedia 20, nasa 9, loc 7, cma 4, met 4, dc 3, aic 1 (total 48).
+Weight by provider (enabled sources, 2026-11-23): wikimedia 34, loc 26, nasa 14, cma 6, met 5, dc 5, aic 3 (total 93). The last twelve rows are the D130 interest packs; their sections are at the end of this page.
 
 ## Credits by institution
 
@@ -1076,3 +1088,110 @@ Research: [loc-collections.md](../research/visuals/image-apis/loc-collections.md
 - `2019700416`
 
 </details>
+
+## Interest packs (D130)
+
+Twelve priority sources added on 2026-11-22 for what the user enjoys: consciousness, AI and analog machines, cyberpunk night transit, retro music and record-era rooms, science-fiction habitats, inner-world and natural patterns, quiet ponds. Queries were checked first against each provider's real first-page request (handoff validation, kept when at least 3 of 20 passed size and rights and were on subject), then in the app with `-LiminalImageAPIPreview` and `scripts/image-yield.py`. Weights inside the group are starting weight x (mean admission / measured admission), rounded to 1-6. Every rights rule and gate is the global one.
+
+### loc-highsmith-record-rooms
+
+- **Provider:** `loc` (Library of Congress). **Weight** 5. **Enabled:** yes. **Priority:** yes. **Monochrome allowed:** no.
+- **Collection:** `carol-m-highsmith`.
+- **Queries:** `radio studio`, `jukebox`, `recording studio`, `music store`.
+- **Filters:** `requireIIIF`; `useMasters` on; whole-word title rejects: `Mercury`, `Crosley`, `Rick Hall`.
+- **Shows:** retro music, radio studios, recording studios, jukeboxes, record-era rooms.
+- **Measured:** Preview (2026-11-22, 31 attempts): 16 stored (52%). Rejected: 7 by title (Mercury Studios building, Rick Hall portraits), 4 declared too small (portrait masters), 2 monochrome, 1 face, 1 over 150 MP. radio studio 1 of 6, recording studio 4 of 10, jukebox 5 of 6, music store 3 of 6; pins 3 of 3.
+- **Pins:** `2011634401`, `2011632355`, `2011634841`.
+
+### loc-highsmith-stations-and-domes
+
+- **Provider:** `loc` (Library of Congress). **Weight** 2. **Enabled:** yes. **Priority:** yes. **Monochrome allowed:** no.
+- **Collection:** `carol-m-highsmith`.
+- **Queries:** `bus station`, `theater marquee`, `observatory`, `science museum`.
+- **Filters:** `requireIIIF`; `useMasters` off (newer Highsmith master-only items answer HTTP 500 to every resize); whole-word title rejects: `dinosaur`, `Tyrannosaurus`, `Tyrannosauras`, `elk`.
+- **Shows:** night transit, Streamline Moderne bus stations, neon marquees, observatory domes, science museums.
+- **Measured:** Preview (2026-11-23, 40 attempts): 33 stored (82%): bus station 6 of 6, observatory 13 of 14 (several Griffith aerials), science museum 7 of 10, theater marquee 7 of 10. A first run on 2026-11-22 stored nothing: every loc.gov search timed out (one probe answered in 32 s, past the 30 s request timeout).
+
+### commons-analog-machines
+
+- **Provider:** `wikimedia` (Wikimedia Commons). **Weight** 3. **Enabled:** yes. **Priority:** yes. **Monochrome allowed:** no.
+- **Searches:** `analog computer filew:>1999 fileh:>1332`, `mainframe computer filew:>1999 fileh:>1332`, `computer terminal filew:>1999 fileh:>1332`, `magnetic core memory filew:>1999 fileh:>1332`, `patch panel filew:>1999 fileh:>1332`, `teletype filew:>1999 fileh:>1332`, `vacuum tube computer filew:>1999 fileh:>1332`, `planetarium projector filew:>1999 fileh:>1332`.
+- **Filters:** whole-word title rejects: `logo`, `diagram`, `schematic`, `screenshot`, `portrait`, `advertisement`, `manual`, `page`, `package`, `Union Terminal`, `Ethernet`, `fibre`, `fiber`, `plaque`, `Opening`, `Schallwelle`, `optical`.
+- **Shows:** analog computers, machine rooms, core memory, teletypes, planetarium projectors, human-machine interfaces.
+- **Measured:** Preview (2026-11-22, 44 attempts): 34 stored (77%); pins 8 of 8. Rejected: 6 monochrome (the French `Ordinateurs centraux` scans under mainframe computer), 2 by title, 1 document, 1 too small. Two modern fibre patch panels got through before `optical` joined the reject words.
+- **Pins:** `File:Analog Computer patch panel (6685104979).jpg`, `File:Early Analog Computer (2585352431).jpg`, `File:Vero Analog Computer.jpg`, `File:Mainframe Computer.jpg`, `File:CHM Artifacts Whirlwind (3188121417).jpg`, `File:Teletype, Intrepid Museum (7558594418).jpg`, `File:Geministar III at Cosmo Planetarium Shibuya.jpg`, `File:Magnetic-core memory (detail).jpg`.
+
+### commons-record-machines
+
+- **Provider:** `wikimedia` (Wikimedia Commons). **Weight** 3. **Enabled:** yes. **Priority:** yes. **Monochrome allowed:** no.
+- **Searches:** `reel to reel tape recorder filew:>2000`, `vinyl record grooves`, `record cutting lathe`, `radio mixing console`, `recording studio control room`, `record shop`, `jukebox`.
+- **Filters:** whole-word title rejects: `logo`, `label`, `cover`, `sleeve`, `advertisement`, `portrait`, `before-and-after`, `retouche`, `screw`, `taps`, `diagram`, `schema`.
+- **Shows:** retro music, tape machines, record grooves, cutting lathes, mixing desks, record shops, jukeboxes.
+- **Measured:** Preview (2026-11-22, 59 attempts): 37 stored (63%); pins 5 of 7. Rejected: 13 declared too small, 2 monochrome, 2 text, 4 by title. reel to reel 10 of 10.
+- **Pins:** `File:BBC mixing desk at Hack Green Secret Nuclear bunker.jpg`, `File:Audio console at Studio di Fonologia Musicale RAI di Milano.jpg`, `File:Neumann VMS-70 Cutting Lathe, SAE Mastering, Phoenix, AZ.jpg`, `File:Beocord 1100 open reel tape recorder.jpg`, `File:Jukebox in Island Delights, Surf City 02.jpg`, `File:33rpm Record Grooves.JPG`, `File:US Record Store 1963.jpg`.
+
+### commons-inner-worlds
+
+- **Provider:** `wikimedia` (Wikimedia Commons). **Weight** 5. **Enabled:** yes. **Priority:** yes. **Monochrome allowed:** no.
+- **Searches:** `Purkinje cells filew:>1999 fileh:>1332`, `schlieren photography filew:>1999 fileh:>1332`, `diatom micrograph filew:>1999 fileh:>1332`, `water caustics filew:>1999 fileh:>1332`, `soap film interference filew:>1999 fileh:>1332`, `microscope pond filew:>1999 fileh:>1332`, `pond reflection filew:>1999 fileh:>1332`, `duckweed filew:>1999 fileh:>1332`, `reeds reflection filew:>1999 fileh:>1332`, `moss macro filew:>1999 fileh:>1332`, `astronomical instrument`.
+- **Filters:** whole-word title rejects: `portrait`, `diagram`, `chart`, `page`, `map`, `Article`, `HTML`, `Fig`, `figure`.
+- **Shows:** inner worlds, neurons, schlieren flows, caustics, thin films, pond life, moss, astronomical instruments.
+- **Measured:** Preview (2026-11-23, 40 attempts, plain searches): 11 stored (28%); 21 rejections were declared too small. Size keywords were then added to ten searches: a first-page check passed 11-20 of 20 hits per search against 3-14 plain.
+
+### commons-night-infrastructure
+
+- **Provider:** `wikimedia` (Wikimedia Commons). **Weight** 3. **Enabled:** yes. **Priority:** yes. **Monochrome allowed:** no.
+- **Searches:** `empty subway platform`, `tram rain`, `laundromat night`, `telephone booth night`, `industrial canal night`, `elevated railway night`, `railway bridge night`.
+- **Filters:** whole-word title rejects: `diagram`, `map`, `plan`, `journal`, `portrait`.
+- **Shows:** cyberpunk night transit, subway platforms, trams in rain, laundromats at night, phone booths, canals and bridges after dark.
+- **Measured:** Preview (2026-11-23, 40 attempts): 27 stored (68%): empty subway platform 8 of 8, telephone booth night 8 of 9, tram rain 5 of 5, laundromat night 3 of 3, railway bridge night 2 of 5, elevated railway night 1 of 8 (title-rejected diagrams and journals).
+
+### nasa-machine-rooms
+
+- **Provider:** `nasa` (NASA Image and Video Library). **Weight** 2. **Enabled:** yes. **Priority:** yes. **Monochrome allowed:** yes.
+- **Queries:** `mission control` (1960-1980), `control console` (1960-1980), `magnetic tape` (1960-1980), `analog computer` (1960-1980), `wind tunnel control room` (1960-1980), `control room` (1960-1980).
+- **Filters:** whole-word title rejects: `press conference`, `presidential`, `portrait`, `diagram`, `chart`, `crew`, `astronaut`, `visit`, `tour`, `ceremony`.
+- **Shows:** mission control, control rooms, tape racks, analog computing halls, 1960s-70s machine rooms.
+- **Measured:** Preview (2026-11-22, 30 attempts): 27 stored (90%); rejected 2 text, 1 face. Many are 1960s-70s Houston MCC rooms with people at consoles, about half monochrome.
+
+### nasa-imagined-habitats
+
+- **Provider:** `nasa` (NASA Image and Video Library). **Weight** 3. **Enabled:** yes. **Priority:** yes. **Monochrome allowed:** no.
+- **Queries:** `space settlement` (1960-1980), `Bernal sphere` (1960-1980).
+- **Filters:** whole-word title rejects: `press conference`, `presidential`, `portrait`, `diagram`, `chart`, `crew`, `artist`, `model`.
+- **Shows:** science-fiction habitats, space settlements, Bernal spheres, torus interiors, 1970s Ames space-colony art.
+- **Measured:** Preview (2026-11-22, 9 attempts, then dry): 7 stored, including the six pins and AC76-0525 and AC75-1086 (also in `nasa-space-age`; dedup by id keeps one copy in a shared pool). The grey mat around several scans shows at the edges.
+- **Pins:** `ARC-1975-AC75-2621`, `ARC-1978-AC78-0330-4`, `ARC-1976-AC76-1267`, `ARC-1975-AC75-1924`, `ARC-1976-AC76-1089`, `ARC-1976-AC76-0965`.
+
+### dc-tichnor-stations
+
+- **Provider:** `dc` (Digital Commonwealth (Boston Public Library)). **Weight** 2. **Enabled:** yes. **Priority:** yes. **Monochrome allowed:** no.
+- **Collection:** `The Tichnor Brothers Collection`.
+- **Queries:** `New York night`, `canoe lake`, `railroad station`, `Hudson River`, `radio station`.
+- **Filters:** whole-word title rejects: `Greetings`, `views`.
+- **Shows:** 1930-45 linen postcards, city nights, railroad stations, radio stations, canoe lakes, Hudson River.
+- **Measured:** Preview (2026-11-22, 22 attempts): 19 stored (86%); 3 rejected as duplicates of another card. New York night 7 of 7. Cards keep their printed captions and numbers; the WIAC lettering card passed the gates.
+
+### cma-quiet-water
+
+- **Provider:** `cma` (Cleveland Museum of Art). **Weight** 2. **Enabled:** yes. **Priority:** yes. **Monochrome allowed:** yes.
+- **Queries:** `pond` (type Painting), `pond` (type Print), `lake` (type Painting).
+- **Shows:** quiet ponds, lakes, Barbizon and tonalist water, pond etchings.
+- **Measured:** Preview (2026-11-22, 22 attempts): 17 stored (77%); pins 4 of 4. `reflection` (Painting) brought four still lifes and a portrait and was removed; `pond` (Painting) also returns Indian miniatures and a screen.
+- **Pins:** `124078`, `128371`, `320778`, `147017`.
+
+### aic-rail-and-ponds
+
+- **Provider:** `aic` (Art Institute of Chicago). **Weight** 2. **Enabled:** yes. **Priority:** yes. **Monochrome allowed:** no.
+- **Queries:** `pond` (type Painting), `twilight`.
+- **Shows:** quiet ponds, Venetian reflections, twilight.
+- **Measured:** Preview (2026-11-22, 11 attempts): 4 stored (36%); 4 declared too small, 3 text or no room. The handoff's pin 33212 (Arcueil aqueduct) failed the text check (36%) and was dropped; `reflection` (prints and a portrait) was removed.
+- **Pins:** `66892`, `95993`.
+
+### met-water-and-nocturnes
+
+- **Provider:** `met` (The Metropolitan Museum of Art). **Weight** 1. **Enabled:** yes. **Priority:** yes. **Monochrome allowed:** no.
+- **Queries:** `pond` (department 11), `nocturne` (department 9), `railway` (department 19).
+- **Filters:** classifications Paintings, Prints, Photographs, Drawings.
+- **Shows:** quiet ponds, Whistler nocturnes, 19th-century railways.
+- **Measured:** Preview (2026-11-22, 62 attempts): 27 stored (44%); 25 not public domain (the search ignores the filter), 2 HTTP 404. Several impressions of the same Whistler plate are stored as separate pictures (different objects, different prints).

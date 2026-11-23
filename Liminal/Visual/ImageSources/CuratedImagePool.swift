@@ -413,6 +413,14 @@ nonisolated final class CuratedImagePool: Sendable {
 
     func item(_ id: UUID) -> PoolItem? { state.withLock { $0.items[id] } }
 
+    /// Source ids of the `count` most recently stored pictures, newest first (the priority share, D130).
+    func newestSourceIDs(_ count: Int) -> [String] {
+        state.withLock { s in
+            s.items.values.sorted { ($0.createdAt, $0.id.uuidString) > ($1.createdAt, $1.id.uuidString) }
+                .prefix(count).map(\.sourceID)
+        }
+    }
+
     /// Records that a picture became the one on screen.
     /// `recorded` runs as soon as the rotation can see the picture as shown, before the ledger write.
     func markShown(_ id: UUID, recorded: (() -> Void)? = nil) {

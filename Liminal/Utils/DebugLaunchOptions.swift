@@ -249,6 +249,12 @@ nonisolated enum DebugLaunchOptions {
     /// fetching works and leaves the real pool alone. Removed again by the next normal launch. With
     /// -LiminalImageAPIOffline the verify folder of the previous fresh run is kept and reused.
     static let imageAPIFresh: Bool = defaults.bool(forKey: "LiminalImageAPIFresh")
+    /// -LiminalImageAPIPreview <n>: a bounded provenance preview (D130). Ingest ignores the never-shown
+    /// pause, stops after n candidates (stored + rejected), logs a summary per source and
+    /// "preview done". Honoured only with -LiminalImageAPIFresh YES, so it never fills the user's pool.
+    static let imageAPIPreview: Int? = imageAPIFresh ? imageAPIPreviewRequested : nil
+    static let imageAPIPreviewRequested: Int? = defaults.string(forKey: "LiminalImageAPIPreview")
+        .flatMap { Int($0.trimmingCharacters(in: .whitespaces)) }.flatMap { $0 > 0 ? $0 : nil }
     /// -LiminalRecordAt <start>,<seconds>[,photos]: start a recording <start> s after playback is ready and stop
     /// it <seconds> later, keeping the file in Documents/Recordings without the Photos step (no prompt in
     /// automation). docs/recording.md.
@@ -295,6 +301,7 @@ nonisolated enum DebugLaunchOptions {
             || dialogueTranscription != nil
             || dropColour != nil || dropFinisher != nil || dropLead != nil || dropOff
             || imageProviders != nil || imageAPIOffline || imageAPISeed != nil || imageAPIFresh
+            || defaults.object(forKey: "LiminalImageAPIPreview") != nil
             || recordAt != nil || recordSize != nil || recordH264 || recordTrace
     }
 #else
@@ -351,6 +358,8 @@ nonisolated enum DebugLaunchOptions {
     static let imageAPIOffline = false
     static let imageAPISeed: UInt64? = nil
     static let imageAPIFresh = false
+    static let imageAPIPreview: Int? = nil
+    static let imageAPIPreviewRequested: Int? = nil
 #endif
 
     private static let logOnce: Void = {
@@ -409,6 +418,9 @@ nonisolated enum DebugLaunchOptions {
         if imageAPIOffline { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalImageAPIOffline=YES (pool only, no network)") }
         if let n = imageAPISeed { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalImageAPISeed=\(n)") }
         if imageAPIFresh { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalImageAPIFresh=YES (empty verify pool)") }
+        if let n = imageAPIPreviewRequested {
+            LMLog.general.info("🧪 DEBUG FLAG applied: LiminalImageAPIPreview=\(n)\(imageAPIPreview == nil ? " (ignored: needs -LiminalImageAPIFresh YES)" : " (bounded preview, then ingest stops)", privacy: .public)")
+        }
         if syncStrength != 1 { LMLog.general.info("🧪 DEBUG FLAG applied: LiminalSyncStrength=\(syncStrength, format: .fixed(precision: 2))") }
 #endif
     }()
