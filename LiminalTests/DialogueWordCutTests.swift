@@ -178,7 +178,7 @@ struct DialogueWordCutTests {
                 for part in run.parts where part.motif.usedTranscript {
                     let motif = part.motif
                     for e in part.plan.events {
-                        guard let p = e.piece, p != 0, e.effect != .reversed, !e.stutter, let played = e.sourceFrames,
+                        guard let p = e.piece, p != 0, e.effect != .reversed, let played = e.sourceFrames,
                               !motif.fragments[p].isUnit else { continue }
                         ended += 1
                         // The end of the dry part is not inside a content word (a unit's end is its syllable edge).

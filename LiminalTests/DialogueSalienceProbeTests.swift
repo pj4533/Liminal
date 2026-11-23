@@ -335,7 +335,7 @@ struct DialogueSalienceProbeTests {
                             let tol = Int(Self.tolerance * rate)
                             for (e, event) in plan.events.enumerated() where playedBank.pads.indices.contains(event.padID) {
                                 let pad = playedBank.pads[event.padID]
-                                let played = pad.frames.lowerBound..<min(pad.frames.upperBound, pad.frames.lowerBound + max(1, Int(event.duration * rate)))
+                                let played = pad.frames.lowerBound..<min(pad.frames.upperBound, pad.frames.lowerBound + max(1, Int(event.duration * rate * pad.transform.playbackRate)))
                                 func covers(_ list: [Word]) -> [[String: Any]] {
                                     list.filter { $0.frames.upperBound > played.lowerBound && $0.frames.lowerBound < played.upperBound }.map { w in
                                         let ov = min(w.frames.upperBound, played.upperBound) - max(w.frames.lowerBound, played.lowerBound)
@@ -525,7 +525,7 @@ struct DialogueSalienceProbeTests {
                             Set(placed.filter { $0.s / 16 == b || $0.s / 16 == b + 1 }.compactMap(\.e.piece)).count
                         }
                         let section = 32 * beat
-                        func dry(_ e: DialogueEvent) -> Double { Double(e.sourceFrames?.count ?? 0) / rate }
+                        func dry(_ e: DialogueEvent) -> Double { Double(e.sourceFrames?.count ?? 0) / (rate * e.transform.playbackRate) }
                         let occupancy = (0..<2).map { k in
                             Self.r3(placed.filter { $0.s / 128 == k }.map { dry($0.e) }.reduce(0, +) / section)
                         }

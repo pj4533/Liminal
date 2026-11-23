@@ -27,6 +27,13 @@ class FeelReportTests(unittest.TestCase):
         self.assertEqual(result['reverse']['repeatGivenPrevious'], 0)
         self.assertEqual(result['consecutiveGridSimilarity'], 0)
 
+    def test_chop_beat_scope_excludes_surrounding_arc_positions(self):
+        result = report.summarize([self.row(1, 0, [16, 32]), self.row(1, 1, [32, 96])])
+        self.assertEqual(result['consecutiveGridSimilarity'], 1 / 3)
+        self.assertEqual(result['chopBeat']['consecutiveGridSimilarity'], 1)
+        self.assertEqual(result['chopBeat']['reverse']['count'], 2)
+        self.assertEqual(result['chopBeat']['reverse']['positions'], {32: 2})
+
     def test_log_and_attachment_duplicates_are_not_counted_twice(self):
         import json
         with tempfile.TemporaryDirectory() as directory:

@@ -62,6 +62,32 @@ jobs:
             verification/feel-attachments/
             verification/feel-summary.json
           retention-days: 14
+      - name: Chop feel regression tests
+        if: ${{ !cancelled() && steps.mac_build.outcome == 'success' }}
+        run: |
+          set -o pipefail
+          set +e
+          xcodebuild test CODE_SIGNING_ALLOWED=NO -project Liminal.xcodeproj -scheme Liminal \
+            -destination 'platform=macOS,arch=arm64' -parallel-testing-enabled NO \
+            -derivedDataPath "$RUNNER_TEMP/LiminalDerivedData" \
+            -resultBundlePath verification/feel-regression.xcresult \
+            -only-testing:LiminalTests/DialogueChopFeelTests \
+            -only-testing:LiminalTests/DialogueWordCutTests \
+            -only-testing:LiminalTests/DialogueMotifTests \
+            2>&1 | tee verification/feel-regression.log
+          result=${PIPESTATUS[0]}
+          xcrun xcresulttool export attachments --path verification/feel-regression.xcresult \
+            --output-path verification/feel-regression-attachments
+          exit "$result"
+      - name: Preserve chop feel regression evidence
+        if: ${{ !cancelled() && steps.mac_build.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: chop-feel-regression-${{ github.sha }}
+          path: |
+            verification/feel-regression.log
+            verification/feel-regression-attachments/
+          retention-days: 14
       - name: Focused dialogue tests
         if: ${{ !cancelled() && steps.mac_build.outcome == 'success' }}
         run: |

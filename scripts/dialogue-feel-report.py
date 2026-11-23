@@ -7,7 +7,13 @@ import pathlib
 import statistics
 
 
-def summarize(records):
+def summarize(records, scope=None):
+    if scope is not None:
+        first, end = scope
+        records = [dict(row, moves={move: [p for p in positions if first <= p < end]
+                    for move, positions in row['moves'].items()},
+                    grid=[hit for hit in row['grid'] if first <= int(hit.split(':', 1)[0]) < end])
+                   for row in records]
     groups = collections.defaultdict(list)
     for row in records:
         groups[(row['film'], row['seed'])].append(row)
@@ -25,7 +31,7 @@ def summarize(records):
             train = [r for r in records if r['film'] == row['film'] and r['seed'] != row['seed']]
             counts = collections.Counter(p for r in train for p in set(r['moves'][move]))
             actual = set(row['moves'][move])
-            for p in range(256):
+            for p in range(*(scope or (0, 256))):
                 prediction = counts[p] * 2 >= len(train)
                 if p in actual:
                     pos += 1
@@ -71,6 +77,8 @@ def summarize(records):
                 total += 1
     result['nextMovePredictability'] = correct / max(1, total)
     result['nextMoveTransitions'] = total
+    if scope is None:
+        result['chopBeat'] = summarize(records, scope=(32, 96))
     return result
 
 

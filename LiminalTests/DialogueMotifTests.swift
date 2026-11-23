@@ -152,8 +152,9 @@ struct DialogueMotifTests {
                 // so its word pieces are shorter and the floor here is lower.
                 #expect((0.25...0.62).contains(occupancy),
                         "\(label): occupancy \(occupancy), line \(motif.text ?? "-") \(motif.seconds(0)) s, \(loop.events.count) events")
-                // Native rate only; nothing is slower than the source.
-                #expect(loop.events.allSatisfy { $0.transform == .native })
+                // One bounded, cadence-derived turntable rate for the whole line and all its cuts.
+                #expect(loop.events.allSatisfy { $0.transform == motif.transform })
+                #expect(abs(12 * log2(motif.transform.playbackRate)) <= 2.5 + 1e-9)
             }
         }
     }
@@ -325,8 +326,8 @@ struct DialogueMotifTests {
     }
 
     /// A cue whose bed starts before bar 9 (live windows open about 0.7 s early) plays the breakdown's
-    /// downbeat hit on bar 9's step 0: the section's first piece may start before its downbeat.
-    @Test(arguments: MotifShape.all) fileprivate func aCueOpeningBeforeBarNinePlaysTheDownbeatHit(_ shape: MotifShape) throws {
+    /// selected opening hit on bar 9: a downbeat piece may start before the bar.
+    @Test(arguments: MotifShape.all) fileprivate func aCueOpeningBeforeBarNinePlaysTheSelectedOpeningHit(_ shape: MotifShape) throws {
         var checked = 0
         for seed in Self.seeds {
             let r = run(shape, seed: seed, preRoll: 0.7)
@@ -336,11 +337,11 @@ struct DialogueMotifTests {
             }
             for (k, loop) in r.loops.enumerated() {
                 let motif = try #require(loop.motif)
-                // The breakdown opens bar 9 with its held word on the downbeat (D126 part 2).
+                // The breakdown opening is drawn from the first bar's quarter grid (chop feel).
                 let breakdown = try #require(motif.cells.first { $0.kind == .breakdown })
-                let down = try #require(breakdown.items.first { $0.slot == 0 })
+                let down = try #require(breakdown.items.first { $0.slot < 16 && $0.effect != .reversed })
                 let bars = DialogueHookMetrics.loopHits(loop.events, loop: loop.snapshot.phraseAtOrigin / 4)
-                #expect(bars[8].contains(DialogueHookMetrics.Hit(step: 0, fragment: down.fragment)),
+                #expect(bars[8].contains(DialogueHookMetrics.Hit(step: down.slot, fragment: down.fragment)),
                         "\(shape) seed \(seed) loop \(k): bar 9 \(bars[8]), breakdown \(breakdown.items.map { [$0.fragment, $0.slot] })")
                 checked += 1
             }
@@ -453,6 +454,8 @@ struct DialogueMotifTests {
             let recut = try #require(DialogueMotif.resolve(loop: 0, source: film.source, analysis: film.analysis, hasBank: true,
                                                            transcript: film.transcript, memory: memory, seed: seed, beatDuration: 60 / 72.0))
             #expect(recut.usedTranscript && recut.lineUnit == acoustic.lineUnit)
+            #expect(recut.transform == acoustic.transform)
+            #expect(recut.priorCells == acoustic.priorCells)
             let a = try #require(acoustic.hook), b = try #require(recut.hook)
             #expect(a.template == b.template)
             let share = DialogueMotif.overlapShare(acoustic.fragments[a.signature].frames, recut.fragments[b.signature].frames)
@@ -545,10 +548,10 @@ struct DialogueMotifTests {
             for chop in chops {
                 let frames = Double(chop.buffer.frameLength)
                 let rate = chop.buffer.format.sampleRate
-                // The buffer plays exactly the event (native rate, choked or with its echo tail), never longer.
+                // The buffer plays exactly the event (linked rate, choked or with its echo tail), never longer.
                 #expect(abs(frames / rate - chop.event.duration) < 0.003, "\(shape): \(frames / rate) s for \(chop.event.duration) s")
                 if case .echoThrow = chop.event.effect {} else if chop.event.chokeAt == nil, chop.event.drySeconds == nil, let piece = chop.event.piece {
-                    #expect(abs(frames - Double(motif.fragments[piece].frames.count)) <= 2)
+                    #expect(abs(frames - Double(motif.fragments[piece].frames.count) / motif.transform.playbackRate) <= 3)
                 }
                 let samples = UnsafeBufferPointer(start: chop.buffer.floatChannelData![0], count: Int(chop.buffer.frameLength))
                 #expect(samples.allSatisfy { $0.isFinite && abs($0) <= 1.0001 })
