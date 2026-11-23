@@ -18,7 +18,7 @@ struct DialogueFeelMetricsTests {
                     for (s, e) in placed {
                         if e.effect == .reversed { moves["reverse", default: []].append(s) }
                         if e.stutter { moves[e.cell == .build ? "roll" : "stutter", default: []].append(s) }
-                        let dry = e.drySeconds ?? e.duration
+                        let dry = Double(e.sourceFrames?.count ?? 0) / (loop.motif.sampleRate * e.transform.playbackRate)
                         for k in 0..<256 where loop.snapshot.gridTime(sixteenth: k) >= e.startTime
                             && loop.snapshot.gridTime(sixteenth: k) < e.startTime + dry { occupied.insert(k) }
                     }

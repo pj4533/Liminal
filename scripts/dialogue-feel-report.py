@@ -46,6 +46,16 @@ def summarize(records):
     sequences = []
     for row in records:
         seq = sorted((p, move) for move in ['reverse', 'roll', 'stutter'] for p in row['moves'][move])
+        # Quiet gestures are starts of contiguous dry gaps of at least one beat; mandatory isolated
+        # empty sixteenths are not moves. Keep this definition identical for baseline and after.
+        quiet = sorted(set(row['moves']['quiet']))
+        runs = []
+        for position in quiet:
+            if not runs or position != runs[-1][-1] + 1:
+                runs.append([])
+            runs[-1].append(position)
+        seq += [(run[0], 'quiet') for run in runs if len(run) >= 4]
+        seq.sort()
         sequences.append((row, [m for _, m in seq]))
     correct = total = 0
     for row, seq in sequences:
@@ -80,8 +90,24 @@ def read_records(path):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('input', type=pathlib.Path)
+    parser.add_argument('--baseline', type=pathlib.Path, help='baseline raw logs/attachments; identical definitions are applied to both')
     args = parser.parse_args()
     records = read_records(args.input)
     if not records:
         parser.error('no FEEL-METRIC records found')
-    print(json.dumps(summarize(records), indent=2, sort_keys=True))
+    result = summarize(records)
+    if args.baseline:
+        before = summarize(read_records(args.baseline))
+        checks = {
+            'all108Loops': result['loops'] == before['loops'] == 108,
+            'moreReverses': result['reverse']['count'] > before['reverse']['count'],
+            'noRepeatedReversePosition': result['reverse']['repeatGivenPrevious'] == 0,
+            'lessGridSimilarity': result['consecutiveGridSimilarity'] < before['consecutiveGridSimilarity'],
+            'lessNextMovePredictability': result['nextMovePredictability'] < before['nextMovePredictability'],
+        }
+        for move in ['rest', 'quiet', 'roll', 'stutter']:
+            checks[move + 'RecurrenceNoWorse'] = result[move]['repeatGivenPrevious'] <= before[move]['repeatGivenPrevious']
+        result = {'before': before, 'after': result, 'gates': checks, 'passed': all(checks.values())}
+    print(json.dumps(result, indent=2, sort_keys=True))
+    if args.baseline and not result['passed']:
+        raise SystemExit(1)
