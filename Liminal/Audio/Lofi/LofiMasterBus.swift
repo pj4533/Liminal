@@ -291,6 +291,7 @@ nonisolated struct LofiKWeighting {
         let b0: Double, b1: Double, b2: Double, a1: Double, a2: Double
         var z1 = 0.0, z2 = 0.0
 
+        @inline(__always)
         mutating func process(_ x: Double) -> Double {
             let y = z1 + b0 * x
             z1 = z2 + b1 * x - a1 * y
@@ -323,6 +324,7 @@ nonisolated struct LofiKWeighting {
                               a1: 2 * (hpSquared - 1) / hpSum, a2: (1 - hpDamping + hpSquared) / hpSum)
     }
 
+    @inline(__always)
     mutating func process(_ sample: Double) -> Double { highpass.process(shelf.process(sample)) }
 }
 
