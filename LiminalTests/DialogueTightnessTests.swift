@@ -119,13 +119,13 @@ struct DialogueTightnessTests {
                                 let ka = wa.process(Double(a[i])), kb = wb.process(Double(b[i]))
                                 beforeK += ka * ka; afterK += kb * kb
                             }
-                            #expect(finite && afterPeak < DialogueChopChain.peakCeiling, key)
+                            #expect(finite && afterPeak < DialogueChopChain.peakCeiling, "\(key)")
                             #expect(bodyUnchanged, "Opening correction changed the body: \(key)")
                             if changed {
                                 corrected += 1
                                 let rmsDB = 10 * log10(max(1e-12, afterPower) / max(1e-12, beforePower))
                                 let weightedDB = 10 * log10(max(1e-12, afterK) / max(1e-12, beforeK))
-                                #expect(rmsDB >= -0.001 && rmsDB <= 9.001, key)
+                                #expect(rmsDB >= -0.001 && rmsDB <= 9.001, "\(key)")
                                 rows.append("bpm=\(bpm) seed=\(seed) transcript=\(transcribed) pad=\(pad.padID) source=\(pad.frames) rate=\(pad.transform.playbackRate) peak=\(beforePeak),\(afterPeak) rmsDeltaDB=\(rmsDB) kWeightedDeltaDB=\(weightedDB)")
                             }
                         }

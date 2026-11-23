@@ -4,13 +4,20 @@ import Testing
 @testable import Liminal
 
 struct DialogueChopFeelTests {
-    @Test func attackPreservationLiftsTheRetainedSyllableWithoutTrimmingOrMovingAudio() {
+    @Test(arguments: [false, true]) func attackPreservationLiftsTheRetainedSyllableWithoutTrimmingOrMovingAudio(_ highCrestTaper: Bool) {
         let rate = 48_000.0
-        let original: [Float] = (0..<24_000).map { i in
+        var original: [Float] = (0..<24_000).map { i in
             let time = Double(i) / rate
             let opening = 0.16 * exp(-pow((time - 0.020) / 0.012, 2))
             let stressed = 0.7 * exp(-pow((time - 0.285) / 0.018, 2))
             return Float((opening + stressed) * sin(2 * .pi * 700 * time))
+        }
+        if highCrestTaper {
+            // Single-sample transients do not move the syllable's RMS maximum. Some land at
+            // the gain taper's end, where a second soft shoulder used to attenuate them.
+            for (index, time) in stride(from: 0.070, through: 0.110, by: 0.003).enumerated() {
+                original[Int(time * rate)] = index.isMultiple(of: 2) ? 0.85 : -0.85
+            }
         }
         var output = original
         DialogueChopRenderer.preserveAttack(&output, expected: 0.012, line: false, sampleRate: rate)
@@ -30,6 +37,7 @@ struct DialogueChopFeelTests {
             #expect(a * b >= 0)
             #expect(abs(b) + 1e-7 >= abs(a))
             #expect(abs(b) <= abs(a) * powf(10, 9.0 / 20) + 1e-7)
+            #expect(b.isFinite && abs(b) < DialogueChopChain.peakCeiling)
         }
     }
 

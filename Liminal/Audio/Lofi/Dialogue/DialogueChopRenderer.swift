@@ -259,8 +259,12 @@ nonisolated enum DialogueChopRenderer {
         for i in 0..<end {
             let phase = Double(max(0, i - hold)) / Double(end - hold)
             let gain = 1 + (lift - 1) * Float(0.5 + 0.5 * cos(.pi * phase))
-            x[i] = LofiSaturation.softClip(x[i] * gain, threshold: DialogueChopChain.peakKnee,
-                                          ceiling: DialogueChopChain.peakCeiling)
+            let lifted = LofiSaturation.softClip(x[i] * gain, threshold: DialogueChopChain.peakKnee,
+                                                 ceiling: DialogueChopChain.peakCeiling)
+            // This input has already met the final shoulder. Near unity gain, sending a high
+            // transient through that shoulder again would lower it. Only admit a positive lift;
+            // the original value and the lifted value both retain the established peak ceiling.
+            if abs(lifted) > abs(x[i]) { x[i] = lifted }
         }
     }
 
