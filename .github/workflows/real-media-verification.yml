@@ -19,9 +19,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: after
+      - name: Initialize diagnostics before baseline checkout
+        run: |
+          mkdir -p "$RUNNER_TEMP/real-media"
+          git -C after rev-parse HEAD > "$RUNNER_TEMP/real-media/after-commit.txt"
+          echo '47a01fe267a3972241ed6918d031fffe55f26ed2' > "$RUNNER_TEMP/real-media/requested-baseline.txt"
       - uses: actions/checkout@v4
         with:
-          ref: 47a01fe
+          ref: 47a01fe267a3972241ed6918d031fffe55f26ed2
           path: baseline
       - name: Install public verification tools
         run: |
@@ -34,22 +39,24 @@ jobs:
           mkdir -p "$RUNNER_TEMP/real-media"
           { sw_vers; xcodebuild -version; xcodebuild -showsdks; } > "$RUNNER_TEMP/real-media/toolchain.txt"
           echo 'Historical 12-film IDs are unknown. These runs compare freshly regenerated baseline and after on the same recorded 12-film dataset, 8 chunks, 72 BPM, seed 1. Historical absolute 159-line denominator is not assumed identical.' > "$RUNNER_TEMP/real-media/comparison-scope.txt"
+      - name: Verify stage 3 integration before media preparation
+        id: stage3
+        timeout-minutes: 20
+        run: |
+          cd after
+          set -o pipefail
+          xcodebuild test CODE_SIGNING_ALLOWED=NO -scheme Liminal -destination 'platform=macOS,arch=arm64' -parallel-testing-enabled NO -derivedDataPath "$RUNNER_TEMP/real-media/dd-after" -only-testing:LiminalTests/FootageSalienceTests -only-testing:LiminalTests/DialogueRuntimeTests 2>&1 | tee "$RUNNER_TEMP/real-media/after-stage3-tests.log"
+      - name: Preserve stage 3 prerequisite diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-media-prerequisites-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/real-media/*.log
+            ${{ runner.temp }}/real-media/*.txt
+          retention-days: 14
       - name: Run serial real media verification
         run: after/scripts/verify-real-media.sh "$GITHUB_WORKSPACE/after" "$GITHUB_WORKSPACE/baseline" "$RUNNER_TEMP/real-media"
-      - name: Full after unit suite
-        if: ${{ !cancelled() }}
-        timeout-minutes: 60
-        run: |
-          cd after
-          set -o pipefail
-          xcodebuild test CODE_SIGNING_ALLOWED=NO -scheme Liminal -destination 'platform=macOS,arch=arm64' -parallel-testing-enabled NO -derivedDataPath "$RUNNER_TEMP/real-media/dd-after" -only-testing:LiminalTests 2>&1 | tee "$RUNNER_TEMP/real-media/full-tests.log"
-      - name: Build visionOS Simulator
-        if: ${{ !cancelled() }}
-        timeout-minutes: 30
-        run: |
-          cd after
-          set -o pipefail
-          xcodebuild CODE_SIGNING_ALLOWED=NO -scheme Liminal -destination 'generic/platform=visionOS Simulator' -derivedDataPath "$RUNNER_TEMP/real-media/dd-vision" build 2>&1 | tee "$RUNNER_TEMP/real-media/vision-build.log"
       - name: Preserve media evidence
         if: always()
         uses: actions/upload-artifact@v4

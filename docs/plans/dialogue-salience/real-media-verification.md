@@ -36,7 +36,10 @@ source playback rates; sources without features do not mark a span scanned.
 The workflow preserves the probe reports and raw snippets, strict reference/fast/same/transcribe mix
 reports, rendered m4a snippet auditions when the corresponding real initialism/syllable hits exist,
 and a 200-second automated app launch with offline video, a fresh image pool and deterministic seeds.
-Focused stage 3 tests, the full unit suite and visionOS Simulator build follow on the same runner.
+Focused stage 3 tests run before media preparation. Full-suite and visionOS verification remain
+in the dedicated Apple workflow; a media prerequisite failure exports diagnostics immediately
+and does not launch unrelated expensive suites. The historical baseline is checked out by its
+full commit ID, because actions/checkout treats a short SHA as a remote ref rather than fetching it.
 Missing authentic audition types fail explicitly instead of substituting unrelated audio.
 
 Private AJ Hall recordings are never fetched or fabricated. Documented preparation requires copying

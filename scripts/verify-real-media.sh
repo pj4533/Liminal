@@ -17,15 +17,14 @@ run_step() {
     local result=$?
     printf '%s\t%s\n' "$name" "$result" >> "$STATUS"
     cat "$OUT/$name.log"
-    return 0
+    return "$result"
 }
-# Compile and exercise the review fixes before expensive network preparation.
-cd "$AFTER" || exit 2
-run_step after-stage3-tests xcodebuild test CODE_SIGNING_ALLOWED=NO -scheme Liminal -destination 'platform=macOS,arch=arm64' -parallel-testing-enabled NO -derivedDataPath "$OUT/dd-after" -only-testing:LiminalTests/FootageSalienceTests -only-testing:LiminalTests/DialogueRuntimeTests
-run_step prepare-media python3 "$AFTER/scripts/prepare-verification-media.py" --cache "$CACHE" --provenance "$OUT/provenance" --count 12
+# The workflow has already compiled and tested stage 3. Stop at preparation/build failures;
+# collect their diagnostics instead of launching dependent captures or unrelated full suites.
+run_step prepare-media python3 "$AFTER/scripts/prepare-verification-media.py" --cache "$CACHE" --provenance "$OUT/provenance" --count 12 || exit $?
 # Explicit model provisioning is a separate executable. Neither the application nor probe downloads.
-run_step compile-provisioner xcrun swiftc -parse-as-library "$AFTER/scripts/provision-verification-speech.swift" -o "$OUT/provision-speech"
-run_step provision-speech python3 -c 'import subprocess,sys; subprocess.run([sys.argv[1]], check=True, timeout=600)' "$OUT/provision-speech"
+run_step compile-provisioner xcrun swiftc -parse-as-library "$AFTER/scripts/provision-verification-speech.swift" -o "$OUT/provision-speech" || exit $?
+run_step provision-speech python3 -c 'import subprocess,sys; subprocess.run([sys.argv[1]], check=True, timeout=600)' "$OUT/provision-speech" || exit $?
 # Record missing private prerequisites explicitly; the public/bundled matrix is a distinct run.
 python3 - "$AFTER" "$BASELINE" "$OUT" <<'PY'
 import json, pathlib, sys
@@ -38,7 +37,7 @@ for checkout in sys.argv[1:3]:
                        drumFiles=sorted(p.name for p in drums.glob('*') if p.is_file()), beatGridExists=grid.is_file()))
 pathlib.Path(sys.argv[3], 'private-prerequisites.json').write_text(json.dumps(checks, indent=2))
 PY
-# Only verification harnesses are copied, never after-production code into the baseline.
+# Copy the matrix harness; the separately documented baseline compiler adapter follows.
 cp "$AFTER/scripts/mix-matrix.sh" "$BASELINE/scripts/mix-matrix.sh"
 # The historical stage-1 source predates a compiler-only qualification already in after.
 # Preserve the exact adapter diff rather than pretending the baseline builds unmodified.
@@ -58,8 +57,8 @@ for label in baseline after; do
     export DD="$OUT/dd-$label"
     cd "$TREE" || exit 2
     git rev-parse HEAD > "$OUT/$label-commit.txt"
-    run_step "$label-build" xcodebuild build-for-testing CODE_SIGNING_ALLOWED=NO -scheme Liminal -destination 'platform=macOS,arch=arm64' -derivedDataPath "$DD"
-    run_step "$label-probe" env BUILD=0 DD="$DD" scripts/dialogue-salience-probe.sh "$OUT/$label-probe" 8 72
+    run_step "$label-build" xcodebuild build-for-testing CODE_SIGNING_ALLOWED=NO -scheme Liminal -destination 'platform=macOS,arch=arm64' -derivedDataPath "$DD" || exit $?
+    run_step "$label-probe" env BUILD=0 DD="$DD" scripts/dialogue-salience-probe.sh "$OUT/$label-probe" 8 72 || exit $?
     comparison=()
     if [ "$label" = after ]; then comparison=(--baseline "$OUT/baseline-public-matrix"); fi
     run_step "$label-public-matrix" env DD="$DD" scripts/mix-matrix.sh --out "$OUT/$label-public-matrix" --cases ref,fast,same,transcribe --bundled-drums --strict "${comparison[@]}"
