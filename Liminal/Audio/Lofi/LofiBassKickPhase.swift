@@ -1,4 +1,5 @@
 import Accelerate
+import AVFoundation
 import Foundation
 
 /// A recorded kick paired with the start of one bass note, both on the take's frame clock.
