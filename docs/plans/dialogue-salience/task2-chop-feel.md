@@ -139,3 +139,15 @@ replaces one whole word in its bar rather than increasing the sparse section's d
 shared nonstructural fill can take a filtered colour in both hook passes; its skeleton, source
 order and spelling are preserved. The next diagnosis run records every outlying attack and
 any missing backbeat's complete arrangement/events to expose remaining source failures.
+
+The final regression pass reserves complete spelling fill sites after ordinary fill selection: the
+old requirement for three existing adjacent slots could never coexist with the groove's run limit.
+Arrangements now use the measured rendered accents when calculating whole-word clearance. The
+random-input safety test retains its protected-anchor requirement and checks bounded shared linked
+rates and exact pad durations for motif banks; the grammar fallback still requires a native anchor.
+These changes are awaiting Apple execution; no acceptance threshold was changed.
+
+Raw fixture evidence at `56fc6f5` also shows the same hook pickup playing in only one pass, with the
+following call disappearing in that pass. Pickup clearance now checks output-time intervals on
+both sides, includes the preceding cell, and requires space in both repetitions. It cannot trade
+a hook word for an optional reverse; sparse breakdown replacements still trade exactly one word.

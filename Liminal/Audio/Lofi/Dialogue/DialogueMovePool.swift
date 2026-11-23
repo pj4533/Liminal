@@ -186,11 +186,37 @@ nonisolated enum DialogueMovePool {
                     $0.slot / 16 == slot / 16 && !fragments[$0.fragment].isUnit
                 }) { continue }
                 if cell.items.contains(where: { $0.slot == slot && $0.after == nil && $0.follow == nil }) { continue }
-                let clear = !cell.items.contains { item in
-                    let end = item.slot + Int(ceil(Double(fragments[item.fragment].frames.count) / sampleRate / step))
-                    return item.slot < slot && end > slot - lead
+                // A reverse begins before its accent. Check both neighbours in output time,
+                // including the preceding cell, and require the same room in both hook passes.
+                // Merely checking preceding local slots let a pickup steal the next call in pass
+                // one while the previous response blocked that pickup in pass two.
+                func clear(_ index: Int) -> Bool {
+                    let candidate = result[index]
+                    let accent = Double(candidate.bar * 16 + slot) * step
+                    let start = accent - length - DialogueMotifTuning.reversedLeadSeconds
+                    let end = accent - DialogueMotifTuning.reversedLeadSeconds
+                    let replacement = candidate.kind == .breakdown ? candidate.items.first {
+                        $0.slot / 16 == slot / 16 && !fragments[$0.fragment].isUnit
+                    } : nil
+                    for neighbour in result[max(0, index - 1)...min(result.count - 1, index + 1)] {
+                        for item in neighbour.items where item.after == nil && item.follow == nil {
+                            if neighbour.bar == candidate.bar, item == replacement { continue }
+                            let fragment = fragments[item.fragment]
+                            let offset = Double(fragment.accentFrame - fragment.frames.lowerBound) / sampleRate
+                            let otherStart = Double(neighbour.bar * 16 + item.slot) * step - offset
+                            let otherEnd = otherStart + Double(fragment.frames.count) / sampleRate
+                            if start < otherEnd + DialogueTuning.dryGapSeconds && end + DialogueTuning.dryGapSeconds > otherStart {
+                                return false
+                            }
+                        }
+                    }
+                    return true
                 }
-                if clear { candidates.append((index, slot)) }
+                guard clear(index) else { continue }
+                if cell.kind == .chopBeat,
+                   let repeatIndex = result.firstIndex(where: { $0.kind == .chopBeat && $0.bar == 4 }),
+                   !clear(repeatIndex) { continue }
+                candidates.append((index, slot))
             }
         }
         for _ in 0..<targetCount where !candidates.isEmpty {

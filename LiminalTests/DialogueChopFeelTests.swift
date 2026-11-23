@@ -99,6 +99,42 @@ struct DialogueChopFeelTests {
         }
     }
 
+    @Test func reversePickupsLeaveBothPassesAndTheFollowingConsonantClear() {
+        typealias Item = DialogueMotifCell.Item
+        func fragment(_ id: Int, length: Int, offset: Int = 0) -> DialogueMotifFragment {
+            DialogueMotifFragment(id: id, kind: id == 0 ? .line : .piece, order: id, parent: nil,
+                frames: 0..<length, accentFrame: offset, fadeIn: 0, fadeOut: 0, text: nil)
+        }
+        // The next call's consonant precedes its accent. The response at the end of pass one
+        // also extends into pass two's potential pickup; neither may be stolen by a reverse.
+        let fragments = [fragment(0, length: 100), fragment(1, length: 450),
+                         fragment(2, length: 900, offset: 500), fragment(3, length: 1600)]
+        let shared = [Item(fragment: 2, slot: 6, fixed: true, skeleton: true),
+                      Item(fragment: 1, slot: 12, fixed: true, skeleton: true),
+                      Item(fragment: 3, slot: 28, fixed: true, skeleton: true)]
+        let cells = [DialogueMotifCell(kind: .chopBeat, bar: 2, bars: 2, variant: 0, items: shared),
+                     DialogueMotifCell(kind: .chopBeat, bar: 4, bars: 2, variant: 0, items: shared)]
+        for seed: UInt64 in 1...40 {
+            let result = DialogueMovePool.arrange(cells, fragments: fragments, signature: 1,
+                sampleRate: 1000, beatDuration: 0.8, seed: seed, avoiding: [])
+            let pickups = result.flatMap { cell in cell.items.filter { $0.effect == .reversed }.map { (cell.bar, $0.slot) } }
+            #expect(!pickups.contains { $0.1 == 4 }, "pickup would overlap the next consonant")
+            #expect(result[0].items == result[1].items, "both hook passes must retain the same pickup")
+            for (bar, slot) in pickups {
+                let start = Double(bar * 16 + slot) * 0.2 - 0.45 - DialogueMotifTuning.reversedLeadSeconds
+                let end = start + 0.45
+                for cell in cells {
+                    for item in cell.items {
+                        let f = fragments[item.fragment]
+                        let otherStart = Double(cell.bar * 16 + item.slot) * 0.2 - Double(f.accentFrame) / 1000
+                        let otherEnd = otherStart + Double(f.frames.count) / 1000
+                        #expect(end + DialogueTuning.dryGapSeconds <= otherStart || start >= otherEnd + DialogueTuning.dryGapSeconds)
+                    }
+                }
+            }
+        }
+    }
+
     @Test func movePoolPreservesCompleteSpellingFiguresAndDynamicChains() throws {
         func fragment(_ id: Int, _ kind: DialogueMotifFragment.Kind, parent: Int? = nil) -> DialogueMotifFragment {
             DialogueMotifFragment(id: id, kind: kind, order: parent ?? id, parent: parent,
