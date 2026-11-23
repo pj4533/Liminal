@@ -69,7 +69,15 @@ enum DialogueHookMetrics {
             m.focalConsistency = Double(modal) / Double(focal.value.count)
         }
         m.distinctRhythms = Set(bars.map { $0.map(\.step) }).count
-        m.fragmentsPer4 = (0..<4).map { g in Double(Set((0..<4).flatMap { bars[4 * g + $0].map(\.fragment) }).count) }.reduce(0, +) / 4
+        var fragmentTotal = 0
+        for group in 0..<4 {
+            var fragments = Set<Int>()
+            for bar in (group * 4)..<(group * 4 + 4) {
+                for hit in bars[bar] { fragments.insert(hit.fragment) }
+            }
+            fragmentTotal += fragments.count
+        }
+        m.fragmentsPer4 = Double(fragmentTotal) / 4
         m.distinctSteps = Set(all.map(\.step)).count
         return m
     }
