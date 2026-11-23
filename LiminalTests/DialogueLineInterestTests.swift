@@ -89,6 +89,47 @@ struct DialogueLineInterestTests {
         #expect(DialogueLineInterest.lexiconWeight("hallucinations") == 1 && DialogueLineInterest.lexiconWeight("dreaming") >= 0.9)
     }
 
+    /// D130 stage 2 (user direction of 22 November 2026: the "psilocybin" / "DMT" chop): initialisms in
+    /// any written form, the drug words, years and large counts are salient; connectives weigh nothing.
+    @Test func initialismsDrugWordsAndNumbersAreSalient() {
+        for text in ["DMT", "LSD", "U.F.O.", "FBI"] {
+            let x = DialogueLineInterest.wordSalience(text)[0]
+            #expect(x.weight >= 0.9 && x.kind == .initialism, "\(text): \(x)")
+        }
+        #expect(DialogueLineInterest.wordSalience("U.F.O.")[0].letters == "UFO")
+        #expect(DialogueLineInterest.wordSalience("they took dmt")[2].weight >= 0.9, "a lower-case acronym")
+        let spelled = DialogueLineInterest.wordSalience("a dose of D M T.")
+        #expect(spelled[3...].allSatisfy { $0.weight >= 0.9 && $0.kind == .initialism && $0.letters?.count == 1 }, "\(spelled)")
+        #expect(spelled[0].weight == 0)
+        // "I" and "A" alone, and capitalised short words, are no initialisms.
+        #expect(DialogueLineInterest.wordSalience("I saw A man")[0].kind != .initialism)
+        #expect(DialogueLineInterest.wordSalience("OK then")[0].kind != .initialism)
+        for word in ["psilocybin", "mescaline", "ayahuasca", "lysergic", "cannabis"] {
+            #expect(DialogueLineInterest.wordWeights(word)[0] == 1, "\(word)")
+        }
+        #expect(DialogueLineInterest.wordWeights("in 1967")[1] >= 0.6)
+        #expect((DialogueLineInterest.wordWeights("ten thousand").max() ?? 0) >= 0.6)
+        #expect(DialogueLineInterest.wordWeights("and the") == [0, 0])
+        #expect(DialogueLineInterest.wordSalience("psilocybin")[0].syllables == 4)
+        #expect(DialogueLineInterest.lexiconVersion >= 2)
+    }
+
+    /// A striking line outranks a plain one at equal sound, by tier and by value (D130 stage 2: in the
+    /// Leary window "It took us a year and a half of paperwork." led over "Drug research, that type.").
+    @Test func aStrikingLineOutranksAPlainOneAtEqualSound() {
+        let drug = DialogueLineInterest.interest("Drug research, that type.")
+        let paperwork = DialogueLineInterest.interest("It took us a year and a half of paperwork.")
+        #expect(drug >= DialogueMotifTuning.strikingInterest && drug >= paperwork + 0.15, "drug \(drug) paperwork \(paperwork)")
+        #expect(DialogueMotif.tier(drug) > DialogueMotif.tier(paperwork) || drug > paperwork)
+        for sound: Float in [0.2, 0.5, 0.9] {
+            #expect(DialogueMotif.lineValue(sound: sound, base: 1, interest: drug, choppability: 2)
+                    > DialogueMotif.lineValue(sound: sound, base: 1, interest: paperwork, choppability: 4))
+        }
+        // Interest outweighs sound inside a tier: twice the sound does not make up 0.3 of interest.
+        #expect(DialogueMotif.lineValue(sound: 0.3, base: 1, interest: 0.95, choppability: 0)
+                > DialogueMotif.lineValue(sound: 0.6, base: 1, interest: 0.65, choppability: 0))
+    }
+
     @Test func discourseMarkersAreNotNames() {
         for line in ["Yes, they do look on them as qualified observers.", "Well, I guess those questions were kind of",
                      "Thus, rigidity the marks of death.", "Hello, Doctor?", "Later, a new crop will be formed."] {

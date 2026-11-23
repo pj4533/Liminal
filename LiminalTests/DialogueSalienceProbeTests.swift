@@ -464,7 +464,7 @@ struct DialogueSalienceProbeTests {
                                    let ms = Self.bandOnsetMs(chop) {
                                     hit["onsetMs"] = Self.r3(ms)
                                 }
-                                if let parent = fr.parent { hit["parentText"] = motif.fragments[parent].text ?? "" }
+                                if let parent = fr.parent { hit["parentText"] = motif.fragments[parent].text ?? ""; hit["parent"] = parent }
                                 let sEdge = startEdge(accepted), eEdge = endEdge(accepted)
                                 if let sEdge { hit["startIn"] = sEdge }
                                 if let eEdge { hit["endIn"] = eEdge }

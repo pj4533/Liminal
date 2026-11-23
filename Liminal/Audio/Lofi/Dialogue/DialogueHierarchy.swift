@@ -118,8 +118,71 @@ nonisolated enum DialogueHierarchy {
                 builder.addWordGroup(parent: phrase, words: words, tokens: clause, spans: spans)
             }
         }
+        addSalientLines(&builder, words: words, spans: spans, analysis: analysis)
         builder.linkNeighbours()
         return Refinement(units: builder.units, words: words, rejections: builder.rejections, dropped: dropped)
+    }
+
+    /// Salient words become candidate lines (D130 stage 2). A word of weight `salientLineWeight` or more
+    /// that no playable line holds (its line was a protected cut, too long, too short or never a unit:
+    /// 101 of 159 salient words on the cached films) gets a word-aligned group of its clause: 2 to
+    /// `salientLineWords` words around it, at most `salientLineSeconds`, widened over any protected span
+    /// it would cut. A one-word clause that spells ("LSD.", "psilocybin") may stand alone.
+    private static let negations = DialogueReorderGuard.negations
+
+    private static func addSalientLines(_ builder: inout Builder, words: [DialogueWordSpan], spans: [Range<Int>],
+                                        analysis: DialogueAnalysis) {
+        let salience = DialogueLineInterest.wordSalience(words)
+        let rate = analysis.sampleRate
+        let limit = DialogueTuning.salientLineSeconds
+        func seconds(_ t: Range<Int>) -> Double { Double(words[t.upperBound - 1].frames.upperBound - words[t.lowerBound].frames.lowerBound) / rate }
+        let protected = DialogueReorderGuard.protectedSpans(words)
+        let clauses = DialogueReorderGuard.clauses(words, analysis: analysis)
+        var added = Set<Range<Int>>()
+        for k in words.indices where salience[k].weight >= DialogueTuning.salientLineWeight {
+            let mid = (words[k].frames.lowerBound + words[k].frames.upperBound) / 2
+            let rejected = Set(builder.rejections.map(\.unit))
+            let held = builder.units.contains { u in
+                [.utterance, .phrase, .wordGroup].contains(u.level) && !rejected.contains(u.id) && u.frames.contains(mid)
+                    && u.score.sound >= DialogueTuning.minimumPadSound && u.seconds(rate) <= DialogueMotifTuning.lineSeconds.upperBound
+                    && u.seconds(rate) >= DialogueMotifTuning.relaxedLineSeconds.lowerBound && u.nuclei >= DialogueMotifTuning.lineMinimumNuclei
+            }
+            guard !held, let clause = clauses.first(where: { $0.contains(k) }) else { continue }
+            // Up to `salientLineWords` words, the salient word last when the clause allows it (the stress
+            // falls late: "a large dose of LSD"), then the following words.
+            var lo = max(clause.lowerBound, k - (DialogueTuning.salientLineWords - 1)), hi = k + 1
+            while hi < clause.upperBound, hi - lo < DialogueTuning.salientLineWords, seconds(lo..<(hi + 1)) <= limit { hi += 1 }
+            while lo < k, seconds(lo..<hi) > limit { lo += 1 }
+            while hi > k + 1, seconds(lo..<hi) > limit { hi -= 1 }
+            // Never cut a protected span ("the Food and Drug Administration"): widen over it, within the limits.
+            for p in protected where p.overlaps(lo..<hi) && (p.lowerBound < lo || p.upperBound > hi) {
+                let w = min(lo, p.lowerBound)..<max(hi, p.upperBound)
+                if seconds(w) <= limit, w.count <= DialogueTuning.salientLineWords + 2 { lo = w.lowerBound; hi = w.upperBound }
+            }
+            var tokens = lo..<hi
+            if tokens.count == 1 {
+                let x = salience[k]
+                // It spells when its nuclei match: one per letter, or two or more syllables.
+                let nuclei = builder.f.nuclei.filter { words[k].frames.contains($0.peakFrame) }.count
+                let spells = x.kind == .initialism ? (x.letters?.count ?? 0) >= 2 && nuclei == x.letters!.count
+                    : x.syllables >= 2 && nuclei >= 2
+                if !spells {
+                    // A one-syllable word takes its neighbour in the clause ("the trip").
+                    if k + 1 < clause.upperBound { tokens = k..<(k + 2) } else if k > clause.lowerBound { tokens = (k - 1)..<(k + 1) } else { continue }
+                }
+            }
+            guard seconds(tokens) <= limit, added.insert(tokens).inserted else { continue }
+            guard let id = builder.addAligned(.wordGroup, parent: nil, words: words, tokens: tokens, spans: spans, salient: true) else { continue }
+            // Its edges are word boundaries, so a protected span it cuts ("about UFO." out of a name's
+            // clause, "the mind" of "Then, the mind explodes.") only starts or ends it mid-phrase; that
+            // stays a rejection only when the span holds a negation, whose meaning a cut would change.
+            if builder.rejection(id) == .protectedCut {
+                let cut = protected.filter { $0.overlaps(tokens) && ($0.lowerBound < tokens.lowerBound || $0.upperBound > tokens.upperBound) }
+                let negated = cut.contains { span in span.contains { negations.contains(DialogueLineInterest.normalize(words[$0].text))
+                    || DialogueLineInterest.normalize(words[$0].text).hasSuffix("n't") } }
+                if !negated { builder.rejections.removeAll { $0.unit == id } }
+            }
+        }
     }
 
     /// Maps words through the source clock, snaps edges to energy minima and applies the
@@ -545,7 +608,7 @@ nonisolated enum DialogueHierarchy {
         /// start and the last word's end, never past the neighbouring words. Nil when nothing is left.
         @discardableResult
         mutating func addAligned(_ level: SpeechUnit.Level, parent: Int?, words: [DialogueWordSpan], tokens: Range<Int>,
-                                 spans: [Range<Int>]) -> Int? {
+                                 spans: [Range<Int>], salient: Bool = false) -> Int? {
             guard !tokens.isEmpty, tokens.lowerBound >= 0, tokens.upperBound <= words.count else { return nil }
             let first = words[tokens.lowerBound].frames.lowerBound, last = words[tokens.upperBound - 1].frames.upperBound
             let lower = tokens.lowerBound > 0 ? min(first, words[tokens.lowerBound - 1].frames.upperBound) : 0
@@ -556,6 +619,13 @@ nonisolated enum DialogueHierarchy {
             let end = refineEnd(core: last, lower: max(start.frame + 1, last - 1), upper: upper, peak: peak)
             guard end.frame > start.frame + 1 else { return nil }
             let id = add(level, parent: parent, core: core, start: start, end: end, inherited: nil)
+            // A salient word's group sits on whole words, so its edges are word boundaries even where the
+            // envelope dips little (co-articulated speech): an uncertain-boundary rejection does not apply.
+            if salient, rejection(id) == .uncertainBoundaries { rejections.removeAll { $0.unit == id } }
+            // A short salient line ("LSD.") is not too short for a line.
+            if salient, rejection(id) == .tooShort, Double(units[id].frames.count) / rate >= DialogueMotifTuning.shortLineSeconds.lowerBound {
+                rejections.removeAll { $0.unit == id }
+            }
             var unit = units[id]
             unit.text = words[tokens].map(\.text).joined(separator: " ")
             unit.tokenRange = tokens

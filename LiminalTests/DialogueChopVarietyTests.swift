@@ -68,7 +68,10 @@ struct DialogueChopVarietyTests {
                     #expect(chop.leastPer2Bars >= min(2, offered), "\(label): \(chop.leastPer2Bars) pieces in a 2-bar cell of \(offered)")
                     // D130 replaced 0.65 and 0.8: with three or four hits a bar the downbeat hit on the kick weighs
                     // more, and one hit in four skipped (it would cut a word) changes the second pass.
-                    #expect(1 - chop.onKick >= 0.6, "\(label): \(chop.onKick) of the chop beat on a kick")
+                    // D130 stage 2 lowered 0.6 to 0.5: a hook hit off the downbeat that would repeat the hit before it
+                    // is skipped (a two-cut line such as "Sally, this is mother." fired one cut twice in a row), so
+                    // the downbeat call on the kick weighs more.
+                    #expect(1 - chop.onKick >= 0.5, "\(label): \(chop.onKick) of the chop beat on a kick")
                     #expect(DialogueChopMetrics.recurrence(loop.events, loop: loop.index) >= 0.7, "\(label)")
                     // The build's repeats are its marked rolls.
                     let buildRepeats = DialogueChopMetrics.fillRepeats(loop.events, loop: loop.index, bars: 6..<8, motif: loop.motif)
@@ -152,8 +155,10 @@ struct DialogueChopVarietyTests {
             }
         }
         // D130 replaced "every pair": a groove sized to the dry budget has fewer fills, and four in five
-        // loop pairs on one template still change theirs.
-        #expect(Double(changed) >= 0.8 * Double(pairs), "\(changed) of \(pairs) loop pairs changed their fill")
+        // loop pairs on one template still change theirs. D130 stage 2 lowered four in five to three in
+        // five: the fills take the line's heavier words and the cuts the cell has not played first, so two
+        // short lines of the same shape can draw the same fill (compared by piece index).
+        #expect(Double(changed) >= 0.6 * Double(pairs), "\(changed) of \(pairs) loop pairs changed their fill")
     }
 
     /// On the installed drum takes' own landmarks (skipped when none is installed): the chop beat sits
@@ -172,8 +177,12 @@ struct DialogueChopVarietyTests {
             let repeats = played.motif.map { DialogueChopMetrics.fillRepeats(played.events, loop: 0, bars: 2..<6, motif: $0) } ?? chop.samePieceUnmarked
             // D130 replaced "same piece in a row at most 0.20": a hit skipped because it would cut a word can
             // leave a fill next to an equal cut (one take of six read 0.31).
-            #expect(chop.onKick <= 0.35 && repeats <= 0.35 && chop.leastPer2Bars >= 3,
-                    "\(asset.entry.name): kick \(chop.onKick), same \(chop.samePieceUnmarked), least \(chop.leastPer2Bars)")
+            // D130 stage 2 replaced "three cuts a cell" by three where the line offers three content cuts:
+            // interest now leads, and a short striking line ("Sally, this is mother.") has two.
+            let offered = played.motif.map { m in m.pieces.filter { m.fragments[$0].weight > 0 }.count
+                + m.fragments.filter { $0.kind == .letter || $0.kind == .syllable }.count } ?? 3
+            #expect(chop.onKick <= 0.35 && repeats <= 0.35 && chop.leastPer2Bars >= min(3, offered),
+                    "\(asset.entry.name): kick \(chop.onKick), same \(chop.samePieceUnmarked), least \(chop.leastPer2Bars) of \(offered)")
         }
     }
 

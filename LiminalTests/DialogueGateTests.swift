@@ -31,7 +31,9 @@ struct DialogueGateTests {
         }
         // Most hits are held for a gate now (or end naturally inside it); most last two steps or less.
         #expect(gated > hits / 2, "\(gated) gated of \(hits)")
-        #expect(Double(short) >= 0.6 * Double(hits), "\(short) of \(hits) at two steps or less")
+        // D130 stage 2 lowered 0.6 to 0.5: a gate that would close before the hit's first content word is
+        // whole ("can" of "can breathe.") plays on to that word's end.
+        #expect(Double(short) >= 0.5 * Double(hits), "\(short) of \(hits) at two steps or less")
     }
 
     @Test func hitsNeverOverlapAndTheLineIsNeverGated() throws {
@@ -74,7 +76,8 @@ struct DialogueGateTests {
                 byPad[chop.event.padID, default: []].append(chop)
             }
         }
-        #expect(checked > 4)
+        // D130 stage 2 lowered "more than 4": fewer hits are gated short of their word on this fixture.
+        #expect(checked > 2)
         // Two gates of one pad play the same samples up to the shorter one's release.
         var compared = 0
         for chops in byPad.values {

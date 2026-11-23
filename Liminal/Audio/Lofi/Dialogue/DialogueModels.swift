@@ -88,6 +88,11 @@ nonisolated enum DialogueTuning {
     static let protectedCutToleranceSeconds = 0.030
     /// A transcribed line whose edge sits more than this inside a word core is re-added on whole words (D130).
     static let lineWordEdgeSeconds = 0.030
+    /// A word this salient that no playable line holds gets a word-aligned line of its clause (D130 stage 2):
+    /// at most this many words and seconds (the word-group limit).
+    static let salientLineWeight: Float = 0.85
+    static let salientLineWords = 6
+    static let salientLineSeconds = 3.0
 
     // MARK: Ranking and bank (plan 4.4, 4.5)
     static let rhythmicFitPool = 6

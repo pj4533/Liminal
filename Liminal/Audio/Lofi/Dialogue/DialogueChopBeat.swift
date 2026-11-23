@@ -69,6 +69,12 @@ nonisolated extension DialogueMotif {
     struct GrooveVocabulary {
         let s: Int, r: Int, t: Int, sa: Int, sb: Int, ra: Int, rb: Int
         let others: [Int]
+        /// Every cut's weight and kind, and whether the line has a content cut (D130 stage 2).
+        let weights: [Float]
+        let kinds: [DialogueMotifFragment.Kind]
+        let content: Bool
+        /// The signature's letters or syllables in source order, when it spells.
+        let spellUnits: [Int]?
 
         init(s: Int, r: Int, t: Int, sa: Int, ra: Int, pieces: [Int], halves: [Int: [Int]], fragments: [DialogueMotifFragment]? = nil) {
             self.s = s; self.r = r; self.t = t; self.sa = sa; self.ra = ra
@@ -82,7 +88,25 @@ nonisolated extension DialogueMotif {
                 rest = rest.filter { fragments[$0].weight > 0 }
             }
             var seen = Set<Int>([s, r, t, sa, sb, ra, rb])
-            others = rest.filter { seen.insert($0).inserted }
+            // D130 stage 2: the signature's and response's other spell units (a third letter, the last
+            // syllables) join the vocabulary, heaviest words first.
+            rest += [s, r].flatMap { halves[$0] ?? [] }
+            let weights = fragments?.map(\.weight) ?? []
+            if let fragments, let units = halves[s], units.count >= 2,
+               units.allSatisfy({ fragments[$0].kind == .letter || fragments[$0].kind == .syllable }) {
+                spellUnits = units
+            } else {
+                spellUnits = nil
+            }
+            self.weights = weights
+            kinds = fragments?.map(\.kind) ?? []
+            content = fragments.map { f in [s, r, t].contains { f[$0].weight > 0 } || rest.contains { f[$0].weight > 0 } } ?? false
+            let order = rest.enumerated().sorted { a, b in
+                let wa = weights.indices.contains(a.element) ? weights[a.element] : 0
+                let wb = weights.indices.contains(b.element) ? weights[b.element] : 0
+                return (wa, -a.offset) > (wb, -b.offset)
+            }.map(\.element)
+            others = order.filter { seen.insert($0).inserted }
         }
 
         /// The cuts a site prefers, most fitting first (duplicates removed).
@@ -95,11 +119,24 @@ nonisolated extension DialogueMotif {
             case .gap: list = [sa, sb, t, ra, rb] + others
             case .answer: list = [ra, rb, t, r, sb] + others
             case .ghost, .push: list = ([sb, rb, sa, ra] + others).sorted { (seconds($0), $0) < (seconds($1), $1) }
-            case .kick: list = [sa, s, sb]
+            case .kick: list = [sa, s, sb] + others.filter { fragments[$0].isUnit }
             case .snare: list = [ra, rb, sa, sb] + others
             }
+            // D130 stage 2: the heavier word first at every site but the ghost and push (by length), the
+            // role order breaking ties, so the stabs say the line's recognisable words.
+            let ranked = site == .ghost || site == .push ? list
+                : list.enumerated().sorted { a, b in
+                    let wa = weights.indices.contains(a.element) ? weights[a.element] : 0
+                    let wb = weights.indices.contains(b.element) ? weights[b.element] : 0
+                    return (wa, -a.offset) > (wb, -b.offset)
+                }.map(\.element)
             var seen = Set<Int>()
-            return list.filter { seen.insert($0).inserted }
+            // D130 stage 2: never a weight-0 cut while the line has a content one (weight-0 pieces sound
+            // only in the whole line and the outro's in-order walk).
+            // Spell units (letters, syllables) are no stand-alone fill: they sound in source order only (the
+            // fill's spell run into the signature, the build and the outro's tag).
+            func spellUnit(_ f: Int) -> Bool { kinds.indices.contains(f) && (kinds[f] == .letter || kinds[f] == .syllable) }
+            return ranked.filter { !spellUnit($0) && seen.insert($0).inserted && (!content || (weights.indices.contains($0) && weights[$0] > 0)) }
         }
     }
 
@@ -290,11 +327,22 @@ nonisolated extension DialogueMotif {
             var list = v.preferred(site, fragments: fragments, sampleRate: sampleRate)
             // A seeded start in the list for each kind of site, advancing as it is used, so two gaps
             // in a bar do not take the same cut.
-            let start = (rotation[site] ?? rng.int(0...max(0, min(1, list.count - 1)))) % max(1, list.count)
+            // D130 stage 2: among the first three (the list is weight-ordered now, so two left the fill alike).
+            let start = (rotation[site] ?? rng.int(0...max(0, min(2, list.count - 1)))) % max(1, list.count)
             list = Array(list[start...] + list[..<start])
             let pool = list + v.preferred(.gap, fragments: fragments, sampleRate: sampleRate)
-            let pick = pool.first { $0 != prev && $0 != next && orderOK(step, $0) && fits($0, room) }
-                ?? pool.first { $0 != prev && orderOK(step, $0) && fits($0, room) }
+            // Units of one word sound in source order next to each other ("D" never right before "M"'s "L").
+            func unitOrderOK(_ f: Int) -> Bool {
+                guard fragments[f].kind == .letter || fragments[f].kind == .syllable, let parent = fragments[f].parent else { return true }
+                if prev >= 0, fragments[prev].parent == parent, fragments[prev].isUnit, prev >= f { return false }
+                if next >= 0, fragments[next].parent == parent, fragments[next].isUnit, next <= f { return false }
+                return true
+            }
+            // D130 stage 2: a cut the cell has not played yet first (three or more cuts a cell where the line
+            // offers them), and never the cut of either neighbour: a site with none is left out.
+            let used = Set(steps.filter { $0 != step && !dropped.contains($0) }.map { hits[$0]!.fragment })
+            func ok(_ f: Int) -> Bool { f != prev && f != next && orderOK(step, f) && fits(f, room) && unitOrderOK(f) }
+            let pick = pool.first { ok($0) && !used.contains($0) } ?? pool.first(where: ok)
             guard let pick else { dropped.insert(step); continue }
             rotation[site] = start + 1 + (list.firstIndex(of: pick) ?? 0)
             let gate: Int
@@ -305,6 +353,70 @@ nonisolated extension DialogueMotif {
             }
             hits[step]!.fragment = pick
             hits[step]!.gate = gate
+        }
+
+        // D130 stage 2: a spell run inside the fill. Before the cell's first signature hit, the fills that
+        // lead into it take the signature's letters or syllables in source order, so "D", "M" ascend into
+        // "DMT" (each unit whole in its room, the run kept in order like `orderOK`'s runs).
+        if let units = v.spellUnits, let target = steps.first(where: { hits[$0]!.skeleton && hits[$0]!.fragment == v.s && !dropped.contains($0) }) {
+            var run: [Int] = []
+            for k in steps.filter({ $0 < target && !dropped.contains($0) }).reversed() {
+                guard !hits[k]!.skeleton, run.count < units.count else { break }
+                run.insert(k, at: 0)
+            }
+            if run.count >= 2 {
+                let assigned = Array(units.prefix(run.count))
+                let ok = run.indices.allSatisfy { i in
+                    let room = (i + 1 < run.count ? run[i + 1] : target) - run[i]
+                    return fits(assigned[i], room)
+                }
+                let before = steps.last { $0 < run[0] && !dropped.contains($0) }
+                let clear = before.map { hits[$0]!.fragment != assigned[0] && fits(hits[$0]!.fragment, run[0] - $0) } ?? true
+                if ok, clear {
+                    for (i, k) in run.enumerated() { hits[k]!.fragment = assigned[i]; hits[k]!.gate = 1 }
+                }
+            }
+        }
+
+        // D130 stage 2: never one cut twice in a row, the cell's repeat included (whole words leave no room
+        // for a fill between two skeleton hits of one cut, and a two-piece line made its third its
+        // response): the later hit takes another content cut that fits its room (the last hit of the cell
+        // when the pair wraps into the repeat), else it is left out when its bar keeps another onset.
+        do {
+            var order = steps.filter { !dropped.contains($0) }
+            let pool = v.preferred(.gap, fragments: fragments, sampleRate: sampleRate) + [v.s, v.r, v.t]
+            var k = 0
+            while order.count >= 2, k < order.count {
+                let wrap = k == order.count - 1
+                let a = order[k], b = order[wrap ? 0 : k + 1]
+                guard hits[a]!.fragment == hits[b]!.fragment else { k += 1; continue }
+                // The hit that changes: the later one, or the cell's last one when the pair wraps; never a
+                // signature skeleton hit (the signature keeps its home steps, D125).
+                let later = wrap ? k : k + 1, earlier = wrap ? 0 : k
+                func home(_ i: Int) -> Bool { hits[order[i]]!.skeleton && hits[order[i]]!.fragment == v.s }
+                let x = home(later) && !home(earlier) && !(wrap && earlier == 0) ? earlier : later
+                let step = order[x]
+                let before = order[(x + order.count - 1) % order.count], after = order[(x + 1) % order.count]
+                let room = (after > step ? after : after + 32) - step
+                let avoid = [hits[before]!.fragment, hits[after]!.fragment]
+                func unitOK(_ f: Int) -> Bool {
+                    guard fragments[f].isUnit, let parent = fragments[f].parent else { return true }
+                    let b = hits[before]!.fragment, n = hits[after]!.fragment
+                    return !(fragments[b].isUnit && fragments[b].parent == parent && b >= f)
+                        && !(fragments[n].isUnit && fragments[n].parent == parent && n <= f)
+                }
+                if let alt = pool.first(where: { !avoid.contains($0) && fits($0, room) && orderOK(step, $0) && unitOK($0) }) {
+                    hits[step]!.fragment = alt
+                    if hits[step]!.gate == nil { hits[step]!.gate = 2 }
+                    k += 1
+                } else if !hits[step]!.skeleton, order.filter({ $0 / 16 == step / 16 }).count > 1 {
+                    dropped.insert(step)
+                    order.remove(at: x)
+                    k = max(0, x - 1)
+                } else {
+                    k += 1
+                }
+            }
         }
 
         for step in dropped { hits[step] = nil }

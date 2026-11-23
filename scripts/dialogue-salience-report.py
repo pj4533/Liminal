@@ -87,6 +87,10 @@ def classify(x):
     e = x.get("endIn") if "endIn" in x and aud_end(x) else None
     if not s and not e:
         return "clean", []
+    # D130 stage 2: a letter of an initialism is a clean cut (its edges are letter boundaries); a
+    # syllable of a salient word is a split by design; a half (no transcript) stays a half.
+    if x["kind"] == "letter":
+        return "clean", []
     if x["kind"] in SPLIT_KINDS:
         return x["kind"], []
     if x["stutter"]:
@@ -178,15 +182,51 @@ def variety(mode):
 
 
 def striking_passed_over(hits, windows):
-    best = {}
-    for w in windows:
-        best[(w["film"], w["chunk"])] = max([l["interest"] for l in w.get("ranked", [])] or [-1])
+    """Loops (T) whose window still offered a ranked line of interest >= 0.6 while the chosen line is at
+    least 0.15 lower. D130 stage 2: a ranked line that overlaps a line an earlier loop of the window
+    already led is not on offer (the ledger and the said-once rule block it), so it no longer counts;
+    before, every second loop of a window with one striking line counted as passed over."""
     loops = {}
     for x in hits:
         if x["mode"] == "T" and x["kind"] != "pad":
-            loops[(x["film"], x["chunk"], x["loop"])] = x["interest"]
-    n = sum(1 for (f, c, _), i in loops.items() if best.get((f, c), -1) >= 0.6 and i <= best[(f, c)] - 0.15)
-    return {"loops": len(loops), "passedOver": n}
+            loops[(x["film"], x["chunk"], x["loop"])] = (x["interest"], x.get("lineS"), x.get("lineE"))
+    ranked = {(w["film"], w["chunk"]): w.get("ranked", []) for w in windows}
+    n = n_any = 0
+    for (f, c, l), (i, s, e) in loops.items():
+        earlier = [(a, b) for (f2, c2, l2), (_, a, b) in loops.items() if (f2, c2) == (f, c) and l2 < l and a is not None]
+        def open_line(r):
+            return not any(min(r["e"], b) - max(r["s"], a) > 0.25 * min(r["e"] - r["s"], b - a) for a, b in earlier)
+        lines = ranked.get((f, c), [])
+        best_any = max([r["interest"] for r in lines] or [-1])
+        best = max([r["interest"] for r in lines if open_line(r)] or [-1])
+        n_any += best_any >= 0.6 and i <= best_any - 0.15
+        n += best >= 0.6 and i <= best - 0.15
+    return {"loops": len(loops), "passedOver": n, "passedOverIncludingPlayed": n_any}
+
+
+def spell_figures(hits):
+    """Loops (per mode) with a spell figure: two or more letters or syllables of one piece played in
+    source order on consecutive hits, then that piece whole."""
+    by_loop = collections.defaultdict(list)
+    for x in hits:
+        if x["kind"] != "pad":
+            by_loop[(x["mode"], x["film"], x["chunk"], x["loop"])].append(x)
+    out = collections.Counter()
+    for (mode, *_), xs in by_loop.items():
+        xs.sort(key=lambda x: (x["block"], x["slot"]))
+        found = False
+        for i in range(len(xs)):
+            run = []
+            j = i
+            while j < len(xs) and xs[j]["kind"] in ("letter", "syllable") and (not run or (
+                    xs[j].get("parent") == run[-1].get("parent") and xs[j]["frag"] > run[-1]["frag"])):
+                run.append(xs[j])
+                j += 1
+            if len(run) >= 2 and j < len(xs) and xs[j]["frag"] == run[0].get("parent"):
+                found = True
+                break
+        out[mode] += found
+    return dict(out)
 
 
 def norm(t):
@@ -224,6 +264,7 @@ def metrics(hits, windows):
             "salientWhole": round(salient_whole / n, 3),
             "salientCut": round(salient_cut / n, 3),
             "categories": {k: round(v / n, 3) for k, v in cats.items()},
+            "spellUnitShare": round(sum(x["kind"] in ("letter", "syllable") for x in h) / n, 3),
             "audiblePartial": round((cats["half"] + cats["accidental"] + cats["stutter"]) / n, 3),
             "accidentalMechanisms": dict(mechs.most_common()),
             "halfLetterSplits": sum(1 for x in h if x["kind"] == "half" and (x["ftext"].endswith("-") or x["ftext"].startswith("-"))),
@@ -261,6 +302,7 @@ def metrics(hits, windows):
     out["salientWords"] = {"inWindows": total, "inRankedLine": ranked, "inChosenLine": chosen,
                            "unrankedReasons": dict(reasons.most_common())}
     out["strikingPassedOver"] = striking_passed_over(hits, windows)
+    out["spellFigureLoops"] = spell_figures(hits)
     out["windows"] = len(windows)
     out["transcribed"] = sum(w["transcribed"] for w in windows)
     out["transcribeMs"] = [round(q) for q in statistics.quantiles([w["transcribeMs"] for w in windows if w["transcribed"]], n=10)] \

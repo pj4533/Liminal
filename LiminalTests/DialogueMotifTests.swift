@@ -181,9 +181,12 @@ struct DialogueMotifTests {
                 let chop = try #require(m.density["chopBeat"])
                 #expect((2.0...7.0).contains(chop), "\(detail)")
                 // D130 replaced "70 percent of gates at most two steps, a quarter at one, a sub-line median of
-                // two steps": a gate that would close inside a word plays to the word's end.
-                #expect(m.gateAtMost2 >= 0.5, "\(detail): gates <=2 \(m.gateAtMost2), <=1 \(m.gateAtMost1)")
-                #expect(m.medianSubLineSteps <= 3, "\(detail): sub-line median \(m.medianSubLineSteps) steps")
+                // two steps": a gate that would close inside a word plays to the word's end. D130 stage 2
+                // lowered 0.5 and 3 steps to 0.35 and 4.5: interest now leads, so the fixture's "she runs to the
+                // station every morning." (whole words of 0.7 to 0.9 s, 3.4 to 4.3 sixteenths at 72 BPM) leads
+                // loops, and a spell figure's whole statement holds to the next beat.
+                #expect(m.gateAtMost2 >= 0.35, "\(detail): gates <=2 \(m.gateAtMost2), <=1 \(m.gateAtMost1)")
+                #expect(m.medianSubLineSteps <= 4.5, "\(detail): sub-line median \(m.medianSubLineSteps) steps")
                 #expect(m.chopEighths >= 0.8, "\(detail): \(m.chopEighths) on 8ths")
                 // Bars 5-6 replay bars 3-4 but for their last beat.
                 let bars = DialogueHookMetrics.loopHits(loop.events, loop: index)
@@ -196,7 +199,11 @@ struct DialogueMotifTests {
                 // Build: at least as busy as the chop beat, with hits into the drop. D130 replaced "bar 8 busier
                 // than bar 7, six onsets in its last two beats": its 1/16 stabs of whole pieces cut words, so
                 // only cuts whole at one step (letters, syllables, short words) or marked rolls stay.
-                #expect(m.onsets[6] + m.onsets[7] >= max(3, 2 * Int(chop.rounded(.down)) - 2), "\(detail)")
+                // D130 stage 2 lowered this to an onset in each build bar: a signature that does not spell
+                // alternates whole pieces with rests in bar 8 instead of 1/16 stabs that cut it, and a line of
+                // long words ("she runs to the station every morning.", 0.7 to 0.9 s a piece at 72 BPM) fits
+                // one whole piece a bar.
+                #expect(m.onsets[6] >= 1 && m.onsets[7] >= 1, "\(detail)")
                 // Breakdown: a word or two a bar.
                 let breakdown = try #require(m.density["breakdown"])
                 // D130 replaced "at most 0.4 of the chop beat's density" (with 3 to 4 chop-beat onsets a bar).
@@ -258,7 +265,10 @@ struct DialogueMotifTests {
                 // The signature and its head (the chop beat's 1/16 stabs, D126 part 2) are played at least as
                 // often as any other piece.
                 let head = DialogueMotif.headHalf(hook.signature, fragments: motif.fragments, halves: motif.halves)
-                let group = Set([hook.signature, head])
+                // D130 stage 2: a piece as heavy as the signature ("dose" beside "of LSD.") counts with it, since
+                // the fills now take the heavier words first.
+                let weight = motif.fragments[hook.signature].weight
+                let group = Set([hook.signature, head] + motif.pieces.filter { motif.fragments[$0].weight >= weight })
                 let own = group.map { counts[$0] ?? 0 }.reduce(0, +)
                 // D130 replaced "at least as often as any other piece": a signature with no syllable or letter
                 // units no longer has 1/16 halves to count, and a fill next to a signature hit is never the
@@ -268,7 +278,10 @@ struct DialogueMotifTests {
                 let phrase = loop.snapshot.phraseAtOrigin
                 let steps = loop.events.filter { $0.piece == hook.signature }.map { ((($0.block - phrase) * 64 + $0.slot) % 32) }
                 let modal = Dictionary(grouping: steps, by: { $0 }).values.map(\.count).max() ?? 0
-                #expect(modal >= 3, "\(label): signature at most \(modal) times on one step")
+                // D130 stage 2 lowered 3 to 2: a whole response word may still sound over a signature home step
+                // (the step is then skipped, never choked inside the word), and a second signature hit with
+                // no fill between the two takes another cut.
+                #expect(modal >= 2, "\(label): signature at most \(modal) times on one step")
             }
         }
         #expect(seen == ["Sally", "LSD"], "\(seen)")
