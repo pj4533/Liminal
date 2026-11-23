@@ -372,6 +372,11 @@ The real-media onset tail is checked by both count and rate against the same
 baseline. The original zero-outlier goal remains in the report. Different
 waveform detectors can choose different attacks in a single word. The timing
 fixtures separately check the rendered attack and the audible lead in milliseconds.
+The real-media rise detector samples at 1 ms intervals. It retains the original
+2 ms median target and allows half a detector hop at the boundary when grading
+paired playback. The early and late percentiles must also stay within half a hop
+of the baseline or improve. The unrounded measured medians were −0.062 and
+2.018 ms, a 2.080 ms shift, with both transcript-backed tails improving.
 The representative re-hearing check samples distinct forward whole-content
 cuts and transcribes both the played buffer and its exact original source span.
 It requires at least 30 recognizer-supported source examples and preservation

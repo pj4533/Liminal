@@ -33,6 +33,7 @@ import collections
 import json
 import re
 import statistics
+import statistics
 import sys
 import wave
 from pathlib import Path
@@ -162,6 +163,9 @@ def pct(v, q):
 def tightness(h):
     v = [x["onsetMs"] for x in h if "onsetMs" in x]
     return {"n": len(v), "median": pct(v, 0.5), "p5": pct(v, 0.05), "p95": pct(v, 0.95),
+            "medianExactMs": round(statistics.median(v), 3) if v else None,
+            # DialogueSalienceProbeTests.bandOnsetMs evaluates the rise at 1 ms hops.
+            "detectorHopMs": 1.0 if v else None,
             "over35": sum(1 for q in v if abs(q) > 35)}
 
 

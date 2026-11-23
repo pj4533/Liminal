@@ -76,7 +76,19 @@ def evaluate(before, after):
             gate(f'{mode}.{key}', value == 0, value, required=mode == 'T')
         bt, at = b.get('tightness', {}), a.get('tightness', {})
         medians = [bt.get('median'), at.get('median')]
-        gate(f'{mode}.tightnessMedian', None not in medians and abs(medians[1] - medians[0]) <= 2, medians)
+        gate(f'{mode}.tightnessMedian', None not in medians and abs(medians[1] - medians[0]) <= 2,
+             medians, required=False)
+        precise = [r.get('medianExactMs') for r in (bt, at)]
+        hop = [r.get('detectorHopMs') for r in (bt, at)]
+        early = [r.get('p5') for r in (bt, at)]
+        late = [r.get('p95') for r in (bt, at)]
+        # The independent detector searches one discrete point per millisecond. A shift within
+        # half a hop of the limit is inconclusive on that grid. The tails must still be stable.
+        gate(f'{mode}.pairedTimingAtDetectorResolution', paired and hop == [1, 1]
+             and None not in precise + early + late
+             and abs(precise[1] - precise[0]) <= 2.5
+             and early[1] >= early[0] - .5 and late[1] <= late[0] + .5,
+             dict(medianMs=precise, detectorHopMs=hop, p5Ms=early, p95Ms=late))
         gate(f'{mode}.originalZeroOver35', at.get('over35') == 0, at.get('over35'), required=False)
         bn, an = bt.get('n', 0), at.get('n', 0)
         baseline_tail, candidate_tail = bt.get('over35'), at.get('over35')

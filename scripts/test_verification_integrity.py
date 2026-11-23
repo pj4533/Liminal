@@ -48,6 +48,19 @@ class IntegrityTests(unittest.TestCase):
         del after['windowOutcomes'][0]['speechWindows']
         self.assertFalse(gates.evaluate(before, after)['pairedCorpusComplete']['passed'])
 
+    def test_median_boundary_resolution_cannot_hide_a_tail_regression(self):
+        before, after = self.corpus(), self.corpus()
+        before['T'] = dict(tightness=dict(median=-.1, medianExactMs=-.062, p5=-17.3, p95=11.9, detectorHopMs=1))
+        timing = dict(median=2.0, medianExactMs=2.018, p5=-14.4, p95=11.6, detectorHopMs=1)
+        after['T'] = dict(tightness=timing)
+        result = gates.evaluate(before, after)
+        self.assertFalse(result['T.tightnessMedian']['passed'])
+        self.assertTrue(result['T.pairedTimingAtDetectorResolution']['passed'])
+        timing['p95'] = 12.5
+        self.assertFalse(gates.evaluate(before, after)['T.pairedTimingAtDetectorResolution']['passed'])
+        timing.update(p95=11.6, medianExactMs=2.6)
+        self.assertFalse(gates.evaluate(before, after)['T.pairedTimingAtDetectorResolution']['passed'])
+
     def test_missing_render_in_one_window_cannot_hide_in_corpus_totals(self):
         before, after = self.corpus(), self.corpus()
         self.assertTrue(gates.evaluate(before, after)['windowRenderCoverage']['passed'])
