@@ -285,6 +285,8 @@ class PrivateAssetTests(unittest.TestCase):
         self.assertIn("branches: ['verify/private-execute/**']", text)
         self.assertNotIn("branches: ['verify/dialogue-private-20261123']", text)
         self.assertNotIn('pull_request', text)
+        self.assertIn('.draft == true', text)
+        self.assertNotIn('releases/tags/', text)
         self.assertIn('group: private-drums-pj4533-liminal', text)
         self.assertNotIn('group: private-drums-${{ github.run_id }}', text)
         self.assertIn('private-verification-cleanup.py clean', text)

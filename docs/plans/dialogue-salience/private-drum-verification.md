@@ -78,7 +78,7 @@ The new workflow uses only `contents: read`, the ordinary job token scoped to th
 ciphertext fetch, and the temporary AES secret scoped to key materialization. The
 shell unsets that secret before starting any decrypt/verification subprocess.
 The fixed draft tag is `private-drums-20261123`, asset name `fixtures.enc`; push
-execution looks up its ID and requires the ciphertext hash above. Dispatch inputs
+execution looks up its uploaded asset ID through the release list, filtered to the exact unpublished draft tag, and requires the ciphertext hash above. The tag endpoint returns 404 for this unpublished draft and is deliberately not used. Dispatch inputs
 can override asset ID/hash on the trusted verification refs. A missing/inaccessible
 draft asset fails closed; the token is never escalated or printed. Draft access with
 the hosted job token is a remote prerequisite that has not yet been verified.

@@ -50,7 +50,7 @@ jobs:
           set -euo pipefail
           umask 077
           if [ -z "$ASSET_ID" ]; then
-            ASSET_ID=$(gh api repos/pj4533/Liminal/releases/tags/private-drums-20261123 --jq '.assets[] | select(.name == "fixtures.enc") | .id')
+            ASSET_ID=$(gh api repos/pj4533/Liminal/releases --jq '.[] | select(.tag_name == "private-drums-20261123" and .draft == true) | .assets[] | select(.name == "fixtures.enc" and .state == "uploaded") | .id')
           fi
           [[ "$ASSET_ID" =~ ^[0-9]+$ ]]
           [[ "$EXPECTED_SHA256" =~ ^[a-f0-9]{64}$ ]]
