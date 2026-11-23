@@ -112,8 +112,10 @@ nonisolated enum DialogueMotifTuning {
         [(.s, 0), (.s, 6), (.r, 12), (.s, 16), (.t, 22), (.r, 28)],
         // Offbeat: the call on the "and", the answer on the fourth beat.
         [(.s, 2), (.r, 8), (.s, 18), (.t, 24), (.r, 28)],
-        // Snare answer.
-        [(.s, 0), (.r, 4), (.t, 12), (.s, 16), (.r, 20), (.s, 24)],
+        // Snare answer with room for complete slow words. A one-beat call-to-response gap
+        // dropped both answers after a long signature; the second call also waits for the
+        // first answer to finish. This grid still holds across both lines of the template.
+        [(.s, 0), (.t, 6), (.r, 12), (.s, 18), (.t, 24), (.r, 28)],
         // Late.
         [(.s, 6), (.r, 10), (.s, 22), (.t, 26), (.r, 28)],
     ]

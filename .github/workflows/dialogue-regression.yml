@@ -4,6 +4,11 @@ on:
   push:
     branches: ['verify/chop-fix/**', 'verify/audio-final/**']
   workflow_dispatch:
+    inputs:
+      suites:
+        description: 'Comma-separated complete suites for diagnosis; empty runs all regression suites'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -27,25 +32,29 @@ jobs:
           if [ "$build" -ne 0 ]; then exit "$build"; fi
       - name: Run complete dialogue regression suites
         shell: bash
+        env:
+          REQUESTED_SUITES: ${{ inputs.suites }}
         run: |
           set -o pipefail
           set +e
+          allowed='DialogueEngineTests DialogueChopVarietyTests DialogueSalienceTests DialogueChopFeelTests DialogueFeelMetricsTests DialogueMotifTests DialogueTightnessTests DialogueGateTests DialogueWordCutTests'
+          selected=${REQUESTED_SUITES//,/ }
+          if [ -z "$selected" ]; then selected=$allowed; fi
+          args=()
+          suites=()
+          for suite in $selected; do
+            case " $allowed " in *" $suite "*) ;; *) echo "Unknown complete suite: $suite"; exit 2 ;; esac
+            args+=("-only-testing:LiminalTests/$suite")
+            suites+=("$suite")
+          done
           xcodebuild test-without-building CODE_SIGNING_ALLOWED=NO -project Liminal.xcodeproj -scheme Liminal \
             -destination 'platform=macOS,arch=arm64' -parallel-testing-enabled NO \
             -derivedDataPath "$RUNNER_TEMP/LiminalDerivedData" \
             -resultBundlePath verification/dialogue-regression.xcresult \
-            -only-testing:LiminalTests/DialogueEngineTests \
-            -only-testing:LiminalTests/DialogueChopVarietyTests \
-            -only-testing:LiminalTests/DialogueSalienceTests \
-            -only-testing:LiminalTests/DialogueChopFeelTests \
-            -only-testing:LiminalTests/DialogueFeelMetricsTests \
-            -only-testing:LiminalTests/DialogueMotifTests \
-            -only-testing:LiminalTests/DialogueTightnessTests \
-            -only-testing:LiminalTests/DialogueGateTests \
-            -only-testing:LiminalTests/DialogueWordCutTests \
+            "${args[@]}" \
             2>&1 | tee verification/dialogue-regression.log
           result=${PIPESTATUS[0]}
-          python3 scripts/verify-swift-test-coverage.py verification/dialogue-regression.log LiminalTests DialogueEngineTests DialogueChopVarietyTests DialogueSalienceTests DialogueChopFeelTests DialogueFeelMetricsTests DialogueMotifTests DialogueTightnessTests DialogueGateTests DialogueWordCutTests > verification/test-coverage.json
+          python3 scripts/verify-swift-test-coverage.py verification/dialogue-regression.log LiminalTests "${suites[@]}" > verification/test-coverage.json
           coverage=$?
           xcrun xcresulttool export attachments --path verification/dialogue-regression.xcresult \
             --output-path verification/attachments

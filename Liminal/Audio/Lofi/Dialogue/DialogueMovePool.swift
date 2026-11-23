@@ -186,6 +186,9 @@ nonisolated enum DialogueMovePool {
                 // Dynamic chains have unknown end positions; leave the outro's restatement alone.
                 if cell.kind == .outro && slot >= 16 { continue }
                 if cell.kind == .chopBeat && (slot >= 28 || oldReverses.contains(absolute + 32)) { continue }
+                // The breakdown's first spoken hit is its cue-opening landmark. A pickup may
+                // replace a later sparse answer, but cannot replace that opening statement.
+                if cell.kind == .breakdown && slot < 16 { continue }
                 if cell.kind == .breakdown, !cell.items.contains(where: {
                     $0.slot / 16 == slot / 16 && !fragments[$0.fragment].isUnit
                 }) { continue }

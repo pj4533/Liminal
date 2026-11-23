@@ -89,6 +89,7 @@ enum DialogueTightnessMetrics {
 struct DialogueTightnessTests {
     @Test(arguments: [62.0, 72.0, 84.0]) func renderedAttacksLandOnTheirSteps(_ bpm: Double) throws {
         var all: [DialogueTightnessMetrics.Hit] = []
+        var diagnosed = Set<String>()
         for (fixture, transcribed) in [(GateRun.investigate, false), (GateRun.investigate, true), (GateRun.corpus, true)] {
             for seed: UInt64 in [1, 2] {
                 let run = GateRun.make(fixture, bpm: bpm, seed: seed, transcribed: transcribed)
@@ -105,6 +106,28 @@ struct DialogueTightnessTests {
                                 let detail = "TIGHT-HIT bpm=\(bpm) seed=\(seed) transcript=\(transcribed) pad=\(e.padID) rate=\(e.transform.playbackRate) attackMs=\(hit.attackMs) audibleMs=\(hit.audibleMs) offset=\(part.motif.accentOffset(e.padID)) source=\(fr.frames) kind=\(fr.kind) effect=\(e.effect) gate=\(e.gateEnd) duration=\(e.duration)"
                                 print(detail)
                                 Attachment.record(detail, named: "tight-hit-\(bpm)-\(seed)-\(transcribed)-\(e.padID)-\(e.block)-\(e.slot).txt")
+                                let key = "\(fr.frames.lowerBound)-\(e.padID)-\(e.effect)"
+                                if diagnosed.insert(key).inserted,
+                                   let native = DialogueMotif.make(loop: part.motif.loop, source: part.motif.source,
+                                        analysis: part.motif.analysis, transcript: transcribed ? DialogueFixtures.transcript(fixture) : nil,
+                                        memory: DialoguePerformanceMemory(),
+                                        seed: part.motif.seed, beatDuration: run.snapshot.beatDuration,
+                                        line: part.motif.lineUnit, transform: .native),
+                                   let nativeBuffer = native.renders[e.padID], native.fragments.indices.contains(e.padID),
+                                   native.fragments[e.padID].frames == fr.frames {
+                                    func envelope(_ buffer: AVAudioPCMBuffer) -> [Float] {
+                                        let x = buffer.floatChannelData![0], sr = buffer.format.sampleRate
+                                        let hop = max(1, Int(sr * 0.001)), width = max(1, Int(sr * 0.002))
+                                        let count = min(Int(buffer.frameLength) - width, Int(sr * 0.4))
+                                        return stride(from: 0, to: max(0, count), by: hop).map { i in
+                                            var power: Float = 0
+                                            for j in i..<(i + width) { power += x[j] * x[j] }
+                                            return sqrt(power / Float(width))
+                                        }
+                                    }
+                                    Attachment.record("\(detail) nativeOffset=\(native.accentOffset(e.padID))\nmatched1ms=\(envelope(chop.buffer))\nnative1ms=\(envelope(nativeBuffer))",
+                                                      named: "onset-envelope-\(bpm)-\(key).txt")
+                                }
                             }
                         }
                     }
