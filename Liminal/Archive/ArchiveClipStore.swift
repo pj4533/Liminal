@@ -109,6 +109,12 @@ actor ArchiveClipStore {
 
     /// `Application Support/Liminal/ArchiveFootage/`, excluded from backup.
     static func defaultDirectory() -> URL {
+        #if DEBUG
+        if let path = ProcessInfo.processInfo.environment["LIMINAL_VERIFICATION_ARCHIVE_DIR"] {
+            precondition(path.hasPrefix("/"), "Verification archive directory must be absolute")
+            return URL(fileURLWithPath: path, isDirectory: true)
+        }
+        #endif
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return base.appendingPathComponent("Liminal/ArchiveFootage", isDirectory: true)
     }

@@ -4,15 +4,15 @@
 
 Integrity45189257392 independently compiled exact adapted47a01fe and candidate and passed whole probe/footage suites. Final Apple45221402727 at73e8d4 passed macOS/test-bundle and visionOS Simulator builds, but full632methods/84suites execution was user-cancelled; no full-suite pass. New test70ace3f execution unconfirmed. Latest private45227791928 authenticated/installed100-file corpus, then user-cancelled during native tests; overallUNMET. Sources are available, correcting the earlier inventory below. Historical159/19-case certification, authentic audition classes, clean app playback and human listening remain open.
 
-The `Real media verification` workflow runs serially on macOS 26. It explicitly prepares public
-Archive media, provisions the runner's on-device English SpeechTranscriber asset in a separate
+Run `scripts/verify-real-media.sh` phases serially on the Mac. The harness explicitly prepares public
+Archive media, provisions the on-device English SpeechTranscriber asset in a separate
 executable, and then uses the application's installed-only transcription path. No production cue or
 probe downloads a speech model. Provisioning failures retain their exact diagnostics; acoustic
 results never satisfy the transcript-evidence gate.
 
 `scripts/prepare-verification-media.py` enumerates the canonical thirteen pins and prepares twelve
 successfully decoded audio-bearing MP4 films. It uses Archive metadata filenames, accepted MP4 formats,
-and decoded track inspection, rather than assuming a filename. The isolated cache has the actual
+and decoded track inspection, rather than assuming a filename. The local harness writes the paired cache to `OUT/ArchiveFootage`. Both debug apps resolve the same directory through the verification environment. The isolated cache has the actual
 `ArchiveClipStore.Index` Codable root and Swift Date encoding. Metadata, download URLs, SHA256 hashes,
 durations, track facts and failed routes are preserved as provenance outside Git.
 
@@ -38,16 +38,15 @@ analysis and transcript values independently of the cue task's cancellation life
 and late transcripts both feed it. Scanned spans stop at actual feature bounds, including non-unit
 source playback rates; sources without features do not mark a span scanned.
 
-The workflow preserves the probe reports and raw snippets, strict reference/fast/same/transcribe mix
+The local harness preserves the probe reports and raw snippets, strict reference/fast/same/transcribe mix
 reports, rendered m4a snippet auditions when the corresponding real initialism/syllable hits exist,
 and a 200-second automated app launch with offline video, a fresh image pool and deterministic seeds.
-Focused stage 3 tests run before media preparation. Full-suite and visionOS verification remain
-in the dedicated Apple workflow; a media prerequisite failure exports diagnostics immediately
+Run the full macOS suite and the visionOS Simulator build on the same Mac before media review; a media prerequisite failure exports diagnostics immediately
 and does not launch unrelated expensive suites. The historical baseline is checked out by its
-full commit ID, because actions/checkout treats a short SHA as a remote ref rather than fetching it.
+full commit ID to keep the comparison tied to the recorded source.
 Missing authentic audition types fail explicitly instead of substituting unrelated audio.
 
-Private AJ Hall sources were subsequently found: all four packs at `/host/external/PJ Archive/Music Production/Samples/Drum Kits`. Prepared fresh corpus100eligible/112originals is available under `/app/state/liminal-private-verification/bundle`, byte-preserved, grid SHA256 `f04ed987acd0d693aa46b717fcac4a1ef6c2b07e3153d90dd41ebbba9ff0dbee`. This corrects the earlier missing-source finding. It is not the historical installed cache. Use `private-verification-assets.py` for local preparation/validation/install into clean paired checkouts; see [private preparation](private-drum-verification.md). Public results cannot qualify private gates. Remote native execution was cancelled before completion; no private matrix pass is claimed. Secrets and draft transport release were deleted; retain local private material outside git and do not restart remote transport.
+Private AJ Hall sources were subsequently found: all four packs at `/host/external/PJ Archive/Music Production/Samples/Drum Kits`. Prepared fresh corpus100eligible/112originals is available under `/app/state/liminal-private-verification/bundle`, byte-preserved, grid SHA256 `f04ed987acd0d693aa46b717fcac4a1ef6c2b07e3153d90dd41ebbba9ff0dbee`. This corrects the earlier missing-source finding. It is not the historical installed cache. Use `private-verification-assets.py` for local preparation/validation/install into clean paired checkouts; see [private preparation](private-drum-verification.md). Public results cannot qualify private gates. Remote native execution was cancelled before completion; no private matrix pass is claimed. Keep private fixtures and verification evidence on the Mac outside Git.
 
 Local verification before the remote run: report regressions 13 passed, media preparation unit tests
 2 passed, gate isolation/missing-evidence tests 2 passed; Bash syntax checks and `git diff --check`

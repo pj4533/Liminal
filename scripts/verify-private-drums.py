@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Serial native verification; logs/audio stay private, summaries are allowlisted."""
+"""Verify private drums and matrices serially on the local Mac."""
 import argparse
 import importlib.util
 import json
@@ -13,7 +13,8 @@ import sys
 
 BASELINE = '47a01fe267a3972241ed6918d031fffe55f26ed2'
 SUITES = ('LofiTests', 'LofiRhythmTests', 'LofiStemChainTests')
-REQUIRED_STEPS = ('baseline-capture-adapter', 'baseline-compiler-adapter',
+REQUIRED_STEPS = ('baseline-cache-adapter-check', 'baseline-cache-adapter',
+                  'baseline-capture-adapter', 'baseline-compiler-adapter',
                   'baseline-native', 'after-native', 'public-media',
                   'baseline-matrix', 'after-matrix')
 
@@ -93,17 +94,28 @@ def main():
     parser.add_argument('phase', choices=('setup', 'native', 'prepare', 'baseline', 'after', 'final'))
     for key in ('after', 'baseline', 'out', 'bundle'):
         parser.add_argument('--' + key, required=True, type=Path)
+    parser.add_argument('--archive-dir', type=Path, help='Shared verification media directory (default: OUT/ArchiveFootage)')
     args = parser.parse_args()
     os.umask(0o077)
     after, baseline, out, bundle = (getattr(args, key).resolve() for key in ('after', 'baseline', 'out', 'bundle'))
     raw = out / 'raw'; raw.mkdir(parents=True, exist_ok=True)
     assets = load('private-verification-assets', after)
-    env = dict(os.environ, LIMINAL_CAPTURE_CODE_SIGNING_ALLOWED='NO')
+    archive_dir = (args.archive_dir or out / 'ArchiveFootage').resolve()
+    env = dict(os.environ, LIMINAL_CAPTURE_CODE_SIGNING_ALLOWED='NO',
+               LIMINAL_VERIFICATION_ARCHIVE_DIR=str(archive_dir),
+               TEST_RUNNER_LIMINAL_VERIFICATION_ARCHIVE_DIR=str(archive_dir))
     if args.phase == 'setup':
         actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=baseline, text=True).strip()
         if actual != BASELINE:
             raise ValueError('baseline revision mismatch')
+        cache_patch = str(after / 'scripts/baseline-verification-cache.patch')
+        check = run('baseline-cache-adapter-check', ['git', 'apply', '--check', cache_patch], baseline, raw)
+        if check:
+            return check
         assets.install(bundle, [after, baseline])
+        cache_adapter = run('baseline-cache-adapter', ['git', 'apply', cache_patch], baseline, raw)
+        if cache_adapter:
+            return cache_adapter
         shutil.copyfile(after / 'scripts/mix-matrix.sh', baseline / 'scripts/mix-matrix.sh')
         capture = run('baseline-capture-adapter', [sys.executable, str(after / 'scripts/prepare-baseline-capture.py'), str(baseline)], after, raw)
         result = run('baseline-compiler-adapter', [sys.executable, str(after / 'scripts/prepare-baseline-compiler.py'), str(baseline)], after, raw)
@@ -125,9 +137,8 @@ def main():
             passed = passed and rc == 0 and coverage['passed'] and identity
         return 0 if passed else 1
     if args.phase == 'prepare':
-        cache = Path.home() / 'Library/Application Support/Liminal/ArchiveFootage'
         return run('public-media', [sys.executable, str(after / 'scripts/prepare-verification-media.py'),
-            '--cache', str(cache), '--provenance', str(raw / 'public-provenance'), '--count', '12'], after, raw, env)
+            '--cache', str(archive_dir), '--provenance', str(raw / 'public-provenance'), '--count', '12'], after, raw, env)
     if args.phase in ('baseline', 'after'):
         label = args.phase
         tree = baseline if label == 'baseline' else after
@@ -167,8 +178,8 @@ def main():
         and all(m['complete'] and m['rawStrictPassed'] for m in summary['matrices'].values())
         and summary['matrices']['after']['noNewTargetedFailures'] is True)
     summary['status'] = 'VERIFIED' if summary['passed'] else 'UNMET'
-    public = out / 'sanitized'; public.mkdir(exist_ok=True)
-    (public / 'summary.json').write_text(json.dumps(summary, indent=2) + '\n')
+    summary_dir = out / 'sanitized'; summary_dir.mkdir(exist_ok=True)
+    (summary_dir / 'summary.json').write_text(json.dumps(summary, indent=2) + '\n')
     print('Private native/matrix verification: ' + summary['status'])
     return 0 if summary['passed'] else 1
 

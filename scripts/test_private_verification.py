@@ -1,12 +1,9 @@
 import importlib.util
-import io
 import json
 from pathlib import Path
-import os
 import subprocess
 import sys
 import struct
-import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -21,8 +18,6 @@ def module(name):
 
 assets = module('private-verification-assets')
 runner = module('verify-private-drums')
-cleanup = module('private-verification-cleanup')
-transport = module('private-ciphertext-download')
 
 
 def wav(path, frames=705600, rate=22050, channels=1, bits=16, encoding=1):
@@ -38,105 +33,6 @@ class PrivateAssetTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.key = self.root / 'key'
-        assets.generate_key(self.key)
-        self.source = self.root / 'source'
-        self.source.mkdir()
-        (self.source / 'nested').mkdir()
-        self.payload = os.urandom(assets.CHUNK + 73)
-        (self.source / 'nested/audio.wav').write_bytes(self.payload)
-
-    def encrypt(self):
-        encrypted = self.root / 'archive.enc'
-        assets.encrypt(self.source, encrypted, self.key)
-        return encrypted
-
-    def test_streaming_roundtrip_preserves_bytes_and_private_modes(self):
-        encrypted = self.encrypt()
-        output = self.root / 'restored'
-        assets.decrypt(encrypted, output, self.key)
-        self.assertEqual((output / 'nested/audio.wav').read_bytes(), self.payload)
-        self.assertEqual(encrypted.stat().st_mode & 0o777, 0o600)
-        self.assertEqual(output.stat().st_mode & 0o777, 0o700)
-        self.assertEqual((output / 'nested/audio.wav').stat().st_mode & 0o777, 0o600)
-        self.assertEqual(self.key.stat().st_mode & 0o777, 0o600)
-
-    def test_tampered_header_nonce_ciphertext_and_tag_never_extract(self):
-        encrypted = self.encrypt()
-        original = encrypted.read_bytes()
-        for index in (0, len(assets.MAGIC), len(assets.MAGIC) + 12 + 20, len(original) - 1):
-            with self.subTest(index=index):
-                data = bytearray(original); data[index] ^= 1
-                encrypted.write_bytes(data)
-                with patch.object(assets, 'safe_extract') as extract:
-                    with self.assertRaises(Exception): assets.decrypt(encrypted, self.root / 'restored', self.key)
-                    extract.assert_not_called()
-                self.assertFalse((self.root / 'restored').exists())
-                self.assertFalse(list(self.root.glob('.private-auth-*')))
-
-    def test_wrong_key_and_truncation_never_extract(self):
-        encrypted = self.encrypt()
-        wrong = self.root / 'wrong'; assets.generate_key(wrong)
-        with self.assertRaises(Exception): assets.decrypt(encrypted, self.root / 'restored', wrong)
-        data = encrypted.read_bytes()
-        for size in (0, len(assets.MAGIC) + 5, len(data) - 1, len(data) // 2):
-            with self.subTest(size=size):
-                encrypted.write_bytes(data[:size])
-                with self.assertRaises(Exception): assets.decrypt(encrypted, self.root / 'restored', self.key)
-                self.assertFalse((self.root / 'restored').exists())
-
-    def test_each_archive_uses_a_fresh_nonce(self):
-        first = self.encrypt().read_bytes()
-        second = self.root / 'second.enc'; assets.encrypt(self.source, second, self.key)
-        self.assertNotEqual(first[:len(assets.MAGIC) + 12], second.read_bytes()[:len(assets.MAGIC) + 12])
-
-    def test_existing_output_and_key_are_never_overwritten(self):
-        encrypted = self.encrypt(); original = encrypted.read_bytes()
-        with self.assertRaises(FileExistsError): assets.encrypt(self.source, encrypted, self.key)
-        self.assertEqual(encrypted.read_bytes(), original)
-        original_key = self.key.read_bytes()
-        with self.assertRaises(FileExistsError): assets.generate_key(self.key)
-        self.assertEqual(self.key.read_bytes(), original_key)
-        output = self.root / 'restored'; output.mkdir()
-        (output / 'keep').write_bytes(b'keep')
-        with self.assertRaises(ValueError): assets.decrypt(encrypted, output, self.key)
-        self.assertEqual((output / 'keep').read_bytes(), b'keep')
-
-    def test_key_permissions_symlink_and_length_fail_closed(self):
-        self.key.chmod(0o644)
-        with self.assertRaises(ValueError): self.encrypt()
-        self.key.chmod(0o600)
-        alias = self.root / 'alias'; alias.symlink_to(self.key)
-        with self.assertRaises(ValueError): assets.read_key(alias)
-        self.key.write_bytes(b'short')
-        with self.assertRaises(ValueError): self.encrypt()
-
-    def test_key_inside_archive_and_symlink_members_are_rejected(self):
-        internal = self.source / 'key'; assets.generate_key(internal)
-        with self.assertRaises(ValueError): assets.encrypt(self.source, self.root / 'archive.enc', internal)
-        internal.unlink()
-        (self.source / 'link').symlink_to(self.key)
-        with self.assertRaises(ValueError): self.encrypt()
-        self.assertFalse((self.root / 'archive.enc').exists())
-        with self.assertRaises(ValueError): assets.encrypt(self.source, self.source / 'archive.enc', self.key)
-
-    def test_tar_traversal_links_devices_directories_and_duplicates_rejected_before_writes(self):
-        for name, kind in [('../escape', tarfile.REGTYPE), ('/escape', tarfile.REGTYPE),
-                           ('nested/../../escape', tarfile.REGTYPE), ('nested\\escape', tarfile.REGTYPE),
-                           ('link', tarfile.SYMTYPE), ('hardlink', tarfile.LNKTYPE),
-                           ('device', tarfile.CHRTYPE), ('directory', tarfile.DIRTYPE),
-                           ('valid', tarfile.REGTYPE)]:
-            with self.subTest(name=name, kind=kind):
-                archive = self.root / 'attack.tar'
-                with tarfile.open(archive, 'w') as tar:
-                    regular = tarfile.TarInfo('valid'); regular.size = 1
-                    tar.addfile(regular, io.BytesIO(b'a'))
-                    member = tarfile.TarInfo(name); member.type = kind
-                    member.linkname = '../escape'
-                    tar.addfile(member)
-                with self.assertRaises(ValueError): assets.safe_extract(archive, self.root / 'restored')
-                self.assertFalse((self.root / 'restored').exists())
-                self.assertFalse((self.root / 'escape').exists())
 
     def test_known_names_and_vol2_space_bpm_normalize(self):
         for source, name, bpm in [
@@ -189,7 +85,7 @@ class PrivateAssetTests(unittest.TestCase):
         (bundle / 'provenance.json').write_text(json.dumps(dict(eligible=100, beatGridSHA256=assets.sha256(bundle / assets.GRID))))
         with self.assertRaises(ValueError): assets.install(bundle, [self.root / 'checkout'])
 
-    def test_public_inventory_drops_private_paths_text_and_transcription_failure_is_unmet(self):
+    def test_summary_inventory_drops_private_paths_text_and_transcription_failure_is_unmet(self):
         value = dict(complete=False, error='private/source.wav', rawStrictPassed=False, noNewTargetedFailures=None,
                      cases=dict(transcribe=dict(complete=False, transcriptionReady=False,
                          rawStrictPassed=False, noNewTargetedFailures=None, error='private dialogue text')))
@@ -198,7 +94,7 @@ class PrivateAssetTests(unittest.TestCase):
         self.assertEqual(result['cases']['transcribe']['status'], 'UNMET')
         self.assertFalse(result['rawStrictPassed'])
 
-    def test_numeric_criteria_allowlist_cannot_publish_transcript_or_arbitrary_fields(self):
+    def test_numeric_criteria_summary_omits_transcript_or_arbitrary_fields(self):
         report = dict(criteria=[dict(id='C-D9', status='fail', level='fail',
             values=dict(emptyBars=3, privateText='licensed words', arbitrary=12, maxOccupancy=float('inf')),
             notes='private transcript'), dict(id='private source name', status='pass', values={})])
@@ -206,7 +102,7 @@ class PrivateAssetTests(unittest.TestCase):
         self.assertEqual(rows, [dict(id='C-D9', status='fail', level='fail', values=dict(emptyBars=3))])
         self.assertNotIn('licensed', json.dumps(rows))
 
-    def test_missing_remote_evidence_produces_unmet_sanitized_summary(self):
+    def test_missing_local_evidence_produces_unmet_sanitized_summary(self):
         repo = Path(__file__).resolve().parents[1]
         bundle = self.root / 'bundle'; bundle.mkdir()
         provenance = dict(scope='Fresh regenerated corpus', original=112, eligible=100, excluded=12,
@@ -258,100 +154,5 @@ class PrivateAssetTests(unittest.TestCase):
                 self.assertEqual(summary['status'], 'VERIFIED' if expected == 0 else 'UNMET')
         (raw / 'steps.jsonl').write_text('malformed ledger')
         self.assertFalse(runner.phase_status(raw)['passed'])
-
-    def test_cleanup_removes_capture_caches_and_targeted_diagnostics_only(self):
-        home = self.root / 'home'; system = self.root / 'system-diagnostics'
-        out = self.root / 'out'; workspace = self.root / 'workspace'
-        for cache in cleanup.capture_caches(home):
-            cache.mkdir(parents=True)
-            (cache / 'orphan-private.wav').write_bytes(b'private')
-        reports = home / 'Library/Logs/DiagnosticReports'; reports.mkdir(parents=True)
-        targeted = reports / 'Liminal-2026.ips'; targeted.write_text('private crash data')
-        unrelated = reports / 'OtherApp-2026.ips'; unrelated.write_text('keep')
-        cleanup.collect(out, home, system)
-        collected = list((out / 'raw/runner-diagnostics').iterdir())
-        self.assertEqual(len(collected), 1)
-        self.assertEqual(collected[0].read_text(), 'private crash data')
-        self.assertEqual(collected[0].stat().st_mode & 0o777, 0o600)
-        with patch.object(cleanup.os, 'getuid', return_value=999999):
-            cleanup.clean(out, workspace, home, system)
-        self.assertFalse(targeted.exists())
-        self.assertTrue(unrelated.exists())
-        self.assertFalse(out.exists())
-        self.assertTrue(all(not path.exists() for path in cleanup.capture_caches(home)))
-
-    def test_workflow_only_triggers_approved_execute_push_and_has_safe_artifact_paths(self):
-        path = Path(__file__).resolve().parents[1] / '.github/workflows/private-drum-verification.yml'
-        text = path.read_text()
-        self.assertIn("branches: ['verify/private-execute/**']", text)
-        self.assertNotIn("branches: ['verify/dialogue-private-20261123']", text)
-        self.assertNotIn('pull_request', text)
-        self.assertIn('secrets.LIMINAL_PRIVATE_DRUMS_URL_20261123', text)
-        self.assertNotIn('GH_TOKEN:', text)
-        self.assertNotIn('contents: write', text)
-        self.assertNotIn('releases/tags/', text)
-        self.assertIn('group: private-drums-pj4533-liminal', text)
-        self.assertNotIn('group: private-drums-${{ github.run_id }}', text)
-        self.assertIn('private-verification-cleanup.py clean', text)
-        self.assertIn("github.ref == 'refs/heads/verify/dialogue-private-20261123'", text)
-        self.assertEqual(text.count('uses: actions/upload-artifact@v4'), 2)
-        self.assertIn('path: ${{ runner.temp }}/private-verification/sanitized/summary.json', text)
-        self.assertIn('path: ${{ runner.temp }}/private-evidence.enc', text)
-        self.assertNotIn('path: ${{ runner.temp }}/private-verification/raw', text)
-        self.assertIn('Remove runner plaintext, private build resources and key\n        if: always()', text)
-        self.assertIn('unset PRIVATE_KEY_B64\n          python3', text)
-
-
-class CiphertextTransportTests(unittest.TestCase):
-    def url(self, host='release-assets.githubusercontent.com', minutes=60):
-        import datetime
-        expires = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=minutes)
-        return 'https://' + host + '/asset?se=' + expires.isoformat().replace('+00:00', 'Z') + '&sig=private-capability'
-
-    def test_url_host_scheme_expiry_credentials_and_fragment_fail_closed(self):
-        transport.validate_url(self.url())
-        for value in [self.url('evil.example'), self.url(minutes=29), self.url().replace('https:', 'http:'),
-                      self.url().replace('https://', 'https://user@'), self.url() + '#fragment',
-                      'https://release-assets.githubusercontent.com/asset?se=bad']:
-            with self.subTest(value=value), self.assertRaises(ValueError): transport.validate_url(value)
-
-    def test_owner_capture_stores_only_one_validated_location_privately(self):
-        from unittest.mock import Mock
-        with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory) / 'url'
-            value = self.url()
-            result = Mock(returncode=0, stdout=('> Authorization: redacted\n< Location: ' + value + '\n').encode(), stderr=b'')
-            with patch.object(transport.subprocess, 'run', return_value=result):
-                transport.capture('783833664', output)
-            self.assertEqual(output.read_text(), value)
-            self.assertEqual(output.stat().st_mode & 0o777, 0o600)
-            output.unlink()
-            for data in (b'HTTP 200', ('Location: ' + value + '\nLocation: ' + value).encode()):
-                result.stdout = data
-                with patch.object(transport.subprocess, 'run', return_value=result), self.assertRaises(ValueError):
-                    transport.capture('783833664', output)
-                self.assertFalse(output.exists())
-
-    def test_download_hash_mismatch_network_errors_and_redirects_never_leak_capability(self):
-        import hashlib
-        from unittest.mock import Mock
-        with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory) / 'fixtures.enc'
-            opener = Mock(); opener.open.return_value = io.BytesIO(b'ciphertext')
-            transport.download(self.url(), output, hashlib.sha256(b'ciphertext').hexdigest(), opener)
-            self.assertEqual(output.read_bytes(), b'ciphertext')
-            self.assertEqual(output.stat().st_mode & 0o777, 0o600)
-            output.unlink()
-            for error in (False, True):
-                opener = Mock()
-                if error: opener.open.side_effect = RuntimeError(self.url())
-                else: opener.open.return_value = io.BytesIO(b'tampered')
-                with self.assertRaises(ValueError) as caught:
-                    transport.download(self.url(), output, 'a'*64, opener)
-                self.assertNotIn('private-capability', str(caught.exception))
-                self.assertFalse(output.exists())
-                self.assertFalse(output.with_name('fixtures.enc.download').exists())
-            with self.assertRaises(ValueError): transport.NoRedirect().redirect_request(None, None, 302, None, None, self.url('evil.example'))
-
 
 if __name__ == '__main__': unittest.main()

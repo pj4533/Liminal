@@ -16,7 +16,7 @@
          var snippetDir: URL?
          if let d = config.snippetDirectory {
 @@ -214,16 +222,25 @@
- 
+
          for clip in clips {
              let usable = clip.duration - Self.windowSeconds - 1
 -            guard usable > 0 else { continue }
@@ -55,7 +55,7 @@
 @@ -301,6 +320,21 @@
                  var perWindow = 0, controlsThisWindow = 0
                  var mechanisms = Set<String>()
- 
+
 +                var renderOutcomes: [String: [String: Int]] = [:]
 +                func recordRenders(mode: String, events: [DialogueEvent], chops: [DialogueChop]) {
 +                    var counts = renderOutcomes[mode] ?? ["planned": 0, "rendered": 0, "audible": 0]

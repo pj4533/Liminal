@@ -8,7 +8,9 @@ BASELINE=$(cd "$2" && pwd)
 mkdir -p "$3"
 OUT=$(cd "$3" && pwd)
 PHASE=${4:-prepare}
-CACHE="$HOME/Library/Application Support/Liminal/ArchiveFootage"
+CACHE="$OUT/ArchiveFootage"
+export LIMINAL_VERIFICATION_ARCHIVE_DIR="$CACHE"
+export TEST_RUNNER_LIMINAL_VERIFICATION_ARCHIVE_DIR="$CACHE"
 STATUS="$OUT/steps.tsv"
 if [ ! -f "$STATUS" ]; then printf 'step\texit\n' > "$STATUS"; fi
 run_step() {
@@ -37,6 +39,8 @@ PY
     prerequisites=$?
     printf 'private-prerequisite-inventory\t%s\n' "$prerequisites" >> "$STATUS"
     [ "$prerequisites" -eq 0 ] || exit "$prerequisites"
+    run_step baseline-cache-check git -C "$BASELINE" apply --check "$AFTER/scripts/baseline-verification-cache.patch" || exit $?
+    run_step baseline-cache-adapter git -C "$BASELINE" apply "$AFTER/scripts/baseline-verification-cache.patch" || exit $?
     run_step baseline-matrix-adapter cp "$AFTER/scripts/mix-matrix.sh" "$BASELINE/scripts/mix-matrix.sh" || exit $?
     run_step baseline-report-adapter cp "$AFTER/scripts/dialogue-salience-report.py" "$BASELINE/scripts/dialogue-salience-report.py" || exit $?
     run_step baseline-probe-adapter-check git -C "$BASELINE" apply --check "$AFTER/scripts/baseline-probe-measurement.patch" || exit $?
@@ -124,7 +128,7 @@ final)
     python3 - "$STATUS" <<'PY'
 import csv, sys
 rows = list(csv.DictReader(open(sys.argv[1]), delimiter='\t'))
-required = {'prepare-media', 'provision-speech', 'baseline-build', 'after-build', 'baseline-probe', 'after-probe', 'baseline-public-matrix', 'after-public-matrix', 'baseline-private-matrix', 'after-private-matrix', 'media-gates', 'auditions', 'app-survived-200s', 'app-playback-evidence', 'baseline-matrix-adapter', 'baseline-report-adapter', 'baseline-probe-adapter-check', 'baseline-probe-adapter', 'baseline-compiler-adapter', 'baseline-capture-adapter', 'private-prerequisite-inventory', 'baseline-public-inventory', 'after-public-inventory', 'baseline-private-inventory', 'after-private-inventory'}
+required = {'prepare-media', 'provision-speech', 'baseline-build', 'after-build', 'baseline-probe', 'after-probe', 'baseline-public-matrix', 'after-public-matrix', 'baseline-private-matrix', 'after-private-matrix', 'media-gates', 'auditions', 'app-survived-200s', 'app-playback-evidence', 'baseline-cache-adapter', 'baseline-matrix-adapter', 'baseline-report-adapter', 'baseline-probe-adapter-check', 'baseline-probe-adapter', 'baseline-compiler-adapter', 'baseline-capture-adapter', 'private-prerequisite-inventory', 'baseline-public-inventory', 'after-public-inventory', 'baseline-private-inventory', 'after-private-inventory'}
 seen = {r['step'] for r in rows}
 print('Missing required steps:', sorted(required - seen))
 print('Failed steps:', [r for r in rows if int(r['exit'])])

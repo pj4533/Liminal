@@ -148,6 +148,8 @@ class SwiftRunnerIntegrityTests(unittest.TestCase):
             self.assertFalse(runner.coverage(text, root, ['Example'])['passed'])
             text+='✘ Test two(_:) with 2 test cases failed after 0.2 seconds with 1 issue.\n'
             self.assertTrue(runner.coverage(text, root, ['Example'])['passed'])
+            local_text = text.replace('✔', '\U0010105b').replace('✘', '\u200b\U00100884')
+            self.assertTrue(runner.coverage(local_text, root, ['Example'])['passed'])
 
     def test_shared_file_suite_scope_ignores_siblings_nested_types_and_literals(self):
         runner = module('verify-swift-test-coverage')

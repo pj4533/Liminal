@@ -1,22 +1,15 @@
 #!/usr/bin/env python3
-"""Prepare byte-preserved private drums and authenticated, streaming transport.
-
-Never pass a key on the command line. Ciphertext and sanitized summaries alone may
-leave the machine. Decryption authenticates the entire staged tar before extraction.
-"""
+"""Prepare and install byte-preserved private drums for local verification."""
 import argparse
 import hashlib
 import json
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 import re
 import shutil
-import stat
 import struct
-import tarfile
 import tempfile
 
-MAGIC = b'LIMINAL-PRIVATE\x00\x01'
 CHUNK = 1024 * 1024
 PACKS = (
     ('A.J HALL - "SLOW BURN" SAMPLE PACK!', 'BREAKS!', 25, 20),
@@ -160,121 +153,6 @@ def prepare(source, output):
     return result
 
 
-def read_key(path):
-    mode = path.stat().st_mode
-    if path.is_symlink() or not stat.S_ISREG(mode) or mode & 0o077:
-        raise ValueError('key must be a private regular file (mode 600)')
-    key = path.read_bytes()
-    if len(key) != 32:
-        raise ValueError('AES-256 key must contain exactly 32 bytes')
-    return key
-
-
-def generate_key(path):
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, 'wb') as stream:
-        stream.write(os.urandom(32))
-
-
-def regular_files(root):
-    for path in sorted(root.rglob('*')):
-        if path.is_symlink() or not (path.is_file() or path.is_dir()):
-            raise ValueError('archive accepts regular files and directories only')
-        if path.is_file():
-            yield path
-
-
-def encrypt(root, destination, key_path):
-    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-    root = root.resolve(strict=True)
-    if destination.resolve().is_relative_to(root):
-        raise ValueError('ciphertext must be outside archived directory')
-    if key_path.resolve().is_relative_to(root):
-        raise ValueError('key must be outside archived directory')
-    key = read_key(key_path)
-    nonce = os.urandom(12)
-    header = MAGIC + nonce
-    context = Cipher(algorithms.AES(key), modes.GCM(nonce)).encryptor()
-    context.authenticate_additional_data(header)
-    # tar writes to the cipher, so neither a plaintext archive nor a whole-file buffer is needed.
-    class Sink:
-        def write(self, data):
-            target.write(context.update(data))
-            return len(data)
-    created = False
-    try:
-        with destination.open('xb') as target:
-            created = True
-            destination.chmod(0o600)
-            target.write(header)
-            with tarfile.open(fileobj=Sink(), mode='w|') as archive:
-                for path in regular_files(root):
-                    archive.add(path, arcname=path.relative_to(root).as_posix(), recursive=False)
-            target.write(context.finalize())
-            target.write(context.tag)
-    except Exception:
-        if created:
-            destination.unlink(missing_ok=True)
-        raise
-
-
-def safe_extract(archive_path, output):
-    """Validate every member before writing anything; no links, devices or traversal."""
-    with tarfile.open(archive_path, 'r:') as archive:
-        members = archive.getmembers()
-        names = set()
-        for member in members:
-            path = PurePosixPath(member.name)
-            if (not member.isfile() or path.is_absolute() or '..' in path.parts
-                    or '\\' in member.name or not path.parts or member.name in names):
-                raise ValueError('unsafe archive member')
-            names.add(member.name)
-        if output.exists():
-            raise ValueError('extraction destination must not exist')
-        private_directory(output)
-        try:
-            for member in members:
-                path = output / member.name
-                path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-                with archive.extractfile(member) as source, path.open('xb') as target:
-                    path.chmod(0o600)
-                    shutil.copyfileobj(source, target, CHUNK)
-        except Exception:
-            shutil.rmtree(output)
-            raise
-
-
-def decrypt(source, output, key_path):
-    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-    if output.exists():
-        raise ValueError('extraction destination must not exist')
-    key = read_key(key_path)
-    # Staging stays on the private filesystem and is unlinked even on authentication failure.
-    with tempfile.TemporaryDirectory(prefix='.private-auth-', dir=output.parent) as stage:
-        staged = Path(stage) / 'authenticated.tar'
-        with source.open('rb') as stream:
-            size = source.stat().st_size
-            header = stream.read(len(MAGIC) + 12)
-            if len(header) != len(MAGIC) + 12 or not header.startswith(MAGIC) or size < len(header) + 16:
-                raise ValueError('invalid encrypted archive header')
-            stream.seek(-16, 2)
-            tag = stream.read(16)
-            stream.seek(len(header))
-            context = Cipher(algorithms.AES(key), modes.GCM(header[-12:], tag)).decryptor()
-            context.authenticate_additional_data(header)
-            left = size - len(header) - 16
-            with staged.open('xb') as target:
-                staged.chmod(0o600)
-                while left:
-                    data = stream.read(min(CHUNK, left))
-                    if not data:
-                        raise ValueError('truncated ciphertext')
-                    left -= len(data)
-                    target.write(context.update(data))
-                target.write(context.finalize())  # Authentication MUST precede safe_extract.
-        safe_extract(staged, output)
-
-
 def install(bundle, checkouts):
     provenance = json.loads((bundle / 'provenance.json').read_text())
     entries = json.loads((bundle / GRID).read_text())
@@ -304,19 +182,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='command', required=True)
     prep = sub.add_parser('prepare'); prep.add_argument('source', type=Path); prep.add_argument('output', type=Path)
-    key = sub.add_parser('keygen'); key.add_argument('key', type=Path)
-    for name in ('encrypt', 'decrypt'):
-        command = sub.add_parser(name)
-        command.add_argument('source', type=Path); command.add_argument('output', type=Path); command.add_argument('--key-file', type=Path, required=True)
     command = sub.add_parser('install'); command.add_argument('bundle', type=Path); command.add_argument('checkouts', type=Path, nargs='+')
     args = parser.parse_args()
     os.umask(0o077)
     if args.command == 'prepare':
         result = prepare(args.source, args.output)
         print(json.dumps({k: result[k] for k in ('original', 'eligible', 'excluded', 'packs', 'beatGridSHA256')}))
-    elif args.command == 'keygen': generate_key(args.key)
-    elif args.command == 'encrypt': encrypt(args.source, args.output, args.key_file)
-    elif args.command == 'decrypt': decrypt(args.source, args.output, args.key_file)
     elif args.command == 'install': install(args.bundle, args.checkouts)
 
 

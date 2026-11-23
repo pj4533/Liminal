@@ -25,7 +25,7 @@ Do not stash/reset/clean the original checkout, force-push, merge main or overwr
 | `70ace3f` | Additional test-only long-word fixture; first execution not confirmed |
 | `73e8d4234f66a1bebbf5fbab1f9c9fea9a653b17` | Consolidated source/test/docs revision used by final Apple/public-media attempts |
 | `2c87c22` | Exact historical capture signing adapter; added after those media captures |
-| `445b9dce07f3f1de4d924ca4b0ceae1c524a3006` | Infrastructure state before this final documentation commit; private workflow/transport included |
+| `445b9dce07f3f1de4d924ca4b0ceae1c524a3006` | Historical infrastructure revision before the local handoff |
 
 Short revision names are unambiguous in the fetched branch; use full baseline SHA for checkouts. Final handoff commit follows `445b9dc`, with no production changes.
 
@@ -59,7 +59,6 @@ These are container/host state paths, **not included in git and not automaticall
 - Same run's small auditions/app artifacts: sibling directories `partial-real-media-auditions-73e8d4234f66a1bebbf5fbab1f9c9fea9a653b17/` and `partial-real-media-app-73e8d4234f66a1bebbf5fbab1f9c9fea9a653b17/`. Export existence is not qualification/listening.
 - Prerequisites, dataset provenance, exact baseline adapter diff, speech alternatives and baseline partials are siblings in that run directory.
 - One unique approximately **1.44GB after artifact remains remote, not downloaded** in run 45221406217, linked above; retention may expire. No need to download it to start local source checks.
-- Private sanitized summary: `/app/state/liminal-verification/run45227791928/summary/summary.json`. Approximately 2MB `private-evidence.enc` retained locally; detailed private evidence needs its local key, never print it.
 
 ## Remaining authentic-media blockers and observed failures
 
@@ -81,7 +80,7 @@ The source is **not missing**. All four packs were found at `/host/external/PJ A
 
 The canonical-name repairs include the Vol.4 BUBBA_KUSH `DRUM_BREA` typo and BISCOFF_BUTTER trailing `!`; Vol.2 also has a space before BPM. See the tested parser; never rename/change source bytes or discard these files. Install exactly the same fresh 100-file corpus/grid in both checkouts. This is a regenerated D122 catalog, **not** the unavailable historical installed cache. Preserve old installations separately; installer deliberately refuses collisions.
 
-Local direct preparation/install requires no remote encryption:
+Prepare and install the corpus locally:
 
 ```sh
 # Set these to verified local paths outside git; output must not already exist.
@@ -91,13 +90,15 @@ python3 scripts/private-verification-assets.py install "$PRIVATE_BUNDLE" "$PWD" 
 
 Use either this direct install OR `verify-private-drums.py setup`, which performs installation plus adapters, not both on the same checkout. The latter's local phases are `setup`, `native`, `prepare`, `baseline`, `after`, `final`, each with `--after PATH --baseline PATH --out PATH --bundle PATH`. Review the script and use clean dedicated checkouts; collect native exact built-resource hashes and complete matrix evidence. The private final gate stays UNMET until every phase is complete and real transcription is used.
 
-The repository is public. Keep drums, grids, builds, raw private logs and mixed captures out of git/uploads. Local private directories/keys remain mode700/600. Ephemeral Actions `LIMINAL_PRIVATE_DRUMS_KEY_20261123` and `LIMINAL_PRIVATE_DRUMS_URL_20261123` secrets were deleted. Draft release `private-drums-20261123` ID455744712 and asset783833664 were deleted and confirmed; no plaintext remote artifacts were published. Local ciphertext/keys were retained privately. Do not recreate secrets, releases or remote runs from the old transport instructions. Standard `macos-26`/`macos-26-intel` public-runner compute is described as free by [GitHub](https://docs.github.com/en/billing/concepts/product-billing/github-actions); account billing was not audited and no all-services $0 guarantee is made. PJ's controlling instruction is local execution and no paid services.
+Keep all private fixtures, builds, logs and captures on the Mac outside public Git.
+Use a mode-700 working directory. The prior hosted run stopped during native tests,
+and its temporary secrets and draft release were deleted. Continue locally.
 
 ## Local completion sequence
 
-Run serially, one Xcode/app/capture at a time. Use a private derived-data directory, explicit destination, preserve logs/xcresults. Build once then `test-without-building`; allow more than 65 minutes for the complete suite if needed. Command-line `CODE_SIGNING_ALLOWED=NO` is for verification only; do not modify project/device signing or install on Vision Pro. The commands below are adapted from committed workflows/scripts; they were not executed in this Linux container.
+Run serially, one Xcode/app/capture at a time. Use a private derived-data directory, explicit destination, preserve logs/xcresults. Build once then `test-without-building`; allow more than 65 minutes for the complete suite if needed. Use command-line `CODE_SIGNING_ALLOWED=NO` for verification builds. Build separately with configured project signing for the final Vision Pro update. The commands below are adapted from committed workflows/scripts; they were not executed in this Linux container.
 
-1. Run Python, build candidate and complete **all** unchanged LiminalTests first. Enumerate suites using `declared_tests`, exactly as `.github/workflows/apple-verification.yml` does, then pass every name to the coverage checker. The checker proves execution, while xcodebuild exit separately proves success. Confirm `70ace3f` test actually ran; do not skip failing tests.
+1. Run Python, build candidate and complete **all** unchanged LiminalTests first. Enumerate suites using `declared_tests`, then pass every name to the coverage checker. The checker proves execution, while xcodebuild exit separately proves success. Confirm `70ace3f` test actually ran; do not skip failing tests.
 
 ```sh
 python3 -m unittest discover -s scripts -p 'test_*.py'
@@ -119,15 +120,15 @@ xcrun xcresulttool export attachments --path "$VERIFY_OUT/unit-tests.xcresult" -
 python3 scripts/dialogue-feel-report.py "$VERIFY_OUT/attachments" --baseline "$FEEL_BASELINE" > "$VERIFY_OUT/feel-comparison.json"
 ```
 
-Set `FEEL_BASELINE` to the preserved before attachment directory before comparison; use the preserved before fixture text and the exact same definitions to reproduce all18 gates. Preserve exit statuses, not just the final pipeline command. Full suite has three known prior issues: installed drum landmark and drum-bus-target tests (rerun with available authentic pack), and `LofiPadTests/phraseBoundaryBreathIsBridgedByTheTail` seed2077, observed dip6.206758 against6. Distinguish baseline/candidate; do not weaken limits. Build visionOS Simulator with `xcodebuild -scheme Liminal -destination 'generic/platform=visionOS Simulator' CODE_SIGNING_ALLOWED=NO build` if source changes invalidate the prior successful build. No device installation.
+Set `FEEL_BASELINE` to the preserved before attachment directory before comparison; use the preserved before fixture text and the exact same definitions to reproduce all18 gates. Preserve exit statuses, not just the final pipeline command. Full suite has three known prior issues: installed drum landmark and drum-bus-target tests (rerun with available authentic pack), and `LofiPadTests/phraseBoundaryBreathIsBridgedByTheTail` seed2077, observed dip6.206758 against6. Distinguish baseline/candidate; do not weaken limits. Build visionOS Simulator with `xcodebuild -scheme Liminal -destination 'generic/platform=visionOS Simulator' CODE_SIGNING_ALLOWED=NO build` for the final candidate.
 
 2. On the physical Mac compile/run `scripts/provision-verification-speech.swift` through the `speech` phase of `verify-real-media.sh`; record hardware, availability, supported/installed locales and actual transcript output. Provisioning is standalone and opt-in; no model downloads in production cue paths.
 3. Prepare/install identical private100 corpus on candidate and exact47a baseline, run native tests and exact built-resource identity checks. Use clean separate baseline checkout(s), since adapters intentionally modify source and each setup asserts original text. Never apply adapters twice. `verify-private-drums.py setup` and `verify-real-media.sh prepare` own overlapping adapters; use separate baseline worktrees for independent harnesses.
-4. Review `verify-real-media.sh` before running: it uses the current user's canonical `~/Library/Application Support/Liminal/ArchiveFootage` cache and writes it. Back up/preserve any existing cache and use an isolated local test account/environment if needed. Prepare fresh12-film cache/provenance, fix the chunk7 decode cause and achieve paired96/96 with same eligibility/model. A preparation ffmpeg check does not replace the actual AVFoundation decode coverage.
+4. The local `verify-real-media.sh` harness prepares and reads a dedicated cache at `OUT/ArchiveFootage` for both checkouts. Prepare fresh12-film cache/provenance, fix the chunk7 decode cause and achieve paired96/96 with same eligibility/model. A preparation ffmpeg check does not replace the actual AVFoundation decode coverage.
 5. Run exact baseline then candidate public/private matrices and probes serially. The harness signature is `scripts/verify-real-media.sh AFTER BASELINE OUT PHASE`, phases `prepare speech baseline after gates auditions app final`; inspect before invoking and stop for real prerequisites, not skip them. Preserve `baseline-verification-adapters.patch`; measurement/compiler/capture-only baseline adapters must not change DSP. `BUILD=0` probe reuse requires a matching compiled bundle.
 6. Recompute T/A metrics, both fresh/evolving footage experiments, re-hearing and complete mix cases; resolve source defects and rerun affected tests. Keep raw strict result, paired no-new-targeted-fail and historical certification distinct. Run app phase, inspect logs, use Peekaboo and actually view the app. Listen to dry and mixed authentic clips.
 7. Produce **3–4 qualifying short m4a examples**, including a real complete initialism and a drug/proper-name syllable figure: one parent, all units in order, uniform1/2step spacing, beat-aligned whole-word landing, export containment, exact source/render provenance. Acoustic extras cannot count. Include whole-word context, dry+mix, and explicit human listening outcome. Reconstruct/listen to historical19 cases where available; report unavailable ones.
-8. Update ledger/decision rationale/architecture/experience/maps for final results and failures, commit explicitly, and report a reviewable result. Main merge/push is deferred; no auto-trigger branch pushes or new remote verification under current instructions. Keep every missing requirement visible.
+8. Update ledger/decision rationale/architecture/experience/maps for final results and failures, commit explicitly, and report a reviewable result. After acceptance, fast-forward main, install the signed build on the paired Vision Pro, and remove the superseded task branches. Execute verification locally and retain any missing requirements in the ledger.
 
 ## Acceptance checklist: omit nothing
 

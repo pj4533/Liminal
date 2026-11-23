@@ -75,10 +75,12 @@ def declared_tests(source_directory):
 def coverage(text, source_directory, suites):
     declarations = declared_tests(source_directory)
     result = {}
+    # Xcode uses SF Symbols on newer macOS versions and Unicode checks on runners.
+    marker = r"[✔✘\U0010105b\U00100884]"
     for suite in suites:
         expected = declarations.get(suite, set())
-        completed = {name for name in expected if re.search(r'[✔✘] Test ' + re.escape(name) + r'\([^\n]*\)(?: with \d+ test cases)? (?:passed|failed) after ', text)}
-        suite_finished = bool(re.search(r'[✔✘] Suite ' + re.escape(suite) + r' (?:passed|failed) after ', text))
+        completed = {name for name in expected if re.search(marker + ' Test ' + re.escape(name) + r'\([^\n]*\)(?: with \d+ test cases)? (?:passed|failed) after ', text)}
+        suite_finished = bool(re.search(marker + ' Suite ' + re.escape(suite) + r' (?:passed|failed) after ', text))
         result[suite] = dict(expected=len(expected), completed=len(completed), missing=sorted(expected-completed),
                              suiteFinished=suite_finished, complete=bool(expected) and expected == completed and suite_finished)
     return dict(passed=bool(result) and all(r['complete'] for r in result.values()), suites=result)

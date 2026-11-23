@@ -2,25 +2,15 @@
 
 [← Project overview](../README.md) · [Documentation index](README.md)
 
-## Hosted Apple verification
+## Local Apple verification
 
-`.github/workflows/apple-verification.yml` runs on pushes to `main` and `work/**`.
-One macOS 26 runner builds the macOS app, runs the focused dialogue suites, runs
-all `LiminalTests`, then builds for a generic visionOS Simulator destination when
-that SDK is installed. Commands run sequentially with one macOS test destination;
-Swift Testing still schedules tests within that host according to their traits.
-Failures remain failures, including the full suite after a focused test failure.
-The `apple-verification-<commit>` artifact retains toolchain inventory, command
-logs and `.xcresult` bundles for 14 days. An absent simulator SDK is explicitly
-reported as unverified. No device installation or private drum assets are involved.
-Opt-in probes requiring cached films/transcripts remain off; hosted tests do not
-replace the local salience probe, mix captures, listening or visual verification.
-
-The project targets macOS 26.0 and uses the installed SDK, rather than pinning
-Xcode 27.2. GitHub's [macOS 26 image inventory](https://github.com/actions/runner-images/blob/main/images/macos/macos-26-arm64-Readme.md)
-listed Xcode 26.6 and the visionOS 26.5 Simulator SDK on 23 November 2026. Each run
-records the actual installed versions before compiling; compiler results determine
-whether a newer SDK is needed by any source API.
+Build and test on the Mac using the installed Xcode and explicit destinations.
+Run one Xcode build, test or capture at a time. Keep logs and result bundles in a
+dedicated local directory. Use the full test and execution-coverage commands in
+the [local handoff](plans/HANDOFF-2026-11-23-CODEX-LOCAL.md), then build the visionOS
+Simulator target and verify playback visually with Peekaboo. The unit suite uses
+bundled assets. The [private drum procedure](plans/dialogue-salience/private-drum-verification.md)
+verifies the separately installed samples and grid in isolated local checkouts.
 
 ## Lo-Fi checks
 
