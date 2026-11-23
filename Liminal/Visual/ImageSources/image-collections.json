@@ -1777,8 +1777,7 @@
    "queries": [
     "radio studio",
     "jukebox",
-    "recording studio",
-    "music store"
+    "recording studio"
    ],
    "requireIIIF": true,
    "useMasters": true,
@@ -1805,15 +1804,15 @@
     "night transit",
     "Streamline Moderne bus stations",
     "neon marquees",
-    "observatory domes",
-    "science museums"
+    "neon signs",
+    "observatory domes"
    ],
    "collection": "carol-m-highsmith",
    "queries": [
     "bus station",
     "theater marquee",
     "observatory",
-    "science museum"
+    "neon sign"
    ],
    "requireIIIF": true,
    "useMasters": false,
@@ -1895,17 +1894,15 @@
     "record grooves",
     "cutting lathes",
     "mixing desks",
-    "record shops",
     "jukeboxes"
    ],
    "searches": [
     "reel to reel tape recorder filew:>2000",
-    "vinyl record grooves",
+    "vinyl record grooves filew:>1999 fileh:>1332",
     "record cutting lathe",
-    "radio mixing console",
-    "recording studio control room",
-    "record shop",
-    "jukebox"
+    "radio mixing console filew:>1999 fileh:>1332",
+    "recording studio control room filew:>1999 fileh:>1332",
+    "jukebox filew:>1999 fileh:>1332"
    ],
    "rejectTitleWords": [
     "logo",
@@ -1919,7 +1916,12 @@
     "screw",
     "taps",
     "diagram",
-    "schema"
+    "schema",
+    "TouchTunes",
+    "Unsplash",
+    "Liseberg",
+    "debate",
+    "Citizens"
    ],
    "license": "Per file: CC BY, CC BY-SA, CC0 or public domain, creator credited (D37)",
    "pinned": [
@@ -1927,9 +1929,7 @@
     "File:Audio console at Studio di Fonologia Musicale RAI di Milano.jpg",
     "File:Neumann VMS-70 Cutting Lathe, SAE Mastering, Phoenix, AZ.jpg",
     "File:Beocord 1100 open reel tape recorder.jpg",
-    "File:Jukebox in Island Delights, Surf City 02.jpg",
-    "File:33rpm Record Grooves.JPG",
-    "File:US Record Store 1963.jpg"
+    "File:Jukebox in Island Delights, Surf City 02.jpg"
    ],
    "allowMonochrome": false
   },
@@ -1941,7 +1941,6 @@
    "weight": 5,
    "themes": [
     "inner worlds",
-    "neurons",
     "schlieren flows",
     "caustics",
     "thin films",
@@ -1950,11 +1949,9 @@
     "astronomical instruments"
    ],
    "searches": [
-    "Purkinje cells filew:>1999 fileh:>1332",
     "schlieren photography filew:>1999 fileh:>1332",
     "diatom micrograph filew:>1999 fileh:>1332",
     "water caustics filew:>1999 fileh:>1332",
-    "soap film interference filew:>1999 fileh:>1332",
     "microscope pond filew:>1999 fileh:>1332",
     "pond reflection filew:>1999 fileh:>1332",
     "duckweed filew:>1999 fileh:>1332",
@@ -1971,10 +1968,19 @@
     "Article",
     "HTML",
     "Fig",
-    "figure"
+    "figure",
+    "slide",
+    "stain",
+    "clown",
+    "performer",
+    "Coast watch"
    ],
    "license": "Per file: CC BY, CC BY-SA, CC0 or public domain, creator credited (D37)",
-   "pinned": [],
+   "pinned": [
+    "File:Lipid Islands on Soap Bubble (horizontal).jpg",
+    "File:Thin Film Interference Soap Bubble.jpg",
+    "File:Soap Film 1.jpg"
+   ],
    "allowMonochrome": false
   },
   {
@@ -2036,17 +2042,7 @@
      "yearEnd": 1980
     },
     {
-     "q": "magnetic tape",
-     "yearStart": 1960,
-     "yearEnd": 1980
-    },
-    {
      "q": "analog computer",
-     "yearStart": 1960,
-     "yearEnd": 1980
-    },
-    {
-     "q": "wind tunnel control room",
      "yearStart": 1960,
      "yearEnd": 1980
     },
@@ -2069,7 +2065,11 @@
     "ceremony"
    ],
    "license": "nasa",
-   "pinned": [],
+   "pinned": [
+    "GRC-1973-C-01775",
+    "S73-36162",
+    "ARC-1971-AC71-1227"
+   ],
    "allowMonochrome": true
   },
   {
@@ -2192,7 +2192,8 @@
    "themes": [
     "quiet ponds",
     "Venetian reflections",
-    "twilight"
+    "Whistler nocturnes",
+    "Monet's Gare Saint-Lazare"
    ],
    "queries": [
     {
@@ -2200,13 +2201,14 @@
      "type": "Painting"
     },
     {
-     "q": "twilight"
+     "q": "nocturne"
     }
    ],
    "license": "CC0 (AIC is_public_domain)",
    "pinned": [
     66892,
-    95993
+    95993,
+    16571
    ],
    "allowMonochrome": false
   },

@@ -82,8 +82,8 @@ The app rotates through these collections (`Liminal/Visual/ImageSources/image-co
 | 1850s photographs: Le Gray's Fontainebleau, Watkins's Yosemite, waterfalls | The Metropolitan Museum of Art | CC0 (public-domain objects) | [Open Access](https://www.metmuseum.org/about-the-met/policies-and-documents/open-access) |
 | Hiroshige night and rain prints | The Metropolitan Museum of Art | CC0 (public-domain objects) | [Open Access](https://www.metmuseum.org/about-the-met/policies-and-documents/open-access) |
 | 19th-century landscape paintings, prints and photographs: moonlight, forests, rivers, mountains | Art Institute of Chicago | CC0 (public-domain works) | [Collection](https://www.artic.edu/collection) |
-| Interest pack (D130): Carol M. Highsmith radio and recording studios, jukeboxes, music stores | Library of Congress | No known restrictions on publication | [Highsmith Archive](https://www.loc.gov/collections/carol-m-highsmith/) |
-| Interest pack: Highsmith Streamline bus stations, neon theatre marquees, observatory domes, science museums | Library of Congress | No known restrictions on publication | [Highsmith Archive](https://www.loc.gov/collections/carol-m-highsmith/) |
+| Interest pack (D130): Carol M. Highsmith radio and recording studios, jukeboxes | Library of Congress | No known restrictions on publication | [Highsmith Archive](https://www.loc.gov/collections/carol-m-highsmith/) |
+| Interest pack: Highsmith Streamline bus stations, neon theatre marquees and signs, observatory domes | Library of Congress | No known restrictions on publication | [Highsmith Archive](https://www.loc.gov/collections/carol-m-highsmith/) |
 | Interest pack: analog computers, mainframe rooms, core memory, teletypes, planetarium projectors | Wikimedia Commons photographers and museums | CC BY / CC BY-SA / CC0 / public domain (creator and licence shown) | [Commons](https://commons.wikimedia.org/) |
 | Interest pack: reel-to-reel recorders, record grooves, cutting lathes, mixing desks, record shops, jukeboxes | Wikimedia Commons photographers | CC BY / CC BY-SA / CC0 / public domain (creator and licence shown) | [Commons](https://commons.wikimedia.org/) |
 | Interest pack: schlieren flows, water caustics, soap films, pond life, duckweed, moss, astronomical instruments | Wikimedia Commons photographers | CC BY / CC BY-SA / CC0 / public domain (creator and licence shown) | [Commons](https://commons.wikimedia.org/) |
@@ -92,7 +92,7 @@ The app rotates through these collections (`Liminal/Visual/ImageSources/image-co
 | Interest pack: 1970s NASA Ames space-settlement paintings (tori, Bernal spheres) | NASA (commissioned artists) | US Government work | [NASA Image and Video Library](https://images.nasa.gov/) |
 | Interest pack: Tichnor linen postcards of city nights, railroad and radio stations, canoe lakes, the Hudson | Boston Public Library, via Digital Commonwealth | No restrictions | [Tichnor Brothers Collection](https://www.digitalcommonwealth.org/search?f%5Brelated_item_host_ssim%5D%5B%5D=The+Tichnor+Brothers+Collection) |
 | Interest pack: quiet ponds, reflections and lakes (Corot, Diaz, Inness; pond etchings) | Cleveland Museum of Art | CC0 | [Open Access](https://www.clevelandart.org/open-access) |
-| Interest pack: ponds, reflections and twilight | Art Institute of Chicago | CC0 (public-domain works) | [Collection](https://www.artic.edu/collection) |
+| Interest pack: ponds, Venetian reflections, Whistler nocturnes, Monet's Gare Saint-Lazare | Art Institute of Chicago | CC0 (public-domain works) | [Collection](https://www.artic.edu/collection) |
 | Interest pack: ponds, Whistler nocturnes, 19th-century railway photographs | The Metropolitan Museum of Art | CC0 (public-domain works) | [Open Access](https://www.metmuseum.org/about-the-met/policies-and-documents/open-access) |
 
 ## Lo-Fi
