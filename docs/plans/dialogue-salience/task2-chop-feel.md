@@ -112,3 +112,18 @@ Local commands: `python3 scripts/test_dialogue_feel_report.py` (4 passed),
 No scanner enabled, image/catalog/criteria files changed, app installed, Vision Pro build deployed,
 private samples added, or real-film mix/listening gates claimed. The real cache probe, strict mix
 matrix, app run and short audition clips remain separate acceptance work.
+
+## Regression diagnosis
+
+The 23 November hosted regression run at `da23b73` exposed two faults: translating an entire
+chop cell moved responses off their backbeats, and a spelling turnaround in only the second
+pass disabled translation for that pass alone. Fill movement now preserves every skeleton
+hit and translates only a shared nonstructural hit when both neighbours retain enough room.
+Reverse pickups no longer target a cell's far boundary, where their dry tail could block the
+next cell's first consonant. The original density, recurrence and backbeat gates remain.
+
+The same run found a resampled pad whose independently measured attack was 66.8 ms late.
+The regression records the stored and newly detected offsets to distinguish rejected onset
+remeasurement from selection of the wrong syllable peak. `Dialogue regression diagnosis`
+runs the musical, word-integrity and timing suites plus the unchanged measurement harness
+on `verify/chop-fix/**`; its artifacts preserve failures as well as successes.

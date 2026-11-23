@@ -63,6 +63,37 @@ struct DialogueChopFeelTests {
         #expect(rates.count >= 3, "line playback rates: \(rates)")
     }
 
+    @Test func movingFillsKeepsBothHookPassesAndBackbeatsWhenOnlyTheTurnaroundSpells() {
+        func fragment(_ id: Int, _ kind: DialogueMotifFragment.Kind) -> DialogueMotifFragment {
+            DialogueMotifFragment(id: id, kind: kind, order: id, parent: kind == .letter ? 1 : nil,
+                frames: (id * 1000)..<(id * 1000 + 100), accentFrame: id * 1000,
+                fadeIn: 0, fadeOut: 0, text: nil, weight: 0.95)
+        }
+        let fragments = [fragment(0, .line), fragment(1, .piece), fragment(2, .piece), fragment(3, .letter)]
+        typealias Item = DialogueMotifCell.Item
+        let shared = [Item(fragment: 1, slot: 0, fixed: true, gate: 2, skeleton: true),
+                      Item(fragment: 2, slot: 4, fixed: true, gate: 2, skeleton: true),
+                      Item(fragment: 1, slot: 8, fixed: true, gate: 2),
+                      Item(fragment: 2, slot: 12, fixed: true, gate: 2, skeleton: true),
+                      Item(fragment: 1, slot: 16, fixed: true, gate: 2, skeleton: true),
+                      Item(fragment: 2, slot: 20, fixed: true, gate: 2, skeleton: true)]
+        let cells = [DialogueMotifCell(kind: .chopBeat, bar: 2, bars: 2, variant: 0, items: shared),
+                     DialogueMotifCell(kind: .chopBeat, bar: 4, bars: 2, variant: 0,
+                        items: shared + [Item(fragment: 3, slot: 29, fixed: true, gate: 1)])]
+        var previous: [DialogueMotifCell] = []
+        for seed: UInt64 in 1...30 {
+            let arranged = DialogueMovePool.arrange(cells, fragments: fragments, signature: 1,
+                sampleRate: 1000, beatDuration: 60 / 72, seed: seed, avoiding: previous)
+            for cell in arranged {
+                #expect(cell.items.filter(\.skeleton) == shared.filter(\.skeleton))
+                #expect(cell.items.filter { $0.effect != .reversed && $0.slot < 28 }.count == shared.count)
+                #expect(cell.items.allSatisfy { $0.slot < cell.bars * 16 })
+            }
+            #expect(arranged[0].items.filter { $0.slot < 28 } == arranged[1].items.filter { $0.slot < 28 })
+            previous = arranged
+        }
+    }
+
     @Test func movePoolPreservesCompleteSpellingFiguresAndDynamicChains() throws {
         func fragment(_ id: Int, _ kind: DialogueMotifFragment.Kind, parent: Int? = nil) -> DialogueMotifFragment {
             DialogueMotifFragment(id: id, kind: kind, order: parent ?? id, parent: parent,
@@ -187,8 +218,15 @@ struct DialogueChopFeelTests {
                         #expect(hits.count == 1, "pad \(pad.padID) missing independent attack measurement")
                         for hit in hits where abs(hit.attackMs) > 35 {
                             let detail = "FEEL-TIGHT-INVENTORY native=\(isNative) bpm=\(bpm) seed=\(seed) pad=\(id) frames=\(pad.frames) rate=\(transform.playbackRate) attackMs=\(hit.attackMs)"
-                            print(detail)
-                            Attachment.record(detail, named: "inventory-\(bpm)-\(seed)-\(id)-\(isNative).txt")
+                            let n = Int(buffer.frameLength), sr = buffer.format.sampleRate
+                            let head = min(n, Int(0.45 * sr))
+                            let x = buffer.floatChannelData![0]
+                            let envelope = DialogueOnsetEnvelope(samples: x, count: n, rate: sr, span: 0..<head, filtered: false)
+                            let attack = DialogueOnset.attack(envelope, samples: x, count: n, rate: sr, search: 0..<head)
+                            let strongest = DialogueOnset.attack(envelope, samples: x, count: n, rate: sr, search: 0..<head, firstPeakShare: 1)
+                            let diagnostics = " storedOffset=\(motif.accentOffset(id)) candidateOffset=\(Double(attack.beatFrame) / sr) strongestOffset=\(Double(strongest.beatFrame) / sr)"
+                            print(detail + diagnostics)
+                            Attachment.record(detail + diagnostics, named: "inventory-\(bpm)-\(seed)-\(id)-\(isNative).txt")
                         }
                         if isNative { inventoryNative += hits } else { inventoryMatched += hits }
                     }

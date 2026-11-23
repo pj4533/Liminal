@@ -26,13 +26,39 @@ nonisolated enum DialogueMovePool {
             let choices = fresh.isEmpty ? pool : fresh
             return choices[rng.int(0...(choices.count - 1))]
         }
-        // The same eighth-note displacement in both passes keeps the hook recognizable inside
-        // a loop, while its entrance and gaps change for the next source line. Translation keeps
-        // protected source-order runs intact; a phrase end that no longer fits is left out.
-        let firstChop = cells.first { $0.kind == .chopBeat }
-        let oldChop = previous.first { $0.kind == .chopBeat }
-        let oldShift = oldChop?.items.first.map { $0.slot - (firstChop?.items.first?.slot ?? 0) }
-        let chopShift = draw([0, 2, 4], avoiding: Set(oldShift.map { [$0] } ?? []))
+        // The hook's call, backbeat responses and spelling stay on their authored grid. Only
+        // a shared fill may move, identically in both passes, inside its neighbours' free room.
+        // Never translate a complete cell: a spelling turnaround can occur in only one pass.
+        let chopCells = cells.filter { $0.kind == .chopBeat }
+        var fillMoves: [Int: Int] = [:]
+        if chopCells.count == 2 {
+            let first = chopCells[0].items
+            let second = chopCells[1].items
+            let old = oldSlots(.chopBeat)
+            for item in first where !item.skeleton && !item.stutter && !fragments[item.fragment].isUnit && item.slot < 28 {
+                guard second.contains(item) else { continue }
+                let candidates = [item.slot - 2, item.slot, item.slot + 2].filter { slot in
+                    guard slot > 0, slot < 28 else { return false }
+                    return chopCells.allSatisfy { cell in
+                        let neighbours = cell.items.filter { $0 != item }
+                        let before = neighbours.last { $0.slot < item.slot }
+                        let after = neighbours.first { $0.slot > item.slot }
+                        guard slot > (before?.slot ?? -1), slot < (after?.slot ?? 32) else { return false }
+                        let step = beatDuration > 0 ? beatDuration / 4 : 0.2
+                        let own = Double(fragments[item.fragment].frames.count) / sampleRate
+                        if own + DialogueMotifTuning.nextLeadSeconds > Double((after?.slot ?? 32) - slot) * step { return false }
+                        if let before {
+                            let length = Double(fragments[before.fragment].frames.count) / sampleRate
+                            if length + DialogueMotifTuning.nextLeadSeconds > Double(slot - before.slot) * step { return false }
+                        }
+                        return true
+                    }
+                }
+                if !candidates.isEmpty { fillMoves[item.slot] = draw(candidates, avoiding: old) }
+                // One pocket changes at a time; later fills still see the authored neighbours.
+                if fillMoves[item.slot] != nil { break }
+            }
+        }
         var result: [Cell] = []
         for cell in cells {
             var items = cell.items
@@ -67,13 +93,9 @@ nonisolated enum DialogueMovePool {
                 }
                 items = shifted
             case .chopBeat:
-                if !items.contains(where: { fragments[$0.fragment].isUnit && fragments[$0.fragment].kind != .half }) {
-                    items = items.compactMap { item in
-                        let slot = item.slot + chopShift
-                        guard slot < 32, DialogueMotif.fitsRoom(item.fragment, steps: 32 - slot,
-                            fragments: fragments, sampleRate: sampleRate, beatDuration: beatDuration) else { return nil }
-                        return moved(item, to: slot)
-                    }
+                items = items.map { item in
+                    if let slot = fillMoves[item.slot], !item.skeleton { return moved(item, to: slot) }
+                    return item
                 }
             case .build:
                 // Shift a complete repeat gesture as one group; metrical shifts keep its shape, and
@@ -131,7 +153,7 @@ nonisolated enum DialogueMovePool {
             let cell = result[index]
             // A chop-beat pickup recurs in both passes of the hook, before the turnaround.
             if cell.kind == .chopBeat && cell.bar != 2 { continue }
-            for slot in stride(from: 4, through: cell.bars * 16, by: 4) {
+            for slot in stride(from: 4, to: cell.bars * 16, by: 4) {
                 let absolute = cell.bar * 16 + slot
                 guard !oldReverses.contains(absolute), absolute < 256, slot - lead >= 0 else { continue }
                 // Dynamic chains have unknown end positions; leave the outro's restatement alone.

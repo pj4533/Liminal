@@ -1,0 +1,44 @@
+name: Dialogue regression diagnosis
+
+on:
+  push:
+    branches: ['verify/chop-fix/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dialogue:
+    runs-on: macos-26
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run dialogue regressions
+        shell: bash
+        run: |
+          mkdir -p verification
+          set -o pipefail
+          set +e
+          xcodebuild test CODE_SIGNING_ALLOWED=NO -project Liminal.xcodeproj -scheme Liminal \
+            -destination 'platform=macOS,arch=arm64' -parallel-testing-enabled NO \
+            -derivedDataPath "$RUNNER_TEMP/LiminalDerivedData" \
+            -resultBundlePath verification/dialogue-regression.xcresult \
+            -only-testing:LiminalTests/DialogueChopFeelTests \
+            -only-testing:LiminalTests/DialogueFeelMetricsTests \
+            -only-testing:LiminalTests/DialogueMotifTests \
+            -only-testing:LiminalTests/DialogueTightnessTests \
+            -only-testing:LiminalTests/DialogueGateTests \
+            -only-testing:LiminalTests/DialogueWordCutTests \
+            2>&1 | tee verification/dialogue-regression.log
+          result=${PIPESTATUS[0]}
+          xcrun xcresulttool export attachments --path verification/dialogue-regression.xcresult \
+            --output-path verification/attachments
+          exit "$result"
+      - name: Preserve diagnosis
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dialogue-regression-${{ github.sha }}
+          path: verification/
+          retention-days: 14
