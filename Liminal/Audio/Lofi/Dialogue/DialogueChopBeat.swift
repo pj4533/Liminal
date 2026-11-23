@@ -181,8 +181,9 @@ nonisolated extension DialogueMotif {
         let d = GrooveDrums(drums)
         var hits: [Int: Hit] = [:]
         // The skeleton plays off the kicks too: a hit on a kick that is not a downbeat moves an 8th later
-        // (or earlier) to a step without a kick, onto a snare only for the response. It depends on the
-        // take alone, so the hook holds for its loops on one take.
+        // (or earlier) to a step without a kick, onto a snare only for the response. These eighth-note
+        // placements depend on the take alone.
+        var skeletonSlot: [Int: Int] = [:]
         for (role, step) in template {
             var at = step
             if step % 16 != 0, d.kick[step] {
@@ -191,6 +192,7 @@ nonisolated extension DialogueMotif {
                     && !template.contains { $0.1 == k } && hits[k] == nil }
                 at = [step + 2, step - 2].first(where: free) ?? step
             }
+            skeletonSlot[step] = at
             hits[at] = Hit(fragment: role == .s ? v.s : (role == .r ? v.r : v.t), gate: nil, skeleton: true, site: nil)
         }
 
@@ -208,6 +210,36 @@ nonisolated extension DialogueMotif {
         }
         func count(_ bar: Int) -> Int { hits.keys.filter { $0 / 16 == bar }.count }
         func oddCount() -> Int { hits.keys.filter { $0 % 2 == 1 }.count }
+
+        // If both eighth-note alternatives were blocked, look within one beat of the
+        // original step. Reserve every other skeleton hit first, including its actual
+        // eighth-note displacement. The new step must leave whole words on either side.
+        for (role, step) in template where step % 16 != 0 && d.kick[step] {
+            guard let original = hits.removeValue(forKey: step) else { continue }
+            let order = hits.keys.sorted()
+            let before = order.last { $0 < step } ?? (order.last ?? step) - 32
+            let after = order.first { $0 > step } ?? (order.first ?? step) + 32
+            let barStart = step / 16 * 16
+            var candidates = [1, -1, 3, -3, 4, -4].map { step + $0 }
+            // A repeated call at the same beat of the second bar keeps the first
+            // call's subdivision when possible (both on the "and", or both on the "a").
+            if template.contains(where: { $0.0 == role && $0.1 == step - 16 }),
+               let first = skeletonSlot[step - 16] {
+                candidates = candidates.filter { $0 % 4 == first % 4 } + candidates.filter { $0 % 4 != first % 4 }
+            }
+            let pocket = candidates.first { k in
+                guard (barStart..<(barStart + 16)).contains(k),
+                      before < k, k < after, !d.kick[k], role == .r || !d.snare[k],
+                      k.isMultiple(of: 2) || oddCount() < DialogueMotifTuning.grooveOffEighths,
+                      fits(k), fitsRoom(original.fragment, steps: after - k, fragments: fragments,
+                                        sampleRate: sampleRate, beatDuration: beatDuration) else { return false }
+                guard let previous = hits[(before + 32) % 32] else { return true }
+                return fitsRoom(previous.fragment, steps: k - before, fragments: fragments,
+                                sampleRate: sampleRate, beatDuration: beatDuration)
+            }
+            skeletonSlot[step] = pocket ?? step
+            hits[pocket ?? step] = original
+        }
 
         // Positions. The pickup on the swung "a" goes into one downbeat of the cell (seeded), when it is free.
         let pushBar = rng.int(0...1)

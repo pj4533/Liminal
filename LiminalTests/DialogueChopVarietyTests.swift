@@ -190,6 +190,27 @@ struct DialogueChopVarietyTests {
         }
     }
 
+    /// A hook on a kick with both eighth-note alternatives blocked can use a nearby
+    /// sixteenth. A whole word must still fit between that pocket and the next role.
+    @Test func blockedHookUsesOnlyAPocketWithRoomForTheWord() {
+        let template: [(DialogueMotifTuning.HookRole, Int)] = [(.s, 6), (.r, 10), (.t, 24)]
+        let vocabulary = DialogueMotif.GrooveVocabulary(s: 0, r: 1, t: 2, sa: 0, ra: 1,
+                                                       pieces: [0, 1, 2], halves: [:])
+        let drums = DialogueMotifDrums(kicks: [4, 6, 8], snares: [])
+        for (length, expected) in [(100, 7), (450, 5)] {
+            let fragments = [length, 100, 100].enumerated().map { i, n in
+                DialogueMotifFragment(id: i, kind: .piece, order: i, parent: nil, frames: 0..<n,
+                                      accentFrame: 0, fadeIn: 0, fadeOut: 0, text: nil)
+            }
+            for seed: UInt64 in [1, 9] {
+                let items = DialogueMotif.groove(template: template, vocabulary: vocabulary, drums: drums,
+                                                 reorderAllowed: true, fragments: fragments, sampleRate: 1_000,
+                                                 seed: seed, beatDuration: 0.5)
+                #expect(items.filter(\.skeleton).map(\.slot) == [expected, 10, 24])
+            }
+        }
+    }
+
     /// A line that may not be reordered drops a fill site no cut fits, on any drum pattern, and keeps
     /// each bar's new pieces in source order (the app run of 22 November 2026 crashed on a dropped site).
     @Test func aLineThatMayNotBeReorderedDropsSitesSafelyOnAnyDrums() throws {
