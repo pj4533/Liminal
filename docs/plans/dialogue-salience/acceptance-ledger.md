@@ -3,7 +3,9 @@
 Scope: all open dialogue tasks in [HANDOFF-2026-11-23.md](../HANDOFF-2026-11-23.md),
 [plan.md](plan.md), [diagnosis.md](diagnosis.md), [stage2-3-implementation.md](stage2-3-implementation.md),
 [task2-chop-feel.md](task2-chop-feel.md) and [real-media-verification.md](real-media-verification.md).
-This is an evidence snapshot at `b4d207b` plus documentation changes, not a completion certificate.
+This ledger was reconciled at infrastructure `445b9dc` plus the final documentation commit.
+The controlling local-only continuation is [CODEX local handoff](../HANDOFF-2026-11-23-CODEX-LOCAL.md);
+no further remote execution is authorized. This is not a completion certificate.
 Statuses: **verified** = specified observation exists at the named revision; **failing** = observed
 miss; **pending** = evidence not complete; **blocked** = a concrete missing prerequisite is identified.
 A source implementation is not a verified behavior. Retain raw evidence, exact revisions and commands
@@ -15,13 +17,13 @@ when updating a row. Never turn a criterion green solely because a fix was commi
 |---|---|---|
 | Historical diagnosis/base2, 12 films, 95 windows, 72 BPM | T 9,318 plays; A 10,170; 159 salient-word occurrences; detailed definitions in diagnosis | verified historical report, raw original cache identity unavailable |
 | Stage 1 `9e7e23d` / baseline fixture checkout `47a01fe267a3972241ed6918d031fffe55f26ed2` | Historical post-stage-1 measurements in music D130; misses below | verified historical report; not final acceptance |
-| Before fixture run [45172042529](https://github.com/pj4533/Liminal/actions/runs/45172042529), `06c1095` | 108 loops, 72 consecutive pairs, all 72 changing source line; raw `/tmp/liminal-feel-before/feel-attachments/` | verified |
+| Before fixture run [45172042529](https://github.com/pj4533/Liminal/actions/runs/45172042529), `06c1095` | 108 loops, 72 consecutive pairs, all 72 changing source line; raw text/manifest preserved at `/app/state/liminal-verification/task2-baseline/feel-attachments/` (original `/tmp` path volatile) | verified |
 | After fixture/regression run [45175446431](https://github.com/pj4533/Liminal/actions/runs/45175446431), `da23b73` | All 18 scoped pattern gates pass, regression 35 tests / 69 issues; local raw/report `/app/state/liminal-verification/run45175446431/` | verified measurements, failing candidate |
 | Structural-hook repair `a024ce7`, diagnosis [45179434556](https://github.com/pj4533/Liminal/actions/runs/45179434556) | Hook/backbeat preservation and stored/detected onset diagnostics added; completion not established here | pending |
 | Media [45177726652](https://github.com/pj4533/Liminal/actions/runs/45177726652) | Historical short-SHA checkout failed; unrelated suites do not prove media | failing historical attempt |
-| Media [45180018915](https://github.com/pj4533/Liminal/actions/runs/45180018915), `b4d207b` | Full-SHA baseline checkout succeeded; remaining prerequisites/results not established here | pending |
+| Media [45180018915](https://github.com/pj4533/Liminal/actions/runs/45180018915), `b4d207b` | Stage3 31 tests/2 suites and12-film preparation succeeded; SpeechTranscriber unavailable | verified scoped tests/preparation; T blocked |
 | Public-media smoke | Authentic World of LSD / `aapb-cpb-aacip-514-n00zp3ws90` downloaded and decoded, 2907.901 s; metadata/hash/track provenance `/app/state/liminal-verification/public-media-smoke/provenance/` | verified one source only |
-| Private AJ Hall pack, beat grid, installed-library cache | Absent in both available checkouts and documented `/app/state` inventory; purchased assets cannot be fabricated or replaced by public drums | blocked private matrix |
+| Private AJ Hall pack / fresh grid | All four source packs located; 112 originals →100 eligible byte-preserved files, grid SHA f04ed987…dbee; bundle `/app/state/liminal-private-verification/bundle` | preparation verified; native tests and paired matrix UNMET after cancellation; historical installed cache unavailable |
 | User listening/device | No listening confirmed; no device installation authorized | pending listening; device installation user-gated |
 
 Historical 159 occurrences and the historical 19 audio cases cannot be assumed present in a newly
@@ -69,22 +71,21 @@ word-aligned protected-span rescue; no onset trim beyond content start slack; on
 multi-syllable/letter units; word-end gates and no content-word chokes; short-site fit/drop;
 untexted demotion; transcript-safe fallback pads; content roles/tags/repair; interest-first ranking;
 complete in-order uniformly spaced spelling ending on the beat-aligned whole word; deterministic
-same-seed planning. Source/tests exist, but final focused regressions are **pending** and current
-candidate failures below prevent blanket acceptance. Acoustic `notSpeech` exclusions and missed
+same-seed planning. Focused suites passed at the named revisions; incomplete final execution and authentic evidence prevent blanket acceptance. Acoustic `notSpeech` exclusions and missed
 salient-word reasons must be reported, not omitted.
 
 ## Task 1 stage 3: stored learning and production selection
 
 | Requirement | Evidence needed / status |
 |---|---|
-| Persist scanned spans + ranked lines; mutex, coalesced atomic save, in-memory tests; ≥.45 and ≤6 per30s; lexicon invalidation | Implementation present; round-trip/merge/version test results pending latest run |
-| Timely + late cached transcript learning after publication, independent cancellation, no cache lock held | `1a05dab` source and runtime tests; latest runtime/stage3 results pending |
-| Actual analyzed bounds, source-rate conversion; no features means no scanned span | source + `scannedSpanUsesAnalyzedFramesAndSourceRate`; latest result pending |
-| No bed/music delay; cue-token/revision and acoustic fallback preserved | focused runtime/timing evidence and 200s launch pending |
-| Catalog start retained; independent clip/piece RNG; empty index identical | production `FootageSalience.prepare` shared with probe; seed regression pending |
-| Sound-only .65 override, weighted feasible top5 ≥.6, unplayed, 3–10s lead, ≥20s shown-start avoidance, complete actual cue containment incl. rate/preroll/clamp | unit + production-shared real simulation evidence pending |
-| Sound-only recency boost ≤2×; pinned/discovery eligibility/current exclusion/duration/audio filtering preserved; every clip eligible | unit + simulation per-film counts pending |
-| 1,000 synthetic sound picks while candidates last | salient fraction .55–.75; pending latest test |
+| Persist scanned spans + ranked lines; mutex, coalesced atomic save, in-memory tests; ≥.45 and ≤6 per30s; lexicon invalidation | implementation covered by stage3 31 tests/2 suites in45221406217; real selection acceptance separate |
+| Timely + late cached transcript learning after publication, independent cancellation, no cache lock held | `1a05dab` source and runtime tests; stage3 31 tests/2 suites passed in45221406217; final complete suite pending |
+| Actual analyzed bounds, source-rate conversion; no features means no scanned span | source + `scannedSpanUsesAnalyzedFramesAndSourceRate`; stage3 focused execution passed in45221406217; authentic bounds inventory incomplete |
+| No bed/music delay; cue-token/revision and acoustic fallback preserved | DialogueRuntimeTests passed in45221406217; final full-suite and clean200s app evidence pending |
+| Catalog start retained; independent clip/piece RNG; empty index identical | production `FootageSalience.prepare` shared with probe; empty-index/seed unit regression passed in45221406217 |
+| Sound-only .65 override, weighted feasible top5 ≥.6, unplayed, 3–10s lead, ≥20s shown-start avoidance, complete actual cue containment incl. rate/preroll/clamp | FootageSalience unit regressions passed in45221406217; production-shared authentic simulation evidence pending |
+| Sound-only recency boost ≤2×; pinned/discovery eligibility/current exclusion/duration/audio filtering preserved; every clip eligible | FootageSalience unit regressions passed in45221406217; authentic simulation per-film counts pending |
+| 1,000 synthetic sound picks while candidates last | salient fraction .55–.75 asserted by passing sound-pick unit test in45221406217; authentic simulation remains separate |
 | Log each salient pick film/seconds/interest/peak | pending app-run log review |
 | Ahead-of-time scanner | Not implemented/enabled; constant false. Explicit allowed off path; no speculative transcription. Scanner-on throttling/cancellation/installed-only and perf acceptance not applicable while off; implementing/enabling needs separate evidence |
 
@@ -143,31 +144,39 @@ Within-loop hook recurrence is .969033. Exact report and raw artifact locations 
 
 | Task | Status and completion evidence required |
 |---|---|
-| Fresh twelve-film public provenance | pending complete decode set; one World of LSD route verified only; preserve metadata/hash/failures and exact corpus |
-| Installed English SpeechTranscriber | pending explicit provisioner/model output; acoustic fallback cannot qualify T evidence; no production download |
+| Fresh twelve-film public provenance | fresh12-film preparation/provenance present; actual baseline95/96 windows, Timothy_Leary_Archives_198 chunk7 decode missing; corpus qualification unmet |
+| Installed English SpeechTranscriber | unavailable on tested Intel/ARM hosted VMs/current and new SDK; no supported/installed locales. Physical Mac provision/actual transcripts required |
 | Paired real probe | pending eight chunks/72BPM/seed1, same cache/model; raw logs/snippets + before/after summaries + every target above |
 | Historical 19 cases | pending availability/reproduction/relisten: 01 whole LSD;02 choke;03 gate;04–05 LS/D;06 whole marijuana;07 choke;08 gate;09–10 UFO;11–12 trip;13 Smaller;14 grebe;15 Air Force;16 is;17 Yes they;18 Pure cane;19 The kids. Original scratch WAVs lost; use diagnosis film/time table and report missing cases, never label unchosen lines passed |
-| Strict bundled/public matrix | pending ref,fast,same,transcribe before/after, distinctly labelled; baseline compiler adapter exact patch retained |
-| Strict private AJ Hall matrix | blocked absent purchased pack/grid; no documented public distribution route; authentic prerequisite must become available |
+| Strict bundled/public matrix | partial45221406217 after ref6fails/fast4fails, same/transcribe incomplete; baseline signing adapter fixed later2c87c22. Paired no-new-fail unverified |
+| Strict private AJ Hall matrix | source and fresh100-file/grid available;45227791928 authenticated/installed then user-cancelled during native tests, no matrix acceptance |
 | C-B8,C-B9,C-D1…D9 | pending no new fail-level failures versus paired baseline; historical baseline ref B8/B9, fast B2/B8, same B9, transcribe B9; historical D1…D9 pass. C-D9 onset every bar, ≤2 lines/16bars, subline≥.6, occupancy .30–.62. Do not alter gains/criteria to conceal planner failures |
-| macOS build | pending final revision result with explicit destination; historical hosted builds do not prove final |
+| macOS build | 73e8d4 app/test-bundle build passed in45221402727; infra445b9dc contains no later production edits; rerun if source changes |
 | Focused dialogue + FootageSalience/FootageWeaver suites | pending final rerun after regression repairs; preserve exact tests/issues/logs |
-| Full unchanged LiminalTests, serial, once at final code | pending completed result; distinguish the known three pre-existing failures below from new failures |
-| visionOS Simulator build | pending actual successful build/SDK evidence; workflow SDK-absent exit0 is unverified, not pass |
+| Full unchanged LiminalTests, serial, once at final code | 45221402727 user-cancelled mid-run;632methods/84suites expected, incomplete. No final full-suite pass;70ace3f new fixture execution unconfirmed |
+| visionOS Simulator build | 73e8d4 actual visionOS Simulator build passed in45221402727; no device install |
 | Scanner perf | scanner off, so scanner-on `perf-run.sh --lofi` conditional not activated; no on-device perf claim |
 | 200-second macOS automated run | pending real hook/salient-pick log review, no connective hits/partial figures, no audio/timing errors; AutoPlay,lofi,archive,offline video,fresh image pool and deterministic seeds |
 | 3–4 short m4a auditions | pending authentic initialism letters on beat plus drug/proper-name syllables; whole-word context, mix and source provenance. Missing type fails, unrelated clip is no substitute |
 | Human listening | pending user judgment; automated rendering/export is not listening approval |
-| Docs/maps/decision rationale | documentation updated with current design, historical reasons and outstanding failures; acceptance remains open |
-| Main merge | pending coherent reviewed branch merge; do not discard other work |
-| Commits and push | pending final code/docs staged explicitly, tested, committed, pushed as authorized; verify remote SHA equals intended commit and record it |
-| Final report | pending every missed target and concrete block, final run IDs/revisions, no unsupported live/device/finished claim |
+| Docs/maps/decision rationale | final local handoff and ledger reconciled; architecture/experience final results still require local completion; acceptance remains open |
+| Main merge | deferred for local completion; main unchanged, do not merge under this handoff |
+| Commits and push | all source and this handoff committed/pushed to new wip/dialogue-salience-finish; original wip/dialogue-salience-stage2 preserved. No auto-trigger branch push |
+| Final report | local handoff records known misses/blocks/revisions and cancellation; final acceptance report remains pending local completion |
 
 Known prior failures (handoff only; still identify separately in final suite):
 `LofiRhythmTests/installedTakesHaveSaneLandmarks`,
 `LofiStemChainTests/installedTakesLandInsideTheDrumBusTargets`,
 `LofiPadTests/phraseBoundaryBreathIsBridgedByTheTail` (seed2077, since D128).
 Missing private-library data can change test applicability; a skip is not a private-data pass.
+
+## Final local-handoff evidence reconciliation
+
+All remote jobs were stopped at PJ's budget request. Cancellation is incomplete evidence, not a test failure. No new remote runs; continue on the physical Mac using the linked handoff. Local Python discovery at handoff: **61/61 passed**. Exact adapted baseline/candidate integrity builds and whole probe/footage suites passed in45189257392. Broad earlier45208957813 passed90tests/10suites, with15/18 metrics at that revision;45214973934 passed44tests/4suites. Latest productionfc4f391 run45218799677 passed14tests/2suites and18/18 metrics. Full consolidated73e8d4 execution remains incomplete, despite successful macOS/visionOS builds.
+
+Latest media45221406217 passed stage3 31tests/2suites (72s), but baseline95/96 windows cannot qualify the fresh12×8 corpus. Missing Timothy_Leary_Archives_198 chunk7 at3648.989s is not EOF (derivative198_512kb.mp4, stream3738.17s); error unknown. Baseline9349/9349 renders/audible,8829/8829 eligible/detected attacks. After A8820 plays, tightnessn7668 with47>35ms; original zero target unmet, paired no-worse comparison unqualified. No authentic T acceptance. Ref strict failures C-M1/M3/M9/B6/B8/D6;fast M9/B6/B8/D6. Remaining same/transcribe and baseline paired inventories pending.
+
+Private source availability is corrected above:100-file preparation verified, not native/mix success.45227791928 summary overallUNMET; native execution cancelled. Ephemeral key/URL secrets and draft release/asset deleted; local private materials remain protected outside git. Original19 curated audio/cache and159-occurrence identity unavailable; fresh results never certify them. App survival and partial exports do not satisfy clean playback, authentic3–4 auditions, dry+mix or human review. See local handoff for durable artifacts, exact source revisions, remaining commands and every acceptance class.
 
 ## Separate user-gated loose ends: no action in this task
 

@@ -2,6 +2,10 @@
 
 Task 2 of `HANDOFF-2026-11-23.md`; fixture acceptance is separate from real-film/mix/listening acceptance.
 
+**Final local handoff:** [CODEX local continuation](../HANDOFF-2026-11-23-CODEX-LOCAL.md) supersedes earlier pending-run notes. Latest productionfc4f391 run45218799677 passed14tests/2suites (coverage14/14) and18/18 gates,108loops/72cross-line pairs. Consolidated73e8d4 builds passed macOS/visionOS, but full632methods/84suites run45221402727 was cancelled by user request, not failed/completed. Added long-word test70ace3f execution is unconfirmed. All remote jobs stopped; continue locally, no paid services. Synthetic success does not qualify authentic T, mixes or listening.
+
+Before text/manifest from06c1095 is now durable at `/app/state/liminal-verification/task2-baseline/feel-attachments/`; original `/tmp/liminal-feel-before/feel-attachments` is volatile. Latest report `/app/state/liminal-verification/run45218799677/feel-report-vs-06c1095.json`. Full/chop grids .121956→.064830 / .090208→.067177; chop rest .918789→.891614, quiet .640732→.623636; full reverses108→285 with zero repeated positions. Native/linked104-pad timing and56-pad headroom evidence remain synthetic. Original timing/variety thresholds unchanged.
+
 ## Playback
 
 `DialogueVarispeed` measures the median interval between the chosen line's acoustic syllable onsets
@@ -158,7 +162,7 @@ old requirement for three existing adjacent slots could never coexist with the g
 Arrangements now use the measured rendered accents when calculating whole-word clearance. The
 random-input safety test retains its protected-anchor requirement and checks bounded shared linked
 rates and exact pad durations for motif banks; the grammar fallback still requires a native anchor.
-These changes are awaiting Apple execution; no acceptance threshold was changed.
+These historical changes subsequently received focused/broad execution described above; final full-suite and authentic acceptance remain incomplete. No acceptance threshold was changed.
 
 Raw fixture evidence at `56fc6f5` also shows the same hook pickup playing in only one pass, with the
 following call disappearing in that pass. Pickup clearance now checks output-time intervals on

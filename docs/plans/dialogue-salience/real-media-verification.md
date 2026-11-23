@@ -1,5 +1,9 @@
 # Reproducible real-media verification, 23 November 2026
 
+**Final status / local-only continuation:** see [CODEX local handoff](../HANDOFF-2026-11-23-CODEX-LOCAL.md). All remote jobs were cancelled at PJ's request; do not restart workflows. Run45221406217 at73e8d4 passed31 stage3 tests/2suites and prepared12 films, but actual baseline decode completed95/96 windows (Timothy_Leary_Archives_198 chunk7,3648.989s, not EOF). Corpus qualification remains unmet. No authentic T evidence: tested hosted Intel/ARM VMs with current/new SDK report SpeechTranscriber unavailable. Physical Mac provisioning/actual transcripts remain necessary. After A has47>35ms attacks out of7668 eligible measures; paired comparability incomplete. Partial ref/fast strict failures and remaining inventories are enumerated in the local handoff.
+
+Integrity45189257392 independently compiled exact adapted47a01fe and candidate and passed whole probe/footage suites. Final Apple45221402727 at73e8d4 passed macOS/test-bundle and visionOS Simulator builds, but full632methods/84suites execution was user-cancelled; no full-suite pass. New test70ace3f execution unconfirmed. Latest private45227791928 authenticated/installed100-file corpus, then user-cancelled during native tests; overallUNMET. Sources are available, correcting the earlier inventory below. Historical159/19-case certification, authentic audition classes, clean app playback and human listening remain open.
+
 The `Real media verification` workflow runs serially on macOS 26. It explicitly prepares public
 Archive media, provisions the runner's on-device English SpeechTranscriber asset in a separate
 executable, and then uses the application's installed-only transcription path. No production cue or
@@ -15,8 +19,9 @@ durations, track facts and failed routes are preserved as provenance outside Git
 Both stage 1 (`47a01fe`) and after use this same cache, eight chunks, 72 BPM and seed 1. The historical
 12-film identities are unavailable; the old absolute count of 159 salient words is not represented as
 an identical dataset. Fresh baseline denominators and after denominators are recorded with every gate.
-The updated matrix harness is copied into the baseline. One compiler-only adapter qualifies
-`Self.cuePartials` to fix the historical local/function name collision; its exact diff is preserved
+The updated matrix harness is copied into the baseline. Compiler-only adapters qualify
+`Self.cuePartials` to fix a historical local/function name collision, and expand the hook distinct-fragment
+expression into equivalent typed loops. Their exact diff is preserved
 in `baseline-verification-adapters.patch`. No baseline signal-processing behavior changes.
 
 The footage experiment shares `FootageSalience.prepare` with the production decoder. It includes
@@ -42,14 +47,7 @@ and does not launch unrelated expensive suites. The historical baseline is check
 full commit ID, because actions/checkout treats a short SHA as a remote ref rather than fetching it.
 Missing authentic audition types fail explicitly instead of substituting unrelated audio.
 
-Private AJ Hall recordings are never fetched or fabricated. Documented preparation requires copying
-the user's purchased 64-beat breaks into `Liminal/SlowBurnDrums/` and the private
-`Liminal/Audio/Lofi/SlowBurnBeatGrid.json`; see `docs/experience.md` and `docs/mix-verification.md`.
-No private pack, beat-grid JSON or installed-library cache was found in the available Liminal
-checkouts or the known `/app/state` artifact inventory. There is no documented public distribution
-route for those purchased recordings. The workflow records exact file checks. It runs an explicitly
-labelled public/bundled matrix separately, and runs the private matrix only if the real prerequisites
-exist. Public fallback results cannot qualify the private matrix.
+Private AJ Hall sources were subsequently found: all four packs at `/host/external/PJ Archive/Music Production/Samples/Drum Kits`. Prepared fresh corpus100eligible/112originals is available under `/app/state/liminal-private-verification/bundle`, byte-preserved, grid SHA256 `f04ed987acd0d693aa46b717fcac4a1ef6c2b07e3153d90dd41ebbba9ff0dbee`. This corrects the earlier missing-source finding. It is not the historical installed cache. Use `private-verification-assets.py` for local preparation/validation/install into clean paired checkouts; see [private preparation](private-drum-verification.md). Public results cannot qualify private gates. Remote native execution was cancelled before completion; no private matrix pass is claimed. Secrets and draft transport release were deleted; retain local private material outside git and do not restart remote transport.
 
 Local verification before the remote run: report regressions 13 passed, media preparation unit tests
 2 passed, gate isolation/missing-evidence tests 2 passed; Bash syntax checks and `git diff --check`
@@ -104,8 +102,8 @@ Per-hit rendered and audible coverage is separate from planned source overlap. T
 onset denominator includes every planned sub-line non-reverse event; missing/undetectable
 eligible attacks fail coverage. Reverses are explicitly excluded from that detector, while
 still requiring rendered signal. Historical baseline `47a01fe` receives only the checked
-`scripts/baseline-probe-measurement.patch`, the same report parser, matrix wrapper and existing
-compiler-only `Self.cuePartials` adapter; the exact diff is retained with preparation artifacts.
+`scripts/baseline-probe-measurement.patch`, the same report parser, matrix wrapper and asserted
+compiler-only bass/hook adapters plus the later exact capture-signing adapter (`prepare-baseline-capture.py`,2c87c22); the exact diff is retained with preparation artifacts.
 No baseline planner, renderer, musical thresholds or detector algorithm is rewritten.
 
 Re-heard denominators retain mode, control, whole-piece and content identity. The 60% gate
@@ -153,5 +151,4 @@ a baseline failure cannot suppress candidate compiler diagnostics. Whole-suite s
 finish, so successful zero-test selections cannot qualify. This also repairs the regression
 workflow's omitted Motif method selectors. The public capture's inner xcodebuild accepts only
 an explicitly set `LIMINAL_CAPTURE_CODE_SIGNING_ALLOWED=YES|NO`; the hosted harness sets `NO`,
-while direct/default and device/project signing remain unchanged. The repaired Apple outcomes
-are pending the next integrity run; local regression success alone does not qualify Swift builds.
+while direct/default and device/project signing remain unchanged. The repaired exact baseline and candidate builds plus whole probe/footage tests passed in45189257392. This does not establish authentic-media acceptance. Local Python regressions at final handoff passed61/61.
