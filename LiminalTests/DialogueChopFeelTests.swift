@@ -4,6 +4,35 @@ import Testing
 @testable import Liminal
 
 struct DialogueChopFeelTests {
+    @Test func attackPreservationLiftsTheRetainedSyllableWithoutTrimmingOrMovingAudio() {
+        let rate = 48_000.0
+        let original: [Float] = (0..<24_000).map { i in
+            let time = Double(i) / rate
+            let opening = 0.16 * exp(-pow((time - 0.020) / 0.012, 2))
+            let stressed = 0.7 * exp(-pow((time - 0.285) / 0.018, 2))
+            return Float((opening + stressed) * sin(2 * .pi * 700 * time))
+        }
+        var output = original
+        DialogueChopRenderer.preserveAttack(&output, expected: 0.012, line: false, sampleRate: rate)
+        func firstHalfPeak(_ x: [Float]) -> Double {
+            let width = 96, end = 14_400
+            let rms = stride(from: 0, to: end - width, by: 24).map { i -> Float in
+                sqrt(x[i..<(i + width)].reduce(0) { $0 + $1 * $1 } / Float(width))
+            }
+            let half = (rms.max() ?? 0) / 2
+            return Double((rms.firstIndex { $0 >= half } ?? rms.count) * 24) / rate
+        }
+        #expect(firstHalfPeak(original) > 0.2)
+        #expect(firstHalfPeak(output) < 0.035)
+        #expect(output.count == original.count)
+        #expect(Array(output[7_200...]) == Array(original[7_200...]))
+        for (a, b) in zip(original, output) {
+            #expect(a * b >= 0)
+            #expect(abs(b) + 1e-7 >= abs(a))
+            #expect(abs(b) <= abs(a) * powf(10, 9.0 / 20) + 1e-7)
+        }
+    }
+
     @Test func cadenceMatchingIsBoundedDeterministicAndDependsOnTempo() {
         let beat = 60.0 / 72
         let speed = DialogueVarispeed.transform(period: 0.23, beatDuration: beat)

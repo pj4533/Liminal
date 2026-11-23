@@ -208,6 +208,9 @@ nonisolated enum DialogueChopRenderer {
         for i in 0..<full {
             out[i] = LofiSaturation.softClip(out[i], threshold: DialogueChopChain.peakKnee, ceiling: DialogueChopChain.peakCeiling)
         }
+        if !pad.transform.isNative {
+            preserveAttack(&out, expected: pad.accentOffset / rate, line: pad.role == .anchor, sampleRate: sr)
+        }
         var gain = powf(10, gainDB / 20)
         if !gain.isFinite { gain = 0 }
         if count < full {
@@ -224,6 +227,41 @@ nonisolated enum DialogueChopRenderer {
             out.withUnsafeBufferPointer { channels[ch].update(from: $0.baseAddress!, count: count) }
         }
         return buffer
+    }
+
+    /// Linked playback can bring the next stressed syllable into the opening peak window, or
+    /// change the first syllable's level through the spectral chain. Keep the retained opening
+    /// attack audible as the rhythmic anchor: lift that syllable by at most 9 dB, then ease back
+    /// to the untouched body. Never trim a consonant, move samples, or relabel a weak lead.
+    static func preserveAttack(_ x: inout [Float], expected: Double, line: Bool, sampleRate: Double) {
+        let head = min(x.count, Int(0.45 * sampleRate))
+        guard head > Int(0.04 * sampleRate) else { return }
+        let measured = x.withUnsafeBufferPointer { p -> (DialogueOnsetEnvelope, DialogueAttack) in
+            let envelope = DialogueOnsetEnvelope(samples: p.baseAddress!, count: x.count, rate: sampleRate,
+                                                 span: 0..<head, filtered: false)
+            return (envelope, DialogueOnset.attack(envelope, samples: p.baseAddress!, count: x.count,
+                rate: sampleRate, search: 0..<head, line: line))
+        }
+        let (envelope, attack) = measured
+        guard Double(attack.beatFrame) / sampleRate > expected + 0.025 else { return }
+        let openingEnd = min(0.12, max(0.04, expected + 0.045))
+        let firstEnd = min(envelope.values.count, envelope.index(Int(openingEnd * sampleRate)) + 1)
+        let peakEnd = min(envelope.values.count, envelope.index(Int(0.3 * sampleRate)) + 1)
+        guard firstEnd > 1, peakEnd > firstEnd,
+              let first = envelope.values[..<firstEnd].indices.max(by: { envelope.values[$0] < envelope.values[$1] }),
+              let peak = envelope.values[..<peakEnd].max(), peak > 1e-5 else { return }
+        let opening = envelope.values[first]
+        guard opening > 0.15 * peak, opening < 0.65 * peak else { return }
+        let lift = min(powf(10, 9.0 / 20), 0.65 * peak / opening)
+        let hold = min(x.count, envelope.frame(Double(first)) + Int(0.015 * sampleRate))
+        let end = min(x.count, hold + Int(0.055 * sampleRate))
+        guard end > hold else { return }
+        for i in 0..<end {
+            let phase = Double(max(0, i - hold)) / Double(end - hold)
+            let gain = 1 + (lift - 1) * Float(0.5 + 0.5 * cos(.pi * phase))
+            x[i] = LofiSaturation.softClip(x[i] * gain, threshold: DialogueChopChain.peakKnee,
+                                          ceiling: DialogueChopChain.peakCeiling)
+        }
     }
 
     /// The first `frames` of a full render with a raised-cosine release of `release` seconds (when

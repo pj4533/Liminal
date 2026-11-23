@@ -116,6 +116,10 @@ struct DialogueMotifTests {
                 #expect(empty.isEmpty, "\(shape) seed \(seed) loop \(k) line '\(motif.text ?? "-")': empty bars \(empty)")
                 // Typical density 2 to 4 onsets per bar.
                 let mean = Double(loop.events.count) / 16
+                if !(1.8...4.5).contains(mean) {
+                    Attachment.record("\(shape) seed=\(seed) loop=\(k) mean=\(mean) line=\(motif.text ?? "-") cells=\(motif.cells) events=\(loop.events) fragments=\(motif.fragments)",
+                                      named: "density-\(shape)-\(seed)-\(k).txt")
+                }
                 #expect((1.8...4.5).contains(mean), "\(shape) seed \(seed) loop \(k): \(mean) onsets per bar")
             }
         }
