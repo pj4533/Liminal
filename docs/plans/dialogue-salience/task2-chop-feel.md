@@ -92,18 +92,31 @@ Raw evidence is the `chop-feel-06c10956025d4a932852ea6e5d02ff7808fc395f` artifac
 
 | Metric | Before | After |
 |---|---:|---:|
-| Reverse events | 108 | pending |
-| Reverse same-position recurrence | 1.000000 | pending |
-| Rest recurrence | 0.955122 | pending |
-| Quiet-grid recurrence | 0.817688 | pending |
-| Roll recurrence | 0.275862 | pending |
-| Stutter recurrence | 0.214286 | pending |
-| Consecutive grid Jaccard | 0.121956 | pending |
-| Next-move prediction accuracy | 0.871310 | pending |
-| Within-loop hook recurrence | 0.986111 | pending |
+| Reverse events | 108 | 285 |
+| Reverse same-position recurrence | 1.000000 | 0 |
+| Rest recurrence | 0.955122 | 0.911590 |
+| Quiet-grid recurrence | 0.817688 | 0.733457 |
+| Roll recurrence | 0.275862 | 0 |
+| Stutter recurrence | 0.214286 | 0 |
+| Consecutive grid Jaccard | 0.121956 | 0.064830 |
+| Next-move prediction accuracy | 0.871310 | 0.791393 |
+| Within-loop hook recurrence | 0.986111 | 0.969033 |
 
-After measurements and paired rendered-audio timing are pending Apple runner execution. Linux has no
-Apple Swift/AVFoundation runtime. Hosted verification is unsigned only through command-line `CODE_SIGNING_ALLOWED=NO`; project
+After values are from [run 45218799677](https://github.com/pj4533/Liminal/actions/runs/45218799677)
+at production revision `fc4f3913a4b2a68160aa9db858140bcaa207f2cf`. All **18/18** comparisons pass:
+108 loops, 72 consecutive pairs, all 72 changing source lines. In the chop-beat-only scope, reverse
+count is 0→26, grid Jaccard .090208→.067177, rest recurrence .918789→.891614, quiet recurrence
+.640732→.623636 and next-move prediction .933054→.841202. Reverse/roll/stutter same-position
+recurrence is zero. The artifact retains exact raw records; the local comparison is
+`/app/state/liminal-verification/run45218799677/feel-report-vs-06c1095.json`.
+
+That run passed 14 tests in two whole suites with independent execution coverage 14/14.
+The preceding [run 45214973934](https://github.com/pj4533/Liminal/actions/runs/45214973934)
+at `e452a83` passed 44 tests across ChopFeel, ChopVariety, FeelMetrics and Motif (coverage 44/44),
+including every backbeat, arc, density, recurrence and atomic-figure assertion in those suites.
+The consolidated full suite, new long-word pocket regression, mix and authentic-media gates still
+require their final run. Paired rendered-audio timing/headroom evidence is recorded below.
+Hosted verification is unsigned only through command-line `CODE_SIGNING_ALLOWED=NO`; project
 signing settings are unchanged. New source/test files join Xcode's synchronized groups automatically.
 
 Local commands: `python3 scripts/test_dialogue_feel_report.py` (4 passed),
@@ -175,8 +188,26 @@ unchanged; two rose from 0.6837 to 0.8126 and 0.7348 to 0.8145. All corrected pe
 `opening-correction-headroom.txt`. This corpus is synthesized speech-like audio; these results
 do not establish authentic-speech intelligibility, integrated-mix acceptance or listening approval.
 
-Broad regression and the 18 before/after feel metrics remain separate gates. The preceding
+At that point, broad regression and the 18 before/after feel metrics remained open. The preceding
 `ea61e5f` run removed backbeat and breakdown-opening failures but retained two sparse arrangements
 (transcript-72, seeds 5 and 8, loop 1: 27 onsets over 16 bars) and three chop-beat metric failures.
 Its pre-correction onset failures are superseded by the focused evidence above; newer broad
-results must still establish all arrangement and metric gates. No threshold was relaxed.
+results subsequently established the arrangement and metric gates described above. No threshold was relaxed.
+
+## Fresh whole-word pockets
+
+The `e1ac382` and `186ccdd` candidates passed the arrangement tests but retained three chop-beat
+comparison failures. Their acoustic-72 fixture repeated occupied shapes (grid .167947→.206632,
+quiet .750290→.776390), while transcript-72 rest recurrence rose .935096→.950081. Both fixtures
+had slightly more onsets than baseline. Moving more existing fills did not change these metrics:
+long words had already reserved their neighbours, leaving no legal two-step shift.
+
+The groove picker now receives the previous hook's occupied accent positions before choosing
+optional fills. It prefers a fresh usable pocket, retains its seeded drum score and all existing
+word-fit, breath and density rules, and never trades an available off-drum pocket for a kick/snare
+collision to obtain novelty. The subsequent move pool keeps an already-fresh pocket. Skeleton
+calls/answers stay authored; both passes share the result; complete spelling figures remain atomic.
+This change produced the passing comparison above without changing any metric or threshold.
+Regressions cover competing fills, multiple independent pockets, deterministic history selection,
+full-buffer clearance and complete late-figure rollback. The added long-word fixture separately
+checks a legal new word/pocket when either shift of the old longer word would collide.

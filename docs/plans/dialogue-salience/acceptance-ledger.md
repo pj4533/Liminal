@@ -121,15 +121,23 @@ position histograms, peak shares, per-position predictor, transition counts and 
 Rests are absent accents; quiet uses actual dry duration/rate, not reverb or perceptual loudness.
 Grid identities are line-local. Predictors leave one seed out; do not call these listener entropy.
 
+Latest production measurement: **18/18 verified passing at `fc4f391`**,
+[run 45218799677](https://github.com/pj4533/Liminal/actions/runs/45218799677), 108 loops and
+72 cross-line pairs. Full/chop-beat grid Jaccard is .064830/.067177; rest recurrence
+.911590/.891614; quiet recurrence .733457/.623636; reverse counts 285/26 with zero repeated
+positions; next-move prediction .791393/.841202. Roll/stutter recurrence is zero in both scopes.
+Within-loop hook recurrence is .969033. Exact report and raw artifact locations are in
+[task2-chop-feel.md](task2-chop-feel.md). Earlier 15/18 candidates remain failures, not waived gates.
+
 | Required preservation | Status |
 |---|---|
-| One ratio per line from natural cadence, pitch/speed linked ±2.5 semitones, tempo dependency; native fallback; carried/revised identity | source present; bounded/per-line synthetic test latest result pending |
-| Resample once offline; keys include ratio; remeasure all rendered pad attacks including carried/repair candidates | source present; paired signed timing and independent same-pad detector tests pending; 66.8ms late attack observed |
-| Same selected line/pad native-vs-varispeed timing; signed before/after offsets, median shift within ±2ms, >35ms count no worse | failing candidate has 2 tightness issues; diagnosis pending; never infer correction from source |
-| Seed replay deterministic; no repeated intentional move+position across consecutive lines; enough real placements | latest synthetic/real report pending |
-| Preserve D125 hook recurrence/two-pass structure, snare response, arc/feels, density, whole words, coverage and occupancy | failing: 6 recurrence,34 response,22 arc,5 density issues in 35-test/69-issue run; a024ce7 repair needs observed rerun |
-| Ordered atomic spelling and dynamic outro chains; no stutter content choke | existing new regressions latest outcome pending |
-| Recompute both scoped reports after fixes | pending; previous pattern success does not carry across changes |
+| One ratio per line from natural cadence, pitch/speed linked ±2.5 semitones, tempo dependency; native fallback; carried/revised identity | verified fixture assertions in fc4f391 focused run; complete final suite pending |
+| Resample once offline; keys include ratio; remeasure all rendered pad attacks including carried/repair candidates | verified focused render/identity assertions; early 66.8ms failure superseded by observed corrected runs |
+| Same selected line/pad native-vs-varispeed timing; signed before/after offsets, median shift within ±2ms, >35ms count no worse | verified paired assertions in fc4f391; df2dc89 inventory 104/104, zero >35ms in each; tightness p95 4/9.5/10.3ms at 62/72/84, zero early>35ms; authentic timing remains separate |
+| Seed replay deterministic; no repeated intentional move+position across consecutive lines; enough real placements | verified fixture assertions and latest 18/18 report; authentic-media evidence pending |
+| Preserve D125 hook recurrence/two-pass structure, snare response, arc/feels, density, whole words, coverage and occupancy | e452a83 four-suite run 45214973934 passed 44/44 tests; fc4f391 focused 14/14; consolidated latest full suite pending |
+| Ordered atomic spelling and dynamic outro chains; no stutter content choke | verified complete/rollback/entrance collision assertions in e452a83 and fc4f391; final full suite pending |
+| Recompute both scoped reports after fixes | verified 18/18 at fc4f391; final full-suite recomputation pending |
 
 ## Stage 4 and delivery checklist
 
