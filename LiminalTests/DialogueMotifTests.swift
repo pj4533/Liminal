@@ -322,6 +322,8 @@ struct DialogueMotifTests {
                 }
                 if answered.isEmpty || !answered.values.allSatisfy({ $0 }) {
                     print("BACKBEAT-MISS \(shape) seed=\(seed) loop=\(k) line=\(motif.text ?? "-") response=\(hook.response) rate=\(motif.transform.playbackRate)")
+                    Attachment.record("shape=\(shape) seed=\(seed) loop=\(k) cells=\(motif.cells) events=\(loop.events) fragments=\(motif.fragments)",
+                                      named: "backbeat-\(shape)-\(seed)-\(k).txt")
                     for cell in motif.cells where cell.kind == .chopBeat {
                         print("BACKBEAT-CELL bar=\(cell.bar) items=\(cell.items)")
                     }

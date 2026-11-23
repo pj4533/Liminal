@@ -471,7 +471,7 @@ struct DialogueEngineTests {
 
     // MARK: Fallback fixtures (handoff acceptance)
 
-    /// Invariants that hold for any input: one dry voice, a native protected anchor, events inside
+    /// Invariants that hold for any input: one dry voice, a protected anchor at the bank's linked rate, events inside
     /// their pads, occupancy and a rest bar in every 8.
     private func checkInvariants(_ blocks: [DialogueBlock], bank: DialoguePadBank?, bpm: Double = 70, motifs: [DialogueMotif] = [],
                                  _ label: String) {
@@ -496,7 +496,16 @@ struct DialogueEngineTests {
             #expect(events.isEmpty, "\(label): events without a bank")
             return
         }
-        #expect(bank.anchor.transform == .native && bank.anchor.protected, "\(label): anchor not native and protected")
+        #expect(bank.anchor.protected, "\(label): unprotected anchor")
+        if let motif = motifs.first(where: { $0.bank.bankID == bank.bankID }) {
+            #expect(bank.anchor.transform == motif.transform, "\(label): anchor differs from its line rate")
+            #expect(abs(12 * log2(motif.transform.playbackRate)) <= 2.5 + 1e-9)
+            #expect(bank.pads.allSatisfy { $0.transform == motif.transform }, "\(label): mixed rates within one line")
+            #expect(bank.pads.allSatisfy { abs($0.duration * motif.playbackSampleRate - Double($0.frames.count)) < 1e-6 },
+                    "\(label): pad duration does not match linked rate")
+        } else {
+            #expect(bank.anchor.transform == .native, "\(label): fallback bank anchor is not native")
+        }
         for e in events {
             // A motif event's pad lives in its loop's motif bank.
             let owner = e.cell == nil ? bank : motifs.first { $0.bank.pads.contains { $0.padKey == e.padKey } }?.bank

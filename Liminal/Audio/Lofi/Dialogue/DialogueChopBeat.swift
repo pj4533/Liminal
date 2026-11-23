@@ -355,30 +355,6 @@ nonisolated extension DialogueMotif {
             hits[step]!.gate = gate
         }
 
-        // D130 stage 2: a spell run inside the fill. Before the cell's first signature hit, the fills that
-        // lead into it take the signature's letters or syllables in source order, so "D", "M" ascend into
-        // "DMT" (each unit whole in its room, the run kept in order like `orderOK`'s runs).
-        if let units = v.spellUnits {
-            for target in steps where hits[target]!.skeleton && hits[target]!.fragment == v.s && !dropped.contains(target) {
-                guard target % 4 == 0 else { continue }
-                var installed = false
-                for stride in [1, 2] {
-                    let run = units.indices.map { target - (units.count - $0) * stride }
-                    guard let first = run.first, first >= 0,
-                          run.allSatisfy({ hits[$0] != nil && !hits[$0]!.skeleton && !dropped.contains($0) }),
-                          units.allSatisfy({ fits($0, stride) }) else { continue }
-                    let between = steps.filter { $0 >= first && $0 < target && !dropped.contains($0) }
-                    guard between == run else { continue }
-                    let before = steps.last { $0 < first && !dropped.contains($0) }
-                    guard before.map({ fits(hits[$0]!.fragment, first - $0) }) ?? true else { continue }
-                    for (i, k) in run.enumerated() { hits[k]!.fragment = units[i]; hits[k]!.gate = stride }
-                    installed = true
-                    break
-                }
-                if installed { break }
-            }
-        }
-
         // D130 stage 2: never one cut twice in a row, the cell's repeat included (whole words leave no room
         // for a fill between two skeleton hits of one cut, and a two-piece line made its third its
         // response): the later hit takes another content cut that fits its room (the last hit of the cell
@@ -417,6 +393,35 @@ nonisolated extension DialogueMotif {
                 } else {
                     k += 1
                 }
+            }
+        }
+
+        // A spelling figure owns its complete lead-in to a beat-aligned signature. The ordinary
+        // fill picker deliberately avoids consecutive sixteenths; requiring those sites to exist
+        // already made three-letter figures impossible. Replace only optional fills, after the
+        // ordinary repeat repair, and retain all skeleton hits and the preceding whole word.
+        if let units = v.spellUnits {
+            for target in hits.keys.sorted() where hits[target]!.skeleton && hits[target]!.fragment == v.s {
+                guard target % 4 == 0 else { continue }
+                var installed = false
+                for stride in [1, 2] {
+                    let run = units.indices.map { target - (units.count - $0) * stride }
+                    guard let first = run.first, first >= 0,
+                          units.allSatisfy({ fits($0, stride) }) else { continue }
+                    let live = hits.keys.sorted().filter { !dropped.contains($0) }
+                    let replaced = live.filter { $0 >= first && $0 < target }
+                    guard replaced.allSatisfy({ !hits[$0]!.skeleton }) else { continue }
+                    let before = live.last { $0 < first }
+                    guard before.map({ fits(hits[$0]!.fragment, first - $0) }) ?? true else { continue }
+                    for step in replaced { dropped.insert(step) }
+                    for (i, step) in run.enumerated() {
+                        hits[step] = Hit(fragment: units[i], gate: stride, skeleton: false, site: nil)
+                        dropped.remove(step)
+                    }
+                    installed = true
+                    break
+                }
+                if installed { break }
             }
         }
 

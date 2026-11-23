@@ -676,14 +676,15 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
         let transform = previous?.transform ?? overrideTransform ?? DialogueVarispeed.transform(line: line, features: f, sampleRate: rate, beatDuration: beatDuration)
         let playbackSampleRate = rate * transform.playbackRate
         let priorCells = previous?.priorCells ?? memory.motif.map { $0.loop == loop ? $0.priorCells : $0.cells } ?? []
-        let arranged = arrange(fragments: fragments, pieces: cut.pieces, halves: cut.halves, reorderAllowed: reorderAllowed,
-                               seed: loopSeed, lineSeconds: Double(line.frames.count) / playbackSampleRate, sampleRate: playbackSampleRate,
-                               hookSeed: memory.cycleSeed ?? seed, loop: loop, anchors: anchors, drums: drums,
-                               keepArc: previous?.arc, avoidArc: prior, beatDuration: beatDuration, avoidCells: priorCells)
         // Measure every cut once, including repair candidates and units a later carried-loop
         // arrangement may choose. Those loops can reuse the converted buffers and measured attacks.
         let rendered = renderedAccents(fragments, line: line, source: source, analysis: analysis, transform: transform)
         fragments = rendered.fragments
+        // Room and pickup decisions use exactly the rendered attacks the performer schedules.
+        let arranged = arrange(fragments: fragments, pieces: cut.pieces, halves: cut.halves, reorderAllowed: reorderAllowed,
+                               seed: loopSeed, lineSeconds: Double(line.frames.count) / playbackSampleRate, sampleRate: playbackSampleRate,
+                               hookSeed: memory.cycleSeed ?? seed, loop: loop, anchors: anchors, drums: drums,
+                               keepArc: previous?.arc, avoidArc: prior, beatDuration: beatDuration, avoidCells: priorCells)
         let key = lineKey(analysis.contentID, line.frames)
         let bank = motifBank(fragments, line: line, analysis: analysis, key: key, usedTranscript: lineWords.count >= 2, transform: transform)
         return DialogueMotif(loop: loop, source: source, analysis: analysis, lineUnit: line.id, lineKey: key,

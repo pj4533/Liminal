@@ -71,6 +71,10 @@ struct DialogueChopVarietyTests {
                     // D130 stage 2 lowered 0.6 to 0.5: a hook hit off the downbeat that would repeat the hit before it
                     // is skipped (a two-cut line such as "Sally, this is mother." fired one cut twice in a row), so
                     // the downbeat call on the kick weighs more.
+                    if 1 - chop.onKick < 0.5 || DialogueChopMetrics.recurrence(loop.events, loop: loop.index) < 0.7 {
+                        Attachment.record("\(label) cells=\(loop.motif.cells) events=\(loop.events) fragments=\(loop.motif.fragments)",
+                                          named: "variety-\(name)-\(busy)-\(seed)-\(loop.index).txt")
+                    }
                     #expect(1 - chop.onKick >= 0.5, "\(label): \(chop.onKick) of the chop beat on a kick")
                     #expect(DialogueChopMetrics.recurrence(loop.events, loop: loop.index) >= 0.7, "\(label)")
                     // The build's repeats are its marked rolls.
