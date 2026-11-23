@@ -184,6 +184,8 @@ struct DialogueSalienceProbeTests {
         }
         print("SALIENCE-SNIPPET-DIR \(snippetDir?.path ?? "base64")")
         let footageIndex = DialogueSalienceIndex()
+        var auditionCounts: [String: Int] = [:]
+        var auditionLines = Set<String>()
         var snippets = 0
         let maxSnippets = config.maxSnippets ?? 60
         /// Words (normalized prefixes) whose hits always get a snippet, once per kind and gate per window.
@@ -405,6 +407,43 @@ struct DialogueSalienceProbeTests {
                             if !chosen.contains(lineKey) { chosen.append(lineKey) }
                             let chops = DialogueChopRenderer.render(part.plan, bank: motif.bank, source: motif.source, analysis: motif.analysis,
                                                                     prerendered: motif.renders)
+                            // Preserve short actual performed figures, with event timing and FX intact.
+                            // Two distinct examples per class give four auditions when the real corpus offers them.
+                            if mode == "T", !auditionLines.contains(clip.id + lineText) {
+                                for kind in ["letter", "syllable"] where auditionCounts[kind, default: 0] < 2 {
+                                    let unitHits = chops.filter { chop in
+                                        guard let id = chop.event.piece, motif.fragments.indices.contains(id) else { return false }
+                                        return motif.fragments[id].kind.rawValue == kind
+                                    }.sorted { $0.event.startTime < $1.event.startTime }
+                                    if unitHits.count >= 2, let first = unitHits.first {
+                                        let start = first.event.startTime - 0.3
+                                        let seconds = 6.0
+                                        let n = Int(seconds * rate)
+                                        if let audio = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(n)),
+                                           let output = audio.floatChannelData {
+                                            audio.frameLength = AVAudioFrameCount(n)
+                                            for c in 0..<Int(format.channelCount) { output[c].update(repeating: 0, count: n) }
+                                            for chop in chops {
+                                                guard let input = chop.buffer.floatChannelData else { continue }
+                                                let at = Int(((chop.event.startTime - start) * rate).rounded())
+                                                let lo = max(0, -at), hi = min(Int(chop.buffer.frameLength), n - at)
+                                                if hi > lo {
+                                                    for c in 0..<Int(format.channelCount) {
+                                                        for i in lo..<hi { output[c][at + i] += input[min(c, Int(chop.buffer.format.channelCount) - 1)][i] }
+                                                    }
+                                                }
+                                            }
+                                            auditionCounts[kind, default: 0] += 1
+                                            let name = "audition-\(kind)-\(auditionCounts[kind]!)-\(clip.id)"
+                                            emitSnippet(name + ".wav", Self.wav(audio))
+                                            emitSnippet(name + "-context.wav", Self.wav(buffer, frames: motif.line.frames))
+                                            print("SALIENCE-AUDITION " + Self.json(["name": name, "film": clip.id, "chunk": chunk,
+                                                "line": lineText, "kind": kind, "transportStart": start, "seconds": seconds]))
+                                            auditionLines.insert(clip.id + lineText)
+                                        }
+                                    }
+                                }
+                            }
                             loopEvents[motif.loop, default: []] += part.plan.events
                             loopMotif[motif.loop] = motif
                             for (e, event) in part.plan.events.enumerated() {
@@ -551,33 +590,51 @@ struct DialogueSalienceProbeTests {
         Self.simulateFootage(clips: clips, index: footageIndex)
         print("SALIENCE-DONE snippets=\(snippets)")
     }
-    /// The same 500 sound requests with the catalog baseline and learned cue index. Does not consume
-    /// the real ledger or shown history, and emits counts so the report can assess every film's share.
+    /// Paired production-policy requests. Fresh-index sampling measures the targeting policy before
+    /// exhaustion; evolving playback independently consumes contained lines and updates cache history.
+    /// Never present finite-index depletion as an indefinitely repeatable targeting success.
     static func simulateFootage(clips: [ArchiveClip], index: DialogueSalienceIndex) {
-        let ledger = DialogueLineLedger()
-        for indexed in [false, true] {
-            var rng = MusicRNG(seed: 0x5A11_EACE)
-            var salient = 0, random = 0
-            var shares: [String: Int] = [:]
-            let boost = indexed ? Dictionary(uniqueKeysWithValues: clips.map {
-                ($0.id, 1 + min(1, Float(index.unplayed(contentID: $0.id, ledger: ledger).count) / 6))
-            }) : [:]
-            for piece in 0..<500 {
-                guard let clip = FootageWeaver.chooseClip(clips, avoiding: [], boost: boost, rng: &rng) else { continue }
-                shares[clip.id, default: 0] += 1
-                var start = ArchiveCatalog.segmentStart(duration: clip.duration, length: 48, avoid: [], rng: &rng)
-                let lines = index.unplayed(contentID: clip.id, ledger: ledger)
-                var separate = FootageSalience.rng(contentID: clip.id, piece: piece)
-                let pick = indexed ? FootageSalience.pick(lines: lines, contentID: clip.id, ledger: ledger, shownStarts: [],
-                                                          duration: clip.duration, sourceLength: 48, preroll: 0, rate: 0.75,
-                                                          soundDelay: FootageWeaver.soundDelay, dialogueLength: 32,
-                                                          sound: true, rng: &separate) : nil
-                if let pick { start = pick.segmentStart } else { random += 1 }
-                let cue = start + FootageWeaver.soundDelay * 0.75
-                if lines.contains(where: { $0.start >= cue && $0.end <= min(clip.duration, cue + 32) }) { salient += 1 }
+        for evolving in [false, true] {
+            for indexed in [false, true] {
+                let ledger = DialogueLineLedger()
+                var history = clips
+                var weaver = FootageWeaver(seed: 0x5A11_EACE, timing: .standard)
+                var rng = MusicRNG(seed: 0x5A11_EACE)
+                var salient = 0, random = 0, consumed = 0, picks = 0
+                var shares: [String: Int] = [:]
+                for piece in 0..<500 {
+                    let request = FootageWeaver.Request(index: piece, slot: piece % 2, start: Double(piece) * 48,
+                                                       fadeIn: 2, length: 48, recipe: .plain(.window), seed: rng.unit(),
+                                                       rate: 0.75, warp: 0, level: 0.5, swell: 0, sound: true)
+                    guard let selection = FootageSalience.prepare(request, clips: history, weaver: &weaver,
+                                                                   rng: &rng, elapsed: request.start, index: index,
+                                                                   ledger: ledger, indexed: indexed),
+                          let cue = ArchiveAudioCuePlan(piece: selection.piece, clipDuration: selection.clip.duration) else { continue }
+                    picks += 1
+                    let clip = selection.clip
+                    shares[clip.id, default: 0] += 1
+                    let end = cue.sourceStart + min(cue.sourceLength, DialogueTuning.analysisSeconds * Double(cue.rate))
+                    let contained = index.unplayed(contentID: clip.id, ledger: ledger).filter {
+                        $0.start >= cue.sourceStart && $0.end <= end
+                    }
+                    if !contained.isEmpty { salient += 1 }
+                    // Random share means the original catalog start survived, including infeasible picks.
+                    if !selection.targeted { random += 1 }
+                    weaver.didPrepare(selection.piece)
+                    _ = weaver.tick(elapsed: request.start + request.fadeIn, conditions: .init(), hasClip: true,
+                                    grid: LofiTakeGrid(origin: 0, beatDuration: 60 / 72), ready: { _ in true })
+                    if evolving, let i = history.firstIndex(where: { $0.id == clip.id }) {
+                        history[i].shownStarts.append(selection.piece.segmentStart)
+                        history[i].lastUsed = Date(timeIntervalSinceReferenceDate: (clips.map { $0.recency.timeIntervalSinceReferenceDate }.max() ?? 0) + Double(piece + 1))
+                        history[i].useCount += 1
+                        // Conservative proxy: count only complete salient lines heard in the actual cue.
+                        // Playback may choose fewer lines; this is explicitly a depletion stress test.
+                        for line in contained { ledger.record(contentID: clip.id, seconds: line.seconds); consumed += 1 }
+                    }
+                }
+                print("SALIENCE-FOOTAGE " + json(["indexed": indexed, "policy": evolving ? "evolvingPlayback" : "freshIndex",
+                    "picks": picks, "salient": salient, "random": random, "consumed": consumed, "filmShares": shares]))
             }
-            print("SALIENCE-FOOTAGE " + json(["indexed": indexed, "picks": 500, "salient": salient,
-                                               "random": random, "filmShares": shares]))
         }
     }
 

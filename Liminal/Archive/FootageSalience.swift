@@ -3,6 +3,73 @@ import Foundation
 /// Optional sound-only override. The caller still draws the original catalog start from its original
 /// stream. This independent stream cannot perturb clip rotation or an empty-index playback sequence.
 nonisolated enum FootageSalience {
+    struct Selection {
+        let clip: ArchiveClip
+        let piece: FootagePiece
+        let preroll: Double
+        let readStart: Double
+        let sourceLength: Double
+        let targeted: Bool
+    }
+
+    /// Shared by the live decoder and the paired verification: eligibility, original RNG draws,
+    /// source-vs-playback cue math and final cue containment all use one policy.
+    static func prepare(_ r: FootageWeaver.Request, clips: [ArchiveClip],
+                        weaver: inout FootageWeaver, rng: inout MusicRNG, elapsed: Double,
+                        index: DialogueSalienceIndex, ledger: DialogueLineLedger,
+                        indexed: Bool = true) -> Selection? {
+        let rate = Double(r.rate)
+        let preroll = max(r.start - elapsed + 0.5, 0) * rate
+        func segment(for clip: ArchiveClip) -> (length: Double, sourceLength: Double) {
+            let usable = max(clip.duration - 1, 1)
+            let visible = (usable - preroll) / rate
+            let length = min(r.length, max(r.fadeIn + 2, visible - 1))
+            let margin = min(27, max(visible - length, 2))
+            return (length, min(preroll + (length + margin) * rate, usable))
+        }
+
+        let different = clips.filter { $0.id != weaver.current?.clipID }
+        let pool = r.fill != nil && !different.isEmpty ? different : clips
+        let sufficient = pool.filter { $0.duration >= (r.length + 2) * rate + preroll + 1 }
+        let candidates = sufficient.isEmpty ? pool : sufficient
+        let audioClips = r.sound ? candidates.filter(\.hasAudio) : []
+        let eligible = audioClips.isEmpty ? candidates : audioClips
+        let boost: [String: Float] = indexed && r.sound ? Dictionary(uniqueKeysWithValues: eligible.map {
+            ($0.id, 1 + min(1, Float(index.unplayed(contentID: $0.id, ledger: ledger).count) / 6))
+        }) : [:]
+        guard let clip = weaver.chooseClipForPlayback(eligible, boost: boost, rng: &rng) else { return nil }
+        let plan = segment(for: clip)
+        var readStart = ArchiveCatalog.segmentStart(duration: clip.duration, length: plan.sourceLength,
+                                                    avoid: clip.shownStarts.map { $0 - preroll }, rng: &rng)
+        var targeted = false
+        var segStart = readStart + preroll
+        var salienceRNG = FootageSalience.rng(contentID: clip.id, piece: r.index)
+        let preliminary = r.piece(clipID: clip.id, segmentStart: segStart, length: plan.length)
+        if indexed, r.sound, clip.hasAudio, let cue = ArchiveAudioCuePlan(piece: preliminary, clipDuration: clip.duration),
+           let pick = FootageSalience.pick(lines: index.entry(contentID: clip.id).lines, contentID: clip.id,
+                                           ledger: ledger, shownStarts: clip.shownStarts, duration: clip.duration,
+                                           sourceLength: plan.sourceLength, preroll: preroll, rate: rate,
+                                           soundDelay: r.fill == nil ? FootageWeaver.soundDelay : 0,
+                                           dialogueLength: min(cue.sourceLength, DialogueTuning.analysisSeconds * Double(cue.rate)), sound: true, rng: &salienceRNG) {
+            let candidate = r.piece(clipID: clip.id, segmentStart: pick.segmentStart, length: plan.length)
+            if let actual = ArchiveAudioCuePlan(piece: candidate, clipDuration: clip.duration),
+               pick.line.start >= actual.sourceStart + 3,
+               pick.line.end <= actual.sourceStart + min(actual.sourceLength, DialogueTuning.analysisSeconds * Double(actual.rate)) {
+                segStart = pick.segmentStart
+                readStart = segStart - preroll
+                targeted = true
+            }
+        }
+        let sourceLength = min(plan.sourceLength, clip.duration - readStart)
+        let length = plan.length
+        var piece = r.piece(clipID: clip.id, segmentStart: segStart, length: length, sound: false)
+        let wantsSound = r.sound && clip.hasAudio
+        if wantsSound, ArchiveAudioCuePlan(piece: piece, clipDuration: clip.duration) != nil {
+            piece.sound = true
+        }
+        return Selection(clip: clip, piece: piece, preroll: preroll, readStart: readStart, sourceLength: sourceLength, targeted: targeted)
+    }
+
     struct Pick: Sendable {
         let segmentStart: Double
         let line: DialogueSalienceIndex.Line

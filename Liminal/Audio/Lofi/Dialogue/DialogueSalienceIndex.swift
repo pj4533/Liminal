@@ -93,6 +93,7 @@ nonisolated final class DialogueSalienceIndex: Sendable {
     }
 
     func record(source: DialogueSource, analysis: DialogueAnalysis, transcript: DialogueTranscript) {
+        guard let features = analysis.features, features.frameCount > 0 else { return }
         let refined = DialogueHierarchy.refine(analysis, transcript: transcript)
         let salience = DialogueLineInterest.wordSalience(refined.words)
         let weights = salience.map(\.weight)
@@ -107,7 +108,7 @@ nonisolated final class DialogueSalienceIndex: Sendable {
                         end: source.sourceSeconds(frame: candidate.unit.frames.upperBound), interest: candidate.interest,
                         peakWord: refined.words[peak].text, peakWeight: weights[peak])
         }
-        record(contentID: source.contentID, scanned: source.sourceStart..<source.sourceSeconds(frame: source.frameCount), lines: lines)
+        record(contentID: source.contentID, scanned: source.sourceStart..<source.sourceSeconds(frame: features.frameCount), lines: lines)
     }
 
     /// Also provides a deterministic persistence barrier for tests; ordinary records coalesce below.

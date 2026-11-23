@@ -97,6 +97,34 @@ struct DialogueRuntimeTests {
         #expect(director.memory.pieceCounter == 1)
     }
 
+    @Test func slowSalienceLearningCannotDelayPublication() async throws {
+        let transcript = DialogueFixtures.transcript(Self.fixture)
+        var settings = DialogueDirector.Settings.neutral(transcriptProvider: { FixtureTranscriptProvider(transcript) })
+        let entered = Mutex(false)
+        let release = DispatchSemaphore(value: 0)
+        settings.learnSalience = { _, _, _, _ in
+            entered.withLock { $0 = true }
+            _ = release.wait(timeout: .now() + 5)
+        }
+        let director = DialogueDirector(settings)
+        let start = Self.uptime(), recorder = Recorder()
+        let info = Self.info(origin: start)
+        let publishedBeforeLearning = Mutex(true)
+        let outcome = await director.run(source: Self.fixture.source(contentID: "slow-learning"),
+            window: (start + 1)..<(start + 64 * Self.beat), seed: 9, transport: { info }, isCurrent: { true },
+            post: { plan in
+                if entered.withLock({ $0 }) { publishedBeforeLearning.withLock { $0 = false } }
+                recorder.add(plan)
+            })
+        #expect(publishedBeforeLearning.withLock { $0 }, "index work must start after the last publication")
+        // run returns and the plan has posted while learning is free to remain blocked indefinitely.
+        #expect(!outcome.posted.isEmpty && !recorder.plans.isEmpty)
+        while !entered.withLock({ $0 }) { await Task.yield() }
+        #expect(recorder.plans.count == outcome.posted.count)
+        release.signal()
+        await director.finishSalienceLearning()
+    }
+
     @Test func aStaleCueTokenPostsNothingAndLeavesMemoryAlone() async throws {
         let director = DialogueDirector(.neutral(transcriptProvider: { NullTranscriptProvider() }))
         let start = Self.uptime()
@@ -175,6 +203,7 @@ struct DialogueRuntimeTests {
         #expect(!outcome.transcriptUsed)
         let source = Self.fixture.source(contentID: "runtime", cueToken: 1)
         #expect(director.cachedTranscript(source) == transcript)
+        await director.finishSalienceLearning()
         #expect(!salience.entry(contentID: "runtime").spans.isEmpty, "late transcripts also populate the salience index")
         #expect(director.cached(source)?.bank?.usedTranscript == true, "a later appearance starts from the refined bank")
     }

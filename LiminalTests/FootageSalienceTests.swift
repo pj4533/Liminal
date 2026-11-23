@@ -108,7 +108,7 @@ struct FootageSalienceTests {
         #expect(!DialogueSalienceIndex.scannerEnabled)
     }
 
-    @Test func cueTranscriptStorageFeedsTheInjectedIndex() throws {
+    @Test func cueTranscriptStorageFeedsTheInjectedIndex() async throws {
         let fixture = DialogueSalienceTests.spelled
         let source = fixture.source(contentID: "stored")
         let analysis = DialogueEngine.analyze(source, speech: [])
@@ -118,8 +118,36 @@ struct FootageSalienceTests {
         let director = DialogueDirector(settings)
         director.store(source, analysis: analysis, bank: nil)
         director.store(source, transcript: DialogueSalienceTests.transcript(fixture), refined: nil)
+        director.learnCachedTranscript(source)
+        await director.finishSalienceLearning()
         #expect(!index.entry(contentID: "stored").spans.isEmpty)
         #expect(!index.entry(contentID: "stored").lines.isEmpty)
         #expect(index.entry(contentID: "stored").lines.allSatisfy { $0.interest >= 0.45 })
     }
+    @Test func scannedSpanUsesAnalyzedFramesAndSourceRate() {
+        var options = DialogueFixtures.Options()
+        options.seconds = 40
+        let fixture = DialogueFixtures.speech(options)
+        let source = fixture.source(contentID: "long", sourceStart: 100, rate: 0.7)
+        let analysis = DialogueEngine.analyze(source, speech: [])
+        let index = DialogueSalienceIndex()
+        index.record(source: source, analysis: analysis, transcript: DialogueFixtures.transcript(fixture))
+        #expect(index.entry(contentID: "long").spans == [.init(start: 100, end: source.sourceSeconds(frame: analysis.features!.frameCount))])
+        #expect(index.entry(contentID: "long").spans[0].end <= 100 + 32 * 0.7)
+        let empty = DialogueFixtures.silence(seconds: 0.001).source(contentID: "empty")
+        index.record(source: empty, analysis: DialogueEngine.analyze(empty, speech: []), transcript: DialogueFixtures.transcript(fixture))
+        #expect(index.entry(contentID: "empty").spans.isEmpty)
+    }
+
+    @Test func playedLinesStopContributingToBothBoostAndCueSelection() {
+        let index = DialogueSalienceIndex(), ledger = DialogueLineLedger()
+        index.record(contentID: "film", scanned: 100..<150, lines: [Self.line()])
+        #expect(index.unplayed(contentID: "film", ledger: ledger).count == 1)
+        ledger.record(contentID: "film", seconds: 120..<122)
+        #expect(index.unplayed(contentID: "film", ledger: ledger).isEmpty)
+        for seed: UInt64 in 0..<100 {
+            #expect(Self.pick(seed: seed, lines: index.entry(contentID: "film").lines, ledger: ledger) == nil)
+        }
+    }
+
 }

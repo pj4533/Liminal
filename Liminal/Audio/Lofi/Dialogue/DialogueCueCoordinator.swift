@@ -374,6 +374,10 @@ nonisolated final class DialogueDirector: @unchecked Sendable {
         var ledger: DialogueLineLedger = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil
             && !DebugLaunchOptions.isAutomated ? .shared : DialogueLineLedger()
         var salienceIndex: DialogueSalienceIndex = .active
+        /// Learning is serialized independently of cue publication, including late transcripts.
+        var learnSalience: @Sendable (DialogueSalienceIndex, DialogueSource, DialogueAnalysis, DialogueTranscript) -> Void = {
+            $0.record(source: $1, analysis: $2, transcript: $3)
+        }
         var now: @Sendable () -> Double = { Double(DispatchTime.now().uptimeNanoseconds) / 1e9 }
         /// Bounded SoundAnalysis classification (buffer, seconds, budget). Tests may inject fixed windows.
         var classify: @Sendable (AVAudioPCMBuffer, Double, Double) async -> [LofiSpeechFocus.Window] = {
@@ -442,15 +446,34 @@ nonisolated final class DialogueDirector: @unchecked Sendable {
     /// A transcript (in time or late) and its refined bank, kept for a later appearance of the source.
     func store(_ source: DialogueSource, transcript: DialogueTranscript, refined: DialoguePadBank?) {
         let key = CacheKey(source)
-        let analysis = state.withLock { s -> DialogueAnalysis? in
-            guard let index = s.cache.firstIndex(where: { $0.key == key }), s.cache[index].matches(source) else { return nil }
+        state.withLock { s in
+            guard let index = s.cache.firstIndex(where: { $0.key == key }), s.cache[index].matches(source) else { return }
             s.cache[index].transcript = transcript
             if let refined { s.cache[index].refined[Self.model(transcript)] = refined }
-            return s.cache[index].analysis
         }
-        if let analysis {
-            let index = settings.withLock { $0.salienceIndex }
-            index.record(source: source, analysis: analysis, transcript: transcript)
+    }
+
+    private static let learningQueue = DispatchQueue(label: "com.saygoodnight.Liminal.dialogueLearning", qos: .utility)
+
+    /// Capture immutable values before queueing; cue cancellation cannot discard completed learning,
+    /// and a later cache replacement cannot make it learn another cue's transcript.
+    func learnCachedTranscript(_ source: DialogueSource) {
+        let cached = state.withLock { s -> (DialogueAnalysis, DialogueTranscript)? in
+            guard let entry = s.cache.first(where: { $0.key == CacheKey(source) && $0.matches(source) }),
+                  let transcript = entry.transcript else { return nil }
+            return (entry.analysis, transcript)
+        }
+        guard let (analysis, transcript) = cached else { return }
+        let config = settings.withLock { $0 }
+        Self.learningQueue.async {
+            config.learnSalience(config.salienceIndex, source, analysis, transcript)
+        }
+    }
+
+    /// Deterministic barrier for verification only; never awaited by the coordinator.
+    func finishSalienceLearning() async {
+        await withCheckedContinuation { continuation in
+            Self.learningQueue.async { continuation.resume() }
         }
     }
 
@@ -498,6 +521,8 @@ nonisolated final class DialogueDirector: @unchecked Sendable {
         let config = settings.withLock { $0 }
         let now = config.now
         var outcome = Outcome()
+        // Publication and its ready filter finish before any tagging/ranking for the index.
+        defer { learnCachedTranscript(source) }
         guard var info = transport() else { outcome.discarded = "noTransport"; return outcome }
         let started = now()
 
