@@ -177,9 +177,16 @@ nonisolated enum DialogueChopRenderer {
         // The vocal chain runs over the warm-up too, so its filters and detectors have settled at the
         // pad start; its group delay is taken back so the accent stays on its sample (plan 8.5).
         DialogueChopChain.process(&y, from: warm, texture: pad.role == .texture, sampleRate: sr)
-        let shift = DialogueChopChain.delayFrames
+        let first = warm + DialogueChopChain.delayFrames
+        let available = min(full, total - first)
         var out = [Float](repeating: 0, count: full)
-        for i in 0..<full where warm + shift + i < total { out[i] = y[warm + shift + i] }
+        if available > 0 {
+            y.withUnsafeBufferPointer { prepared in
+                out.withUnsafeMutableBufferPointer { pad in
+                    pad.baseAddress!.update(from: prepared.baseAddress! + first, count: available)
+                }
+            }
+        }
 
         // Edges from the hierarchy: fade in, natural release.
         let fadeIn = max(2, Int(Double(pad.fadeIn) / rate))
