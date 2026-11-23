@@ -423,8 +423,8 @@ struct ArchiveVoiceRenderTests {
             _ = planned
         }
         let found = try #require(probe.onset(x, near: 1.0, threshold: 0.05))
-        // The dry chop path is `ChopBus.dryGain`; the fader is min(cueGain, 1.15) = 1 regardless of the bed fade.
-        let dry = ArchiveVoice.ChopBus.dryGain
+        // The cue gain is 1 independently of the bed fade; the dialogue fader applies its balance trim.
+        let dry = ArchiveVoice.ChopBus.dryGain * ArchiveVoice.ChopBus.outputTrim
         #expect(abs(x[found]) > dry * 0.9 && abs(x[found]) < dry * 1.11, "chop peak \(x[found])")
     }
 

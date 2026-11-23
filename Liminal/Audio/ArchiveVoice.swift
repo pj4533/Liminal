@@ -84,7 +84,7 @@ nonisolated final class ArchiveVoice {
     let source = BufferSource()
     let chops = BufferSource()
     let bed: Fader
-    /// The dry chop path: mono, centred, 0.72 (capture tap `dialogue-dry`).
+    /// The centered dry chop path (capture tap `dialogue-dry`).
     let chopDry: Fader
     let chopEcho: VariableDelay
     /// Echo and room returns, each band-limited (plan 8.5).
@@ -143,6 +143,8 @@ nonisolated final class ArchiveVoice {
         /// Tuck pass (19 November 2026): 8 dB under the calibrated 0.72, so the chops sit with the
         /// melodic stems instead of 9 to 15 dB over them in 250 Hz-4 kHz.
         static let dryGain: Float = 0.28
+        /// Shared balance trim after the dry and wet paths have been mixed (C-B8).
+        static let outputTrim: Float = dbToGain(-0.35)
         static let echoBeats: Float = 0.75
         /// Heavier chop effects (user direction of 19 November 2026, "heavier... echo more, more repeats,
         /// more reverb"): feedback 0.55 with the return 5 dB under dry (0.42 at -11 dB after calibration,
@@ -255,7 +257,7 @@ nonisolated final class ArchiveVoice {
     /// The chop fader follows the Footage audio setting while a cue and its tail last, with its own 50 ms
     /// ramp. It does not follow the bed's fade-in (plan 6.3).
     private func updateChopGain(at t: Double) {
-        let gain: Float = t < chopsUntil ? min(cueGain, 1.15) : 0
+        let gain: Float = t < chopsUntil ? min(cueGain, 1.15) * ChopBus.outputTrim : 0
         guard abs(gain - lastChopGain) > 0.0001 else { return }
         ParamRamp.setGain(chopOutput, gain, over: 0.05)
         lastChopGain = gain
