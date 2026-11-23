@@ -1855,7 +1855,8 @@ nonisolated extension DialogueMotif {
         // The skeleton holds for the template's loops; the fill around it is drawn from this loop's seed (D127).
         let g = groove(template: DialogueMotifTuning.hookTemplates[template], vocabulary: vocabulary, drums: drums,
                        reorderAllowed: reorderAllowed, fragments: fragments, sampleRate: sampleRate, seed: seed,
-                       beatDuration: beatDuration)
+                       beatDuration: beatDuration, avoiding: Set(avoidCells.first { $0.kind == .chopBeat }?.items
+                            .filter { $0.effect != .reversed }.map(\.slot) ?? []))
         // Cuts a hit that does not fit its room may take instead (content words first); a line that may
         // not be reordered only drops such a hit (D130).
         // D130 stage 2: never a weight-0 cut while the line has a content one.

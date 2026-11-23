@@ -47,6 +47,9 @@ nonisolated enum DialogueMovePool {
             }
             for item in first where !item.skeleton && !item.stutter && !fragments[item.fragment].isUnit && item.slot < 28 {
                 guard second.contains(item) else { continue }
+                // The groove can already choose a fresh pocket. Do not force that new onset
+                // back onto a previous loop's occupied step merely to move it again.
+                if !old.isEmpty, !old.contains(item.slot) { continue }
                 let candidates = [item.slot - 2, item.slot, item.slot + 2].filter { slot in
                     guard slot > 0, slot < 28 else { return false }
                     return chopCells.allSatisfy { cell in

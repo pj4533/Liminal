@@ -173,7 +173,8 @@ nonisolated extension DialogueMotif {
     /// sixteenths (a word and a syllable) and the cell's last response plays out.
     static func groove(template: [(DialogueMotifTuning.HookRole, Int)], vocabulary v: GrooveVocabulary,
                        drums: DialogueMotifDrums, reorderAllowed: Bool, fragments: [DialogueMotifFragment],
-                       sampleRate: Double, seed: UInt64, beatDuration: Double = 0) -> [DialogueMotifCell.Item] {
+                       sampleRate: Double, seed: UInt64, beatDuration: Double = 0,
+                       avoiding previousSlots: Set<Int> = []) -> [DialogueMotifCell.Item] {
         typealias Item = DialogueMotifCell.Item
         struct Hit { var fragment: Int; var gate: Int?; var skeleton: Bool; var site: FillSite? }
         var rng = MusicRNG(seed: seed ^ 0xD127_C40B)
@@ -278,7 +279,16 @@ nonisolated extension DialogueMotif {
                         steps: room, fragments: fragments, sampleRate: sampleRate, beatDuration: beatDuration) }) else { return nil }
                     return (k, s, score(k, s))
                 }
-                guard let best = open.max(by: { ($0.2, -$0.0) < ($1.2, -$1.0) }), best.2 > -1 else { break }
+                guard var best = open.max(by: { ($0.2, -$0.0) < ($1.2, -$1.0) }), best.2 > -1 else { break }
+                // History belongs in pocket selection, before a long word has committed its
+                // neighbours. A later two-step nudge often has no legal room. Prefer an unused
+                // usable pocket without trading an off-drum fill for a kick/snare collision;
+                // all word-fit, breath, density and seeded drum-score rules still apply.
+                let offDrums = best.1 != .kick && best.1 != .snare
+                let fresh = open.filter { !previousSlots.contains($0.0) && $0.2 > -1
+                    && (!offDrums || ($0.1 != .kick && $0.1 != .snare)) }
+                if !previousSlots.isEmpty,
+                   let alternative = fresh.max(by: { ($0.2, -$0.0) < ($1.2, -$1.0) }) { best = alternative }
                 hits[best.0] = Hit(fragment: -1, gate: nil, skeleton: false, site: best.1)
             }
         }

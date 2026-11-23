@@ -4,6 +4,44 @@ import Testing
 @testable import Liminal
 
 struct DialogueChopFeelTests {
+    @Test func hookPocketSelectionUsesHistoryBeforeWholeWordsReserveTheirRoom() {
+        typealias Item = DialogueMotifCell.Item
+        let fragments = (0..<6).map { id in
+            DialogueMotifFragment(id: id, kind: id == 0 ? .line : .piece, order: id, parent: nil,
+                frames: (id * 1000)..<(id * 1000 + 200), accentFrame: id * 1000,
+                fadeIn: 0, fadeOut: 0, text: nil, weight: 0.8)
+        }
+        let vocabulary = DialogueMotif.GrooveVocabulary(s: 1, r: 2, t: 3, sa: 1, ra: 2,
+            pieces: [1, 2, 3, 4, 5], halves: [:], fragments: fragments)
+        let template: [(DialogueMotifTuning.HookRole, Int)] = [(.s, 0), (.r, 12), (.s, 16), (.r, 28)]
+        for seed: UInt64 in 1...20 {
+            func groove(_ history: Set<Int>) -> [Item] {
+                DialogueMotif.groove(template: template, vocabulary: vocabulary, drums: .boomBap,
+                    reorderAllowed: true, fragments: fragments, sampleRate: 1000, seed: seed,
+                    beatDuration: 0.8, avoiding: history)
+            }
+            let first = groove([])
+            let history = Set(first.map(\.slot))
+            let next = groove(history)
+            #expect(next == groove(history))
+            #expect(next.filter(\.skeleton).map { [$0.slot, $0.fragment] }
+                == first.filter(\.skeleton).map { [$0.slot, $0.fragment] })
+            let newFills = next.filter { !$0.skeleton && !history.contains($0.slot) }
+            #expect(!newFills.isEmpty, "seed \(seed): free pockets repeated the old occupied grid")
+            for (a, b) in zip(next, next.dropFirst()) {
+                #expect(Double(b.slot - a.slot) * 0.2 >= 0.2 + DialogueTuning.dryGapSeconds)
+            }
+            let previous = [2, 4].map { DialogueMotifCell(kind: .chopBeat, bar: $0, bars: 2, variant: 0, items: first) }
+            let cells = [2, 4].map { DialogueMotifCell(kind: .chopBeat, bar: $0, bars: 2, variant: 0, items: next) }
+            let arranged = DialogueMovePool.arrange(cells, fragments: fragments, signature: 1,
+                sampleRate: 1000, beatDuration: 0.8, seed: seed, avoiding: previous)
+            #expect(arranged[0].items == arranged[1].items)
+            for fill in newFills {
+                #expect(arranged[0].items.contains { $0.fragment == fill.fragment && $0.slot == fill.slot })
+            }
+        }
+    }
+
     @Test func competingHookFillsReserveWholeWordsAgainstEarlierMoves() {
         typealias Item = DialogueMotifCell.Item
         let fragments = (0..<5).map { id in
