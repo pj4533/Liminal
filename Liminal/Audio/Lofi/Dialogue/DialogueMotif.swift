@@ -158,7 +158,7 @@ nonisolated enum DialogueMotifTuning {
     /// A rendered pad's accent replaces the source one only within this many seconds of it.
     static let renderedAccentRange: ClosedRange<Double> = -0.050...0.020
     /// Speech-band weighting can refine a rendered word's beat within its opening transient.
-    static let speechAccentRefinementSeconds = 0.004
+    static let speechAccentRefinementSeconds = 0.006
     /// The line's statement tries these sixteenths after its slot, never an off-sixteenth (D126 part 2:
     /// the intro states the whole line on the downbeat so the listener understands it).
     static let lineSteps = [0, 4, 8, 16]
@@ -882,7 +882,7 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
                 let speech = attack(filtered: true)
                 let limit = Int(rate * DialogueMotifTuning.speechAccentRefinementSeconds)
                 let delta = max(-limit, min(limit, speech.beatFrame - renderedBeat))
-                let leadRoom = max(0, Int(0.030 * rate) - (renderedBeat - broadband.audibleFrame))
+                let leadRoom = max(0, Int(DialogueOnset.softLeadSeconds * rate) - (renderedBeat - broadband.audibleFrame))
                 renderedBeat += min(delta, leadRoom)
             }
             let beat = fr.frames.lowerBound + Int((Double(renderedBeat) * transform.playbackRate).rounded())
@@ -2473,16 +2473,27 @@ nonisolated enum DialogueMotifPerformer {
             let order = Array(candidates[(rotation % max(1, candidates.count))...] + candidates[..<(rotation % max(1, candidates.count))])
             rotation += 1
             let generic = DialogueMotifTuning.repairSlots.flatMap { slot in order.map { (slot: slot, fragment: $0) } }
-            for (slot, f) in hookItems + generic {
+            // The return can leave room for a whole word only before the first lead note. Try
+            // its downbeat last: the consonant may start in the preceding bar, but its accent
+            // belongs to this one. This fallback never chokes a neighbour or shortens the word.
+            let ordinary = hookItems + generic
+            let downbeat = returnBar ? order.map { (slot: 0, fragment: $0) } : []
+            for (index, item) in (ordinary + downbeat).enumerated() {
+                let (slot, f) = item
+                let returnDownbeat = index >= ordinary.count
                 let accent = snapshot.gridTime(sixteenth: s0 + slot)
                 let start = accent - motif.accentOffset(f)
                 // A breakdown bar's repair holds its word (the section's own vocabulary); elsewhere a 1/8 stab.
-                let repairGate: Int? = (8..<12).contains(barInLoop) ? nil : DialogueMotifTuning.repairGate
+                let repairGate: Int? = returnDownbeat || (8..<12).contains(barInLoop) ? nil : DialogueMotifTuning.repairGate
                 let gated = gatedEnd(f, start: start, sixteenth: s0 + slot, gate: repairGate, motif: motif, snapshot: snapshot)
                 var end = gated.end
-                guard start >= barStart, start < barEnd, start >= max(hard, floor) else { continue }
+                guard (returnDownbeat || start >= barStart), start < barEnd, start >= max(hard, floor) else { continue }
                 let previous = placed.lastIndex { $0.start < start }
                 let next = placed.firstIndex { $0.start >= start }
+                if returnDownbeat {
+                    if let p = previous, placed[p].end + DialogueTuning.dryGapSeconds > start { continue }
+                    if let q = next, end + DialogueTuning.dryGapSeconds > placed[q].start { continue }
+                }
                 var chokePrevious = false
                 var shortenPrevious: Double?
                 if let p = previous, placed[p].end + DialogueTuning.dryGapSeconds > start {

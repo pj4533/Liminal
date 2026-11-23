@@ -120,6 +120,42 @@ struct DialogueMotifTests {
 
     static let seeds: [UInt64] = [1, 2, 3, 5, 8, 13]
 
+    @Test func returnDownbeatRepairKeepsTheWholeWordAndItsConsonantPickup() throws {
+        let film = MotifShape.film(MotifShape.corpus, id: "return-downbeat", transcribed: true)
+        let bank = try #require(film.bank)
+        let rate = film.source.sampleRate
+        let frames = 0..<Int(0.85 * rate)
+        var word = DialogueMotifFragment(id: 1, kind: .piece, order: 1, parent: nil, frames: frames,
+            accentFrame: Int(0.016 * rate), fadeIn: 0, fadeOut: 0, text: "recognized", weight: 1)
+        word.words = [.init(frames: frames, weight: 1)]
+        let line = DialogueMotifFragment(id: 0, kind: .line, order: 0, parent: nil, frames: 0..<Int(2 * rate),
+            accentFrame: 0, fadeIn: 0, fadeOut: 0, text: "message is recognized", weight: 1)
+        let motif = DialogueMotif(loop: 0, source: film.source, analysis: film.analysis, lineUnit: 0,
+            lineKey: 0, fragments: [line, word], pieces: [1], halves: [:], bank: bank, usedTranscript: true,
+            reorderAllowed: false, cells: [], carried: false, seed: 1)
+        var snapshot = DialogueFixtures.snapshot(bpm: 72, origin: 0, seed: 1)
+        let down = snapshot.gridTime(sixteenth: 192), next = snapshot.gridTime(sixteenth: 208)
+        let start = down - motif.accentOffset(1), end = start + motif.seconds(1)
+        func repair(previousEnd: Double, earliest: Double) -> [DialogueMotifPerformer.Placed] {
+            let previous = DialogueMotifPerformer.Placed(fragment: 0, cell: .breakdown, sixteenth: 184,
+                accent: down - 1, start: down - 1, end: previousEnd, gainDB: 0, effect: .none, landing: false)
+            let following = DialogueMotifPerformer.Placed(fragment: 0, cell: .outro, sixteenth: 208,
+                accent: next, start: next, end: next + 2, gainDB: 0, effect: .none, landing: false)
+            return DialogueMotifPerformer.repair([previous, following], motif: motif, snapshot: snapshot,
+                owned: 48..<52, hard: down - 2, floor: earliest, upper: next + 2)
+        }
+        snapshot.returnLeadWindows = [(end + 0.005)..<next]
+        let placed = repair(previousEnd: start - 0.01, earliest: start)
+        let hit = try #require(placed.first { $0.cell == .repair })
+        #expect(hit.fragment == 1 && hit.sixteenth == 192 && hit.accent == down)
+        #expect(hit.start == start && hit.end == end && hit.gate == nil && !hit.choked)
+        #expect(placed.count == 3 && placed.first?.end == start - 0.01 && placed.last?.start == next)
+        #expect(repair(previousEnd: start - 0.001, earliest: start).count == 2)
+        #expect(repair(previousEnd: start - 0.01, earliest: down).count == 2)
+        snapshot.returnLeadWindows = [(end - 0.001)..<next]
+        #expect(repair(previousEnd: start - 0.01, earliest: start).count == 2)
+    }
+
     @Test func returnMelodyHasRoomForItsFirstTwoNotesAndBarThirteenStillSpeaks() throws {
         let film = MotifShape.film(MotifShape.corpus, id: "return-clearance", transcribed: true)
         let beat = 60.0 / 72
