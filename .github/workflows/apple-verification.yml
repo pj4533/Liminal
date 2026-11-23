@@ -1,0 +1,88 @@
+name: Apple verification
+
+on:
+  push:
+    branches: [main, 'work/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apple-verification-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apple:
+    runs-on: macos-26
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Record Apple toolchain
+        run: |
+          mkdir -p verification
+          {
+            sw_vers
+            xcodebuild -version
+            xcodebuild -showsdks
+            xcrun simctl list devices available
+          } 2>&1 | tee verification/toolchain.log
+      - name: Build macOS
+        id: mac_build
+        run: |
+          set -o pipefail
+          xcodebuild -project Liminal.xcodeproj -scheme Liminal \
+            -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath "$RUNNER_TEMP/LiminalDerivedData" \
+            -resultBundlePath verification/macos-build.xcresult \
+            build 2>&1 | tee verification/macos-build.log
+      - name: Focused dialogue tests
+        if: ${{ !cancelled() && steps.mac_build.outcome == 'success' }}
+        run: |
+          set -o pipefail
+          suites=()
+          for source in LiminalTests/Dialogue*Tests.swift; do
+            suites+=("-only-testing:LiminalTests/$(basename "$source" .swift)")
+          done
+          xcodebuild test -project Liminal.xcodeproj -scheme Liminal \
+            -destination 'platform=macOS,arch=arm64' \
+            -parallel-testing-enabled NO -maximum-concurrent-test-macos-destinations 1 \
+            -derivedDataPath "$RUNNER_TEMP/LiminalDerivedData" \
+            -resultBundlePath verification/dialogue-tests.xcresult \
+            "${suites[@]}" -only-testing:LiminalTests/DialogueLineLedgerTests \
+            2>&1 | tee verification/dialogue-tests.log
+      - name: Full unit suite
+        if: ${{ !cancelled() && steps.mac_build.outcome == 'success' }}
+        run: |
+          set -o pipefail
+          xcodebuild test -project Liminal.xcodeproj -scheme Liminal \
+            -destination 'platform=macOS,arch=arm64' \
+            -parallel-testing-enabled NO -maximum-concurrent-test-macos-destinations 1 \
+            -derivedDataPath "$RUNNER_TEMP/LiminalDerivedData" \
+            -resultBundlePath verification/unit-tests.xcresult \
+            -only-testing:LiminalTests 2>&1 | tee verification/unit-tests.log
+      - name: Build visionOS Simulator when SDK is installed
+        if: ${{ !cancelled() }}
+        run: |
+          set -o pipefail
+          if ! xcodebuild -showsdks | grep -q xrsimulator; then
+            echo 'visionOS Simulator build unverified: no xrsimulator SDK installed.' | tee verification/visionos-build.log
+            echo '### visionOS Simulator build unverified: SDK unavailable' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          xcodebuild -project Liminal.xcodeproj -scheme Liminal \
+            -destination 'generic/platform=visionOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/LiminalVisionDerivedData" \
+            -resultBundlePath verification/visionos-build.xcresult \
+            build 2>&1 | tee verification/visionos-build.log
+      - name: Preserve verification evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: apple-verification-${{ github.sha }}
+          path: verification/
+          retention-days: 14
+          if-no-files-found: error
