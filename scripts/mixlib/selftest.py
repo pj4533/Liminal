@@ -486,11 +486,220 @@ def test_bass_tone():
     expect(r["thirds"][1000] < -40, f"bass-tone: little at 1 kHz ({r['thirds'][1000]:.1f} dB)")
 
 
-def run_self_test():
-    tests = [test_loudness_and_peak, test_masking, test_cadence, test_kick_bass, test_lowband_mono, test_pumping,
-             test_full_pipeline_v1, test_plan_fingerprints, test_gain_reduction_trace, test_bass_attack_lag,
-             test_all_piece_sii, test_lead_salience, test_lead_time_simulation, test_kick_attack_not_measured,
-             test_nofilm_master_gating, test_engine_paths_skip_cleanly, test_bass_tone]
+# ------------------------------------------------------------------------------------- translation report
+
+def test_translation_mono_change():
+    """Identical channels 0 dB, independent equal-power noise -3.01 dB, inverted channels cancelled, silence gated."""
+    from . import translation as tr
+    rng = np.random.default_rng(3)
+    a, b = rng.standard_normal(RATE * 4) * 0.1, rng.standard_normal(RATE * 4) * 0.1
+
+    def change(x, y):
+        m = (x + y) / 2
+        return tr.mono_change_db(float(np.mean(x ** 2)), float(np.mean(y ** 2)), float(np.mean(m ** 2)))
+    v, st = change(a, a)
+    expect(st == "ok" and abs(v) < 1e-9, f"translation: identical channels fold at 0 dB ({v})")
+    v, st = change(a, b)
+    expect(st == "ok" and abs(v + 3.01) <= 0.15, f"translation: independent noise folds at -3.01 dB ({v:.2f})")
+    v, st = change(a, -a)
+    expect(st == "cancelled" and v == float("-inf"), f"translation: inverted channels reported as cancelled ({st}, {v})")
+    v, st = change(np.zeros(100), np.zeros(100))
+    expect(st == "gated" and v is None, "translation: silence is gated, never divided")
+    # The same through the STFT band powers used by the report.
+    hops = tr.BandHops(RATE)
+    h = hops.compute(np.stack([a, b], axis=1))
+    j = hops.col("400-900")
+    v, _ = tr.mono_change_db(float(h["L"][:, j].mean()), float(h["R"][:, j].mean()), float(h["M"][:, j].mean()))
+    expect(abs(v + 3.01) <= 0.3, f"translation: band mono change of independent noise {v:.2f} dB")
+
+
+def test_translation_transforms():
+    """mono-hp180 attenuates 55 Hz by its analytic response, passes 400 Hz, and the 7 kHz low-pass cuts 12 kHz."""
+    from . import translation as tr
+    sos = tr.filter_sos(180, RATE)
+    for f, check in ((55, None), (400, 0.3), (12000, None)):
+        x = tone(f, 4, 0.5)
+        y = tr.apply_transform(stereo(x), "mono-hp180", RATE)[RATE:, 0]
+        got = 20 * np.log10(np.sqrt(np.mean(y ** 2)) / (0.5 / np.sqrt(2)))
+        _, hresp = __import__("scipy.signal", fromlist=["sosfreqz"]).sosfreqz(sos, worN=[f], fs=RATE)
+        analytic = 20 * np.log10(abs(hresp[0]))
+        if f == 55:
+            expect(abs(got - analytic) <= 0.5 and got < -40, f"translation: 55 Hz through mono-hp180 {got:.1f} dB (analytic {analytic:.1f})")
+        elif f == 400:
+            expect(abs(got) <= check, f"translation: 400 Hz through mono-hp180 {got:.2f} dB")
+        else:
+            expect(got < -10, f"translation: 12 kHz attenuated by the 7 kHz low-pass ({got:.1f} dB)")
+    # Mono arithmetic: opposite channels fold to silence, a one-sided signal halves.
+    x = tone(500, 1, 0.4)
+    y = tr.apply_transform(stereo(x, -x), "mono", RATE)
+    expect(np.max(np.abs(y)) < 1e-6, "translation: (L + R) / 2 of opposite channels is silent")
+    y = tr.apply_transform(stereo(x, np.zeros_like(x)), "mono", RATE)
+    expect(np.allclose(y[:, 0], x / 2, atol=1e-6), "translation: (L + R) / 2 of a one-sided signal is half of it")
+
+
+def test_translation_band_rms():
+    """Two tones of known amplitude land in their own bands within 0.2 dB."""
+    from . import translation as tr
+    x = tone(113, 6, 0.3) + tone(600, 6, 0.05)
+    hops = tr.BandHops(RATE)
+    h = hops.compute(stereo(x))
+    for band, amp in (("80-160", 0.3), ("400-900", 0.05)):
+        got = tr.db10(float(h["M"][20:-20, hops.col(band)].mean()))
+        want = 20 * np.log10(amp / np.sqrt(2))
+        expect(abs(got - want) <= 0.2, f"translation: band {band} reads {got:.2f} dB, expected {want:.2f}")
+    leak = tr.db10(float(h["M"][20:-20, hops.col("2000-5000")].mean()))
+    expect(leak < -80, f"translation: nothing in 2-5 kHz ({leak:.1f} dB)")
+
+
+def _note(f0, seconds, partials, rate=RATE):
+    t = np.arange(int(seconds * rate)) / rate
+    return sum(a * np.sin(2 * np.pi * k * f0 * t) for k, a in partials)
+
+
+def test_translation_proxies():
+    """Pure 55 Hz is not identifiable at HP180; 220 + 275 Hz partials over noise 12 dB under them are; the same
+    partials 12 dB under the noise are not; one partial alone is not; the masker is the stem holding the noise."""
+    from . import translation as tr
+    rng = np.random.default_rng(5)
+    n = RATE
+    ref = {c: -20.0 for c in tr.CUTOFFS}
+    pure = _note(55, 1, [(1, 0.3)])
+    quiet = rng.standard_normal(n) * 1e-4
+    p = tr.window_proxies(pure, {"texture": quiet}, RATE, 55.0, solo_ref_db=ref)["180"]
+    expect(not p["identifiable"] and not p["identifiableSolo"] and p["survivalDb"] < -40,
+           f"translation: pure 55 Hz at HP180 not identifiable, survival {p['survivalDb']:.1f} dB")
+    bass = _note(55, 1, [(1, 0.3), (4, 0.03), (5, 0.03)])
+    noise = rng.standard_normal(n)
+    # Scale the noise so its third octave at 220 Hz sits 12 dB under (or over) the 220 Hz partial.
+    freqs, pn = tr.power_spectrum(noise, RATE)
+    third = float(pn[tr.third_octave(freqs, 220.0)].sum())
+    partial = 0.03 ** 2 / 2
+    under = noise * np.sqrt(partial / third * 10 ** (-12 / 10))
+    over = noise * np.sqrt(partial / third * 10 ** (12 / 10))
+    p = tr.window_proxies(bass, {"texture": under, "wet": under * 0.1}, RATE, 55.0, solo_ref_db=ref)["180"]
+    expect(p["identifiable"] and p["audibleHarmonics"] >= 2, f"translation: partials 12 dB over the noise identifiable ({p['harmonics']})")
+    p = tr.window_proxies(bass, {"texture": over, "wet": over * 0.1}, RATE, 55.0, solo_ref_db=ref)["180"]
+    expect(not p["identifiable"] and p["identifiableSolo"], "translation: partials 12 dB under the noise not identifiable, but solo they are")
+    expect(p["maskers"] and set(p["maskers"]) == {"texture"}, f"translation: the masker is the stem holding the noise ({p['maskers']})")
+    single = _note(55, 1, [(1, 0.3), (4, 0.03)])
+    p = tr.window_proxies(single, {"texture": under}, RATE, 55.0, solo_ref_db=ref)["180"]
+    expect(not p["identifiable"] and not p["identifiableSolo"], "translation: one partial alone is not identifiable")
+    expect(tr.window_proxies(np.zeros(n), {"texture": under}, RATE, 55.0, solo_ref_db=ref) is None,
+           "translation: a silent bass window is gated")
+
+
+def _synthetic_capture(d, latency=200, gain_db=4.0, stage_db=-2.0, seconds=6, trace=None):
+    """Stems, pre-master, master and a gain trace with a known chain (the delivered-stem fixture)."""
+    import json
+    from . import delivery
+    rng = np.random.default_rng(9)
+    n = RATE * seconds
+    stems = {"drums": rng.standard_normal((n, 2)) * 0.05, "bass": stereo(tone(55, seconds, 0.2)).astype(np.float64),
+             "texture": rng.standard_normal((n, 2)) * 0.02, "dry": stereo(tone(440, seconds, 0.05)).astype(np.float64),
+             "wet": rng.standard_normal((n, 2)) * 0.02, "dialogue-chops": np.zeros((n, 2)), "footage": rng.standard_normal((n, 2)) * 0.01}
+    stage = 10 ** (stage_db / 20)
+    pre = sum(stems.values()) * stage
+    hop = 64
+    frames = np.arange(0, n, hop)
+    gr = trace if trace is not None else np.column_stack([frames, 1.0 + 0.5 * np.sin(frames / RATE), np.zeros(len(frames)),
+                                                          np.where((frames > 2 * RATE) & (frames < 3 * RATE), 0.8, 0.0)])
+    env = delivery.gain_envelope(gr, n)
+    chain = delivery.MasterChain(RATE, 1.0, latency, 10 ** (gain_db / 20), env)
+    master = chain.apply(pre, staged=False)
+    for k, v in stems.items():
+        write_wav(Path(d) / f"{k}.wav", v.astype(np.float32), RATE)
+    write_wav(Path(d) / "pre-master.wav", pre.astype(np.float32), RATE)
+    write_wav(Path(d) / "master.wav", master.astype(np.float32), RATE)
+    with open(Path(d) / "master-gr.csv", "w") as f:
+        f.write("frame,glue_db,clip_db,limiter_db\n")
+        for row in gr:
+            f.write(f"{int(row[0])},{row[1]:.6f},{row[2]:.6f},{row[3]:.6f}\n")
+    m = manifest(n, diagnostics={"masterDynamics": {"preMasterStagingDb": stage_db, "latencyFrames": latency,
+                                                    "settings": {"highpassHz": 25}, "traceFile": "master-gr.csv"}})
+    (Path(d) / "manifest.json").write_text(json.dumps(m))
+    return stems, master
+
+
+def test_translation_delivery():
+    """Delivered stems with a known gain trace sum back to the master under -80 dB; a wrong latency is refused."""
+    from . import delivery
+    with tempfile.TemporaryDirectory() as d:
+        _synthetic_capture(d, latency=203)
+        stems, chain = delivery.delivered_stems(d)
+        expect(chain.latency == 203, f"translation: fitted latency {chain.latency} (203)")
+        expect(chain.sum_residual_db < -80, f"translation: delivered stems sum to the master at {chain.sum_residual_db:.1f} dB")
+        expect(abs(20 * np.log10(chain.gain) - 4.0) < 0.01, f"translation: fitted finisher gain {20 * np.log10(chain.gain):+.3f} dB")
+        wrong = delivery.MasterChain(RATE, chain.stage, chain.latency + 7, chain.gain, chain.env)
+        try:
+            delivery.delivered_stems(d, wrong)
+            expect(False, "translation: a wrong latency must be refused")
+        except ValueError:
+            pass
+
+
+def test_translation_pair_match():
+    """Pair gains are linear, equal across the three transforms of a pair, and match full-range loudness within 0.1 LU."""
+    from . import translation as tr
+    from .loudness import measure_loudness
+    rng = np.random.default_rng(11)
+    base = stereo(tone(60, 8, 0.2) + tone(300, 8, 0.05)) + rng.standard_normal((RATE * 8, 2)) * 0.01
+    cand = base * 10 ** (2.5 / 20) + stereo(tone(240, 8, 0.03))
+    stress = ("mono-hp180", "mono-hp250")
+    sb = {t: tr.apply_transform(base, t, RATE) for t in stress}
+    sc = {t: tr.apply_transform(cand, t, RATE) for t in stress}
+    g = tr.pair_gains(base, cand, RATE, sb, sc)
+    lb = measure_loudness(base * 10 ** (g["baseGainDb"] / 20), RATE)["integratedLufs"]
+    lc = measure_loudness(cand * 10 ** (g["candGainDb"] / 20), RATE)["integratedLufs"]
+    expect(abs(lb - lc) <= 0.1, f"translation: matched loudness {lb:.2f} vs {lc:.2f} LUFS")
+    expect(g["baseGainDb"] <= 0 and g["candGainDb"] <= 0, "translation: pair gains only turn down")
+    # The stress files of a pair take the same capture gains plus one common gain: their difference is the
+    # same as the full-range pair's.
+    for t in stress:
+        expect(set(g["stressCommonGainDb"]) == set(stress), "translation: one common stress gain per transform")
+    diff = g["candGainDb"] - g["baseGainDb"]
+    expect(abs(diff - (g["candGainDb"] + g["stressCommonGainDb"]["mono-hp180"] - g["baseGainDb"] - g["stressCommonGainDb"]["mono-hp180"])) < 1e-12,
+           "translation: equal relative gain across transforms")
+
+
+def test_translation_integrity():
+    """An injected DC offset, a NaN and a phrase-boundary step are each reported."""
+    import json
+    from . import translation as tr
+    with tempfile.TemporaryDirectory() as d:
+        n = RATE * 8
+        pf = n // 2
+        bass = tone(55, 8, 0.2)
+        bass[:pf] += 0.01                       # DC in phrase 0
+        wet = tone(300, 8, 0.05)
+        wet[pf:] += 0.2                         # a step at the boundary
+        master = stereo(tone(100, 8, 0.1))
+        master[RATE, 1] = np.nan
+        write_wav(Path(d) / "bass.wav", stereo(bass), RATE)
+        write_wav(Path(d) / "wet.wav", stereo(wet), RATE)
+        write_wav(Path(d) / "master.wav", master, RATE)
+        m = manifest(n)
+        m["grid"]["phraseFrames"] = pf
+        (Path(d) / "manifest.json").write_text(json.dumps(m))
+        g = tr.integrity_block(Path(d), m)
+    expect(g["bassDcDbfsPerPhrase"][0] > -45 and g["bassDcDbfsPerPhrase"][1] < -60,
+           f"translation: DC reported in phrase 0 only ({g['bassDcDbfsPerPhrase']})")
+    expect(g["nonFinite"].get("master") == 1 and not g["allFinite"], f"translation: the NaN is reported ({g['nonFinite']})")
+    st = g["boundarySteps"]["wet"]
+    expect(st["maxAtBoundary"] > 0.15 and st["maxAtBoundary"] > 5 * st["p9999Elsewhere"],
+           f"translation: the boundary step is reported ({st['maxAtBoundary']:.3f} vs {st['p9999Elsewhere']:.3f})")
+    expect(g["bassLrNullMaxAbs"] == 0.0, "translation: dual-mono bass nulls exactly")
+
+
+TRANSLATION_TESTS = [test_translation_mono_change, test_translation_transforms, test_translation_band_rms,
+                     test_translation_proxies, test_translation_delivery, test_translation_pair_match,
+                     test_translation_integrity]
+
+
+def run_translation_self_test():
+    return _run_tests(TRANSLATION_TESTS)
+
+
+def _run_tests(tests):
     failures = 0
     for t in tests:
         print(t.__name__)
@@ -502,3 +711,9 @@ def run_self_test():
     print("self-test " + ("FAILED" if failures else "passed"))
     return 1 if failures else 0
 
+
+def run_self_test():
+    return _run_tests([test_loudness_and_peak, test_masking, test_cadence, test_kick_bass, test_lowband_mono, test_pumping,
+                       test_full_pipeline_v1, test_plan_fingerprints, test_gain_reduction_trace, test_bass_attack_lag,
+                       test_all_piece_sii, test_lead_salience, test_lead_time_simulation, test_kick_attack_not_measured,
+                       test_nofilm_master_gating, test_engine_paths_skip_cleanly, test_bass_tone] + TRANSLATION_TESTS)

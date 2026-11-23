@@ -16,10 +16,15 @@ stems keep their relative levels and still sum to the mix) before the AAC encode
 because a lossy encode raises true peak (+0.23 dB for the master at 256k, +1.5 dB
 at 160k on the 20 November 2026 capture; D121). The --wav files are not trimmed.
 """
-import json, os, subprocess, sys
-import numpy as np, soundfile as sf
-from scipy.signal import butter, sosfilt
+import os, subprocess, sys
+from pathlib import Path
 
+import numpy as np, soundfile as sf
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from mixlib import delivery  # noqa: E402
+
+# (file label, capture stem): the same seven stems as mixlib.delivery.DELIVERED.
 STEMS = [('drums', 'drums'), ('bass', 'bass'), ('chords', 'texture'), ('melody', 'dry'),
          ('reverb-echo', 'wet'), ('chops', 'dialogue-chops'), ('film-footage', 'footage')]
 ENCODE_TRIM_DB = -1.0
@@ -29,27 +34,13 @@ def main():
     keep_wav = '--wav' in sys.argv
     os.makedirs(out, exist_ok=True)
     rd = lambda n: sf.read(os.path.join(cap, f'{n}.wav'), dtype='float64')
-    master, sr = rd('master'); pre, _ = rd('pre-master')
-    man = json.load(open(os.path.join(cap, 'manifest.json')))
-    dyn = man.get('diagnostics', {}).get('masterDynamics', {})
-    stage = 10 ** (dyn.get('preMasterStagingDb', 0.0) / 20)
-    gr = np.loadtxt(os.path.join(cap, 'master-gr.csv'), delimiter=',', skiprows=1)
-    env = 10 ** (-np.interp(np.arange(len(master)), gr[:, 0], gr[:, 1] + gr[:, 2] + gr[:, 3]) / 20)
-    hp = butter(2, dyn.get('settings', {}).get('highpassHz', 25), 'highpass', fs=sr, output='sos')
-
-    def chain(x, lat, g):
-        y = np.zeros_like(x); y[lat:] = x[:len(x) - lat]
-        return sosfilt(hp, y, axis=0) * (g * env[:, None])
-
-    best = None  # fit latency and static gain of the finisher against master.wav
-    for lat in range(max(0, dyn.get('latencyFrames', 200) - 60), dyn.get('latencyFrames', 200) + 60):
-        r = chain(pre, lat, 1.0); g = np.sum(r * master) / np.sum(r * r)
-        res = np.sqrt(np.mean((master - g * r) ** 2))
-        if best is None or res < best[2]: best = (lat, g, res)
-    lat, g, _ = best
+    master, sr = rd('master')
+    # Latency and static finisher gain fitted against master.wav (mixlib.delivery, shared with
+    # scripts/translation-report.py).
+    chain, _ = delivery.load_chain(cap, master=master, pre=rd('pre-master')[0])
+    print(f'latency {chain.latency} frames, finisher gain {20 * np.log10(chain.gain):+.2f} dB')
     db = lambda v: 20 * np.log10(v + 1e-12)
     rms = lambda v: np.sqrt(np.mean(v ** 2))
-    print(f'latency {lat} frames, finisher gain {db(g):+.2f} dB')
     try:
         import pyloudnorm as pyln; meter = pyln.Meter(sr)
     except ImportError:
@@ -57,7 +48,7 @@ def main():
     files = [('01-full-mix', master)]
     total = 0
     for i, (name, src) in enumerate(STEMS, start=2):
-        y = chain(rd(src)[0] * stage, lat, g); total = total + y
+        y = chain.apply(rd(src)[0]); total = total + y
         files.append((f'{i:02d}-{name}', y))
         L = f'{meter.integrated_loudness(y):6.1f} LUFS' if meter else ''
         act = np.mean(np.abs(y).max(axis=1) > 10 ** (-60 / 20))
