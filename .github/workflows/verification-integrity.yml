@@ -31,27 +31,46 @@ jobs:
           cd ../baseline
           git apply --check ../after/scripts/baseline-probe-measurement.patch
           git apply ../after/scripts/baseline-probe-measurement.patch
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path('Liminal/Audio/Lofi/LofiBassVoice.swift')
-          text = path.read_text()
-          old = '            cuePartials(note, voice: voice, envelope: envelope, rate: rate, onset: cueOnset, cue: $0, sub: sub, tone: tone)'
-          assert text.count(old) == 1, 'Historical compiler-only adapter no longer matches'
-          path.write_text(text.replace(old, old.replace('cuePartials(', 'Self.cuePartials(', 1)))
-          PY
+          python3 ../after/scripts/prepare-baseline-compiler.py .
           git diff > ../verification/baseline-measurement-adapter.patch
       - name: Compile historical measurement probe without capturing
+        id: baseline
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
           cd baseline
           xcodebuild build-for-testing CODE_SIGNING_ALLOWED=NO -scheme Liminal -destination 'platform=macOS,arch=arm64' -parallel-testing-enabled NO -derivedDataPath "$RUNNER_TEMP/baseline-dd" 2>&1 | tee ../verification/baseline-build.log
-      - name: Compile candidate and run new detector and selection regressions
+      - name: Compile candidate independently
+        if: ${{ !cancelled() }}
+        id: candidate-build
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
           cd after
-          xcodebuild test CODE_SIGNING_ALLOWED=NO -scheme Liminal -destination 'platform=macOS,arch=arm64' -parallel-testing-enabled NO -derivedDataPath "$RUNNER_TEMP/after-dd" -resultBundlePath ../verification/integrity.xcresult -only-testing:LiminalTests/DialogueSalienceProbeTests/independentAttackRequiresActualSignalAndExcludesReverses -only-testing:LiminalTests/FootageSalienceTests 2>&1 | tee ../verification/after-tests.log
+          xcodebuild build-for-testing CODE_SIGNING_ALLOWED=NO -scheme Liminal -destination 'platform=macOS,arch=arm64' -parallel-testing-enabled NO -derivedDataPath "$RUNNER_TEMP/after-dd" 2>&1 | tee ../verification/after-build.log
+      - name: Run whole detector and selection suites
+        if: ${{ !cancelled() && steps.candidate-build.outcome == 'success' }}
+        id: candidate
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -uo pipefail
+          cd after
+          xcodebuild test-without-building CODE_SIGNING_ALLOWED=NO -scheme Liminal -destination 'platform=macOS,arch=arm64' -parallel-testing-enabled NO -derivedDataPath "$RUNNER_TEMP/after-dd" -resultBundlePath ../verification/integrity.xcresult -only-testing:LiminalTests/DialogueSalienceProbeTests -only-testing:LiminalTests/FootageSalienceTests 2>&1 | tee ../verification/after-tests.log
+          result=${PIPESTATUS[0]}
+          python3 scripts/verify-swift-test-coverage.py ../verification/after-tests.log LiminalTests DialogueSalienceProbeTests FootageSalienceTests > ../verification/test-coverage.json
+          coverage=$?
+          if [ "$result" -ne 0 ]; then exit "$result"; fi
+          exit "$coverage"
+      - name: Require both independent build outcomes
+        if: ${{ !cancelled() }}
+        env:
+          BASELINE: ${{ steps.baseline.outcome }}
+          CANDIDATE_BUILD: ${{ steps.candidate-build.outcome }}
+          CANDIDATE: ${{ steps.candidate.outcome }}
+        run: test "$BASELINE" = success && test "$CANDIDATE_BUILD" = success && test "$CANDIDATE" = success
       - name: Preserve integrity diagnosis
         if: always()
         uses: actions/upload-artifact@v4

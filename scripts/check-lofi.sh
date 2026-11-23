@@ -154,8 +154,14 @@ with ThreadingHTTPServer(("127.0.0.1", 0), Receiver) as server:
         # and capture again. Every other failure is reported at once.
         for attempt in range(1, args.capture_attempts + 1):
             with log_path.open("w") as log:
+                signing = []
+                if os.environ.get("LIMINAL_CAPTURE_CODE_SIGNING_ALLOWED"):
+                    value = os.environ["LIMINAL_CAPTURE_CODE_SIGNING_ALLOWED"]
+                    if value not in ("YES", "NO"):
+                        raise ValueError("LIMINAL_CAPTURE_CODE_SIGNING_ALLOWED must be YES or NO")
+                    signing = ["CODE_SIGNING_ALLOWED=" + value]
                 xcode = subprocess.run([
-                    "xcodebuild", "test", "-scheme", "Liminal", "-destination", "platform=macOS",
+                    "xcodebuild", "test", *signing, "-scheme", "Liminal", "-destination", "platform=macOS",
                     "-derivedDataPath", os.environ.get("DD", "/private/tmp/liminal-overhaul-mac"),
                     "-parallel-testing-enabled", "NO", "-only-testing:LiminalTests/LofiMixRenderTests",
                 ], stdout=log, stderr=subprocess.STDOUT)

@@ -26,17 +26,18 @@ jobs:
             -resultBundlePath verification/dialogue-regression.xcresult \
             -only-testing:LiminalTests/DialogueChopFeelTests \
             -only-testing:LiminalTests/DialogueFeelMetricsTests \
-            -only-testing:LiminalTests/DialogueMotifTests/everyBarOfEveryLoopHasAPieceOnset \
-            -only-testing:LiminalTests/DialogueMotifTests/everyLoopPlaysTheArc \
-            -only-testing:LiminalTests/DialogueMotifTests/theResponseAnswersOnTheBackbeat \
+            -only-testing:LiminalTests/DialogueMotifTests \
             -only-testing:LiminalTests/DialogueTightnessTests \
             -only-testing:LiminalTests/DialogueGateTests \
             -only-testing:LiminalTests/DialogueWordCutTests \
             2>&1 | tee verification/dialogue-regression.log
           result=${PIPESTATUS[0]}
+          python3 scripts/verify-swift-test-coverage.py verification/dialogue-regression.log LiminalTests DialogueChopFeelTests DialogueFeelMetricsTests DialogueMotifTests DialogueTightnessTests DialogueGateTests DialogueWordCutTests > verification/test-coverage.json
+          coverage=$?
           xcrun xcresulttool export attachments --path verification/dialogue-regression.xcresult \
             --output-path verification/attachments
-          exit "$result"
+          if [ "$result" -ne 0 ]; then exit "$result"; fi
+          exit "$coverage"
       - name: Preserve diagnosis
         if: always()
         uses: actions/upload-artifact@v4

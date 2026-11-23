@@ -2,6 +2,7 @@
 # Each phase is serial on its runner; workflow preserves artifacts between phases.
 # Usage: verify-real-media.sh AFTER BASELINE OUT [prepare|speech|baseline|after|gates|auditions|app|final]
 set -uo pipefail
+export LIMINAL_CAPTURE_CODE_SIGNING_ALLOWED=NO
 AFTER=$(cd "$1" && pwd)
 BASELINE=$(cd "$2" && pwd)
 mkdir -p "$3"
@@ -40,15 +41,7 @@ PY
     run_step baseline-report-adapter cp "$AFTER/scripts/dialogue-salience-report.py" "$BASELINE/scripts/dialogue-salience-report.py" || exit $?
     run_step baseline-probe-adapter-check git -C "$BASELINE" apply --check "$AFTER/scripts/baseline-probe-measurement.patch" || exit $?
     run_step baseline-probe-adapter git -C "$BASELINE" apply "$AFTER/scripts/baseline-probe-measurement.patch" || exit $?
-    python3 - "$BASELINE" <<'PY'
-from pathlib import Path
-import sys
-path = Path(sys.argv[1]) / 'Liminal/Audio/Lofi/LofiBassVoice.swift'
-text = path.read_text()
-old = '            cuePartials(note, voice: voice, envelope: envelope, rate: rate, onset: cueOnset, cue: $0, sub: sub, tone: tone)'
-assert text.count(old) == 1, 'Historical baseline compiler adapter no longer matches'
-path.write_text(text.replace(old, old.replace('cuePartials(', 'Self.cuePartials(', 1)))
-PY
+    python3 "$AFTER/scripts/prepare-baseline-compiler.py" "$BASELINE"
     adapter=$?
     printf 'baseline-compiler-adapter\t%s\n' "$adapter" >> "$STATUS"
     [ "$adapter" -eq 0 ] || exit "$adapter"

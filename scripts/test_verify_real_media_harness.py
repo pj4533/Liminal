@@ -43,6 +43,8 @@ class MediaHarnessPrerequisiteTests(unittest.TestCase):
             for tree in (after, baseline): (tree / 'scripts').mkdir(parents=True)
             binaries.mkdir()
             (after/'scripts/prepare-verification-media.py').write_text('pass\n')
+            import shutil
+            shutil.copy(Path(__file__).with_name('prepare-baseline-compiler.py'), after/'scripts/prepare-baseline-compiler.py')
             for name in ('mix-matrix.sh', 'dialogue-salience-report.py', 'baseline-probe-measurement.patch'):
                 (after/'scripts'/name).write_text('measurement adapter\n')
             voice = baseline/'Liminal/Audio/Lofi/LofiBassVoice.swift'

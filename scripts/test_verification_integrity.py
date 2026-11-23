@@ -136,3 +136,68 @@ class IntegrityTests(unittest.TestCase):
         self.assertFalse(app.evidence('process survived 200s')['hook'])
         evidence = app.evidence('Lo-Fi dialogue hook\n📼 piece #2 sound=true\nsalient-pick id=f')
         self.assertTrue(evidence['hook'] and evidence['footage'] and evidence['salientPick'])
+
+class SwiftRunnerIntegrityTests(unittest.TestCase):
+    def test_zero_or_omitted_method_cannot_qualify_suite(self):
+        runner = module('verify-swift-test-coverage')
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            (root/'Example.swift').write_text('@Test func one() {}\n@Test(arguments: [1,2]) func two(_ value: Int) {}')
+            text='✔ Suite Example passed after 1 second.\n✔ Test one() passed after 0.1 seconds.\n'
+            self.assertFalse(runner.coverage('', root, ['Example'])['passed'])
+            self.assertFalse(runner.coverage(text, root, ['Example'])['passed'])
+            text+='✘ Test two(_:) with 2 test cases failed after 0.2 seconds with 1 issue.\n'
+            self.assertTrue(runner.coverage(text, root, ['Example'])['passed'])
+
+    def test_exact_historical_adapters_have_single_window_loop_and_compiler_expansion(self):
+        import subprocess
+        import sys
+        import shutil
+        root_repo=Path(__file__).resolve().parent.parent
+        baseline='47a01fe267a3972241ed6918d031fffe55f26ed2'
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            files=['LiminalTests/DialogueSalienceProbeTests.swift','LiminalTests/DialogueHookMetrics.swift','Liminal/Audio/Lofi/LofiBassVoice.swift']
+            for name in files:
+                target=root/name; target.parent.mkdir(parents=True,exist_ok=True)
+                history = root_repo.parent/'baseline' if (root_repo.parent/'baseline/.git').exists() else root_repo
+                target.write_bytes(subprocess.check_output(['git','show',baseline+':'+name],cwd=history))
+            subprocess.run(['git','apply',str(root_repo/'scripts/baseline-probe-measurement.patch')],cwd=root,check=True)
+            subprocess.run([sys.executable,str(root_repo/'scripts/prepare-baseline-compiler.py'),str(root)],check=True)
+            probe=(root/files[0]).read_text()
+            self.assertEqual(probe.count('for (chunk, offset) in offsets.enumerated()'),1)
+            self.assertEqual(probe.count('let offsets ='),1)
+            self.assertEqual(probe.count('"decode": "boundarySkip"'),1)
+            metrics=(root/files[1]).read_text()
+            self.assertIn('m.fragmentsPer4 = Double(fragmentTotal) / 4',metrics)
+            # Check the loop expansion equals the original arithmetic over varied group inputs.
+            for n in range(15):
+                bars=[[((i+j)*n)%7 for j in range(i%4)] for i in range(16)]
+                original=sum(len(set(sum(bars[4*g:4*g+4],[]))) for g in range(4))/4
+                total=0
+                for g in range(4):
+                    fragments=set()
+                    for b in range(4*g,4*g+4): fragments.update(bars[b])
+                    total+=len(fragments)
+                self.assertEqual(total/4,original)
+
+    def test_capture_signing_override_is_opt_in_and_preserves_default(self):
+        import ast
+        import os
+        source=Path(__file__).with_name('check-lofi.sh').read_text().split("<<'PY'\n",1)[1].rsplit('\nPY',1)[0]
+        tree=ast.parse(source)
+        # Execute only command construction with fake subprocess; never start captures.
+        call=next(n for n in ast.walk(tree) if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='xcode' for t in n.targets))
+        parent=next(n for n in ast.walk(tree) if isinstance(n,ast.With) and call in n.body)
+        statements=parent.body[:parent.body.index(call)+1]
+        for value, expected in [(None,False),('NO',True)]:
+            commands=[]
+            class Process:
+                @staticmethod
+                def run(command,**kwargs): commands.append(command)
+                STDOUT=None
+            with patch.dict(os.environ,{},clear=False):
+                os.environ.pop('LIMINAL_CAPTURE_CODE_SIGNING_ALLOWED',None)
+                if value: os.environ['LIMINAL_CAPTURE_CODE_SIGNING_ALLOWED']=value
+                exec(compile(ast.Module(body=statements,type_ignores=[]),'capture-command','exec'),dict(os=os,subprocess=Process,log=None))
+            self.assertEqual('CODE_SIGNING_ALLOWED=NO' in commands[0],expected)

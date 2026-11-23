@@ -137,3 +137,21 @@ Local Python/shell regressions verify these failure paths. A separate `verificat
 workflow compiles the adapted historical probe and candidate and runs the new detector/selection
 regressions without downloading media or running duplicate captures. Its existence/start does
 not establish a passing Apple build, real-media acceptance, or resolution of the remaining DSP gates.
+
+
+Integrity run `45187285260` failed historical Swift compilation: the generated probe adapter
+accidentally duplicated a window loop, leaving the final log outside the function. Patch
+applicability had passed and did not establish compilation. The repair removes that duplicate;
+regressions now inspect the fully applied exact historical source. The historical hook-metrics
+expression that exceeded the compiler's type-check budget is expanded to typed loops preserving
+the identical four-group distinct-fragment mean. `prepare-baseline-compiler.py` asserts both
+historical source expressions exactly, and the resulting adapter diff remains an artifact.
+
+The integrity workflow now attempts baseline and candidate build-for-testing independently;
+a baseline failure cannot suppress candidate compiler diagnostics. Whole-suite selectors and
+`verify-swift-test-coverage.py` require each suite and every source-declared `@Test` method to
+finish, so successful zero-test selections cannot qualify. This also repairs the regression
+workflow's omitted Motif method selectors. The public capture's inner xcodebuild accepts only
+an explicitly set `LIMINAL_CAPTURE_CODE_SIGNING_ALLOWED=YES|NO`; the hosted harness sets `NO`,
+while direct/default and device/project signing remain unchanged. The repaired Apple outcomes
+are pending the next integrity run; local regression success alone does not qualify Swift builds.

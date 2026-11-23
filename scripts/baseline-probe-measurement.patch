@@ -15,7 +15,7 @@
          print("SALIENCE-TRANSCRIBER \(provider == nil ? "none" : "apple") films=\(clips.count)")
          var snippetDir: URL?
          if let d = config.snippetDirectory {
-@@ -214,16 +222,34 @@
+@@ -214,16 +222,25 @@
  
          for clip in clips {
              let usable = clip.duration - Self.windowSeconds - 1
@@ -31,15 +31,6 @@
              let count = max(1, config.chunks ?? 6)
              let offsets = (0..<count).map { k in count == 1 ? (lo + hi) / 2 : lo + (hi - lo) * Double(k) / Double(count - 1) }
              for (chunk, offset) in offsets.enumerated() {
-+                print("SALIENCE-ATTEMPT " + Self.json(["film": clip.id, "chunk": chunk, "decode": "boundarySkip", "reason": "film shorter than 31 seconds"]))
-+                }
-+                continue
-+            }
-+            let margin = min(0.2 * clip.duration, 60)
-+            let lo = usable > 2 * margin ? margin : 0, hi = usable > 2 * margin ? usable - margin : usable
-+            let count = max(1, config.chunks ?? 6)
-+            let offsets = (0..<count).map { k in count == 1 ? (lo + hi) / 2 : lo + (hi - lo) * Double(k) / Double(count - 1) }
-+            for (chunk, offset) in offsets.enumerated() {
 +                print("SALIENCE-ATTEMPT " + Self.json(["film": clip.id, "chunk": chunk, "offset": Self.r3(offset), "decode": "attempted"]))
                  let url = directory.appending(path: clip.fileName)
                  guard let buffer = try? await ArchiveAudioDecoder.decode(url: url, sourceStart: offset, sourceLength: Self.windowSeconds,
@@ -52,7 +43,7 @@
                  let rate = buffer.format.sampleRate
                  let frameCount = Int(buffer.frameLength)
                  let speech = LofiSpeechFocus.classify(buffer, seconds: Self.windowSeconds)
-@@ -258,6 +284,8 @@
+@@ -258,6 +275,8 @@
                  }
                  var windowLine: [String: Any] = [
                      "film": clip.id, "title": String(clip.title.prefix(60)), "chunk": chunk, "offset": Self.r3(offset),
@@ -61,7 +52,7 @@
                      "duration": Self.r3(clip.duration), "transcribed": transcript != nil, "transcribeMs": Self.r3(transcribeMs),
                      "speechWindows": speech.filter { $0.speech > max(0.3, $0.singing, $0.music) }.count, "windows": speech.count,
                      "raw": raw.map { ["t": $0.text, "s": film($0.frames.lowerBound), "e": film($0.frames.upperBound),
-@@ -301,6 +329,21 @@
+@@ -301,6 +320,21 @@
                  var perWindow = 0, controlsThisWindow = 0
                  var mechanisms = Set<String>()
  
@@ -83,7 +74,7 @@
                  for mode in modes {
                      let useTranscript = mode == "T" ? transcript : nil
                      if mode == "T", transcript == nil { continue }
-@@ -330,10 +373,12 @@
+@@ -330,10 +364,12 @@
                                                                seed: seed &+ UInt64(piece), cueToken: piece + 1, revision: 0)
                              print("SALIENCE-NOPLAN \(clip.id) chunk=\(chunk) mode=\(mode) piece=\(piece) fallbackEvents=\(plan.events.count)")
                              guard let playedBank else { continue }
@@ -97,7 +88,7 @@
                                  func covers(_ list: [Word]) -> [[String: Any]] {
                                      list.filter { $0.frames.upperBound > played.lowerBound && $0.frames.lowerBound < played.upperBound }.map { w in
                                          let ov = min(w.frames.upperBound, played.upperBound) - max(w.frames.lowerBound, played.lowerBound)
-@@ -351,12 +396,12 @@
+@@ -351,12 +387,12 @@
                                  let heard = words.filter { ($0["cov"] as? Double ?? 0) >= 0.3 }
                                  var hit: [String: Any] = [
                                      "film": clip.id, "chunk": chunk, "mode": mode, "piece": piece, "loop": -1, "ev": e, "line": "-", "interest": -1,
@@ -112,7 +103,7 @@
                                      "functionOnly": !heard.isEmpty && heard.allSatisfy { ($0["fn"] as? Bool) == true },
                                  ]
                                  if let w = inside(played.lowerBound) {
-@@ -368,6 +413,12 @@
+@@ -368,6 +404,12 @@
                                                      "mech": event.chokeAt != nil && pad.frames.upperBound >= w.frames.upperBound - tol ? "padChoke" : "padEdge",
                                                      "drop": ""] as [String: Any]
                                  }
@@ -125,7 +116,7 @@
                                  print("SALIENCE-HIT " + Self.json(hit))
                              }
                              continue
-@@ -403,6 +454,7 @@
+@@ -403,6 +445,7 @@
                              if !chosen.contains(lineKey) { chosen.append(lineKey) }
                              let chops = DialogueChopRenderer.render(part.plan, bank: motif.bank, source: motif.source, analysis: motif.analysis,
                                                                      prerendered: motif.renders)
@@ -133,7 +124,7 @@
                              loopEvents[motif.loop, default: []] += part.plan.events
                              loopMotif[motif.loop] = motif
                              for (e, event) in part.plan.events.enumerated() {
-@@ -459,11 +511,21 @@
+@@ -459,11 +502,21 @@
                                      "peak": Self.r3(peak), "preDB": Self.r3(pre - peak), "postDB": Self.r3(post - peak), "tailDB": Self.r3(tail - peak),
                                      "words": covers(accepted), "rawWords": covers(raw),
                                  ]
@@ -160,7 +151,7 @@
                                  if let parent = fr.parent { hit["parentText"] = motif.fragments[parent].text ?? "" }
                                  let sEdge = startEdge(accepted), eEdge = endEdge(accepted)
                                  if let sEdge { hit["startIn"] = sEdge }
-@@ -543,6 +605,7 @@
+@@ -543,6 +596,7 @@
                      }
                  }
                  windowLine["chosen"] = chosen
