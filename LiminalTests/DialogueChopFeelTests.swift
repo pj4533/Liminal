@@ -4,6 +4,68 @@ import Testing
 @testable import Liminal
 
 struct DialogueChopFeelTests {
+    @Test func freshHookPocketCanChooseAWordThatFitsWhenALongFillCannotMove() throws {
+        typealias Item = DialogueMotifCell.Item
+        let fragments = [1200, 900, 200, 900, 700].enumerated().map { id, length in
+            let frames = (id * 2000)..<(id * 2000 + length)
+            var fragment = DialogueMotifFragment(id: id, kind: id == 0 ? .line : .piece, order: id, parent: nil,
+                frames: frames, accentFrame: frames.lowerBound + 20,
+                fadeIn: 0, fadeOut: 0, text: nil, weight: 0.8)
+            fragment.words = [.init(frames: frames, weight: 0.8)]
+            return fragment
+        }
+        let vocabulary = DialogueMotif.GrooveVocabulary(s: 1, r: 2, t: 3, sa: 1, ra: 2,
+            pieces: [1, 2, 3, 4], halves: [:], fragments: fragments)
+        let template: [(DialogueMotifTuning.HookRole, Int)] = [(.s, 0), (.r, 12), (.s, 16), (.r, 28)]
+        let drums = DialogueMotifDrums(kicks: [0, 10, 16, 26], snares: [4, 12, 20, 28],
+            ghosts: [13, 14, 29, 30])
+        let seed: UInt64 = 1
+        func groove(_ history: Set<Int>) -> [Item] {
+            DialogueMotif.groove(template: template, vocabulary: vocabulary, drums: drums,
+                reorderAllowed: true, fragments: fragments, sampleRate: 1000, seed: seed,
+                beatDuration: 0.8, avoiding: history)
+        }
+        let first = groove([])
+        let oldFill = try #require(first.first { !$0.skeleton && $0.slot < 12 })
+        #expect(oldFill.slot == 6 && oldFill.fragment == 3)
+        // Moving this 900 ms word to 4 crowds the preceding 900 ms call; moving it
+        // to 8 crowds the answer at 12. Both gaps are only 800 ms, before clearance.
+        #expect(!DialogueMotif.fitsRoom(1, steps: 4, fragments: fragments, sampleRate: 1000, beatDuration: 0.8))
+        #expect(!DialogueMotif.fitsRoom(oldFill.fragment, steps: 4, fragments: fragments,
+            sampleRate: 1000, beatDuration: 0.8))
+        let history = Set(first.map(\.slot))
+        let next = groove(history)
+        #expect(next == groove(history))
+        let fresh = try #require(next.first { !$0.skeleton && $0.slot < 12 })
+        #expect(fresh.slot == 8 && fresh.fragment == 4)
+        #expect(!history.contains(fresh.slot))
+        #expect(next.filter(\.skeleton) == first.filter(\.skeleton))
+        let previous = [2, 4].map { DialogueMotifCell(kind: .chopBeat, bar: $0, bars: 2, variant: 0, items: first) }
+        let cells = [2, 4].map { DialogueMotifCell(kind: .chopBeat, bar: $0, bars: 2, variant: 0, items: next) }
+        let arranged = DialogueMovePool.arrange(cells, fragments: fragments, signature: 1,
+            sampleRate: 1000, beatDuration: 0.8, seed: seed, avoiding: previous)
+        #expect(arranged == DialogueMovePool.arrange(cells, fragments: fragments, signature: 1,
+            sampleRate: 1000, beatDuration: 0.8, seed: seed, avoiding: previous))
+        #expect(arranged[0].items == arranged[1].items)
+        for cell in arranged {
+            #expect(cell.items.filter(\.skeleton) == first.filter(\.skeleton))
+            let forward = cell.items.filter { $0.effect != .reversed }
+            #expect(forward.count == next.count)
+            #expect(forward.contains { $0.slot == 8 && $0.fragment == 4 })
+            // Measure complete buffers, including pre-accent audio and natural word tails;
+            // the authored short gates cannot conceal an invalid fresh pocket.
+            let intervals = forward.map { item -> Range<Double> in
+                let fragment = fragments[item.fragment]
+                let start = Double(cell.bar * 16 + item.slot) * 0.2
+                    - Double(fragment.accentFrame - fragment.frames.lowerBound) / 1000
+                return start..<(start + Double(fragment.frames.count) / 1000)
+            }
+            for (before, after) in zip(intervals, intervals.dropFirst()) {
+                #expect(before.upperBound + DialogueTuning.dryGapSeconds <= after.lowerBound)
+            }
+        }
+    }
+
     @Test func hookPocketSelectionUsesHistoryBeforeWholeWordsReserveTheirRoom() {
         typealias Item = DialogueMotifCell.Item
         let fragments = (0..<6).map { id in
