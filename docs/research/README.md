@@ -44,6 +44,7 @@ The people and crews whose techniques we studied, one file each, with what Limin
 | --- | --- |
 | [Mix index](mix/README.md) | Index of the mix notes |
 | [Mix engineering](mix/engineering.md) | Per-bus effect chains, spectral space and master finishing practice |
+| [Bass translation handoff](mix/translation-handoff.md) | Keeping the bass line identifiable on small speakers and in mono while headphones keep the low end; plan, experiments, source ledger (D129) |
 | [Mix distortion](mix/distortion/README.md) | How distortion was detected by measurement, gain staging, and the drive sweep behind D121 |
 
 ## Visuals
