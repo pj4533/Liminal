@@ -4,6 +4,50 @@ import Testing
 @testable import Liminal
 
 struct DialogueChopFeelTests {
+    @Test func competingHookFillsReserveWholeWordsAgainstEarlierMoves() {
+        typealias Item = DialogueMotifCell.Item
+        let fragments = (0..<5).map { id in
+            let frames = (id * 1000)..<(id * 1000 + 400)
+            var fragment = DialogueMotifFragment(id: id, kind: id == 0 ? .line : .piece, order: id, parent: nil,
+                frames: frames, accentFrame: frames.lowerBound + 20,
+                fadeIn: 0, fadeOut: 0, text: nil, weight: 0.8)
+            fragment.words = [.init(frames: frames, weight: 0.8)]
+            return fragment
+        }
+        let items = [Item(fragment: 1, slot: 0, fixed: true, skeleton: true),
+                     Item(fragment: 3, slot: 6, fixed: true), Item(fragment: 4, slot: 12, fixed: true),
+                     Item(fragment: 2, slot: 16, fixed: true, skeleton: true),
+                     Item(fragment: 1, slot: 28, fixed: true, skeleton: true)]
+        let cells = [2, 4].map { DialogueMotifCell(kind: .chopBeat, bar: $0, bars: 2, variant: 0, items: items) }
+        // Seed 13 moves the first fill inward to 8. With stale neighbours it also chooses
+        // 10 for the second fill: two 400 ms words on a 400 ms interval leave no dry gap.
+        let seed: UInt64 = 13
+        let arranged = DialogueMovePool.arrange(cells, fragments: fragments, signature: 1, sampleRate: 1000,
+            beatDuration: 0.8, seed: seed, avoiding: cells)
+        let replay = DialogueMovePool.arrange(cells, fragments: fragments, signature: 1, sampleRate: 1000,
+            beatDuration: 0.8, seed: seed, avoiding: cells)
+        #expect(arranged == replay)
+        #expect(arranged.count == 2)
+        #expect(arranged[0].items == arranged[1].items)
+        for cell in arranged {
+            #expect(cell.items.filter(\.skeleton) == items.filter(\.skeleton))
+            let forward = cell.items.filter { $0.effect != .reversed }
+            #expect(forward.map(\.fragment) == items.map(\.fragment))
+            #expect(forward.filter { !$0.skeleton }.map(\.slot) == [8, 12])
+            // Check full output intervals, including the retained pre-accent consonant and
+            // natural word tail. A gate, choke or omitted word cannot make this assertion pass.
+            let intervals = forward.map { item -> Range<Double> in
+                let fragment = fragments[item.fragment]
+                let accent = Double(cell.bar * 16 + item.slot) * 0.2
+                let start = accent - Double(fragment.accentFrame - fragment.frames.lowerBound) / 1000
+                return start..<(start + Double(fragment.frames.count) / 1000)
+            }
+            for (before, after) in zip(intervals, intervals.dropFirst()) {
+                #expect(before.upperBound + DialogueTuning.dryGapSeconds <= after.lowerBound)
+            }
+        }
+    }
+
     @Test func separateHookPocketsCanVaryTogetherWithoutMovingTheCallOrAnswers() {
         typealias Item = DialogueMotifCell.Item
         let fragments = (0..<5).map { id in
