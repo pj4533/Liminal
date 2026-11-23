@@ -2160,7 +2160,39 @@ nonisolated enum DialogueMotifPerformer {
             let cellStart = loopSixteenth + cell.bar * 16
             let cellEnd = cellStart + cell.bars * 16
             var firstInCell = true
-            for item in cell.items {
+            // A spelling figure is one gesture: dynamic after/follow chains can occupy its
+            // drawn start. Roll back the complete figure (including any choke it attempted)
+            // unless every ordered unit and its whole-word landing can be placed.
+            var figures: [Int: Int] = [:]
+            var index = 0
+            while index < cell.items.count {
+                let fragment = motif.fragments[cell.items[index].fragment]
+                guard fragment.isUnit, fragment.kind != .half, let parent = fragment.parent else { index += 1; continue }
+                let first = index
+                while index < cell.items.count,
+                      motif.fragments[cell.items[index].fragment].parent == parent { index += 1 }
+                if index < cell.items.count, cell.items[index].fragment == parent {
+                    index += 1
+                }
+                figures[first] = index - 1
+            }
+            var figure: (start: Int, end: Int, placed: [Placed], prevEnd: Double, first: Bool, statements: Int)?
+            for (itemIndex, item) in cell.items.enumerated() {
+                if let end = figures[itemIndex] {
+                    figure = (itemIndex, end, placed, prevEnd, firstInCell, statements)
+                }
+                defer {
+                    if let saved = figure, itemIndex == saved.end {
+                        let expected = cell.items[saved.start...saved.end].map(\.fragment)
+                        if Array(placed.dropFirst(saved.placed.count).map(\.fragment)) != expected {
+                            placed = saved.placed
+                            prevEnd = saved.prevEnd
+                            firstInCell = saved.first
+                            statements = saved.statements
+                        }
+                        figure = nil
+                    }
+                }
                 if item.fragment == 0 {
                     guard statements < DialogueMotifTuning.maximumLineStatements else { continue }
                 }

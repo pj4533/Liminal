@@ -31,6 +31,7 @@ jobs:
             xcrun simctl list devices available
           } 2>&1 | tee verification/toolchain.log
       - name: Build macOS
+        timeout-minutes: 15
         id: mac_build
         run: |
           set -o pipefail
@@ -40,6 +41,7 @@ jobs:
             -resultBundlePath verification/macos-build.xcresult \
             build 2>&1 | tee verification/macos-build.log
       - name: Chop feel fixture measurements
+        timeout-minutes: 15
         if: ${{ !cancelled() && steps.mac_build.outcome == 'success' }}
         run: |
           set -o pipefail
@@ -63,6 +65,7 @@ jobs:
             verification/feel-summary.json
           retention-days: 14
       - name: Chop feel regression tests
+        timeout-minutes: 15
         if: ${{ !cancelled() && steps.mac_build.outcome == 'success' }}
         run: |
           set -o pipefail
@@ -89,6 +92,7 @@ jobs:
             verification/feel-regression-attachments/
           retention-days: 14
       - name: Focused dialogue tests
+        timeout-minutes: 25
         if: ${{ !cancelled() && steps.mac_build.outcome == 'success' }}
         run: |
           set -o pipefail
@@ -105,6 +109,7 @@ jobs:
             -only-testing:LiminalTests/FootageSalienceTests -only-testing:LiminalTests/FootageWeaverTests \
             2>&1 | tee verification/dialogue-tests.log
       - name: Full unit suite
+        timeout-minutes: 30
         if: ${{ !cancelled() && steps.mac_build.outcome == 'success' }}
         run: |
           set -o pipefail

@@ -101,10 +101,63 @@ struct DialogueChopFeelTests {
         }
     }
 
+    @Test func performedSpellingFigureIsAtomicAcrossDynamicOutroCollisions() throws {
+        let film = DialogueHookProbeTests.film(GateRun.corpus, id: "atomic-outro", transcribed: false)
+        let snapshot = DialogueFixtures.snapshot(bpm: 72, origin: 0.5, seed: 3)
+        let base = try #require(DialogueMotif.make(loop: 0, source: film.source, analysis: film.analysis,
+            transcript: film.transcript, memory: DialoguePerformanceMemory(), seed: 1,
+            beatDuration: snapshot.beatDuration))
+        let line = try #require(film.analysis.units.first)
+        let rate = base.sampleRate
+        func fragment(_ id: Int, _ kind: DialogueMotifFragment.Kind, seconds: Double, parent: Int? = nil) -> DialogueMotifFragment {
+            let start = Int(Double(id) * rate)
+            let frames = start..<(start + Int(seconds * rate))
+            var result = DialogueMotifFragment(id: id, kind: kind, order: id, parent: parent,
+                frames: frames, accentFrame: start, fadeIn: 0, fadeOut: 0, text: nil, weight: 0.95)
+            result.words = [.init(frames: frames, weight: 0.95)]
+            return result
+        }
+        let fragments = [fragment(0, .line, seconds: 5), fragment(1, .piece, seconds: 0.3),
+                         fragment(2, .piece, seconds: 0.35), fragment(3, .letter, seconds: 0.1, parent: 1),
+                         fragment(4, .letter, seconds: 0.1, parent: 1), fragment(5, .letter, seconds: 0.1, parent: 1)]
+        let bank = DialogueMotif.motifBank(fragments, line: line, analysis: base.analysis, key: base.lineKey, usedTranscript: false)
+        typealias Item = DialogueMotifCell.Item
+        var completed = 0, dropped = 0
+        for seed: UInt64 in 1...30 {
+            let authored = [DialogueMotifCell(kind: .outro, bar: 12, bars: 4, variant: 0, items: [
+                Item(fragment: 0, slot: 16), Item(fragment: 2, slot: 44, after: 0, onEighths: true),
+                Item(fragment: 2, slot: 0, fixed: true, gate: 2, follow: 2),
+                Item(fragment: 3, slot: 56, fixed: true, gate: 1),
+                Item(fragment: 4, slot: 57, fixed: true, gate: 1),
+                Item(fragment: 5, slot: 58, fixed: true, gate: 1),
+                Item(fragment: 1, slot: 60, fixed: true, gate: 4)])]
+            let cells = DialogueMovePool.arrange(authored, fragments: fragments, signature: 1, sampleRate: rate,
+                beatDuration: snapshot.beatDuration, seed: seed, avoiding: [])
+            let motif = DialogueMotif(loop: 0, source: base.source, analysis: base.analysis, lineUnit: base.lineUnit,
+                lineKey: base.lineKey, fragments: fragments, pieces: [2], halves: [1: [3, 4, 5]], bank: bank,
+                usedTranscript: false, reorderAllowed: false, cells: cells, carried: false, seed: seed)
+            var memory = DialoguePerformanceMemory()
+            let window = snapshot.time(beat: 48)..<snapshot.time(beat: 64)
+            let plan = DialogueMotifPerformer.perform(motif, snapshot: snapshot, window: window, owned: 48..<64,
+                earliestStart: window.lowerBound, memory: &memory, seed: seed, cueToken: 1, revision: 0)
+            let figure = plan.events.filter { [1, 3, 4, 5].contains($0.piece ?? -1) && $0.effect != .reversed }
+            let ids = figure.compactMap(\.piece)
+            #expect(ids.isEmpty || ids == [3, 4, 5, 1], "seed \(seed): partial figure \(ids)")
+            if ids.isEmpty { dropped += 1 } else {
+                completed += 1
+                let slots = figure.map(\.slot)
+                #expect(slots[1] == slots[0] + 1 && slots[2] == slots[0] + 2)
+                #expect(slots[3] % 4 == 0 && slots[3] == slots[0] + 4)
+            }
+        }
+        #expect(completed > 0 && dropped > 0, "complete=\(completed) dropped=\(dropped)")
+    }
+
     /// Run the independent D126 detector on native and speed-matched renders of the same chosen lines.
     /// Unlike a duration or source-coordinate assertion, this measures the audio after resampling/DSP.
     @Test func resampledRenderedAttacksRetainNativeTightness() throws {
         var native: [DialogueTightnessMetrics.Hit] = [], matched: [DialogueTightnessMetrics.Hit] = []
+        var inventoryNative: [DialogueTightnessMetrics.Hit] = [], inventoryMatched: [DialogueTightnessMetrics.Hit] = []
         for (fixture, bpm, transcribed) in GateRun.cases {
             let film = DialogueHookProbeTests.film(fixture, id: "feel-tight-\(bpm)-\(transcribed)", transcribed: transcribed)
             for seed: UInt64 in 1...4 {
@@ -116,6 +169,24 @@ struct DialogueChopFeelTests {
                     let motif = try #require(DialogueMotif.make(loop: 0, source: film.source, analysis: film.analysis,
                         transcript: film.transcript, memory: memory, seed: seed, beatDuration: snapshot.beatDuration,
                         line: line.lineUnit, transform: transform))
+                    // Every selected pad is measured once with the same full-length event recipe.
+                    // Planning at different rates may omit different hits; it cannot shrink this inventory.
+                    #expect(motif.fragments.map(\.frames) == line.fragments.map(\.frames))
+                    #expect(motif.fragments.map(\.weakLead) == line.fragments.map(\.weakLead))
+                    let inventory = line.fragments.filter { $0.id != 0 && !$0.weakLead }.map(\.id)
+                    for id in inventory {
+                        let pad = try #require(motif.bank.pad(id))
+                        let buffer = try #require(motif.renders[pad.padID])
+                        var event = DialogueEvent(padID: pad.padID, role: pad.role, block: 0, slot: 0,
+                            accentTime: 0, startTime: -motif.accentOffset(pad.padID), duration: pad.duration,
+                            gainDB: 0, protected: pad.protected, chokeAt: nil, text: pad.text,
+                            transform: pad.transform, padKey: pad.padKey, snareLanded: false)
+                        event.piece = pad.padID
+                        let hits = DialogueTightnessMetrics.hits([DialogueChop(event: event, buffer: buffer)],
+                            sixteenth: snapshot.beatDuration / 4)
+                        #expect(hits.count == 1, "pad \(pad.padID) missing independent attack measurement")
+                        if isNative { inventoryNative += hits } else { inventoryMatched += hits }
+                    }
                     var trial = DialoguePerformanceMemory()
                     for half in 0..<2 {
                         let window = snapshot.time(beat: Double(half * 32))..<snapshot.time(beat: Double((half + 1) * 32))
@@ -131,13 +202,26 @@ struct DialogueChopFeelTests {
         }
         let before = DialogueTightnessMetrics.percentile(native.map { abs($0.attackMs) }, 0.5)
         let after = DialogueTightnessMetrics.percentile(matched.map { abs($0.attackMs) }, 0.5)
+        let signedBefore = DialogueTightnessMetrics.percentile(native.map(\.attackMs), 0.5)
+        let signedAfter = DialogueTightnessMetrics.percentile(matched.map(\.attackMs), 0.5)
+        let inventoryBefore = DialogueTightnessMetrics.percentile(inventoryNative.map(\.attackMs), 0.5)
+        let inventoryAfter = DialogueTightnessMetrics.percentile(inventoryMatched.map(\.attackMs), 0.5)
+        let inventoryBadBefore = inventoryNative.filter { abs($0.attackMs) > 35 }.count
+        let inventoryBadAfter = inventoryMatched.filter { abs($0.attackMs) > 35 }.count
         let badBefore = native.filter { abs($0.attackMs) > 35 }.count
         let badAfter = matched.filter { abs($0.attackMs) > 35 }.count
-        let summary = "FEEL-TIGHT native=\(native.count) matched=\(matched.count) medianMs=\(before),\(after) over35ms=\(badBefore),\(badAfter)"
+        let summary = "FEEL-TIGHT native=\(native.count) matched=\(matched.count) medianMs=\(before),\(after) over35ms=\(badBefore),\(badAfter) signedMedianMs=\(signedBefore),\(signedAfter) inventory=\(inventoryNative.count),\(inventoryMatched.count) inventorySignedMedianMs=\(inventoryBefore),\(inventoryAfter) inventoryOver35ms=\(inventoryBadBefore),\(inventoryBadAfter)"
         print(summary)
         Attachment.record(summary, named: "feel-tightness.txt")
         #expect(native.count > 100 && matched.count > 100)
         #expect(abs(after - before) <= 2, "\(summary)")
         #expect(badAfter <= badBefore, "\(summary)")
+        #expect(abs(signedAfter - signedBefore) <= 2, "\(summary)")
+        #expect(inventoryNative.count == inventoryMatched.count && !inventoryNative.isEmpty)
+        #expect(abs(inventoryAfter - inventoryBefore) <= 2, "\(summary)")
+        let inventoryAbsoluteBefore = DialogueTightnessMetrics.percentile(inventoryNative.map { abs($0.attackMs) }, 0.5)
+        let inventoryAbsoluteAfter = DialogueTightnessMetrics.percentile(inventoryMatched.map { abs($0.attackMs) }, 0.5)
+        #expect(abs(inventoryAbsoluteAfter - inventoryAbsoluteBefore) <= 2, "\(summary)")
+        #expect(inventoryBadAfter <= inventoryBadBefore, "\(summary)")
     }
 }
