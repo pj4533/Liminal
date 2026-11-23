@@ -504,6 +504,28 @@ struct LofiLiveBusTests {
         #expect(offTarget(faint) < -6, "a faint source stays \(offTarget(faint)) dB from the target")
     }
 
+    @Test func aFrontLoadedPadKeepsOneLevelForTheOpeningAndTheWholeWord() throws {
+        let rate = Self.rate, frames = Int(0.9 * rate)
+        let loudFrames = Int(0.4 * rate)
+        let carrier = (0..<frames).map { Float(sin(2 * .pi * 950 * Double($0) / rate)) }
+        let front = carrier.enumerated().map { i, x in x * (i < loudFrames ? 0.42 : 0.13) }
+        let back = carrier.enumerated().map { i, x in x * (i >= frames - loudFrames ? 0.42 : 0.13) }
+        let frontGain = DialogueChopChain.residualStabGain(front, sampleRate: rate)
+        let backGain = DialogueChopChain.residualStabGain(back, sampleRate: rate)
+        let trimDB = 20 * log10f(backGain / frontGain)
+        #expect(trimDB > 0.4 && trimDB <= 1.01)
+        #expect(frontGain >= powf(10, -1.5 / 20))
+        // The gain belongs to the full pad. A gate applies only a release to its shared prefix.
+        let full = front.map { $0 * frontGain }
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: rate, channels: 2))
+        let rendered = try buffer(format, seconds: 0.9) { i, _ in full[i] }
+        let gateFrames = Int(0.45 * rate), release = 0.008
+        let gated = try #require(DialogueChopRenderer.prefix(rendered, frames: gateFrames, release: release, gainDB: 0))
+        let dryCount = gateFrames - Int(release * rate)
+        let channels = try #require(gated.floatChannelData)
+        #expect(Array(UnsafeBufferPointer(start: channels[0], count: dryCount)) == Array(full.prefix(dryCount)))
+    }
+
     @Test func finishedStabCorrectsOnlySmallResidualsWithinPeakHeadroom() {
         let rate = Self.rate
         let tone = (0..<Int(rate / 2)).map { Float(sin(2 * .pi * 950 * Double($0) / rate)) }

@@ -496,11 +496,14 @@ nonisolated enum DialogueChopChain {
     static func residualStabGain(_ samples: [Float], sampleRate: Double) -> Float {
         guard !samples.isEmpty else { return 1 }
         var filter = LofiKWeighting(sampleRate: sampleRate)
-        var power = 0.0
+        var power = 0.0, openingPower = 0.0
+        let openingFrames = min(samples.count, max(1, Int(0.4 * sampleRate)))
         var peak: Float = 0
-        for x in samples {
+        for i in samples.indices {
+            let x = samples[i]
             let weighted = filter.process(Double(x))
             power += weighted * weighted
+            if i + 1 == openingFrames { openingPower = power }
             peak = max(peak, abs(x))
         }
         let rms = Float(sqrt(power / Double(samples.count)))
@@ -511,7 +514,15 @@ nonisolated enum DialogueChopChain {
         // the post-gain limiter (0.9) to the final ceiling (1.0); never pull a peak up to it.
         let db = min(1.5, max(-1.5, difference))
         let headroom = (limiterCeiling + peakCeiling) / 2
-        return min(powf(10, db / 20), max(1, headroom / peak))
+        let fullGain = min(powf(10, db / 20), max(1, headroom / peak))
+        guard samples.count > openingFrames, openingPower > 0 else { return fullGain }
+        // A front-loaded word can meet the full-pad target while an ordinary eighth-note gate
+        // retains only its loud opening. Give the first 400 ms room to rise, then take at most
+        // one extra dB off the entire pad so the gate and the natural word still share one gain.
+        let openingRMS = Float(sqrt(openingPower / Double(openingFrames))) * fullGain
+        let excess = 20 * log10f(openingRMS / target) - 1.75
+        guard excess > 0 else { return fullGain }
+        return max(powf(10, -1.5 / 20), fullGain * powf(10, -min(1, excess) / 20))
     }
 
     static func densityGain(_ x: [Float], gain: Float, sampleRate: Double) -> Float {
