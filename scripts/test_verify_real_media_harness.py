@@ -35,6 +35,12 @@ class MediaHarnessPrerequisiteTests(unittest.TestCase):
         self.assertEqual(calls, ['xcrun'])
         self.assertIn('compile-provisioner\t29', status)
 
+    def test_audition_export_runs_without_a_review_file(self):
+        code, calls, status = self.run_harness(phase="auditions")
+        self.assertEqual(code, 0)
+        self.assertEqual(calls, ['python3'])
+        self.assertIn('auditions\t0', status)
+
     def test_failed_compiler_adapter_assertion_cannot_be_masked_by_successful_git_diff(self):
         import sys
         with tempfile.TemporaryDirectory() as directory:

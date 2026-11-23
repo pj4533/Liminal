@@ -70,18 +70,18 @@ baseline|after)
     # Installed-only probe reports unavailable T honestly and still measures real acoustic playback.
     phase_status=0
     run_step "$label-probe" env BUILD=0 DD="$DD" scripts/dialogue-salience-probe.sh "$OUT/$label-probe" 8 72 || phase_status=$?
-    comparison=()
-    if [ "$label" = after ]; then comparison=(--baseline "$OUT/baseline-public-matrix"); fi
-    run_step "$label-public-matrix" env DD="$DD" scripts/mix-matrix.sh --out "$OUT/$label-public-matrix" --cases ref,fast,same,transcribe --bundled-drums --strict "${comparison[@]}" || phase_status=$?
+    matrix=(env DD="$DD" scripts/mix-matrix.sh --out "$OUT/$label-public-matrix" --cases ref,fast,same,transcribe --bundled-drums --strict)
+    if [ "$label" = after ]; then matrix+=(--baseline "$OUT/baseline-public-matrix"); fi
+    run_step "$label-public-matrix" "${matrix[@]}" || phase_status=$?
     exit "$phase_status"
     ;;
 gates)
     run_step media-gates python3 "$AFTER/scripts/verify-salience-gates.py" "$OUT/baseline-probe/summary.json" "$OUT/after-probe/summary.json" "$OUT/salience-gates.json"
     ;;
 auditions)
-    reviews=()
-    if [ -f "$OUT/audition-reviews.json" ]; then reviews=(--reviews "$OUT/audition-reviews.json"); fi
-    run_step auditions python3 "$AFTER/scripts/verification-auditions.py" "$OUT/after-probe/bugs" "$OUT/auditions" "$OUT/after-probe/summary.json" "${reviews[@]}"
+    audition=(python3 "$AFTER/scripts/verification-auditions.py" "$OUT/after-probe/bugs" "$OUT/auditions" "$OUT/after-probe/summary.json")
+    if [ -f "$OUT/audition-reviews.json" ]; then audition+=(--reviews "$OUT/audition-reviews.json"); fi
+    run_step auditions "${audition[@]}"
     ;;
 app)
     # Playback updates the index and sweeps files outside it, including probe provenance.
