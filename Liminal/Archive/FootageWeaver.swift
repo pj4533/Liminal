@@ -336,8 +336,8 @@ nonisolated struct FootageWeaver {
     }
 
     /// Four curated excerpts for every discovery when both are available.
-    func chooseClipForPlayback(_ clips: [ArchiveClip], rng: inout MusicRNG) -> ArchiveClip? {
-        Self.chooseClip(eligibleClips(clips), avoiding: Set(pieces.map(\.clipID)), rng: &rng)
+    func chooseClipForPlayback(_ clips: [ArchiveClip], boost: [String: Float] = [:], rng: inout MusicRNG) -> ArchiveClip? {
+        Self.chooseClip(eligibleClips(clips), avoiding: Set(pieces.map(\.clipID)), boost: boost, rng: &rng)
     }
 
     func eligibleClips(_ clips: [ArchiveClip]) -> [ArchiveClip] {
@@ -349,13 +349,13 @@ nonisolated struct FootageWeaver {
 
     /// Which cached clip a piece comes from: least recently used clips are likelier, never one of the
     /// clips on screen when another exists.
-    static func chooseClip(_ clips: [ArchiveClip], avoiding: Set<String>, rng: inout MusicRNG) -> ArchiveClip? {
+    static func chooseClip(_ clips: [ArchiveClip], avoiding: Set<String>, boost: [String: Float] = [:], rng: inout MusicRNG) -> ArchiveClip? {
         let rest = clips.filter { !avoiding.contains($0.id) }
         let pool = rest.isEmpty ? clips : rest
         guard !pool.isEmpty else { return nil }
         let order = pool.sorted { $0.recency < $1.recency }
         // Weights 1/(rank+1): the oldest is likeliest, the newest still possible.
-        let weights = order.indices.map { 1 / Float($0 + 1) }
+        let weights = order.indices.map { (1 / Float($0 + 1)) * max(1, min(2, boost[order[$0].id] ?? 1)) }
         return order[rng.weighted(weights)]
     }
 }

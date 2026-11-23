@@ -612,14 +612,37 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
         let candidates = sufficient.isEmpty ? pool : sufficient
         let audioClips = r.sound ? candidates.filter(\.hasAudio) : []
         let eligible = audioClips.isEmpty ? candidates : audioClips
-        guard let clip = weaver.chooseClipForPlayback(eligible, rng: &rng) else {
+        let salience = DialogueSalienceIndex.active
+        let ledger = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil
+            && !DebugLaunchOptions.isAutomated ? DialogueLineLedger.shared : DialogueLineLedger()
+        let boost: [String: Float] = r.sound ? Dictionary(uniqueKeysWithValues: eligible.map {
+            ($0.id, 1 + min(1, Float(salience.unplayed(contentID: $0.id, ledger: ledger).count) / 6))
+        }) : [:]
+        guard let clip = weaver.chooseClipForPlayback(eligible, boost: boost, rng: &rng) else {
             weaver.prepareFailed()
             return nil
         }
         let plan = segment(for: clip)
-        let readStart = ArchiveCatalog.segmentStart(duration: clip.duration, length: plan.sourceLength,
+        var readStart = ArchiveCatalog.segmentStart(duration: clip.duration, length: plan.sourceLength,
                                                     avoid: clip.shownStarts.map { $0 - preroll }, rng: &rng)
-        let segStart = readStart + preroll
+        var segStart = readStart + preroll
+        var salienceRNG = FootageSalience.rng(contentID: clip.id, piece: r.index)
+        let preliminary = r.piece(clipID: clip.id, segmentStart: segStart, length: plan.length)
+        if r.sound, clip.hasAudio, let cue = ArchiveAudioCuePlan(piece: preliminary, clipDuration: clip.duration),
+           let pick = FootageSalience.pick(lines: salience.entry(contentID: clip.id).lines, contentID: clip.id,
+                                           ledger: ledger, shownStarts: clip.shownStarts, duration: clip.duration,
+                                           sourceLength: plan.sourceLength, preroll: preroll, rate: rate,
+                                           soundDelay: r.fill == nil ? FootageWeaver.soundDelay : 0,
+                                           dialogueLength: min(cue.sourceLength, DialogueTuning.analysisSeconds * Double(cue.rate)), sound: true, rng: &salienceRNG) {
+            let candidate = r.piece(clipID: clip.id, segmentStart: pick.segmentStart, length: plan.length)
+            if let actual = ArchiveAudioCuePlan(piece: candidate, clipDuration: clip.duration),
+               pick.line.start >= actual.sourceStart + 3,
+               pick.line.end <= actual.sourceStart + min(actual.sourceLength, DialogueTuning.analysisSeconds * Double(actual.rate)) {
+                segStart = pick.segmentStart
+                readStart = segStart - preroll
+                LMLog.visual.info("📼 salient id=\(clip.id, privacy: .public) line=\(pick.line.start, format: .fixed(precision: 1))..\(pick.line.end, format: .fixed(precision: 1)) interest=\(pick.line.interest) word=\(pick.line.peakWord, privacy: .public)")
+            }
+        }
         let sourceLength = min(plan.sourceLength, clip.duration - readStart)
         let length = plan.length
         var piece = r.piece(clipID: clip.id, segmentStart: segStart, length: length, sound: false)

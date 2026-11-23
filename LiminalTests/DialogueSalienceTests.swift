@@ -67,7 +67,7 @@ struct DialogueSalienceTests {
                     guard motif.fragments.dropFirst().contains(where: { $0.weight > 0 }) else { continue }
                     for e in part.plan.events {
                         guard let p = e.piece, p != 0, motif.fragments[p].weight == 0 else { continue }
-                        #expect(e.cell == .outro && motif.arc.outro == 0 && e.slot >= 16 && e.slot < 56, "\(id) seed \(seed): '\(motif.fragments[p].text ?? "-")' in \(e.cell.map { "\($0)" } ?? "-") of '\(motif.text ?? "-")'")
+                        #expect(e.cell == .outro && motif.arc?.outro == 0 && e.slot >= 16 && e.slot < 56, "\(id) seed \(seed): '\(motif.fragments[p].text ?? "-")' in \(e.cell.map { "\($0)" } ?? "-") of '\(motif.text ?? "-")'")
                     }
                 }
             }
@@ -197,6 +197,29 @@ struct DialogueSalienceTests {
         let units = try #require(cut.halves[try #require(cut.pieces.first)])
         #expect(units.map { cut.fragments[$0].text ?? "" } == ["D", "M", "T"])
         #expect(units.allSatisfy { cut.fragments[$0].kind == .letter })
+    }
+
+    @Test func aFillCanSpellIntoALaterSignatureAfterTheStepZeroSignature() {
+        func fragment(_ id: Int, _ parent: Int?, _ frames: Range<Int>, _ kind: DialogueMotifFragment.Kind) -> DialogueMotifFragment {
+            DialogueMotifFragment(id: id, kind: kind, order: parent == nil ? id : parent!, parent: parent,
+                                  frames: frames, accentFrame: frames.lowerBound, fadeIn: 0, fadeOut: 0, text: nil, weight: 0.95)
+        }
+        let fragments = [fragment(0, nil, 0..<500, .line), fragment(1, nil, 0..<300, .piece),
+                         fragment(2, nil, 300..<400, .piece), fragment(3, 1, 0..<100, .letter),
+                         fragment(4, 1, 100..<200, .letter), fragment(5, 1, 200..<300, .letter)]
+        let vocabulary = DialogueMotif.GrooveVocabulary(s: 1, r: 2, t: 2, sa: 3, ra: 2,
+                                                       pieces: [1, 2], halves: [1: [3, 4, 5]], fragments: fragments)
+        var figures = 0
+        for seed: UInt64 in 0..<200 {
+            let items = DialogueMotif.groove(template: [(.s, 0), (.s, 16), (.r, 28)], vocabulary: vocabulary,
+                                            drums: .boomBap, reorderAllowed: true, fragments: fragments,
+                                            sampleRate: 1000, seed: seed, beatDuration: 60 / 72)
+            for stride in [1, 2] {
+                let slots = [16 - 3 * stride, 16 - 2 * stride, 16 - stride]
+                if slots.enumerated().allSatisfy({ i, slot in items.contains { $0.slot == slot && $0.fragment == i + 3 } }) { figures += 1 }
+            }
+        }
+        #expect(figures > 0, "the first signature at zero has no lead-in; try the later signature")
     }
 
     /// The same seed gives the same plan.

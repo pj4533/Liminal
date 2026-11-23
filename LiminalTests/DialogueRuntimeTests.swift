@@ -162,6 +162,8 @@ struct DialogueRuntimeTests {
         let director = DialogueDirector(.neutral(transcriptProvider: {
             FixtureTranscriptProvider(transcript, delay: .milliseconds(3000))
         }))
+        let salience = DialogueSalienceIndex()
+        director.configure { $0.salienceIndex = salience }
         let start = Self.uptime()
         // The second block starts 4.0 s from now, so a transcript is useful only until 2.7 s.
         let info = Self.info(origin: start + 4.0 - 16 * Self.beat)
@@ -173,6 +175,7 @@ struct DialogueRuntimeTests {
         #expect(!outcome.transcriptUsed)
         let source = Self.fixture.source(contentID: "runtime", cueToken: 1)
         #expect(director.cachedTranscript(source) == transcript)
+        #expect(!salience.entry(contentID: "runtime").spans.isEmpty, "late transcripts also populate the salience index")
         #expect(director.cached(source)?.bank?.usedTranscript == true, "a later appearance starts from the refined bank")
     }
 

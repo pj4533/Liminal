@@ -373,6 +373,7 @@ nonisolated final class DialogueDirector: @unchecked Sendable {
         /// so tests and verification runs neither read nor consume the user's played lines.
         var ledger: DialogueLineLedger = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil
             && !DebugLaunchOptions.isAutomated ? .shared : DialogueLineLedger()
+        var salienceIndex: DialogueSalienceIndex = .active
         var now: @Sendable () -> Double = { Double(DispatchTime.now().uptimeNanoseconds) / 1e9 }
         /// Bounded SoundAnalysis classification (buffer, seconds, budget). Tests may inject fixed windows.
         var classify: @Sendable (AVAudioPCMBuffer, Double, Double) async -> [LofiSpeechFocus.Window] = {
@@ -441,10 +442,15 @@ nonisolated final class DialogueDirector: @unchecked Sendable {
     /// A transcript (in time or late) and its refined bank, kept for a later appearance of the source.
     func store(_ source: DialogueSource, transcript: DialogueTranscript, refined: DialoguePadBank?) {
         let key = CacheKey(source)
-        state.withLock { s in
-            guard let index = s.cache.firstIndex(where: { $0.key == key }), s.cache[index].matches(source) else { return }
+        let analysis = state.withLock { s -> DialogueAnalysis? in
+            guard let index = s.cache.firstIndex(where: { $0.key == key }), s.cache[index].matches(source) else { return nil }
             s.cache[index].transcript = transcript
             if let refined { s.cache[index].refined[Self.model(transcript)] = refined }
+            return s.cache[index].analysis
+        }
+        if let analysis {
+            let index = settings.withLock { $0.salienceIndex }
+            index.record(source: source, analysis: analysis, transcript: transcript)
         }
     }
 

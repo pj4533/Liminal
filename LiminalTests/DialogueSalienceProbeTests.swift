@@ -183,6 +183,7 @@ struct DialogueSalienceProbeTests {
             if (try? Data("ok".utf8).write(to: probe)) != nil { snippetDir = url; try? FileManager.default.removeItem(at: probe) }
         }
         print("SALIENCE-SNIPPET-DIR \(snippetDir?.path ?? "base64")")
+        let footageIndex = DialogueSalienceIndex()
         var snippets = 0
         let maxSnippets = config.maxSnippets ?? 60
         /// Words (normalized prefixes) whose hits always get a snippet, once per kind and gate per window.
@@ -243,6 +244,7 @@ struct DialogueSalienceProbeTests {
                 var refinement: DialogueHierarchy.Refinement?
                 if let transcript {
                     let r = DialogueHierarchy.refine(analysis, transcript: transcript)
+                    footageIndex.record(source: baseSource, analysis: analysis, transcript: transcript)
                     refinement = r
                     let weights = DialogueLineInterest.wordWeights(r.words)
                     var weightByIndex: [Int: Float] = [:]
@@ -546,6 +548,37 @@ struct DialogueSalienceProbeTests {
                 print("SALIENCE-WINDOW " + Self.json(windowLine))
             }
         }
+        Self.simulateFootage(clips: clips, index: footageIndex)
         print("SALIENCE-DONE snippets=\(snippets)")
     }
+    /// The same 500 sound requests with the catalog baseline and learned cue index. Does not consume
+    /// the real ledger or shown history, and emits counts so the report can assess every film's share.
+    static func simulateFootage(clips: [ArchiveClip], index: DialogueSalienceIndex) {
+        let ledger = DialogueLineLedger()
+        for indexed in [false, true] {
+            var rng = MusicRNG(seed: 0x5A11_EACE)
+            var salient = 0, random = 0
+            var shares: [String: Int] = [:]
+            let boost = indexed ? Dictionary(uniqueKeysWithValues: clips.map {
+                ($0.id, 1 + min(1, Float(index.unplayed(contentID: $0.id, ledger: ledger).count) / 6))
+            }) : [:]
+            for piece in 0..<500 {
+                guard let clip = FootageWeaver.chooseClip(clips, avoiding: [], boost: boost, rng: &rng) else { continue }
+                shares[clip.id, default: 0] += 1
+                var start = ArchiveCatalog.segmentStart(duration: clip.duration, length: 48, avoid: [], rng: &rng)
+                let lines = index.unplayed(contentID: clip.id, ledger: ledger)
+                var separate = FootageSalience.rng(contentID: clip.id, piece: piece)
+                let pick = indexed ? FootageSalience.pick(lines: lines, contentID: clip.id, ledger: ledger, shownStarts: [],
+                                                          duration: clip.duration, sourceLength: 48, preroll: 0, rate: 0.75,
+                                                          soundDelay: FootageWeaver.soundDelay, dialogueLength: 32,
+                                                          sound: true, rng: &separate) : nil
+                if let pick { start = pick.segmentStart } else { random += 1 }
+                let cue = start + FootageWeaver.soundDelay * 0.75
+                if lines.contains(where: { $0.start >= cue && $0.end <= min(clip.duration, cue + 32) }) { salient += 1 }
+            }
+            print("SALIENCE-FOOTAGE " + json(["indexed": indexed, "picks": 500, "salient": salient,
+                                               "random": random, "filmShares": shares]))
+        }
+    }
+
 }

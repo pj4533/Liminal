@@ -47,10 +47,13 @@ def parse(text, bad):
 
 def load(path):
     hits, windows, snippets, bad = [], [], {}, []
-    global LOOPS
+    global LOOPS, FOOTAGE
     LOOPS = []
+    FOOTAGE = []
     for line in open(path, errors="replace"):
-        if line.startswith("SALIENCE-LOOP "):
+        if line.startswith("SALIENCE-FOOTAGE "):
+            FOOTAGE += [x for x in [parse(line[16:], bad)] if x]
+        elif line.startswith("SALIENCE-LOOP "):
             LOOPS += [x for x in [parse(line[14:], bad)] if x]
         elif line.startswith("SALIENCE-HIT "):
             hits += [x for x in [parse(line[13:], bad)] if x]
@@ -104,6 +107,7 @@ def classify(x):
 
 SPLIT_KINDS = ("half", "syllable", "letter")
 LOOPS = []
+FOOTAGE = []
 
 
 def syllables(t):
@@ -369,6 +373,7 @@ def main():
             x["preDB"], x["tailDB"], x["postDB"], x["line"]]))
     (bugs / "index.tsv").write_text("\n".join(rows) + "\n")
     summary = metrics(hits, windows)
+    summary["footage"] = FOOTAGE
     summary["reheard"] = reheard_table(hits)
     summary["snippetsWritten"] = written
     summary["snippetsCorrupt"] = corrupt

@@ -53,6 +53,7 @@ jobs:
             -derivedDataPath "$RUNNER_TEMP/LiminalDerivedData" \
             -resultBundlePath verification/dialogue-tests.xcresult \
             "${suites[@]}" -only-testing:LiminalTests/DialogueLineLedgerTests \
+            -only-testing:LiminalTests/FootageSalienceTests -only-testing:LiminalTests/FootageWeaverTests \
             2>&1 | tee verification/dialogue-tests.log
       - name: Full unit suite
         if: ${{ !cancelled() && steps.mac_build.outcome == 'success' }}
