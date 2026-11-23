@@ -15,7 +15,9 @@ durations, track facts and failed routes are preserved as provenance outside Git
 Both stage 1 (`47a01fe`) and after use this same cache, eight chunks, 72 BPM and seed 1. The historical
 12-film identities are unavailable; the old absolute count of 159 salient words is not represented as
 an identical dataset. Fresh baseline denominators and after denominators are recorded with every gate.
-Only the updated matrix harness is copied into the baseline; its application source stays unchanged.
+The updated matrix harness is copied into the baseline. One compiler-only adapter qualifies
+`Self.cuePartials` to fix the historical local/function name collision; its exact diff is preserved
+in `baseline-verification-adapters.patch`. No baseline signal-processing behavior changes.
 
 The footage experiment shares `FootageSalience.prepare` with the production decoder. It includes
 pinned/discovery eligibility, current/on-screen exclusion, recency weighting, duration/audio filtering,

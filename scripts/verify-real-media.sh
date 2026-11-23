@@ -19,6 +19,9 @@ run_step() {
     cat "$OUT/$name.log"
     return 0
 }
+# Compile and exercise the review fixes before expensive network preparation.
+cd "$AFTER" || exit 2
+run_step after-stage3-tests xcodebuild test CODE_SIGNING_ALLOWED=NO -scheme Liminal -destination 'platform=macOS,arch=arm64' -parallel-testing-enabled NO -derivedDataPath "$OUT/dd-after" -only-testing:LiminalTests/FootageSalienceTests -only-testing:LiminalTests/DialogueRuntimeTests
 run_step prepare-media python3 "$AFTER/scripts/prepare-verification-media.py" --cache "$CACHE" --provenance "$OUT/provenance" --count 12
 # Explicit model provisioning is a separate executable. Neither the application nor probe downloads.
 run_step compile-provisioner xcrun swiftc -parse-as-library "$AFTER/scripts/provision-verification-speech.swift" -o "$OUT/provision-speech"
@@ -37,15 +40,25 @@ pathlib.Path(sys.argv[3], 'private-prerequisites.json').write_text(json.dumps(ch
 PY
 # Only verification harnesses are copied, never after-production code into the baseline.
 cp "$AFTER/scripts/mix-matrix.sh" "$BASELINE/scripts/mix-matrix.sh"
+# The historical stage-1 source predates a compiler-only qualification already in after.
+# Preserve the exact adapter diff rather than pretending the baseline builds unmodified.
+python3 - "$BASELINE" <<'PYBASE'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1]) / 'Liminal/Audio/Lofi/LofiBassVoice.swift'
+text = path.read_text()
+old = '            cuePartials(note, voice: voice, envelope: envelope, rate: rate, onset: cueOnset, cue: $0, sub: sub, tone: tone)'
+assert text.count(old) == 1, 'Historical baseline compiler adapter no longer matches'
+path.write_text(text.replace(old, old.replace('cuePartials(', 'Self.cuePartials(', 1)))
+PYBASE
+git -C "$BASELINE" diff > "$OUT/baseline-verification-adapters.patch"
+
 for label in baseline after; do
     if [ "$label" = baseline ]; then TREE=$BASELINE; else TREE=$AFTER; fi
     export DD="$OUT/dd-$label"
     cd "$TREE" || exit 2
     git rev-parse HEAD > "$OUT/$label-commit.txt"
     run_step "$label-build" xcodebuild build-for-testing CODE_SIGNING_ALLOWED=NO -scheme Liminal -destination 'platform=macOS,arch=arm64' -derivedDataPath "$DD"
-    if [ "$label" = after ]; then
-        run_step after-stage3-tests xcodebuild test-without-building CODE_SIGNING_ALLOWED=NO -scheme Liminal -destination 'platform=macOS,arch=arm64' -parallel-testing-enabled NO -derivedDataPath "$DD" -only-testing:LiminalTests/FootageSalienceTests -only-testing:LiminalTests/DialogueRuntimeTests
-    fi
     run_step "$label-probe" env BUILD=0 DD="$DD" scripts/dialogue-salience-probe.sh "$OUT/$label-probe" 8 72
     comparison=()
     if [ "$label" = after ]; then comparison=(--baseline "$OUT/baseline-public-matrix"); fi

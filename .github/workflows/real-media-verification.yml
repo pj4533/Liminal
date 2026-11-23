@@ -56,6 +56,7 @@ jobs:
         with:
           name: real-media-${{ github.sha }}
           path: |
+            ${{ runner.temp }}/real-media/*.patch
             ${{ runner.temp }}/real-media/*.txt
             ${{ runner.temp }}/real-media/*.json
             ${{ runner.temp }}/real-media/*.tsv
