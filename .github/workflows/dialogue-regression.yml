@@ -2,7 +2,7 @@ name: Dialogue regression diagnosis
 
 on:
   push:
-    branches: ['verify/chop-fix/**']
+    branches: ['verify/chop-fix/**', 'verify/audio-final/**']
   workflow_dispatch:
 
 permissions:
@@ -11,7 +11,7 @@ permissions:
 jobs:
   dialogue:
     runs-on: macos-26
-    timeout-minutes: 35
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
       - name: Build and run dialogue regressions
@@ -20,10 +20,18 @@ jobs:
           mkdir -p verification
           set -o pipefail
           set +e
-          xcodebuild test CODE_SIGNING_ALLOWED=NO -project Liminal.xcodeproj -scheme Liminal \
+          xcodebuild build-for-testing CODE_SIGNING_ALLOWED=NO -project Liminal.xcodeproj -scheme Liminal \
+            -destination 'platform=macOS,arch=arm64' -parallel-testing-enabled NO \
+            -derivedDataPath "$RUNNER_TEMP/LiminalDerivedData" 2>&1 | tee verification/build.log
+          build=${PIPESTATUS[0]}
+          if [ "$build" -ne 0 ]; then exit "$build"; fi
+          xcodebuild test-without-building CODE_SIGNING_ALLOWED=NO -project Liminal.xcodeproj -scheme Liminal \
             -destination 'platform=macOS,arch=arm64' -parallel-testing-enabled NO \
             -derivedDataPath "$RUNNER_TEMP/LiminalDerivedData" \
             -resultBundlePath verification/dialogue-regression.xcresult \
+            -only-testing:LiminalTests/DialogueEngineTests \
+            -only-testing:LiminalTests/DialogueChopVarietyTests \
+            -only-testing:LiminalTests/DialogueSalienceTests \
             -only-testing:LiminalTests/DialogueChopFeelTests \
             -only-testing:LiminalTests/DialogueFeelMetricsTests \
             -only-testing:LiminalTests/DialogueMotifTests \
@@ -32,7 +40,7 @@ jobs:
             -only-testing:LiminalTests/DialogueWordCutTests \
             2>&1 | tee verification/dialogue-regression.log
           result=${PIPESTATUS[0]}
-          python3 scripts/verify-swift-test-coverage.py verification/dialogue-regression.log LiminalTests DialogueChopFeelTests DialogueFeelMetricsTests DialogueMotifTests DialogueTightnessTests DialogueGateTests DialogueWordCutTests > verification/test-coverage.json
+          python3 scripts/verify-swift-test-coverage.py verification/dialogue-regression.log LiminalTests DialogueEngineTests DialogueChopVarietyTests DialogueSalienceTests DialogueChopFeelTests DialogueFeelMetricsTests DialogueMotifTests DialogueTightnessTests DialogueGateTests DialogueWordCutTests > verification/test-coverage.json
           coverage=$?
           xcrun xcresulttool export attachments --path verification/dialogue-regression.xcresult \
             --output-path verification/attachments

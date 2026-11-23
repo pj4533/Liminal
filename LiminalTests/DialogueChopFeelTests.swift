@@ -29,7 +29,12 @@ struct DialogueChopFeelTests {
                     rates.insert(Int((loop.motif.transform.playbackRate * 10000).rounded()))
                     reverses.formUnion(DialogueMovePool.positions(loop.motif.cells) { $0.effect == .reversed })
                     #expect(loop.events.allSatisfy { $0.transform == loop.motif.transform })
-                    #expect(DialogueChopMetrics.recurrence(loop.events, loop: loop.index) >= 0.7)
+                    let recurrence = DialogueChopMetrics.recurrence(loop.events, loop: loop.index)
+                    if recurrence < 0.7 {
+                        let detail = "RECURRENCE bpm=\(bpm) seed=\(seed) loop=\(loop.index) line=\(loop.motif.text ?? "-") cells=\(loop.motif.cells) events=\(loop.events)"
+                        Attachment.record(detail, named: "recurrence-\(bpm)-\(seed)-\(loop.index).txt")
+                    }
+                    #expect(recurrence >= 0.7, "bpm=\(bpm) seed=\(seed) loop=\(loop.index)")
                     for pad in loop.motif.bank.pads {
                         #expect(pad.transform == loop.motif.transform)
                         #expect(abs(pad.duration * loop.motif.playbackSampleRate - Double(pad.frames.count)) < 1e-6)
