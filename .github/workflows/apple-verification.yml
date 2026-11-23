@@ -70,6 +70,15 @@ jobs:
         run: |
           set -o pipefail
           set +e
+          # Record compiler/test process timing so a slow suite can be distinguished from a hang.
+          (
+            while sleep 60; do
+              date -u
+              ps -Ao pid,ppid,etime,%cpu,comm | grep -E 'swift|xcodebuild|Liminal' || true
+            done
+          ) > verification/feel-runtime.log 2>&1 &
+          monitor=$!
+          trap 'kill "$monitor" 2>/dev/null || true' EXIT
           xcodebuild test CODE_SIGNING_ALLOWED=NO -project Liminal.xcodeproj -scheme Liminal \
             -destination 'platform=macOS,arch=arm64' -parallel-testing-enabled NO \
             -derivedDataPath "$RUNNER_TEMP/LiminalDerivedData" \
@@ -89,6 +98,7 @@ jobs:
           name: chop-feel-regression-${{ github.sha }}
           path: |
             verification/feel-regression.log
+            verification/feel-runtime.log
             verification/feel-regression-attachments/
           retention-days: 14
       - name: Focused dialogue tests

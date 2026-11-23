@@ -34,6 +34,22 @@ class FeelReportTests(unittest.TestCase):
         self.assertEqual(result['chopBeat']['reverse']['count'], 2)
         self.assertEqual(result['chopBeat']['reverse']['positions'], {32: 2})
 
+    def test_scoped_regressions_fail_even_when_arc_improves(self):
+        import copy
+        before = report.summarize([self.row(1, 0, [32]), self.row(1, 1, [32])])
+        before['loops'] = before['chopBeat']['loops'] = 108
+        after = copy.deepcopy(before)
+        after['consecutiveGridSimilarity'] = 0
+        before['nextMovePredictability'] = 0.8
+        after['nextMovePredictability'] = 0.7
+        after['reverse']['count'] += 1
+        after['reverse']['repeatGivenPrevious'] = 0
+        checks = report.acceptance(before, after)
+        self.assertTrue(all(value for key, value in checks.items() if not key.startswith('chopBeat.')))
+        self.assertFalse(checks['chopBeat.lessGridSimilarity'])
+        self.assertFalse(checks['chopBeat.lessNextMovePredictability'])
+        self.assertFalse(checks['chopBeat.noRepeatedReversePosition'])
+
     def test_log_and_attachment_duplicates_are_not_counted_twice(self):
         import json
         with tempfile.TemporaryDirectory() as directory:

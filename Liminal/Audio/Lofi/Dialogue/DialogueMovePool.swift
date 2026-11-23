@@ -26,6 +26,13 @@ nonisolated enum DialogueMovePool {
             let choices = fresh.isEmpty ? pool : fresh
             return choices[rng.int(0...(choices.count - 1))]
         }
+        // The same eighth-note displacement in both passes keeps the hook recognizable inside
+        // a loop, while its entrance and gaps change for the next source line. Translation keeps
+        // protected source-order runs intact; a phrase end that no longer fits is left out.
+        let firstChop = cells.first { $0.kind == .chopBeat }
+        let oldChop = previous.first { $0.kind == .chopBeat }
+        let oldShift = oldChop?.items.first.map { $0.slot - (firstChop?.items.first?.slot ?? 0) }
+        let chopShift = draw([0, 2, 4], avoiding: Set(oldShift.map { [$0] } ?? []))
         var result: [Cell] = []
         for cell in cells {
             var items = cell.items
@@ -59,6 +66,15 @@ nonisolated enum DialogueMovePool {
                     }
                 }
                 items = shifted
+            case .chopBeat:
+                if !items.contains(where: { fragments[$0.fragment].isUnit && fragments[$0.fragment].kind != .half }) {
+                    items = items.compactMap { item in
+                        let slot = item.slot + chopShift
+                        guard slot < 32, DialogueMotif.fitsRoom(item.fragment, steps: 32 - slot,
+                            fragments: fragments, sampleRate: sampleRate, beatDuration: beatDuration) else { return nil }
+                        return moved(item, to: slot)
+                    }
+                }
             case .build:
                 // Shift a complete repeat gesture as one group; metrical shifts keep its shape, and
                 // the performer drops conflicts whole instead of choking an earlier word. Spelling
@@ -111,13 +127,16 @@ nonisolated enum DialogueMovePool {
         let lead = Int(ceil((length + DialogueMotifTuning.reversedLeadSeconds + 0.04) / step))
         let targetCount = rng.int(2...3)
         var candidates: [(Int, Int)] = []
-        for index in result.indices where [.intro, .breakdown, .outro].contains(result[index].kind) {
+        for index in result.indices where [.intro, .chopBeat, .breakdown, .outro].contains(result[index].kind) {
             let cell = result[index]
+            // A chop-beat pickup recurs in both passes of the hook, before the turnaround.
+            if cell.kind == .chopBeat && cell.bar != 2 { continue }
             for slot in stride(from: 4, through: cell.bars * 16, by: 4) {
                 let absolute = cell.bar * 16 + slot
                 guard !oldReverses.contains(absolute), absolute < 256, slot - lead >= 0 else { continue }
                 // Dynamic chains have unknown end positions; leave the outro's restatement alone.
                 if cell.kind == .outro && slot >= 16 { continue }
+                if cell.kind == .chopBeat && (slot >= 28 || oldReverses.contains(absolute + 32)) { continue }
                 if cell.items.contains(where: { $0.slot == slot && $0.after == nil && $0.follow == nil }) { continue }
                 let clear = !cell.items.contains { item in
                     let end = item.slot + Int(ceil(Double(fragments[item.fragment].frames.count) / sampleRate / step))
@@ -142,6 +161,13 @@ nonisolated enum DialogueMovePool {
             }
             result[chosen.0] = Cell(kind: cell.kind, bar: cell.bar, bars: cell.bars, variant: cell.variant,
                                    items: items)
+            if cell.kind == .chopBeat, let repeatIndex = result.firstIndex(where: { $0.kind == .chopBeat && $0.bar == 4 }) {
+                let repeated = result[repeatIndex]
+                var repeatedItems = repeated.items + [reverse]
+                repeatedItems.sort { $0.slot < $1.slot }
+                result[repeatIndex] = Cell(kind: repeated.kind, bar: repeated.bar, bars: repeated.bars,
+                    variant: repeated.variant, items: repeatedItems)
+            }
             candidates.removeAll { $0.0 == chosen.0 }
         }
         return result

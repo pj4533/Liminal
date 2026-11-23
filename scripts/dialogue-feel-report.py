@@ -95,6 +95,23 @@ def read_records(path):
     return list(records.values())
 
 
+def acceptance(before, after):
+    checks = {}
+    for scope, prefix in [(None, ''), ('chopBeat', 'chopBeat.')]:
+        a, b = (after, before) if scope is None else (after[scope], before[scope])
+        scoped = {
+            'all108Loops': a['loops'] == b['loops'] == 108,
+            'moreReverses': a['reverse']['count'] > b['reverse']['count'],
+            'noRepeatedReversePosition': a['reverse']['repeatGivenPrevious'] == 0,
+            'lessGridSimilarity': a['consecutiveGridSimilarity'] < b['consecutiveGridSimilarity'],
+            'lessNextMovePredictability': a['nextMovePredictability'] < b['nextMovePredictability'],
+        }
+        for move in ['rest', 'quiet', 'roll', 'stutter']:
+            scoped[move + 'RecurrenceNoWorse'] = a[move]['repeatGivenPrevious'] <= b[move]['repeatGivenPrevious']
+        checks.update({prefix + name: passed for name, passed in scoped.items()})
+    return checks
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('input', type=pathlib.Path)
@@ -106,15 +123,7 @@ if __name__ == '__main__':
     result = summarize(records)
     if args.baseline:
         before = summarize(read_records(args.baseline))
-        checks = {
-            'all108Loops': result['loops'] == before['loops'] == 108,
-            'moreReverses': result['reverse']['count'] > before['reverse']['count'],
-            'noRepeatedReversePosition': result['reverse']['repeatGivenPrevious'] == 0,
-            'lessGridSimilarity': result['consecutiveGridSimilarity'] < before['consecutiveGridSimilarity'],
-            'lessNextMovePredictability': result['nextMovePredictability'] < before['nextMovePredictability'],
-        }
-        for move in ['rest', 'quiet', 'roll', 'stutter']:
-            checks[move + 'RecurrenceNoWorse'] = result[move]['repeatGivenPrevious'] <= before[move]['repeatGivenPrevious']
+        checks = acceptance(before, result)
         result = {'before': before, 'after': result, 'gates': checks, 'passed': all(checks.values())}
     print(json.dumps(result, indent=2, sort_keys=True))
     if args.baseline and not result['passed']:

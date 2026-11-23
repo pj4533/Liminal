@@ -185,6 +185,11 @@ struct DialogueChopFeelTests {
                         let hits = DialogueTightnessMetrics.hits([DialogueChop(event: event, buffer: buffer)],
                             sixteenth: snapshot.beatDuration / 4)
                         #expect(hits.count == 1, "pad \(pad.padID) missing independent attack measurement")
+                        for hit in hits where abs(hit.attackMs) > 35 {
+                            let detail = "FEEL-TIGHT-INVENTORY native=\(isNative) bpm=\(bpm) seed=\(seed) pad=\(id) frames=\(pad.frames) rate=\(transform.playbackRate) attackMs=\(hit.attackMs)"
+                            print(detail)
+                            Attachment.record(detail, named: "inventory-\(bpm)-\(seed)-\(id)-\(isNative).txt")
+                        }
                         if isNative { inventoryNative += hits } else { inventoryMatched += hits }
                     }
                     var trial = DialoguePerformanceMemory()
@@ -193,8 +198,18 @@ struct DialogueChopFeelTests {
                         let plan = DialogueMotifPerformer.perform(motif, snapshot: snapshot, window: window, owned: Double(half * 32)..<Double((half + 1) * 32),
                             earliestStart: window.lowerBound, memory: &trial, seed: seed, cueToken: half + 1, revision: 0)
                         let chops = DialogueChopRenderer.render(plan, bank: motif.bank, source: motif.source, analysis: motif.analysis, prerendered: motif.renders)
-                        let hits = DialogueTightnessMetrics.hits(chops, sixteenth: snapshot.beatDuration / 4,
-                            weakLead: Set(motif.fragments.filter(\.weakLead).map(\.id))).filter { !$0.line && !$0.weakLead }
+                        let weak = Set(motif.fragments.filter(\.weakLead).map(\.id))
+                        let hits = chops.flatMap { chop -> [DialogueTightnessMetrics.Hit] in
+                            let found = DialogueTightnessMetrics.hits([chop], sixteenth: snapshot.beatDuration / 4,
+                                weakLead: weak).filter { !$0.line && !$0.weakLead }
+                            for hit in found where abs(hit.attackMs) > 35 {
+                                let e = chop.event
+                                let detail = "FEEL-TIGHT-HIT native=\(isNative) bpm=\(bpm) seed=\(seed) half=\(half) pad=\(e.padID) frames=\(String(describing: e.sourceFrames)) rate=\(transform.playbackRate) gate=\(e.gateEnd) attackMs=\(hit.attackMs)"
+                                print(detail)
+                                Attachment.record(detail, named: "event-\(bpm)-\(seed)-\(half)-\(e.padID)-\(e.slot)-\(isNative).txt")
+                            }
+                            return found
+                        }
                         if isNative { native += hits } else { matched += hits }
                     }
                 }
