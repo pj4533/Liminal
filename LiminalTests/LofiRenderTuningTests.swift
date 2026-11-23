@@ -70,10 +70,10 @@ import Testing
         #expect(throws: LofiRenderTuning.ParseError.self) {
             try LofiRenderTuning.parse(["tune.bassCueDb": "-15", "tune.bassCueAlign": "maybe"])
         }
-        // The judged values (D129) are the cue's own defaults.
+        // The shipped R3h values (D129) are the cue's own defaults.
         let judged = try LofiRenderTuning.parse([
-            "tune.bassCueDb": "-15", "tune.bassCueBand": "180-300", "tune.bassCueSlopeDb": "4",
-            "tune.bassCueOnsetMs": "90", "tune.bassCueSynthDb": "-4",
+            "tune.bassCueDb": "-14", "tune.bassCueBand": "180-300", "tune.bassCueSlopeDb": "4",
+            "tune.bassCueOnsetMs": "90", "tune.bassCueSynthDb": "-12",
         ])
         #expect(judged.bassCue == .standard)
         // Shape keys alone change the cue only when it plays by default.

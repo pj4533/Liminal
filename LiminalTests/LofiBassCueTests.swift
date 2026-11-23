@@ -86,7 +86,7 @@ struct LofiBassCueTests {
         let f = f0 * 4
         let weight = (1 - LofiBassVoice.subWeight(f)) / sqrt(1 + pow(f / 300, 8))
         // The hold decays 2 dB per second: 1.4 dB at the slice's centre (0.7 s).
-        let expected = fundamental * pow(10, (-15.0 - 1.4) / 20) * weight
+        let expected = fundamental * pow(10, (LofiBassVoice.Cue.standard.levelDB - 1.4) / 20) * weight
         #expect(abs(20 * log10(first / expected)) < 0.5)
         let fifth = Self.amplitude(steady, hz: f0 * 5), seventh = Self.amplitude(steady, hz: f0 * 7)
         #expect(fifth < first && seventh < fifth)

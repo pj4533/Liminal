@@ -514,12 +514,12 @@ nonisolated enum LofiBassVoice: Int, CaseIterable, Sendable {
     /// velocity but is zero at the strike (or the note start) and rises over `onset` seconds (raised cosine),
     /// so the strike stays the brightest moment and the slap still lines up with the kick.
     struct Cue: Sendable, Equatable {
-        var levelDB: Double = -15
+        var levelDB: Double = -14
         var lowHz: Double = 180
         var highHz: Double = 300
         var slopeDB: Double = 4
         var onset: Double = 0.090
-        var synthOffsetDB: Double = -4
+        var synthOffsetDB: Double = -12
         /// Each partial takes the phase of the tone's own component at that harmonic (`alignedPartials`), so
         /// it adds to a sampled body's harmonics instead of cancelling them. The synth tone's series is already
         /// in sine phase with the sub, so it is never aligned.

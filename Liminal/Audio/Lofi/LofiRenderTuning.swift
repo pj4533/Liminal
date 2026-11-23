@@ -26,7 +26,8 @@ nonisolated struct LofiRenderTuning: Sendable, Equatable {
     var cueDuck: LofiCueDuck? = Self.defaultCueDuck
 
     /// The app's cue layer and cue duck (`nil`: none).
-    static let defaultBassCue: LofiBassVoice.Cue? = nil
+    /// R3h (D129), shipped 2026-11-23 after a headphone listen; `tune.bassCueDb=off` is the rollback.
+    static let defaultBassCue: LofiBassVoice.Cue? = .standard
     static let defaultCueDuck: LofiCueDuck? = nil
 
     static let standard = LofiRenderTuning()

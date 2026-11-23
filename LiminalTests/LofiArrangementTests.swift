@@ -124,15 +124,26 @@ struct LofiArrangementTests {
                                              drift: .init(seed: 5), startBeat: 80)
         let n = phrase.clock.frameCount
         var left = [Float](repeating: 0, count: n), right = left
+        // The shipped cue partials (D129) join inside the chain, so the reconstruction renders them too.
+        var cue = [Float](repeating: 0, count: n)
+        let cueShape = LofiRenderTuning.defaultBassCue
         left.withUnsafeMutableBufferPointer { l in
             right.withUnsafeMutableBufferPointer { r in
-                for note in part(phrase.score, .bass) {
-                    LofiRenderer.addBass(note, score: phrase.score, clock: phrase.clock, samples: .bundled, left: l, right: r)
+                cue.withUnsafeMutableBufferPointer { c in
+                    for note in part(phrase.score, .bass) {
+                        if let cueShape {
+                            LofiRenderer.addBass(note, score: phrase.score, clock: phrase.clock, samples: .bundled,
+                                                 left: l, right: r, cue: cueShape, cueOut: c)
+                        } else {
+                            LofiRenderer.addBass(note, score: phrase.score, clock: phrase.clock, samples: .bundled, left: l, right: r)
+                        }
+                    }
+                    vDSP_vadd(l.baseAddress!, 1, r.baseAddress!, 1, l.baseAddress!, 1, vDSP_Length(n))
+                    var half: Float = 0.5
+                    vDSP_vsmul(l.baseAddress!, 1, &half, l.baseAddress!, 1, vDSP_Length(n))
+                    _ = LofiStemChains.applyBass(l.baseAddress!, count: n, sampleRate: phrase.clock.sampleRate,
+                                                 cue: cueShape == nil ? nil : UnsafePointer(c.baseAddress!))
                 }
-                vDSP_vadd(l.baseAddress!, 1, r.baseAddress!, 1, l.baseAddress!, 1, vDSP_Length(n))
-                var half: Float = 0.5
-                vDSP_vsmul(l.baseAddress!, 1, &half, l.baseAddress!, 1, vDSP_Length(n))
-                _ = LofiStemChains.applyBass(l.baseAddress!, count: n, sampleRate: phrase.clock.sampleRate)
             }
         }
         let rendered = try #require(phrase.bass.floatChannelData)
