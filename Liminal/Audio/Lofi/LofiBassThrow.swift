@@ -33,7 +33,8 @@ nonisolated enum LofiBassThrow {
 
     /// The return of `thrown` over phrase frames `origin ..< origin + frames`.
     static func render(_ thrown: [LofiScore.Note], kit: LofiBassSamples.Kit, clock: LofiClock, frames: Int,
-                       origin: Int = 0, sweep: ClosedRange<Double>? = nil, samples: LofiBassSamples = .bundled)
+                       origin: Int = 0, sweep: ClosedRange<Double>? = nil, samples: LofiBassSamples = .bundled,
+                       invertedBeats: Set<Double> = [])
         -> (left: [Float], right: [Float]) {
         let rate = clock.sampleRate
         var send = [Float](repeating: 0, count: frames)
@@ -44,7 +45,8 @@ nonisolated enum LofiBassThrow {
                                                 sweep: sweep, layers: .body)
             body.withUnsafeBufferPointer { b in
                 send.withUnsafeMutableBufferPointer { s in
-                    vDSP_vadd(s.baseAddress! + start, 1, b.baseAddress!, 1, s.baseAddress! + start, 1, vDSP_Length(b.count))
+                    var gain: Float = invertedBeats.contains(note.beat) ? -1 : 1
+                    vDSP_vsma(b.baseAddress!, 1, &gain, s.baseAddress! + start, 1, s.baseAddress! + start, 1, vDSP_Length(b.count))
                 }
             }
         }
@@ -72,7 +74,8 @@ nonisolated enum LofiBassThrow {
             guard start >= 0, start < frames else { continue }
             let full = LofiBassThrowSend.render(note, kit: kit, clock: clock, limit: frames - start, samples: samples, sweep: sweep)
             voice.withUnsafeMutableBufferPointer { v in
-                vDSP_vadd(v.baseAddress! + start, 1, full, 1, v.baseAddress! + start, 1, vDSP_Length(full.count))
+                var gain: Float = invertedBeats.contains(note.beat) ? -1 : 1
+                vDSP_vsma(full, 1, &gain, v.baseAddress! + start, 1, v.baseAddress! + start, 1, vDSP_Length(full.count))
             }
         }
         let wanted = strongest(voice, rate: rate) * powf(10, -returnUnderNoteDB / 20)

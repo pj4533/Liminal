@@ -35,6 +35,48 @@ struct LofiBassVoiceTests {
         return (left, right)
     }
 
+    @Test func recordedKickPolarityAppliesOnlyToTheNewNote() throws {
+        let rate = 24_000.0
+        let clock = LofiClock(tempo: 90, sampleRate: rate)
+        let drums = try LofiDrumTake(recording: nil, clock: clock)
+        let channels = try #require(drums.buffer.floatChannelData)
+        let note = Self.note(36, .hold, beat: 0.25)
+        let start = clock.frame(at: note.beat), count = clock.frame(at: 2)
+        let offset = clock.frameCount
+        let phase = LofiBassKickPhase(drums: drums, kickFrame: offset + start, noteFrame: offset + start,
+                                      settings: .standard)
+        // The existing signal models a sustaining note already in the destination.
+        let sustain: Float = 0.125
+        func render(_ phase: LofiBassKickPhase?, bed: Float) -> (audio: [Float], cue: [Float], inverted: Bool) {
+            var left = [Float](repeating: bed, count: count), right = left
+            var cue = [Float](repeating: 0, count: count)
+            let inverted = left.withUnsafeMutableBufferPointer { l in
+                right.withUnsafeMutableBufferPointer { r in
+                    cue.withUnsafeMutableBufferPointer { c in
+                        LofiBassVoice.add(note, voice: .synth, clock: clock, left: l, right: r,
+                                          cue: .standard, cueOut: c, kickPhase: phase)
+                    }
+                }
+            }
+            return (left, cue, inverted)
+        }
+        let original = render(nil, bed: 0)
+        var kick = original.audio
+        let chain = LofiStemChains.Bass.standard
+        var eq = LofiFilterChain(chain.highpass + chain.filters, sampleRate: rate)
+        eq.process(&kick, count: count)
+        for sign: Float in [1, -1] {
+            for i in 0..<count {
+                channels[0][offset + i] = sign * dbToGain(chain.outputTrimDB) * kick[i]
+                channels[1][offset + i] = channels[0][offset + i]
+            }
+            let mixed = render(phase, bed: sustain)
+            #expect(mixed.inverted == (sign < 0))
+            #expect(zip(mixed.audio, original.audio).allSatisfy { abs($0 - (sustain + sign * $1)) < 1e-6 })
+            #expect(zip(mixed.cue, original.cue).allSatisfy { $0 == sign * $1 })
+        }
+    }
+
     static func rms(_ x: ArraySlice<Float>) -> Double {
         var value: Float = 0
         x.withUnsafeBufferPointer { vDSP_rmsqv($0.baseAddress!, 1, &value, vDSP_Length($0.count)) }

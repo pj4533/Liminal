@@ -5,12 +5,14 @@ import Foundation
 nonisolated extension LofiRenderer {
     /// One bass note into the phrase's bass buffers, with the phrase's voice and breakdown sweep.
     /// `cue`/`cueOut`: the phrase's cue partials (`LofiBassVoice.Cue`, D129) into their own mono buffer.
+    @discardableResult
     static func addBass(_ note: LofiScore.Note, score: LofiScore, clock: LofiClock, samples: LofiSampleBank,
                         left: UnsafeMutableBufferPointer<Float>, right: UnsafeMutableBufferPointer<Float>,
-                        cue: LofiBassVoice.Cue? = nil, cueOut: UnsafeMutableBufferPointer<Float>? = nil) {
+                        cue: LofiBassVoice.Cue? = nil, cueOut: UnsafeMutableBufferPointer<Float>? = nil,
+                        kickPhase: LofiBassKickPhase? = nil) -> Bool {
         LofiBassVoice.add(note, voice: score.bassVoice, clock: clock, left: left, right: right,
                           samples: .bundled, sweep: score.bassSweep, beforeStrike: score.bassBeforeStrike(note),
-                          strikeShift: score.bassStrikeShift(note, clock: clock), cue: cue, cueOut: cueOut)
+                          strikeShift: score.bassStrikeShift(note, clock: clock), cue: cue, cueOut: cueOut, kickPhase: kickPhase)
     }
 
     /// Dub throws (plan 2.4): the body of each thrown bass note through the echo and spring, added to the
@@ -18,7 +20,7 @@ nonisolated extension LofiRenderer {
     /// the space filters, the lead-keyed space duck, the chop duck on the wet fader, the return's carry
     /// dip and the carried tail like every other return; the bass stem itself stays dry and mono.
     static func addBassThrow(score: LofiScore, clock: LofiClock, frames: Int,
-                             spaceLeft: inout [Float], spaceRight: inout [Float]) {
+                             spaceLeft: inout [Float], spaceRight: inout [Float], invertedBeats: Set<Double> = []) {
         guard LofiBassThrow.isEnabled else { return }
         let thrown = score.notes.filter { $0.part == .bass && $0.send > 0 && $0.velocity > 0 }
         guard !thrown.isEmpty, score.bassVoice != .classic else { return }
@@ -30,7 +32,7 @@ nonisolated extension LofiRenderer {
         let end = min(total, last + LofiBassThrow.ringFrames(clock))
         guard end > origin else { return }
         let ret = LofiBassThrow.render(thrown, kit: kit, clock: clock, frames: end - origin, origin: origin,
-                                       sweep: score.bassSweep)
+                                       sweep: score.bassSweep, invertedBeats: invertedBeats)
         spaceLeft.withUnsafeMutableBufferPointer { l in
             vDSP_vadd(l.baseAddress! + origin, 1, ret.left, 1, l.baseAddress! + origin, 1, vDSP_Length(ret.left.count))
         }
@@ -89,7 +91,8 @@ nonisolated extension LofiRenderer {
     /// attack, `kickLowRiseFrame` the kick's 40-160 Hz half-amplitude rise measured on the take, and
     /// `bassLowRiseFrame` the same measure on this phrase's finished bass stem (after the chain, the
     /// headroom guard and the kick duck); `bassLowRiseFrame - kickLowRiseFrame` is the real alignment error.
-    static func reportBass(_ score: LofiScore, clock: LofiClock, phrase: Int, bass: UnsafePointer<Float>) {
+    static func reportBass(_ score: LofiScore, clock: LofiClock, phrase: Int, bass: UnsafePointer<Float>,
+                           invertedBeats: Set<Double>) {
         guard LofiCaptureHooks.isEnabled else { return }
         let origin = phrase * clock.frameCount
         let lead = Int((score.bassVoice.attackLead * clock.sampleRate).rounded())
@@ -101,6 +104,7 @@ nonisolated extension LofiRenderer {
                                       "stroke": String(describing: note.stroke), "thrown": note.send > 0,
                                       "strike": note.strike, "release": score.bassRelease(note),
                                       "alignedKickFrame": kick.map { origin + clock.frame(at: $0.kickBeat) as Any } ?? NSNull()]
+            if invertedBeats.contains(note.beat) { row["invertedPolarity"] = true }
             if let kick {
                 row["kickLowRiseFrame"] = origin + clock.frame(at: kick.kickLowRiseBeat)
                 let rise = LofiDrumLandmarks.lowBandRise(bass, count: clock.frameCount, around: local + lead,

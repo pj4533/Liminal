@@ -291,25 +291,34 @@ nonisolated enum LofiBassVoice: Int, CaseIterable, Sendable {
     /// `cue` and `cueOut`, when both are given, also render the note's clean cue partials (`Cue`, D129) into
     /// the separate mono `cueOut` buffer (same frames as `left`), which the bass chain adds after its
     /// parallel harmonics and compressor.
+    @discardableResult
     static func add(_ note: LofiScore.Note, voice: LofiBassVoice, clock: LofiClock,
                     left: UnsafeMutableBufferPointer<Float>, right: UnsafeMutableBufferPointer<Float>,
                     samples: LofiBassSamples = .bundled, sweep: ClosedRange<Double>? = nil, beforeStrike: Bool = false,
-                    strikeShift: Int = 0, cue: Cue? = nil, cueOut: UnsafeMutableBufferPointer<Float>? = nil) {
+                    strikeShift: Int = 0, cue: Cue? = nil, cueOut: UnsafeMutableBufferPointer<Float>? = nil,
+                    kickPhase: LofiBassKickPhase? = nil) -> Bool {
         guard voice != .classic else {
             addClassic(note, clock: clock, left: left, right: right)
-            return
+            return false
         }
         let start = clock.frame(at: note.beat)
-        guard start >= 0, start < left.count else { return }
+        guard start >= 0, start < left.count else { return false }
         let parts = renderParts(note, voice: voice, clock: clock, limit: left.count - start, samples: samples,
                                 sweep: sweep, layers: .all, beforeStrike: beforeStrike,
                                 cue: cueOut == nil ? nil : cue, cueOnset: note.strike > 0 ? strikeShift : 0)
+        let inverted = kickPhase?.shouldInvert(tone: parts.tone, strike: parts.strike, strikeShift: strikeShift) == true
         func mix(_ x: [Float], at position: Int, into out: UnsafeMutableBufferPointer<Float>) {
             let skip = max(0, -position), at = max(0, position)
             let n = min(x.count - skip, out.count - at)
             guard n > 0 else { return }
             x.withUnsafeBufferPointer { m in
-                vDSP_vadd(out.baseAddress! + at, 1, m.baseAddress! + skip, 1, out.baseAddress! + at, 1, vDSP_Length(n))
+                if inverted {
+                    var polarity: Float = -1
+                    vDSP_vsma(m.baseAddress! + skip, 1, &polarity, out.baseAddress! + at, 1,
+                              out.baseAddress! + at, 1, vDSP_Length(n))
+                } else {
+                    vDSP_vadd(out.baseAddress! + at, 1, m.baseAddress! + skip, 1, out.baseAddress! + at, 1, vDSP_Length(n))
+                }
             }
         }
         for out in [left, right] {
@@ -317,6 +326,7 @@ nonisolated enum LofiBassVoice: Int, CaseIterable, Sendable {
             mix(parts.strike, at: start + strikeShift, into: out)
         }
         if let cueOut, !parts.cue.isEmpty { mix(parts.cue, at: start, into: cueOut) }
+        return inverted
     }
 
     enum Layers: Sendable { case all, sub, body, strike }

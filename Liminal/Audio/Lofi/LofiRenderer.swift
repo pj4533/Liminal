@@ -115,18 +115,22 @@ nonisolated enum LofiRenderer {
         // balance meters the phrase without them.
         var strumDry: (left: [Float], right: [Float])?
         let upperVoices = Self.upperShellVoices(score)
+        let drumOffset = (drumStartBeat / Int(LofiClock.beats)) * n
+        var invertedBassBeats: Set<Double> = []
         for (index, note) in score.notes.enumerated() where note.velocity > 0 {
             try Task.checkCancellation()
             switch note.part {
             case .bass:
-                if let cue = tuning.bassCue {
-                    bassCue.withUnsafeMutableBufferPointer { out in
-                        addBass(note, score: score, clock: clock, samples: samples, left: left, right: right,
-                                cue: cue, cueOut: out)
-                    }
-                } else {
-                    addBass(note, score: score, clock: clock, samples: samples, left: left, right: right)
+                let anchor = score.bassAnchors.first { $0.noteBeat == note.beat }
+                let kickPhase = drums.flatMap { take in
+                    anchor.map { LofiBassKickPhase(drums: take, kickFrame: drumOffset + clock.frame(at: $0.kickBeat),
+                                                   noteFrame: drumOffset + clock.frame(at: note.beat), settings: tuning.bass) }
                 }
+                let inverted = bassCue.withUnsafeMutableBufferPointer { out in
+                    addBass(note, score: score, clock: clock, samples: samples, left: left, right: right,
+                            cue: tuning.bassCue, cueOut: out.isEmpty ? nil : out, kickPhase: kickPhase)
+                }
+                if inverted { invertedBassBeats.insert(note.beat) }
             case .strum:
                 // The strummed hook (D128) renders beside the melody in the accent buffer: the lead's
                 // filters and gain curve and the phrase's lead gain, but never the gain measurement or
@@ -221,7 +225,6 @@ nonisolated enum LofiRenderer {
         let captureWindow = replay?.window ?? 0..<0
         let automation = (0...Int(ceil(LofiClock.beats + tailBeats))).map { drift.at(startBeat + Double($0)) }
         let drumChannels = drums?.buffer.floatChannelData
-        let drumOffset = (drumStartBeat / Int(LofiClock.beats)) * n
         var kickDuck = LofiKickDuck(sampleRate: sampleRate)
         if let drumChannels, drumOffset > 0 {
             for frame in max(0, drumOffset - Int(sampleRate * 0.25))..<drumOffset {
@@ -355,7 +358,8 @@ nonisolated enum LofiRenderer {
         }
         // Space: filtered once over phrase plus tail, so the carried tail is never filtered again,
         // then ducked under the dry lead. The duck applies to this phrase's frames (own and carried).
-        addBassThrow(score: score, clock: clock, frames: frames, spaceLeft: &spaceL, spaceRight: &spaceR)
+        addBassThrow(score: score, clock: clock, frames: frames, spaceLeft: &spaceL, spaceRight: &spaceR,
+                     invertedBeats: invertedBassBeats)
         let spaceStats = LofiStemChains.applySpace(left: &spaceL, right: &spaceR, sampleRate: sampleRate)
         let duck = Self.spaceDuck(lead: lead, gain: dryLeadGain, frames: n, sampleRate: sampleRate,
                                   onsets: Self.leadOnsets(score, clock: clock))
@@ -420,7 +424,7 @@ nonisolated enum LofiRenderer {
         // a plucked program held under the 400 ms and peak ceilings can still come up to the grand.
         let programTrim = powf(10, score.preset.levelDB / 20)
         let trim = balance.gain * programTrim
-        reportBass(score, clock: clock, phrase: phrase, bass: UnsafePointer(bassL))
+        reportBass(score, clock: clock, phrase: phrase, bass: UnsafePointer(bassL), invertedBeats: invertedBassBeats)
         reportMusicLevels(score, phrase: phrase,
                levels: ["leadGain": dryLeadGain, "sendGain": sendGain, "midsGain": mids.shellGain, "padGain": mids.padGain,
                         "padDuckMeanDb": mids.padDuckMeanDB, "balanceTrim": balance.gain,
