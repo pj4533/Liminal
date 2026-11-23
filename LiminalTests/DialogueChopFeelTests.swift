@@ -259,7 +259,7 @@ struct DialogueChopFeelTests {
         }
     }
 
-    @Test func performedSpellingFigureIsAtomicAcrossDynamicOutroCollisions() throws {
+    @Test(arguments: [44, 60]) func performedSpellingFigureIsAtomicAcrossDynamicOutroCollisions(_ chainStart: Int) throws {
         let film = DialogueHookProbeTests.film(GateRun.corpus, id: "atomic-outro", transcribed: false)
         let snapshot = DialogueFixtures.snapshot(bpm: 72, origin: 0.5, seed: 3)
         let base = try #require(DialogueMotif.make(loop: 0, source: film.source, analysis: film.analysis,
@@ -283,7 +283,7 @@ struct DialogueChopFeelTests {
         var completed = 0, dropped = 0
         for seed: UInt64 in 1...30 {
             let authored = [DialogueMotifCell(kind: .outro, bar: 12, bars: 4, variant: 0, items: [
-                Item(fragment: 0, slot: 16), Item(fragment: 2, slot: 44, after: 0, onEighths: true),
+                Item(fragment: 0, slot: 16), Item(fragment: 2, slot: chainStart, after: 0, onEighths: true),
                 Item(fragment: 2, slot: 0, fixed: true, gate: 2, follow: 2),
                 Item(fragment: 3, slot: 56, fixed: true, gate: 1),
                 Item(fragment: 4, slot: 57, fixed: true, gate: 1),
@@ -301,6 +301,23 @@ struct DialogueChopFeelTests {
             let figure = plan.events.filter { [1, 3, 4, 5].contains($0.piece ?? -1) && $0.effect != .reversed }
             let ids = figure.compactMap(\.piece)
             #expect(ids.isEmpty || ids == [3, 4, 5, 1], "seed \(seed): partial figure \(ids)")
+            if chainStart == 60 {
+                // This chain reaches beyond step 63: no complete four-step tag can follow it.
+                // Compare with the same performance without a tag to prove rollback preserves
+                // the preceding events, including their exact dry ends and effect tails.
+                let withoutTag = cells.map { cell in
+                    DialogueMotifCell(kind: cell.kind, bar: cell.bar, bars: cell.bars, variant: cell.variant,
+                        items: cell.items.filter { ![1, 3, 4, 5].contains($0.fragment) || $0.effect == .reversed })
+                }
+                let control = DialogueMotif(loop: 0, source: base.source, analysis: base.analysis, lineUnit: base.lineUnit,
+                    lineKey: base.lineKey, fragments: fragments, pieces: [2], halves: [1: [3, 4, 5]], bank: bank,
+                    usedTranscript: false, reorderAllowed: false, cells: withoutTag, carried: false, seed: seed)
+                var controlMemory = DialoguePerformanceMemory()
+                let controlPlan = DialogueMotifPerformer.perform(control, snapshot: snapshot, window: window, owned: 48..<64,
+                    earliestStart: window.lowerBound, memory: &controlMemory, seed: seed, cueToken: 1, revision: 0)
+                #expect(plan.events == controlPlan.events, "seed \(seed): failed tag changed preceding events")
+                #expect(plan.events.filter { $0.piece == 2 }.contains { $0.slot == 62 })
+            }
             if ids.isEmpty { dropped += 1 } else {
                 completed += 1
                 let slots = figure.map(\.slot)
@@ -308,7 +325,8 @@ struct DialogueChopFeelTests {
                 #expect(slots[3] % 4 == 0 && slots[3] == slots[0] + 4)
             }
         }
-        #expect(completed > 0 && dropped > 0, "complete=\(completed) dropped=\(dropped)")
+        #expect(chainStart == 60 ? (completed == 0 && dropped == 30) : (completed == 30 && dropped == 0),
+                "chainStart=\(chainStart) complete=\(completed) dropped=\(dropped)")
     }
 
     /// Run the independent D126 detector on native and speed-matched renders of the same chosen lines.
