@@ -103,6 +103,21 @@ private func bars(_ loop: MotifRun.Loop) -> [Int: [DialogueEvent]] {
 }
 
 struct DialogueMotifTests {
+    @Test func aClosingSpellingFigureWaitsForTheWholeWordBeforeIt() throws {
+        let loop = run(MotifShape.all[1], seed: 5).loops[1]
+        let motif = try #require(loop.motif)
+        let outro = try #require(motif.cells.first { $0.kind == .outro })
+        let units = outro.items.filter { $0.slot >= 44 && motif.fragments[$0.fragment].isUnit }
+        try #require(units.count >= 2)
+        let parent = try #require(motif.fragments[units[0].fragment].parent)
+        let expected = units.map(\.fragment) + [parent]
+        let played = loop.events.filter { $0.cell == .outro }.compactMap(\.piece)
+        #expect(played.count >= expected.count)
+        #expect((0...max(0, played.count - expected.count)).contains { start in
+            Array(played.dropFirst(start).prefix(expected.count)) == expected
+        }, "Closing figure \(expected) was lost after the line's whole-word chain: \(played)")
+    }
+
     static let seeds: [UInt64] = [1, 2, 3, 5, 8, 13]
 
     @Test(arguments: MotifShape.all) fileprivate func everyBarOfEveryLoopHasAPieceOnset(_ shape: MotifShape) throws {

@@ -2191,8 +2191,31 @@ nonisolated enum DialogueMotifPerformer {
                 figures[first] = index - 1
             }
             var figure: (start: Int, end: Int, placed: [Placed], prevEnd: Double, first: Bool, statements: Int)?
+            var figureShift = 0
             for (itemIndex, item) in cell.items.enumerated() {
                 if let end = figures[itemIndex] {
+                    if cell.kind == .outro {
+                        let group = cell.items[itemIndex...end]
+                        // The preceding restatement is a dynamic whole-word chain. Its actual
+                        // end can overrun the tag's drawn start. Move the complete figure by
+                        // beats into remaining space, retaining its unit order, spacing and
+                        // whole-word landing instead of discarding it or cutting the chain.
+                        if group.allSatisfy({ $0.after == nil && $0.follow == nil }) {
+                            figureShift = stride(from: 0, to: cell.bars * 16 - item.slot, by: 4).first { shift in
+                                var lastEnd = max(prevEnd + DialogueTuning.dryGapSeconds, floor)
+                                for part in group {
+                                    let step = cellStart + part.slot + shift
+                                    let start = snapshot.gridTime(sixteenth: step) - accentOffset(part)
+                                    guard start >= lastEnd else { return false }
+                                    let end = gatedEnd(part.fragment, start: start, sixteenth: step, gate: part.gate,
+                                                       motif: motif, snapshot: snapshot).end
+                                    guard end <= min(upper, snapshot.gridTime(sixteenth: cellEnd - 1)) else { return false }
+                                    lastEnd = end + DialogueTuning.dryGapSeconds
+                                }
+                                return true
+                            } ?? 0
+                        }
+                    }
                     figure = (itemIndex, end, placed, prevEnd, firstInCell, statements)
                 }
                 defer {
@@ -2205,12 +2228,13 @@ nonisolated enum DialogueMotifPerformer {
                             statements = saved.statements
                         }
                         figure = nil
+                        figureShift = 0
                     }
                 }
                 if item.fragment == 0 {
                     guard statements < DialogueMotifTuning.maximumLineStatements else { continue }
                 }
-                let base = cellStart + item.slot
+                let base = cellStart + item.slot + figureShift
                 let offset = accentOffset(item)
                 let length = duration(item.fragment)
                 // The section's dry budget; the line statement, the turnaround's landing and the phrase-end
