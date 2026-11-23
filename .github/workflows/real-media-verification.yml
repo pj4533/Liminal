@@ -6,7 +6,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: real-media-${{ github.ref }}
+  group: real-media-${{ github.run_id }}
   cancel-in-progress: false
 jobs:
   media:
