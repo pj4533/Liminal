@@ -1,0 +1,67 @@
+name: Real media verification
+on:
+  push:
+    branches: ['verify/real-media/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: real-media-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  media:
+    runs-on: macos-26
+    timeout-minutes: 360
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: after
+      - uses: actions/checkout@v4
+        with:
+          ref: 47a01fe
+          path: baseline
+      - name: Install public verification tools
+        run: |
+          brew install ffmpeg
+          python3 -m venv "$RUNNER_TEMP/media-venv"
+          "$RUNNER_TEMP/media-venv/bin/pip" install numpy scipy matplotlib
+          echo "$RUNNER_TEMP/media-venv/bin" >> "$GITHUB_PATH"
+      - name: Record toolchain and dataset comparison scope
+        run: |
+          mkdir -p "$RUNNER_TEMP/real-media"
+          { sw_vers; xcodebuild -version; xcodebuild -showsdks; } > "$RUNNER_TEMP/real-media/toolchain.txt"
+          echo 'Historical 12-film IDs are unknown. These runs compare freshly regenerated baseline and after on the same recorded 12-film dataset, 8 chunks, 72 BPM, seed 1. Historical absolute 159-line denominator is not assumed identical.' > "$RUNNER_TEMP/real-media/comparison-scope.txt"
+      - name: Run serial real media verification
+        run: after/scripts/verify-real-media.sh "$GITHUB_WORKSPACE/after" "$GITHUB_WORKSPACE/baseline" "$RUNNER_TEMP/real-media"
+      - name: Full after unit suite
+        if: ${{ !cancelled() }}
+        timeout-minutes: 60
+        run: |
+          cd after
+          set -o pipefail
+          xcodebuild test CODE_SIGNING_ALLOWED=NO -scheme Liminal -destination 'platform=macOS,arch=arm64' -parallel-testing-enabled NO -derivedDataPath "$RUNNER_TEMP/real-media/dd-after" -only-testing:LiminalTests 2>&1 | tee "$RUNNER_TEMP/real-media/full-tests.log"
+      - name: Build visionOS Simulator
+        if: ${{ !cancelled() }}
+        timeout-minutes: 30
+        run: |
+          cd after
+          set -o pipefail
+          xcodebuild CODE_SIGNING_ALLOWED=NO -scheme Liminal -destination 'generic/platform=visionOS Simulator' -derivedDataPath "$RUNNER_TEMP/real-media/dd-vision" build 2>&1 | tee "$RUNNER_TEMP/real-media/vision-build.log"
+      - name: Preserve media evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-media-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/real-media/*.txt
+            ${{ runner.temp }}/real-media/*.json
+            ${{ runner.temp }}/real-media/*.tsv
+            ${{ runner.temp }}/real-media/*.log
+            ${{ runner.temp }}/real-media/provenance/
+            ${{ runner.temp }}/real-media/*-probe/
+            ${{ runner.temp }}/real-media/*-matrix/
+            ${{ runner.temp }}/real-media/auditions/
+          retention-days: 14

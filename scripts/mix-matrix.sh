@@ -3,7 +3,9 @@
 #
 #   DD=$S/dd-name scripts/mix-matrix.sh --out DIR [--baseline DIR] [--cases ref,long,fast,same,nofilm] [--strict] [--prune-wavs]
 #
-# Cases (all --private-drums):
+# Cases use --private-drums by default. --bundled-drums explicitly verifies the public fallback
+# and must never be reported as private-drum verification.
+# Cases:
 #   ref    --film-reel --bars 32 --seed 1042 --bpm 70
 #   long   --film-reel --bars 64 --seed 7    --bpm 62
 #   fast   --film-reel --bars 32 --seed 2025 --bpm 80
@@ -31,6 +33,7 @@ cases="ref,long,fast,same,nofilm"
 strict=""
 prune=""
 extra=()
+private_drums=--private-drums
 while [ $# -gt 0 ]; do
     case "$1" in
         --out) out="$2"; shift 2 ;;
@@ -38,6 +41,7 @@ while [ $# -gt 0 ]; do
         --cases) cases="$2"; shift 2 ;;
         --strict) strict="--strict"; shift ;;
         --prune-wavs) prune=1; shift ;;
+        --bundled-drums) private_drums=""; shift ;;
         --) shift; extra=("$@"); break ;;
         *) echo "unknown option $1" >&2; exit 2 ;;
     esac
@@ -84,7 +88,7 @@ summary_cases=()
 for name in ${cases//,/ }; do
     flags=$(args_for "$name") || { echo "unknown case $name" >&2; exit 2; }
     echo "=== case $name: $flags ==="
-    case_args=(--out "$out/$name" --case "$name" --private-drums $flags)
+    case_args=(--out "$out/$name" --case "$name" $private_drums $flags)
     if [ -n "$baseline" ] && [ -f "$baseline/$name/report/mix-report.json" ]; then
         case_args+=(--baseline "$baseline/$name")
     fi
