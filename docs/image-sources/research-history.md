@@ -139,6 +139,10 @@ Where something was rejected, the reason is recorded so nobody repeats the probe
 | Cleveland mushroom, fungi and plain painting keywords | Lamps, ceramics, Asian scrolls, Mughal miniatures | Use types and "American landscape" |
 | Met Walker Evans and 1950s photographs, "clouds" (department 19), mushrooms | Not public domain; caricatures | Rejected |
 
+## Interest packs (2026-11-22/23)
+
+The user asked for more of what they enjoy. A handoff ([personal-media-search.md](../research/visuals/personal-media-search.md)) supplied the queries; twelve priority sources were built from it, previewed per pack, and narrowed (queries dropped for storefronts, lab slides, a bubble performer, cloud photographs and cattle). Measurements and the dropped searches are in D130 in [decisions/images.md](../decisions/images.md); the film side is A32.
+
 ## Open candidates
 
 - **Through existing providers:** LoC photochroms and Prokudin-Gorskii through the `master:` route; the Commons NOAA stream with strict reject words; O'Sullivan and Jackson survey photographs (monochrome).

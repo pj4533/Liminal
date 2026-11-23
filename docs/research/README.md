@@ -53,6 +53,7 @@ The people and crews whose techniques we studied, one file each, with what Limin
 | --- | --- |
 | [Visual research index](visuals/README.md) | Index of the image and transition notes |
 | [Drop transitions](visuals/drop-transitions.md) | Glitch and datamosh craft, drop-edit timing and audiovisual sync tolerances behind T44-T50 |
+| [Personal media search](visuals/personal-media-search.md) | Handoff behind the interest image packs and film routes (D130, A32); evidence files not supplied |
 | [Image API survey](visuals/image-apis/survey.md) | Which public image APIs work in 2026, their keys, resolution and rights |
 | [Image collections](visuals/image-apis/collections.md) | The curated collections, measured sizes, rejections and live ingest results |
 | [More image institutions](visuals/image-apis/other-institutions.md) | Commons, NASA, Cleveland and Met sources |

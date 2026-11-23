@@ -84,7 +84,7 @@ Add an object to `sources` in `Liminal/Visual/ImageSources/image-collections.jso
 | `id` | string | yes | Unique, kebab-case, usually `<provider>-<theme>`. Stored in every picture's credit and used by `-LiminalImageProvider` |
 | `provider` | string | yes | A registered provider id: `loc`, `nasa`, `wikimedia`, `cma`, `met`, `dc`, `aic` (or `si` with a key) |
 | `enabled` | bool | yes | `false` keeps the entry without using it |
-| `weight` | number | yes | Copies in the ingest bag of its group (`round(weight)`, at least 1) and a multiplier on display weight. Most sources are 1-4; the enabled total is 92 (2026-11-22: 60 for the other sources, 32 for the priority packs) |
+| `weight` | number | yes | Copies in the ingest bag of its group (`round(weight)`, at least 1) and a multiplier on display weight. Most sources are 1-4; the enabled total is 93 (2026-11-23: 60 for the other sources, 33 for the priority packs) |
 | `themes` | [string] | yes | Documentation: what the source is for |
 | `license` | string | yes | Documentation: what the rights should be. The app always judges each item's own record |
 | `collection` | string | LoC, DC | LoC collection slug (`carol-m-highsmith`); Digital Commonwealth host collection facet ("The Tichnor Brothers Collection") |
