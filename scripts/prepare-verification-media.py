@@ -49,6 +49,37 @@ def inspect(path):
         "-show_format", "-of", "json", str(path)], text=True))
 
 
+def digest(path):
+    with path.open('rb') as stream:
+        return hashlib.file_digest(stream, 'sha256').hexdigest()
+
+
+def cached_matches(destination, sidecar, identifier, file, url, metadata_hash):
+    try:
+        saved = json.loads(sidecar.read_text())
+        return (destination.is_file() and saved['id'] == identifier and saved['url'] == url and
+                saved['archiveFile'] == file and saved['metadataSHA256'] == metadata_hash and
+                saved['sha256'] == digest(destination))
+    except (OSError, ValueError, KeyError):
+        return False
+
+
+def decoded_windows(path, duration):
+    """Decode the exact eight 30-second probe windows; ffprobe alone proves no decoding."""
+    usable, margin = duration - 31, min(.2 * duration, 60)
+    lo, hi = (margin, usable - margin) if usable > 2 * margin else (0, usable)
+    rows = []
+    for chunk in range(8):
+        offset = lo + (hi - lo) * chunk / 7
+        audio = subprocess.check_output(['ffmpeg', '-v', 'error', '-ss', str(offset), '-i', str(path),
+            '-t', '30', '-vn', '-ar', '48000', '-ac', '1', '-f', 'f32le', '-'])
+        frames = len(audio) // 4
+        if frames < 29 * 48000:
+            raise RuntimeError(f'chunk {chunk} decoded only {frames} frames')
+        rows.append(dict(chunk=chunk, offset=offset, frames=frames, sampleRate=48000))
+    return rows
+
+
 def prepare(cache, provenance, count):
     cache.mkdir(parents=True, exist_ok=True)
     provenance.mkdir(parents=True, exist_ok=True)
@@ -61,12 +92,16 @@ def prepare(cache, provenance, count):
             if not metadata_path.exists():
                 fetch(f"https://archive.org/metadata/{identifier}", metadata_path)
             metadata = json.loads(metadata_path.read_text())
+            metadata_hash = digest(metadata_path)
             errors = []
             for file in candidates(metadata):
                 url = f"https://archive.org/download/{identifier}/{quote(file['name'], safe='/')}"
                 destination = cache / f"{identifier}.mp4"
                 try:
-                    if not destination.exists():
+                    sidecar = destination.with_suffix('.provenance.json')
+                    if not cached_matches(destination, sidecar, identifier, file, url, metadata_hash):
+                        destination.unlink(missing_ok=True)
+                        sidecar.unlink(missing_ok=True)
                         partial = destination.with_suffix(".part")
                         fetch(url, partial)
                         partial.rename(destination)
@@ -75,14 +110,18 @@ def prepare(cache, provenance, count):
                     assert any(s["codec_type"] == "audio" for s in facts["streams"]), "no audio track"
                     duration = float(facts["format"]["duration"])
                     assert duration >= 60, f"too short: {duration}"
+                    coverage = decoded_windows(destination, duration)
+                    identity = dict(id=identifier, url=url, archiveFile=file, metadataSHA256=metadata_hash,
+                                    sha256=digest(destination))
+                    sidecar.write_text(json.dumps(identity, indent=2))
                     info = metadata.get("metadata", {})
                     clips.append(dict(id=identifier, title=str(info.get("title", identifier)),
                         fileName=destination.name, bytes=destination.stat().st_size, duration=duration,
                         width=video["width"], height=video["height"], hasAudio=True, black=0, white=1,
                         isColour=True, licence=str(info.get("licenseurl", "See original Archive metadata")),
                         added=0, useCount=0, shownStarts=[]))
-                    records.append(dict(id=identifier, url=url, archiveFile=file, facts=facts,
-                        sha256=hashlib.file_digest(destination.open("rb"), "sha256").hexdigest()))
+                    records.append(dict(**identity, facts=facts, decodedWindows=coverage,
+                        decodingScope='Eight probe windows only; not full-film decode'))
                     print(f"prepared {identifier}: {duration:.1f}s", flush=True)
                     break
                 except Exception as error:

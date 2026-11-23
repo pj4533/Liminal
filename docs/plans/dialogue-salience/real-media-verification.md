@@ -92,3 +92,48 @@ Git; both revisions continue to use exactly the same cache within a run. Acousti
 performed figures can be exported as explicitly named acoustic m4a listening evidence; they
 cannot satisfy the required initialism/proper-noun syllable audition classes. Original
 zero-attacks-over-35ms gates and later task-2 no-worse counts are now emitted separately.
+
+## Verification integrity follow-up (23 November)
+
+Measurements now require an explicit twelve-film/eight-window inventory at 72 BPM/seed 1,
+including Archive derivative URL/hash identities, attempts, successful decoded frame counts,
+speech-eligible/nonspeech denominators, Apple model version/locale and per-window transcript
+outcomes. Missing decode or eligible transcript windows fail corpus qualification. Nonspeech
+windows remain in the inventory; an absent transcript there does not itself fail speech coverage.
+Per-hit rendered and audible coverage is separate from planned source overlap. The independent
+onset denominator includes every planned sub-line non-reverse event; missing/undetectable
+eligible attacks fail coverage. Reverses are explicitly excluded from that detector, while
+still requiring rendered signal. Historical baseline `47a01fe` receives only the checked
+`scripts/baseline-probe-measurement.patch`, the same report parser, matrix wrapper and existing
+compiler-only `Self.cuePartials` adapter; the exact diff is retained with preparation artifacts.
+No baseline planner, renderer, musical thresholds or detector algorithm is rewritten.
+
+Re-heard denominators retain mode, control, whole-piece and content identity. The 60% gate
+uses only sampled rendered **T whole content pieces outside controls**, with an exact normalized
+recognized-token match ("trip" cannot match "tripping"). Controls and A remain reported.
+Fresh salient-word counts and rates are separate from the historical 110/50-of-159 gates;
+those gates remain unverified without an explicit verified `historicalMatch` provenance record.
+They cannot be made green by coincidentally observing 159 fresh occurrences.
+
+Auditions qualify only from logged actual rendered figures: complete ordered units from one
+parent, a uniform one/two-step grid, next-beat whole landing, and complete containment in the
+exported window. Three or four qualifying examples must include a real initialism and a
+recognized drug/proper-name syllable figure. Drug classification uses an explicit documented
+word list in the probe; unclassified/proper-name examples remain missing until authenticated.
+Acoustic examples are separate extras. Effects/context evidence is retained; full mix,
+dry-only and human listening evidence is explicitly unavailable until captured/reviewed.
+
+Media cache sidecars authenticate chosen metadata filename/URL/hash and source metadata hash;
+legacy or mismatching cache entries are refetched. ffprobe facts are metadata only. Actual
+FFmpeg decoded sample counts cover the eight probe windows, with no full-film decode claim.
+Required ref/fast/same/transcribe cases are inventoried per revision; unavailable transcription
+is unmet, and ready status without actual used recognized words cannot qualify. Raw strict
+results remain separate from the paired no-new-targeted-fail result. Private after captures
+now receive the private baseline. Preparation assertion/copy/adapter failures stop the phase
+and preserve failure status. The app's process-survival step is separate from automated
+hook/footage/salient-pick evidence; neither establishes human visual or listening acceptance.
+
+Local Python/shell regressions verify these failure paths. A separate `verification-integrity`
+workflow compiles the adapted historical probe and candidate and runs the new detector/selection
+regressions without downloading media or running duplicate captures. Its existence/start does
+not establish a passing Apple build, real-media acceptance, or resolution of the remaining DSP gates.

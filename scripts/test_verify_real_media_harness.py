@@ -34,3 +34,41 @@ class MediaHarnessPrerequisiteTests(unittest.TestCase):
         self.assertEqual(code, 29)
         self.assertEqual(calls, ['xcrun'])
         self.assertIn('compile-provisioner\t29', status)
+
+    def test_failed_compiler_adapter_assertion_cannot_be_masked_by_successful_git_diff(self):
+        import sys
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            after, baseline, output, binaries = [root / n for n in ('after', 'baseline', 'output', 'bin')]
+            for tree in (after, baseline): (tree / 'scripts').mkdir(parents=True)
+            binaries.mkdir()
+            (after/'scripts/prepare-verification-media.py').write_text('pass\n')
+            for name in ('mix-matrix.sh', 'dialogue-salience-report.py', 'baseline-probe-measurement.patch'):
+                (after/'scripts'/name).write_text('measurement adapter\n')
+            voice = baseline/'Liminal/Audio/Lofi/LofiBassVoice.swift'
+            voice.parent.mkdir(parents=True); voice.write_text('unexpected baseline source')
+            trace = root/'git-calls'
+            git = binaries/'git'
+            git.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{trace}"\nexit 0\n'); git.chmod(0o755)
+            env = dict(os.environ, PATH=str(binaries)+os.pathsep+os.environ['PATH'])
+            script = Path(__file__).with_name('verify-real-media.sh').resolve()
+            result = subprocess.run(['bash', str(script), str(after), str(baseline), str(output), 'prepare'], env=env, capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('baseline-compiler-adapter\t1', (output/'steps.tsv').read_text())
+            self.assertNotIn(' diff', trace.read_text())
+
+    def test_required_transcribe_skip_fails_even_when_matrix_summary_passes(self):
+        import json
+        import shutil
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); (root/'scripts').mkdir()
+            shutil.copy(Path(__file__).with_name('mix-matrix.sh'), root/'scripts/mix-matrix.sh')
+            (root/'scripts/mix-report.py').write_text('pass\n')
+            out = root/'matrix'
+            for case in ('ref', 'fast', 'same', 'transcribe'):
+                target=out/case; (target/'report').mkdir(parents=True)
+                (target/'manifest.json').write_text(json.dumps(dict(dialogueTranscripts=[dict(status='ready', words=0, transcriptUsed=False)])))
+                (target/'report/mix-report.json').write_text('{}')
+            result=subprocess.run(['bash', str(root/'scripts/mix-matrix.sh'), '--out', str(out), '--cases', 'ref,fast,same,transcribe', '--strict'], capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertTrue((out/'transcribe/skipped.txt').is_file())

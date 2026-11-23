@@ -1,0 +1,137 @@
+import importlib.util
+import json
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+
+
+def module(name):
+    spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name(name + '.py'))
+    result = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(result)
+    return result
+
+report = module('dialogue-salience-report')
+gates = module('verify-salience-gates')
+auditions = module('verification-auditions')
+media = module('prepare-verification-media')
+matrix = module('verify-matrix-integrity')
+app = module('verify-app-playback')
+
+
+class IntegrityTests(unittest.TestCase):
+    def corpus(self):
+        films = [dict(id=str(i), file=str(i)+'.mp4', duration=600, sha256='hash', url='source') for i in range(12)]
+        rows = [dict(film=f['id'], chunk=c, offset=c*30, decode='success', decodedFrames=1440000,
+                     sampleRate=48000, speechWindows=1, renderOutcomes={m: dict(planned=3, rendered=3, audible=3) for m in ('T','A')}, model='apple', transcriptOutcome='result', transcribed=True, transcriptWords=10, transcriptLocale='en-US', transcriptModelVersion='apple-v1')
+                for f in films for c in range(8)]
+        return dict(corpus=dict(films=films, chunks=8, bpm=72, seed=1, modes=['T', 'A']),
+                    windowOutcomes=rows, attempts=[dict(film=w['film'], chunk=w['chunk'], decode='attempted') for w in rows])
+
+    def test_partial_corpus_and_duplicate_window_cannot_qualify(self):
+        before, after = self.corpus(), self.corpus()
+        self.assertTrue(gates.evaluate(before, after)['pairedCorpusComplete']['passed'])
+        after['windowOutcomes'][-1] = after['windowOutcomes'][0]
+        self.assertFalse(gates.evaluate(before, after)['pairedCorpusComplete']['passed'])
+        self.assertFalse(gates.evaluate(before, after)['transcriptEvidence']['passed'])
+
+    def test_missing_render_in_one_window_cannot_hide_in_corpus_totals(self):
+        before, after = self.corpus(), self.corpus()
+        self.assertTrue(gates.evaluate(before, after)['windowRenderCoverage']['passed'])
+        after['windowOutcomes'][1]['renderOutcomes']['T']['rendered'] = 2
+        self.assertFalse(gates.evaluate(before, after)['windowRenderCoverage']['passed'])
+
+    def test_one_transcript_cannot_qualify_and_silence_is_separate(self):
+        before, after = self.corpus(), self.corpus()
+        after['windowOutcomes'][3]['transcribed'] = False
+        self.assertFalse(gates.evaluate(before, after)['transcriptEvidence']['passed'])
+        after['windowOutcomes'][3]['speechWindows'] = 0
+        self.assertTrue(gates.evaluate(before, after)['transcriptEvidence']['passed'])
+
+    def test_fresh_absolute_counts_are_not_historical_certification(self):
+        after = dict(salientWords=dict(inWindows=159, inRankedLine=159, inChosenLine=159))
+        self.assertFalse(gates.evaluate({}, after)['T.stage2.inRankedLine']['passed'])
+        after['historicalMatch'] = dict(verified=True, provenance='authenticated original corpus identity record')
+        self.assertTrue(gates.evaluate({}, after)['T.stage2.inRankedLine']['passed'])
+
+    def test_render_and_detection_missing_fail_even_with_good_timing(self):
+        coverage = dict(planned=10, inventoryPlanned=10, rendered=10, audible=10, onsetEligible=8, onsetDetected=8)
+        after = {'T': {'renderCoverage': coverage}}
+        self.assertTrue(gates.evaluate({}, after)['T.after.renderCoverage']['passed'])
+        coverage['rendered'] = 9
+        self.assertFalse(gates.evaluate({}, after)['T.after.renderCoverage']['passed'])
+        coverage['rendered'] = 10
+        coverage['onsetDetected'] = 7
+        self.assertFalse(gates.evaluate({}, after)['T.after.renderCoverage']['passed'])
+
+    def test_reheard_exact_tokens_modes_content_and_control_denominators(self):
+        hit = dict(mode='T', kind='piece', gateEnd='natural', renderAudible=True, snippet='a',
+                   words=[dict(t='trip', cov=1, fn=False)], reheard='tripping')
+        self.assertEqual(report.reheard_table([hit])['T/wholeContent/piece/natural']['mainWord'], 0)
+        hit['reheard'] = 'a TRIP!'
+        acoustic = dict(hit, mode='A')
+        control = dict(hit, control=True)
+        rows = report.reheard_table([hit, acoustic, control])
+        self.assertEqual(len(rows), 3)
+        self.assertTrue(gates.evaluate({}, {'reheard': rows})['T.reheardMainContentWord']['passed'])
+        del rows['T/wholeContent/piece/natural']
+        self.assertFalse(gates.evaluate({}, {'reheard': rows})['T.reheardMainContentWord']['passed'])
+
+    def figure(self):
+        return dict(mode='T', kind='letter', complete=True, parentText='DMT', parent=1,
+                    spellUnits=[2,3,4], transportStart=0, seconds=6,
+                    events=[dict(id=i, step=s, start=s*.1, end=s*.1+.1) for i,s in [(2,0),(3,1),(4,2),(1,4)]])
+
+    def test_audition_requires_complete_order_grid_containment_and_semantics(self):
+        row = self.figure()
+        self.assertTrue(auditions.qualifies(row))
+        row['events'][1]['id'] = 4
+        self.assertFalse(auditions.qualifies(row))
+        row = self.figure(); row['events'][-1]['end'] = 7
+        self.assertFalse(auditions.qualifies(row))
+        row = self.figure(); row['kind'] = 'acoustic'
+        self.assertFalse(auditions.qualifies(row))
+        row = self.figure(); row.update(kind='syllable', parentText='psilocybin', semanticClass='drug')
+        self.assertTrue(auditions.qualifies(row))
+        row['semanticClass'] = 'unclassified'
+        self.assertFalse(auditions.qualifies(row))
+
+    def test_cache_fallback_derivative_mismatch_and_corruption_refetch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'film.mp4'; path.write_bytes(b'second derivative')
+            sidecar = path.with_suffix('.provenance.json')
+            file = dict(name='second.mp4')
+            sidecar.write_text(json.dumps(dict(id='film', url='second-url', archiveFile=file,
+                metadataSHA256='metadata', sha256=media.digest(path))))
+            self.assertTrue(media.cached_matches(path, sidecar, 'film', file, 'second-url', 'metadata'))
+            self.assertFalse(media.cached_matches(path, sidecar, 'film', dict(name='first.mp4'), 'first-url', 'metadata'))
+            path.write_bytes(b'corrupt')
+            self.assertFalse(media.cached_matches(path, sidecar, 'film', file, 'second-url', 'metadata'))
+
+    def test_decode_coverage_is_actual_samples_not_metadata(self):
+        with patch.object(media.subprocess, 'check_output', return_value=bytes(30*48000*4)) as decode:
+            rows = media.decoded_windows(Path('film.mp4'), 600)
+            self.assertEqual(len(rows), 8)
+            self.assertEqual(decode.call_count, 8)
+        with patch.object(media.subprocess, 'check_output', return_value=b''):
+            with self.assertRaises(RuntimeError): media.decoded_windows(Path('film.mp4'), 600)
+
+    def test_matrix_requires_all_cases_and_real_transcription(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for case in matrix.REQUIRED:
+                target = root/case; (target/'report').mkdir(parents=True)
+                (target/'manifest.json').write_text(json.dumps(dict(dialogueTranscripts=[dict(status='ready', words=3, transcriptUsed=True)])))
+                (target/'report/mix-report.json').write_text(json.dumps(dict(criteria=[dict(id='C-D1', level='fail', status='pass')])))
+            self.assertTrue(matrix.inventory(root)['complete'])
+            (root/'transcribe/skipped.txt').write_text('unavailable')
+            self.assertFalse(matrix.inventory(root)['complete'])
+            (root/'transcribe/skipped.txt').unlink()
+            (root/'transcribe/manifest.json').write_text(json.dumps(dict(dialogueTranscripts=[dict(status='ready', words=0, transcriptUsed=False)])))
+            self.assertFalse(matrix.inventory(root)['complete'])
+
+    def test_app_survival_alone_is_no_playback_evidence(self):
+        self.assertFalse(app.evidence('process survived 200s')['hook'])
+        evidence = app.evidence('Lo-Fi dialogue hook\n📼 piece #2 sound=true\nsalient-pick id=f')
+        self.assertTrue(evidence['hook'] and evidence['footage'] and evidence['salientPick'])

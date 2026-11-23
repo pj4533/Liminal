@@ -47,11 +47,18 @@ def parse(text, bad):
 
 def load(path):
     hits, windows, snippets, bad = [], [], {}, []
-    global LOOPS, FOOTAGE
+    global LOOPS, FOOTAGE, CORPUS, ATTEMPTS, AUDITIONS
     LOOPS = []
     FOOTAGE = []
+    CORPUS, ATTEMPTS, AUDITIONS = [], [], []
     for line in open(path, errors="replace"):
-        if line.startswith("SALIENCE-FOOTAGE "):
+        if line.startswith("SALIENCE-CORPUS "):
+            CORPUS += [x for x in [parse(line[16:], bad)] if x]
+        elif line.startswith("SALIENCE-ATTEMPT "):
+            ATTEMPTS += [x for x in [parse(line[17:], bad)] if x]
+        elif line.startswith("SALIENCE-AUDITION "):
+            AUDITIONS += [x for x in [parse(line[17:], bad)] if x]
+        elif line.startswith("SALIENCE-FOOTAGE "):
             FOOTAGE += [x for x in [parse(line[16:], bad)] if x]
         elif line.startswith("SALIENCE-LOOP "):
             LOOPS += [x for x in [parse(line[14:], bad)] if x]
@@ -77,7 +84,7 @@ def aud_end(x):
 
 
 def heard(x):
-    return [w for w in x["words"] if w["cov"] >= 0.3]
+    return [w for w in x["words"] if w["cov"] >= 0.3] if x.get("renderAudible", True) else []
 
 
 def initialism(t):
@@ -108,6 +115,7 @@ def classify(x):
 SPLIT_KINDS = ("half", "syllable", "letter")
 LOOPS = []
 FOOTAGE = []
+CORPUS, ATTEMPTS, AUDITIONS = [], [], []
 
 
 def syllables(t):
@@ -248,7 +256,11 @@ def norm(t):
 def metrics(hits, windows):
     out = {}
     for mode in sorted({h["mode"] for h in hits}):
-        h = [x for x in hits if x["mode"] == mode]
+        planned = [x for x in hits if x["mode"] == mode]
+        h = [x for x in planned if x.get("renderAudible") is True]
+        if not h:
+            out[mode] = {"plays": 0, "planned": len(planned), "renderCoverage": render_coverage(planned)}
+            continue
         n = len(h)
         cats = collections.Counter()
         mechs = collections.Counter()
@@ -265,7 +277,7 @@ def metrics(hits, windows):
                 loops[(x["film"], x["chunk"], x["loop"])] = (x["line"], x["interest"])
         ints = [v[1] for v in loops.values()]
         out[mode] = {
-            "plays": n,
+            "plays": n, "planned": len(planned), "renderCoverage": render_coverage(planned),
             "kinds": dict(collections.Counter(x["kind"] for x in h)),
             "padFallbackShare": round(sum(x["kind"] == "pad" for x in h) / n, 3),
             "gateEnds": dict(collections.Counter(x["gateEnd"] for x in h)),
@@ -288,6 +300,8 @@ def metrics(hits, windows):
             "lineInterestMedian": round(statistics.median(ints), 3) if ints else None,
             "lineInterestAtLeast0.6": round(sum(i >= 0.6 for i in ints) / len(ints), 3) if ints else None,
         }
+    for mode in sorted({h["mode"] for h in hits}):
+        out[mode]["renderCoverage"]["inventoryPlanned"] = sum(w.get("renderOutcomes", {}).get(mode, {}).get("planned", 0) for w in windows)
     # Salient words in the windows and why their lines do or do not compete.
     total = ranked = chosen = 0
     reasons = collections.Counter()
@@ -319,22 +333,36 @@ def metrics(hits, windows):
     out["transcribed"] = sum(w["transcribed"] for w in windows)
     out["transcribeMs"] = [round(q) for q in statistics.quantiles([w["transcribeMs"] for w in windows if w["transcribed"]], n=10)] \
         if sum(w["transcribed"] for w in windows) > 10 else None
+    out["corpus"] = CORPUS[-1] if len(CORPUS) == 1 else {}
+    out["attempts"] = ATTEMPTS
+    out["windowOutcomes"] = [{k: w.get(k) for k in ("film", "chunk", "offset", "decode", "decodedFrames", "sampleRate", "renderOutcomes", "speechWindows", "model", "transcriptOutcome", "transcriptWords", "transcriptLocale", "transcriptModelVersion", "transcribed")} for w in windows]
     return out
 
 
+def render_coverage(hits):
+    return dict(planned=len(hits), rendered=sum(x.get("rendered") is True for x in hits),
+                audible=sum(x.get("renderAudible") is True for x in hits),
+                onsetEligible=sum(x.get("onsetEligible") is True for x in hits),
+                onsetDetected=sum(x.get("onsetEligible") is True and x.get("onsetStatus") == "detected" for x in hits))
+
+
 def reheard_table(hits):
+    """Denominator: sampled rendered snippets, separated by mode, content and whole-piece status.
+    Recognition is an exact normalized token match; controls retain their own rows.
+    """
     rows = collections.defaultdict(lambda: [0, 0, 0])
     for x in hits:
-        if "snippet" not in x:
+        if "snippet" not in x or x.get("renderAudible") is not True:
             continue
-        c, _ = classify(x)
-        key = "control" if x.get("control") else f"{x['kind']}/{x['gateEnd']}/{c}"
         main = max(heard(x), key=lambda w: w["cov"], default=None)
+        content = bool(main and not main.get("fn") and main["cov"] >= .9 and x["kind"] == "piece")
+        identity = "control" if x.get("control") else "wholeContent" if content else "other"
+        key = f"{x['mode']}/{identity}/{x['kind']}/{x['gateEnd']}"
         rows[key][0] += 1
         rows[key][1] += bool(x.get("reheard"))
-        if main and x.get("reheard") and norm(main["t"])[:4] in norm(x["reheard"]):
-            rows[key][2] += 1
-    return {k: {"n": v[0], "anything": v[1], "mainWord": v[2]} for k, v in sorted(rows.items(), key=lambda kv: -kv[1][0])}
+        tokens = {norm(t) for t in re.findall(r"[^\W_]+(?:['’][^\W_]+)*", x.get("reheard", ""))}
+        rows[key][2] += bool(main and norm(main["t"]) in tokens)
+    return {k: {"n": v[0], "anything": v[1], "mainWord": v[2]} for k, v in sorted(rows.items())}
 
 
 def main():
@@ -374,6 +402,7 @@ def main():
     (bugs / "index.tsv").write_text("\n".join(rows) + "\n")
     summary = metrics(hits, windows)
     summary["footage"] = FOOTAGE
+    summary["auditions"] = AUDITIONS
     summary["reheard"] = reheard_table(hits)
     summary["snippetsWritten"] = written
     summary["snippetsCorrupt"] = corrupt
@@ -382,7 +411,7 @@ def main():
         print(json.dumps(summary))
     else:
         for mode in ("T", "A"):
-            if mode in summary:
+            if mode in summary and summary[mode]["plays"] > 0:
                 m = summary[mode]
                 print(f"[{mode}] plays {m['plays']} functionOnly {m['functionOnly']} audiblePartial {m['audiblePartial']} "
                       f"accidental {m['categories'].get('accidental', 0)} half {m['categories'].get('half', 0)} "

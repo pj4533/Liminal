@@ -8,10 +8,35 @@ def evaluate(before, after):
     gates = {}
     def gate(name, passed, evidence):
         gates[name] = dict(passed=bool(passed), evidence=evidence)
-    gate('transcriptEvidence', before.get('transcribed', 0) > 0 and after.get('transcribed', 0) > 0,
-         [before.get('transcribed', 0), after.get('transcribed', 0)])
+    bc, ac = before.get('corpus', {}), after.get('corpus', {})
+    def corpus_evidence(report):
+        corpus = report.get('corpus', {})
+        films = corpus.get('films', [])
+        expected = {(f['id'], k) for f in films for k in range(corpus.get('chunks', 0))}
+        rows = report.get('windowOutcomes', [])
+        identities = [(w.get('film'), w.get('chunk')) for w in rows]
+        attempts = {(w.get('film'), w.get('chunk')) for w in report.get('attempts', []) if w.get('decode') == 'attempted'}
+        successful = all(w.get('decode') == 'success' and w.get('decodedFrames', 0) >= 29 * w.get('sampleRate', 48000) for w in rows)
+        complete = len(films) == 12 and len({f['id'] for f in films}) == 12 and all(f.get('sha256') not in (None, 'missing', '') and f.get('url') not in (None, 'missing', '') for f in films) and corpus.get('chunks') == 8 and corpus.get('bpm') == 72 and corpus.get('seed') == 1 and set(corpus.get('modes', [])) == {'T', 'A'} and len(identities) == len(expected) and set(identities) == expected and attempts == expected and successful
+        speech = [w for w in rows if w.get('speechWindows', 0) > 0]
+        render_complete = all(all(w.get('renderOutcomes', {}).get(mode, {}).get('planned', 0) > 0 and
+            w['renderOutcomes'][mode].get('planned') == w['renderOutcomes'][mode].get('rendered') == w['renderOutcomes'][mode].get('audible')
+            for mode in ('T', 'A')) for w in speech)
+        transcript = bool(speech) and all(w.get('model') == 'apple' and w.get('transcriptModelVersion') not in (None, '', 'missing') and w.get('transcriptLocale') not in (None, '', 'missing') and w.get('transcriptWords', 0) > 0 and w.get('transcriptOutcome') == 'result' and w.get('transcribed') is True for w in speech)
+        return dict(complete=complete, transcript=transcript, rendered=render_complete, expected=len(expected), successful=len(rows), speechEligible=len(speech), nonspeech=len(rows)-len(speech))
+    be, ae = corpus_evidence(before), corpus_evidence(after)
+    gate('pairedCorpusComplete', be['complete'] and ae['complete'] and bc == ac and
+         [(w.get('film'), w.get('chunk'), w.get('offset'), w.get('transcriptLocale'), w.get('transcriptModelVersion')) for w in before.get('windowOutcomes', [])] ==
+         [(w.get('film'), w.get('chunk'), w.get('offset'), w.get('transcriptLocale'), w.get('transcriptModelVersion')) for w in after.get('windowOutcomes', [])], [be, ae])
+    gate('windowRenderCoverage', be['complete'] and ae['complete'] and be['rendered'] and ae['rendered'], [be, ae])
+    gate('transcriptEvidence', be['complete'] and ae['complete'] and be['transcript'] and ae['transcript'], [be, ae])
     for mode, ceiling in [('T', .05), ('A', .20)]:
         b, a = before.get(mode, {}), after.get(mode, {})
+        for label, report in [('before', b), ('after', a)]:
+            coverage = report.get('renderCoverage', {})
+            gate(f'{mode}.{label}.renderCoverage', coverage.get('planned', 0) > 0 and coverage.get('planned') == coverage.get('inventoryPlanned') and
+                 coverage.get('rendered') == coverage.get('planned') and coverage.get('audible') == coverage.get('planned') and
+                 coverage.get('onsetEligible') == coverage.get('onsetDetected'), coverage)
         accidental = a.get('categories', {}).get('accidental', 1)
         gate(f'{mode}.accidental', accidental <= ceiling, accidental)
         gate(f'{mode}.functionOnly', a.get('functionOnly', 1) <= .08, a.get('functionOnly'))
@@ -36,7 +61,7 @@ def evaluate(before, after):
     words = after.get('salientWords', {})
     for name, minimum in [('inRankedLine', 110), ('inChosenLine', 50)]:
         value = words.get(name)
-        gate('T.stage2.' + name, value is not None and value >= minimum, dict(value=value, denominator=words.get('inWindows'), historicalDenominator=159))
+        gate('T.stage2.' + name, after.get('historicalMatch', {}).get('verified') is True and bool(after.get('historicalMatch', {}).get('provenance')) and words.get('inWindows') == 159 and value is not None and value >= minimum, dict(value=value, denominator=words.get('inWindows'), historicalDenominator=159, historicalMatch=after.get('historicalMatch'), freshRate=value / words['inWindows'] if value is not None and words.get('inWindows') else None))
     protected = sum(v for k, v in words.get('unrankedReasons', {}).items() if 'protectedCut' in k)
     gate('T.stage2.protectedCut', bool(words) and protected <= 10, protected)
     passed = after.get('strikingPassedOver', {}).get('passedOver')
@@ -46,7 +71,7 @@ def evaluate(before, after):
          [bv.get('chopLongestRunMax'), av.get('chopLongestRunMax')])
     gate('T.threeCutsWhereOffered', av.get('cellsUnder3WhereOffered') == 0 and av.get('cellsWhereOffered', 0) > 0,
          [av.get('cellsUnder3WhereOffered'), av.get('cellsWhereOffered')])
-    content = [v for k, v in after.get('reheard', {}).items() if k.startswith('piece/')]
+    content = [v for k, v in after.get('reheard', {}).items() if k.startswith('T/wholeContent/piece/')]
     heard = sum(r.get('mainWord', 0) for r in content)
     total = sum(r.get('n', 0) for r in content)
     gate('T.reheardMainContentWord', total > 0 and heard / total >= .60, [heard, total])

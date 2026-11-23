@@ -604,6 +604,9 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
             weaver.prepareFailed()
             return nil
         }
+        if let line = selection.salientLine {
+            LMLog.visual.info("salient-pick id=\(selection.clip.id, privacy: .public) line=\(line.start)...\(line.end) interest=\(line.interest) peakWord=\(line.peakWord, privacy: .public) peakWeight=\(line.peakWeight)")
+        }
         let clip = selection.clip
         let piece = selection.piece
         let segStart = piece.segmentStart

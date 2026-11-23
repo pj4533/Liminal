@@ -51,6 +51,7 @@ if [ -z "$out" ]; then
     exit 2
 fi
 mkdir -p "$out"
+printf '%s\n' "$cases" > "$out/required-cases.txt"
 
 args_for() {
     case "$1" in
@@ -74,7 +75,7 @@ rows = m.get("dialogueTranscripts")
 if not rows:
     print("the capture wrote no dialogueTranscripts (transcription hook not applied)")
     sys.exit(0)
-if any(r.get("status") == "ready" for r in rows):
+if any(r.get("status") == "ready" and r.get("words", 0) > 0 and r.get("transcriptUsed") is True and not r.get("error") for r in rows):
     sys.exit(1)
 statuses = sorted({str(r.get("status")) for r in rows})
 errors = sorted({str(r.get("error")) for r in rows if r.get("error")})
@@ -111,6 +112,7 @@ for name in ${cases//,/ }; do
     if [ "$name" = transcribe ] && [ -f "$out/$name/manifest.json" ]; then
         if reason=$(transcription_skip_reason "$out/$name"); then
             echo "case transcribe skipped: $reason" | tee "$out/$name/skipped.txt"
+            status=1
             continue
         fi
     fi

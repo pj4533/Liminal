@@ -1,0 +1,61 @@
+name: Verification integrity diagnosis
+on:
+  push:
+    branches: ['verify/integrity/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: verification-integrity-${{ github.run_id }}
+  cancel-in-progress: false
+jobs:
+  integrity:
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: after
+      - uses: actions/checkout@v4
+        with:
+          ref: 47a01fe267a3972241ed6918d031fffe55f26ed2
+          path: baseline
+      - name: Test integrity tools and apply measurement-only baseline adapter
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p verification
+          cd after
+          python3 -m unittest discover -s scripts -p 'test_*.py' 2>&1 | tee ../verification/python-tests.log
+          bash -n scripts/verify-real-media.sh scripts/mix-matrix.sh
+          cd ../baseline
+          git apply --check ../after/scripts/baseline-probe-measurement.patch
+          git apply ../after/scripts/baseline-probe-measurement.patch
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('Liminal/Audio/Lofi/LofiBassVoice.swift')
+          text = path.read_text()
+          old = '            cuePartials(note, voice: voice, envelope: envelope, rate: rate, onset: cueOnset, cue: $0, sub: sub, tone: tone)'
+          assert text.count(old) == 1, 'Historical compiler-only adapter no longer matches'
+          path.write_text(text.replace(old, old.replace('cuePartials(', 'Self.cuePartials(', 1)))
+          PY
+          git diff > ../verification/baseline-measurement-adapter.patch
+      - name: Compile historical measurement probe without capturing
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd baseline
+          xcodebuild build-for-testing CODE_SIGNING_ALLOWED=NO -scheme Liminal -destination 'platform=macOS,arch=arm64' -parallel-testing-enabled NO -derivedDataPath "$RUNNER_TEMP/baseline-dd" 2>&1 | tee ../verification/baseline-build.log
+      - name: Compile candidate and run new detector and selection regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd after
+          xcodebuild test CODE_SIGNING_ALLOWED=NO -scheme Liminal -destination 'platform=macOS,arch=arm64' -parallel-testing-enabled NO -derivedDataPath "$RUNNER_TEMP/after-dd" -resultBundlePath ../verification/integrity.xcresult -only-testing:LiminalTests/DialogueSalienceProbeTests/independentAttackRequiresActualSignalAndExcludesReverses -only-testing:LiminalTests/FootageSalienceTests 2>&1 | tee ../verification/after-tests.log
+      - name: Preserve integrity diagnosis
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-integrity-${{ github.sha }}
+          path: verification/
+          retention-days: 14

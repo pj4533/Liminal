@@ -33,7 +33,13 @@ for checkout in sys.argv[1:3]:
         drumFiles=sorted(p.name for p in drums.glob('*') if p.is_file()), beatGridExists=grid.is_file()))
 pathlib.Path(sys.argv[3], 'private-prerequisites.json').write_text(json.dumps(checks, indent=2))
 PY
-    cp "$AFTER/scripts/mix-matrix.sh" "$BASELINE/scripts/mix-matrix.sh"
+    prerequisites=$?
+    printf 'private-prerequisite-inventory\t%s\n' "$prerequisites" >> "$STATUS"
+    [ "$prerequisites" -eq 0 ] || exit "$prerequisites"
+    run_step baseline-matrix-adapter cp "$AFTER/scripts/mix-matrix.sh" "$BASELINE/scripts/mix-matrix.sh" || exit $?
+    run_step baseline-report-adapter cp "$AFTER/scripts/dialogue-salience-report.py" "$BASELINE/scripts/dialogue-salience-report.py" || exit $?
+    run_step baseline-probe-adapter-check git -C "$BASELINE" apply --check "$AFTER/scripts/baseline-probe-measurement.patch" || exit $?
+    run_step baseline-probe-adapter git -C "$BASELINE" apply "$AFTER/scripts/baseline-probe-measurement.patch" || exit $?
     python3 - "$BASELINE" <<'PY'
 from pathlib import Path
 import sys
@@ -43,7 +49,10 @@ old = '            cuePartials(note, voice: voice, envelope: envelope, rate: rat
 assert text.count(old) == 1, 'Historical baseline compiler adapter no longer matches'
 path.write_text(text.replace(old, old.replace('cuePartials(', 'Self.cuePartials(', 1)))
 PY
-    git -C "$BASELINE" diff > "$OUT/baseline-verification-adapters.patch"
+    adapter=$?
+    printf 'baseline-compiler-adapter\t%s\n' "$adapter" >> "$STATUS"
+    [ "$adapter" -eq 0 ] || exit "$adapter"
+    git -C "$BASELINE" diff > "$OUT/baseline-verification-adapters.patch" || exit $?
     ;;
 speech)
     run_step compile-provisioner xcrun swiftc -parse-as-library "$AFTER/scripts/provision-verification-speech.swift" -o "$OUT/provision-speech" || exit $?
@@ -78,7 +87,9 @@ baseline|after)
     if [ "$label" = after ]; then comparison=(--baseline "$OUT/baseline-public-matrix"); fi
     run_step "$label-public-matrix" env DD="$DD" scripts/mix-matrix.sh --out "$OUT/$label-public-matrix" --cases ref,fast,same,transcribe --bundled-drums --strict "${comparison[@]}"
     if [ -d Liminal/SlowBurnDrums ] && [ -f Liminal/Audio/Lofi/SlowBurnBeatGrid.json ]; then
-        run_step "$label-private-matrix" env DD="$DD" scripts/mix-matrix.sh --out "$OUT/$label-private-matrix" --cases ref,fast,same,transcribe --strict
+        private_comparison=()
+        if [ "$label" = after ]; then private_comparison=(--baseline "$OUT/baseline-private-matrix"); fi
+        run_step "$label-private-matrix" env DD="$DD" scripts/mix-matrix.sh --out "$OUT/$label-private-matrix" --cases ref,fast,same,transcribe --strict "${private_comparison[@]}"
     else
         printf '%s-private-matrix\t1\n' "$label" >> "$STATUS"
     fi
@@ -87,7 +98,7 @@ gates)
     run_step media-gates python3 "$AFTER/scripts/verify-salience-gates.py" "$OUT/baseline-probe/summary.json" "$OUT/after-probe/summary.json" "$OUT/salience-gates.json"
     ;;
 auditions)
-    run_step auditions python3 "$AFTER/scripts/verification-auditions.py" "$OUT/after-probe/bugs" "$OUT/auditions"
+    run_step auditions python3 "$AFTER/scripts/verification-auditions.py" "$OUT/after-probe/bugs" "$OUT/auditions" "$OUT/after-probe/summary.json"
     ;;
 app)
     APP="$OUT/dd-after/Build/Products/Debug/Liminal.app/Contents/MacOS/Liminal"
@@ -103,12 +114,21 @@ app)
         printf 'app-survived-200s\t1\n' >> "$STATUS"
     fi
     kill "$LOGGER" 2>/dev/null || true
+    run_step app-playback-evidence python3 "$AFTER/scripts/verify-app-playback.py" "$OUT/app-200s.log" "$OUT/app-stdout.log"
+
     ;;
 final)
+    for label in baseline after; do
+        for kind in public private; do
+            pair=()
+            if [ "$label" = after ]; then pair=("$OUT/baseline-$kind-matrix"); fi
+            run_step "$label-$kind-inventory" python3 "$AFTER/scripts/verify-matrix-integrity.py" "$OUT/$label-$kind-matrix" "${pair[@]}"
+        done
+    done
     python3 - "$STATUS" <<'PY'
 import csv, sys
 rows = list(csv.DictReader(open(sys.argv[1]), delimiter='\t'))
-required = {'prepare-media', 'provision-speech', 'baseline-build', 'after-build', 'baseline-probe', 'after-probe', 'baseline-public-matrix', 'after-public-matrix', 'baseline-private-matrix', 'after-private-matrix', 'media-gates', 'auditions', 'app-survived-200s'}
+required = {'prepare-media', 'provision-speech', 'baseline-build', 'after-build', 'baseline-probe', 'after-probe', 'baseline-public-matrix', 'after-public-matrix', 'baseline-private-matrix', 'after-private-matrix', 'media-gates', 'auditions', 'app-survived-200s', 'app-playback-evidence', 'baseline-matrix-adapter', 'baseline-report-adapter', 'baseline-probe-adapter-check', 'baseline-probe-adapter', 'baseline-compiler-adapter', 'private-prerequisite-inventory', 'baseline-public-inventory', 'after-public-inventory', 'baseline-private-inventory', 'after-private-inventory'}
 seen = {r['step'] for r in rows}
 print('Missing required steps:', sorted(required - seen))
 print('Failed steps:', [r for r in rows if int(r['exit'])])

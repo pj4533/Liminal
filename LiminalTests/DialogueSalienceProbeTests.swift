@@ -143,6 +143,22 @@ struct DialogueSalienceProbeTests {
         return (e.startTime + Double(best.t) / sr - e.accentTime) * 1000
     }
 
+    @Test func independentAttackRequiresActualSignalAndExcludesReverses() throws {
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
+        let audio = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 24_000))
+        audio.frameLength = 24_000
+        let samples = try #require(audio.floatChannelData?[0])
+        samples.update(repeating: 0, count: 24_000)
+        var event = DialogueEvent(padID: 0, role: .stab, block: 0, slot: 0, accentTime: 0,
+            startTime: 0, duration: 0.5, gainDB: 0, protected: false, chokeAt: nil, text: nil,
+            transform: .native, padKey: 0, snareLanded: false)
+        #expect(Self.bandOnsetMs(DialogueChop(event: event, buffer: audio)) == nil)
+        for i in 2_400..<12_000 { samples[i] = Float(sin(Double(i) * 2 * .pi * 1000 / 48_000)) * 0.3 }
+        #expect(Self.bandOnsetMs(DialogueChop(event: event, buffer: audio)) != nil)
+        event.effect = .reversed
+        #expect(Self.bandOnsetMs(DialogueChop(event: event, buffer: audio)) == nil)
+    }
+
     struct Word {
         let text: String
         let index: Int
@@ -174,6 +190,14 @@ struct DialogueSalienceProbeTests {
            await DialogueSpeechAssets.status(mode: .installedOnly, environment: environment) == .ready {
             provider = AppleSpeechTranscriptProvider.live()
         }
+        let expectedChunks = max(1, config.chunks ?? 6)
+        print("SALIENCE-CORPUS " + Self.json(["films": clips.map { clip -> [String: Any] in
+            let sidecar = directory.appending(path: clip.fileName).deletingPathExtension().appendingPathExtension("provenance.json")
+            let identity = (try? Data(contentsOf: sidecar)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            return ["id": clip.id, "file": clip.fileName, "duration": clip.duration,
+                    "sha256": identity?["sha256"] as? String ?? "missing", "url": identity?["url"] as? String ?? "missing"]
+        },
+            "chunks": expectedChunks, "bpm": bpm, "seed": baseSeed, "modes": modes]))
         print("SALIENCE-TRANSCRIBER \(provider == nil ? "none" : "apple") films=\(clips.count)")
         var snippetDir: URL?
         if let d = config.snippetDirectory {
@@ -217,16 +241,25 @@ struct DialogueSalienceProbeTests {
 
         for clip in clips {
             let usable = clip.duration - Self.windowSeconds - 1
-            guard usable > 0 else { continue }
+            guard usable > 0 else {
+                for chunk in 0..<expectedChunks {
+                    print("SALIENCE-ATTEMPT " + Self.json(["film": clip.id, "chunk": chunk, "decode": "boundarySkip", "reason": "film shorter than 31 seconds"]))
+                }
+                continue
+            }
             let margin = min(0.2 * clip.duration, 60)
             let lo = usable > 2 * margin ? margin : 0, hi = usable > 2 * margin ? usable - margin : usable
             let count = max(1, config.chunks ?? 6)
             let offsets = (0..<count).map { k in count == 1 ? (lo + hi) / 2 : lo + (hi - lo) * Double(k) / Double(count - 1) }
             for (chunk, offset) in offsets.enumerated() {
+                print("SALIENCE-ATTEMPT " + Self.json(["film": clip.id, "chunk": chunk, "offset": Self.r3(offset), "decode": "attempted"]))
                 let url = directory.appending(path: clip.fileName)
                 guard let buffer = try? await ArchiveAudioDecoder.decode(url: url, sourceStart: offset, sourceLength: Self.windowSeconds,
                                                                          rate: 1, format: format),
-                      let samples = buffer.floatChannelData?[0] else { continue }
+                      let samples = buffer.floatChannelData?[0] else {
+                    print("SALIENCE-ATTEMPT " + Self.json(["film": clip.id, "chunk": chunk, "offset": Self.r3(offset), "decode": "failed"]))
+                    continue
+                }
                 let rate = buffer.format.sampleRate
                 let frameCount = Int(buffer.frameLength)
                 let speech = LofiSpeechFocus.classify(buffer, seconds: Self.windowSeconds)
@@ -262,6 +295,8 @@ struct DialogueSalienceProbeTests {
                 }
                 var windowLine: [String: Any] = [
                     "film": clip.id, "title": String(clip.title.prefix(60)), "chunk": chunk, "offset": Self.r3(offset),
+                    "decode": "success", "decodedFrames": Int(buffer.frameLength), "sampleRate": buffer.format.sampleRate,
+                    "transcriptLocale": transcript?.locale ?? "missing", "transcriptModelVersion": transcript?.modelVersion ?? "missing", "transcriptWords": transcript?.words.count ?? 0, "model": provider == nil ? "unavailable" : "apple", "transcriptOutcome": transcript == nil ? "missing" : "result",
                     "duration": Self.r3(clip.duration), "transcribed": transcript != nil, "transcribeMs": Self.r3(transcribeMs),
                     "speechWindows": speech.filter { $0.speech > max(0.3, $0.singing, $0.music) }.count, "windows": speech.count,
                     "raw": raw.map { ["t": $0.text, "s": film($0.frames.lowerBound), "e": film($0.frames.upperBound),
@@ -305,6 +340,21 @@ struct DialogueSalienceProbeTests {
                 var perWindow = 0, controlsThisWindow = 0
                 var mechanisms = Set<String>()
 
+                var renderOutcomes: [String: [String: Int]] = [:]
+                func recordRenders(mode: String, events: [DialogueEvent], chops: [DialogueChop]) {
+                    var counts = renderOutcomes[mode] ?? ["planned": 0, "rendered": 0, "audible": 0]
+                    counts["planned", default: 0] += events.count
+                    for event in events {
+                        if let chop = chops.first(where: { $0.event == event }) {
+                            counts["rendered", default: 0] += 1
+                            if let x = chop.buffer.floatChannelData?[0],
+                               Self.peakDB(x, count: Int(chop.buffer.frameLength), range: 0..<Int(chop.buffer.frameLength), rate: chop.buffer.format.sampleRate) > -100 {
+                                counts["audible", default: 0] += 1
+                            }
+                        }
+                    }
+                    renderOutcomes[mode] = counts
+                }
                 for mode in modes {
                     let useTranscript = mode == "T" ? transcript : nil
                     if mode == "T", transcript == nil { continue }
@@ -334,6 +384,8 @@ struct DialogueSalienceProbeTests {
                                                               seed: seed &+ UInt64(piece), cueToken: piece + 1, revision: 0)
                             print("SALIENCE-NOPLAN \(clip.id) chunk=\(chunk) mode=\(mode) piece=\(piece) fallbackEvents=\(plan.events.count)")
                             guard let playedBank else { continue }
+                            let fallbackChops = DialogueChopRenderer.render(plan, bank: playedBank, source: source, analysis: analysis)
+                            recordRenders(mode: mode, events: plan.events, chops: fallbackChops)
                             let tol = Int(Self.tolerance * rate)
                             for (e, event) in plan.events.enumerated() where playedBank.pads.indices.contains(event.padID) {
                                 let pad = playedBank.pads[event.padID]
@@ -355,12 +407,12 @@ struct DialogueSalienceProbeTests {
                                 let heard = words.filter { ($0["cov"] as? Double ?? 0) >= 0.3 }
                                 var hit: [String: Any] = [
                                     "film": clip.id, "chunk": chunk, "mode": mode, "piece": piece, "loop": -1, "ev": e, "line": "-", "interest": -1,
-                                    "usedT": playedBank.usedTranscript, "frag": event.padID, "kind": "pad", "ftext": pad.text ?? "",
+                                    "rendered": false, "renderAudible": false, "onsetEligible": false, "onsetStatus": "padUnmeasured", "usedT": playedBank.usedTranscript, "frag": event.padID, "kind": "pad", "ftext": pad.text ?? "",
                                     "level": pad.level.name, "role": pad.role.rawValue, "transform": pad.transform.name,
                                     "playS": film(played.lowerBound), "playE": film(played.upperBound), "dur": Self.r3(Double(played.count) / rate),
                                     "gate": -1, "gateEnd": event.chokeAt != nil ? "choke" : "natural", "stutter": false, "cell": "", "carried": false,
                                     "peak": Self.r3(peak), "preDB": Self.r3(pre - peak), "postDB": Self.r3(post - peak), "tailDB": Self.r3(tail - peak),
-                                    "words": words, "rawWords": covers(raw),
+                                    "words": [], "rawWords": covers(raw),
                                     "functionOnly": !heard.isEmpty && heard.allSatisfy { ($0["fn"] as? Bool) == true },
                                 ]
                                 if let w = inside(played.lowerBound) {
@@ -372,6 +424,12 @@ struct DialogueSalienceProbeTests {
                                                     "mech": event.chokeAt != nil && pad.frames.upperBound >= w.frames.upperBound - tol ? "padChoke" : "padEdge",
                                                     "drop": ""] as [String: Any]
                                 }
+                                let actual = fallbackChops.first { $0.event == event }
+                                let audible = actual.map { chop in
+                                    chop.buffer.floatChannelData.map { Self.peakDB($0[0], count: Int(chop.buffer.frameLength), range: 0..<Int(chop.buffer.frameLength), rate: chop.buffer.format.sampleRate) > -100 } ?? false
+                                } ?? false
+                                hit["rendered"] = actual != nil; hit["renderAudible"] = audible
+                                hit["words"] = audible ? words : []
                                 print("SALIENCE-HIT " + Self.json(hit))
                             }
                             continue
@@ -407,6 +465,7 @@ struct DialogueSalienceProbeTests {
                             if !chosen.contains(lineKey) { chosen.append(lineKey) }
                             let chops = DialogueChopRenderer.render(part.plan, bank: motif.bank, source: motif.source, analysis: motif.analysis,
                                                                     prerendered: motif.renders)
+                            recordRenders(mode: mode, events: part.plan.events, chops: chops)
                             // Preserve short actual performed figures, with event timing and FX intact.
                             // Two distinct examples per class give four auditions when the real corpus offers them.
                             if !auditionLines.contains(mode + clip.id + (mode == "T" ? lineText : String(chunk))) {
@@ -415,9 +474,34 @@ struct DialogueSalienceProbeTests {
                                         guard let id = chop.event.piece, motif.fragments.indices.contains(id) else { return false }
                                         return kind == "acoustic" || motif.fragments[id].kind.rawValue == kind
                                     }.sorted { $0.event.startTime < $1.event.startTime }
-                                    if unitHits.count >= 2, let first = unitHits.first {
+                                    let figure = unitHits.indices.first { i in
+                                        guard kind != "acoustic", let id = unitHits[i].event.piece,
+                                              let parent = motif.fragments[id].parent,
+                                              let expected = motif.halves[parent], expected.count >= 2,
+                                              i + expected.count <= unitHits.count else { return false }
+                                        let ordered = Array(unitHits[i..<(i + expected.count)])
+                                        guard ordered.compactMap({ $0.event.piece }) == expected else { return false }
+                                        let steps = ordered.map { $0.event.block * 64 + $0.event.slot }
+                                        let strides = zip(steps, steps.dropFirst()).map { $1 - $0 }
+                                        guard Set(strides) == [1] || Set(strides) == [2] else { return false }
+                                        let landing = (steps.last! / 4 + 1) * 4
+                                        return chops.contains { $0.event.piece == parent && $0.event.block * 64 + $0.event.slot == landing }
+                                    }
+                                    let first = figure.map { unitHits[$0] } ?? (kind == "acoustic" ? unitHits.first : nil)
+                                    if unitHits.count >= 2, let first {
                                         let start = first.event.startTime - 0.3
                                         let seconds = 6.0
+                                        let parent = first.event.piece.flatMap { motif.fragments[$0].parent }
+                                        let expected = parent.flatMap { motif.halves[$0] } ?? []
+                                        let firstStep = first.event.block * 64 + first.event.slot
+                                        let lastStep = figure.map { unitHits[$0 + expected.count - 1].event.block * 64 + unitHits[$0 + expected.count - 1].event.slot } ?? firstStep
+                                        let landingStep = (lastStep / 4 + 1) * 4
+                                        let relevant = chops.filter { chop in
+                                            guard let id = chop.event.piece else { return false }
+                                            let step = chop.event.block * 64 + chop.event.slot
+                                            return (expected.contains(id) || id == parent) && step >= firstStep && step <= landingStep
+                                        }.sorted { $0.event.startTime < $1.event.startTime }
+                                        guard kind == "acoustic" || relevant.allSatisfy({ $0.event.startTime >= start && $0.event.startTime + Double($0.buffer.frameLength) / rate <= start + seconds }) else { continue }
                                         let n = Int(seconds * rate)
                                         if let audio = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(n)),
                                            let output = audio.floatChannelData {
@@ -438,7 +522,13 @@ struct DialogueSalienceProbeTests {
                                             emitSnippet(name + ".wav", Self.wav(audio))
                                             emitSnippet(name + "-context.wav", Self.wav(buffer, frames: motif.line.frames))
                                             print("SALIENCE-AUDITION " + Self.json(["name": name, "film": clip.id, "chunk": chunk,
-                                                "line": lineText, "kind": kind, "transportStart": start, "seconds": seconds]))
+                                                "line": lineText, "mode": mode, "kind": kind, "transportStart": start, "seconds": seconds,
+                                                "parentText": parent.map { motif.fragments[$0].text ?? "" } ?? "",
+                                                "parent": parent ?? -1, "spellUnits": expected, "complete": kind != "acoustic",
+                                                "semanticClass": parent.map { ["psilocybin", "mescaline", "marijuana", "peyote", "ergot", "lysergic", "amphetamine", "cocaine", "heroin"].contains(DialogueLineInterest.normalize(motif.fragments[$0].text ?? "")) ? "drug" : "unclassified" } ?? "unclassified",
+                                                "render": "performed-effects", "mixEvidence": "unavailable: isolated dialogue only",
+                                                "events": relevant.map { ["id": $0.event.piece ?? -1, "step": $0.event.block * 64 + $0.event.slot,
+                                                    "start": $0.event.startTime, "end": $0.event.startTime + Double($0.buffer.frameLength) / rate] }]))
                                             auditionLines.insert(mode + clip.id + (mode == "T" ? lineText : String(chunk)))
                                         }
                                     }
@@ -500,11 +590,21 @@ struct DialogueSalienceProbeTests {
                                     "peak": Self.r3(peak), "preDB": Self.r3(pre - peak), "postDB": Self.r3(post - peak), "tailDB": Self.r3(tail - peak),
                                     "words": covers(accepted), "rawWords": covers(raw),
                                 ]
-                                // Tightness per play (D126 independent detector), sub-line plays only.
-                                if id != 0, motif.isSubLine(id), let chop = chops.first(where: { $0.event == event }),
-                                   let ms = Self.bandOnsetMs(chop) {
-                                    hit["onsetMs"] = Self.r3(ms)
-                                }
+                                // Planned source overlap earns no audible credit without an actual rendered signal.
+                                let actual = chops.first(where: { $0.event == event })
+                                let audible = actual.map { chop in
+                                    chop.buffer.floatChannelData.map { Self.peakDB($0[0], count: Int(chop.buffer.frameLength),
+                                        range: 0..<Int(chop.buffer.frameLength), rate: chop.buffer.format.sampleRate) > -100 } ?? false
+                                } ?? false
+                                let eligible = id != 0 && motif.isSubLine(id) && event.effect != .reversed
+                                let onset = actual.flatMap { Self.bandOnsetMs($0) }
+                                hit["rendered"] = actual != nil
+                                hit["renderAudible"] = audible
+                                hit["onsetEligible"] = eligible
+                                hit["onsetStatus"] = !eligible ? "excluded" : (onset == nil ? "undetectable" : "detected")
+                                if eligible, let onset { hit["onsetMs"] = Self.r3(onset) }
+                                if !audible { hit["words"] = []; hit["rawWords"] = [] }
+
                                 if let parent = fr.parent { hit["parentText"] = motif.fragments[parent].text ?? ""; hit["parent"] = parent; hit["spellUnits"] = motif.halves[parent] ?? [] }
                                 let sEdge = startEdge(accepted), eEdge = endEdge(accepted)
                                 if let sEdge { hit["startIn"] = sEdge }
@@ -584,6 +684,7 @@ struct DialogueSalienceProbeTests {
                     }
                 }
                 windowLine["chosen"] = chosen
+                windowLine["renderOutcomes"] = renderOutcomes
                 print("SALIENCE-WINDOW " + Self.json(windowLine))
             }
         }

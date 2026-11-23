@@ -10,6 +10,7 @@ nonisolated enum FootageSalience {
         let readStart: Double
         let sourceLength: Double
         let targeted: Bool
+        let salientLine: DialogueSalienceIndex.Line?
     }
 
     /// Shared by the live decoder and the paired verification: eligibility, original RNG draws,
@@ -42,6 +43,7 @@ nonisolated enum FootageSalience {
         var readStart = ArchiveCatalog.segmentStart(duration: clip.duration, length: plan.sourceLength,
                                                     avoid: clip.shownStarts.map { $0 - preroll }, rng: &rng)
         var targeted = false
+        var salientLine: DialogueSalienceIndex.Line?
         var segStart = readStart + preroll
         var salienceRNG = FootageSalience.rng(contentID: clip.id, piece: r.index)
         let preliminary = r.piece(clipID: clip.id, segmentStart: segStart, length: plan.length)
@@ -58,6 +60,7 @@ nonisolated enum FootageSalience {
                 segStart = pick.segmentStart
                 readStart = segStart - preroll
                 targeted = true
+                salientLine = pick.line
             }
         }
         let sourceLength = min(plan.sourceLength, clip.duration - readStart)
@@ -67,7 +70,7 @@ nonisolated enum FootageSalience {
         if wantsSound, ArchiveAudioCuePlan(piece: piece, clipDuration: clip.duration) != nil {
             piece.sound = true
         }
-        return Selection(clip: clip, piece: piece, preroll: preroll, readStart: readStart, sourceLength: sourceLength, targeted: targeted)
+        return Selection(clip: clip, piece: piece, preroll: preroll, readStart: readStart, sourceLength: sourceLength, targeted: targeted, salientLine: salientLine)
     }
 
     struct Pick: Sendable {
