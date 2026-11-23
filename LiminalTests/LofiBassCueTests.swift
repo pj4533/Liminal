@@ -117,13 +117,48 @@ struct LofiBassCueTests {
         #expect(Self.rms(immediate[0..<960]) > 0.3 * Self.rms(immediate[onset..<(onset + 4_800)]))
     }
 
+    /// On a sampled body the aligned cue adds to the body's own harmonics instead of cancelling them (round
+    /// MIDI 39 lost about 2 dB at h3/h4 in sine phase, D129), with exactly the unaligned partial's level and
+    /// nothing off the series. On the synth (its series is already in sine phase) alignment changes nothing.
+    @Test(arguments: [(LofiBassVoice.flatwound, 39), (.flatwound, 36), (.upright, 39), (.upright, 34)])
+    func theAlignedCueAddsToTheBodysHarmonics(voice: LofiBassVoice, midi: Int) {
+        let n = Self.note(midi)
+        var sine = LofiBassVoice.Cue.standard
+        sine.alignToTone = false
+        let aligned = Self.render(voice, n, cue: .standard)
+        let plain = Self.render(voice, n, cue: sine)
+        let f0 = LofiBassVoice.frequency(midi)
+        // The whole held note: one phase per note and partial, so the claim is about the note, not a slice
+        // (the upright's harmonics drift a little against k f0, so a short slice can still beat).
+        let window = 4_800..<Self.clock.frame(at: n.length)
+        let tone = aligned.left[window]
+        let first = Int((180 / f0).rounded(.up))
+        for k in first...(first + 1) {
+            let hz = f0 * Double(k)
+            let body = Self.amplitude(tone, hz: hz)
+            let cue = Self.amplitude(plain.cue[window], hz: hz)
+            let sum = Self.amplitude(ArraySlice(zip(tone, aligned.cue[window]).map { $0 + $1 }), hz: hz)
+            // No cancellation on the note: about the power sum or more (a drifting upright harmonic averages to
+            // it), and for the round body's locked harmonics near the coherent sum.
+            #expect(sum * sum >= 0.95 * (body * body + cue * cue))
+            if voice == .flatwound { #expect(sum >= 0.85 * (body + cue)) }
+            #expect(abs(20 * log10(Self.amplitude(aligned.cue[window], hz: hz) / cue)) < 0.2)
+            #expect(Self.amplitude(aligned.cue[window], hz: hz + f0 / 2) < 0.01 * cue)
+        }
+        #expect(aligned.cue.allSatisfy { $0.isFinite })
+        let synthAligned = Self.render(.synth, n, cue: .standard).cue
+        let synthSine = Self.render(.synth, n, cue: sine).cue
+        #expect(synthAligned == synthSine)
+    }
+
     /// The synth tone's cue sits `synthOffsetDB` under the sampled tones' at the same pitch.
     @Test func theSynthCueTakesItsOffset() {
         let n = Self.note(36)
         let round = Self.render(.flatwound, n, cue: .standard).cue
         let synth = Self.render(.synth, n, cue: .standard).cue
         let ratio = 20 * log10(Self.rms(synth[24_000..<48_000]) / Self.rms(round[24_000..<48_000]))
-        #expect(abs(ratio - LofiBassVoice.Cue.standard.synthOffsetDB) < 0.01)
+        // The round cue's partials take the body's phases, which moves its RMS by a few hundredths of a dB.
+        #expect(abs(ratio - LofiBassVoice.Cue.standard.synthOffsetDB) < 0.05)
     }
 
     /// The layer follows the note's envelope to exactly zero after the release, at every pitch, and is

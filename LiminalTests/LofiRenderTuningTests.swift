@@ -62,6 +62,14 @@ import Testing
         #expect(report["band"] as? [Double] == [200, 350])
         #expect(try LofiRenderTuning.parse(["tune.bassCueDb": "off", "tune.bassCueSlopeDb": "6"]).bassCue == nil)
         #expect(try LofiRenderTuning.parse(["tune.bassCueDb": "OFF"]).report["bassCue"] as? String == "off")
+        // Phase alignment to the body (on by default), and the round-2 sine phase.
+        #expect(try LofiRenderTuning.parse(["tune.bassCueDb": "-15"]).bassCue?.alignToTone == true)
+        let sine = try LofiRenderTuning.parse(["tune.bassCueDb": "-15", "tune.bassCueAlign": "off"])
+        #expect(sine.bassCue?.alignToTone == false)
+        #expect((sine.report["bassCue"] as? [String: Any])?["align"] as? Bool == false)
+        #expect(throws: LofiRenderTuning.ParseError.self) {
+            try LofiRenderTuning.parse(["tune.bassCueDb": "-15", "tune.bassCueAlign": "maybe"])
+        }
         // The judged values (D129) are the cue's own defaults.
         let judged = try LofiRenderTuning.parse([
             "tune.bassCueDb": "-15", "tune.bassCueBand": "180-300", "tune.bassCueSlopeDb": "4",

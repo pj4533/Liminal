@@ -15,7 +15,9 @@ import Foundation
 /// - `tune.bassCueSlopeDb=DB`: level step per partial (0 to 12).
 /// - `tune.bassCueOnsetMs=MS`: the cue's raised-cosine rise from the strike (0 to 500 ms).
 /// - `tune.bassCueSynthDb=DB`: extra level of the cue on the `synth` tone (-24 to 12).
-///   The four shape keys change the cue only while it is on.
+/// - `tune.bassCueAlign=on|off`: each partial follows the phase of the tone's own harmonic (default `on`;
+///   `off` is the round-2 sine phase, which cancels part of a sampled body's harmonics).
+///   The shape keys change the cue only while it is on.
 /// - `tune.cueDuck=SOURCES:LO-HI:DB|off`: the cue duck (`LofiCueDuck`, D129) on `texture`, `wet` or
 ///   `texture+wet`, band LO-HI (100-2000 Hz), at most DB (0 to 12); `off` renders no duck.
 nonisolated struct LofiRenderTuning: Sendable, Equatable {
@@ -31,7 +33,7 @@ nonisolated struct LofiRenderTuning: Sendable, Equatable {
     static let prefix = "tune."
     /// Every key this build understands; any other `tune.*` hook fails the capture.
     static let keys = ["tune.bassSatBand", "tune.bassSatMix", "tune.bassCueDb", "tune.bassCueBand",
-                       "tune.bassCueSlopeDb", "tune.bassCueOnsetMs", "tune.bassCueSynthDb", "tune.cueDuck"]
+                       "tune.bassCueSlopeDb", "tune.bassCueOnsetMs", "tune.bassCueSynthDb", "tune.bassCueAlign", "tune.cueDuck"]
 
     enum ParseError: Error, Equatable, CustomStringConvertible {
         case unknownKey(String)
@@ -83,6 +85,12 @@ nonisolated struct LofiRenderTuning: Sendable, Equatable {
                 cue.onset = Double(try number(key, value, range: 0...500)) / 1_000
             case "tune.bassCueSynthDb":
                 cue.synthOffsetDB = Double(try number(key, value, range: -24...12))
+            case "tune.bassCueAlign":
+                switch value.lowercased() {
+                case "on": cue.alignToTone = true
+                case "off": cue.alignToTone = false
+                default: throw ParseError.invalid(key: key, value: value, reason: "expected on or off")
+                }
             case "tune.cueDuck":
                 tuning.cueDuck = try cueDuck(key, value)
             default:
@@ -123,7 +131,7 @@ nonisolated struct LofiRenderTuning: Sendable, Equatable {
         let band = bass.saturationBand.compactMap(hz)
         let cue: Any = bassCue.map { c -> [String: Any] in
             ["levelDb": c.levelDB, "band": [c.lowHz, c.highHz], "slopeDb": c.slopeDB, "onsetMs": c.onset * 1_000,
-             "synthDb": c.synthOffsetDB]
+             "synthDb": c.synthOffsetDB, "align": c.alignToTone]
         } ?? "off"
         let duck: Any = cueDuck.map { d -> [String: Any] in
             ["sources": (d.texture ? ["texture"] : []) + (d.wet ? ["wet"] : []), "band": [d.lowHz, d.highHz],

@@ -366,7 +366,9 @@ nonisolated enum LofiBassVoice: Int, CaseIterable, Sendable {
             layer = strikeLayer(note, voice: voice, count: count, rate: rate, samples: samples,
                                 peak: Float(strike) * subPeak * powf(10, strikeLevelDB(voice) / 20))
         }
-        let cuePartials = cue.map { cuePartials(note, voice: voice, envelope: envelope, rate: rate, onset: cueOnset, cue: $0) } ?? []
+        let cuePartials = cue.map {
+            cuePartials(note, voice: voice, envelope: envelope, rate: rate, onset: cueOnset, cue: $0, sub: sub, tone: tone)
+        } ?? []
         return (tone, layer, cuePartials)
     }
 
@@ -518,13 +520,17 @@ nonisolated enum LofiBassVoice: Int, CaseIterable, Sendable {
         var slopeDB: Double = 4
         var onset: Double = 0.090
         var synthOffsetDB: Double = -4
+        /// Each partial takes the phase of the tone's own component at that harmonic (`alignedPartials`), so
+        /// it adds to a sampled body's harmonics instead of cancelling them. The synth tone's series is already
+        /// in sine phase with the sub, so it is never aligned.
+        var alignToTone = true
         static let standard = Cue()
     }
 
     /// The cue layer of one note (`Cue`), starting on the note's first frame. `onset` is the ramp's start in
     /// frames from the note start (the strike's shift on a struck note, else 0).
     private static func cuePartials(_ note: LofiScore.Note, voice: LofiBassVoice, envelope: [Float], rate: Double,
-                                    onset: Int, cue: Cue) -> [Float] {
+                                    onset: Int, cue: Cue, sub: [Float] = [], tone: [Float] = []) -> [Float] {
         let count = envelope.count
         let f0 = frequency(note.midi)
         let first = max(2, Int((cue.lowHz / f0).rounded(.up)))
@@ -538,20 +544,36 @@ nonisolated enum LofiBassVoice: Int, CaseIterable, Sendable {
             k += 1
         }
         guard !amplitudes.isEmpty, count > 0 else { return [] }
-        var out = partials(phase(note, count: count, rate: rate), first: first, amplitudes: amplitudes, f0: f0, rate: rate)
-        var gain = subGain * note.velocity
-        vDSP_vsmul(out, 1, &gain, &out, 1, vDSP_Length(count))
-        vDSP_vmul(out, 1, envelope, 1, &out, 1, vDSP_Length(count))
-        // Onset: zero up to the strike, then 0.5 - 0.5 cos(pi u) over `onset` seconds.
+        let p = phase(note, count: count, rate: rate)
+        var out: [Float]
+        if cue.alignToTone, voice != .synth, tone.count == count, sub.count == count {
+            // The body alone is measured: the sub's partials are in sine phase by construction, so they join as
+            // a known in-phase term.
+            var body = [Float](repeating: 0, count: count)
+            vDSP_vsub(sub, 1, tone, 1, &body, 1, vDSP_Length(count))
+            let known = amplitudes.indices.map { i -> Double in
+                let k = i + first
+                return k <= subPartialsDB.count ? pow(10, subPartialsDB[k - 1] / 20) * subWeight(f0 * Double(k)) : 0
+            }
+            out = alignedPartials(p, body: body, known: known, envelope: envelope, gain: subGain * note.velocity,
+                                  first: first, amplitudes: amplitudes, f0: f0, rate: rate)
+        } else {
+            out = partials(p, first: first, amplitudes: amplitudes, f0: f0, rate: rate)
+            var gain = subGain * note.velocity
+            vDSP_vsmul(out, 1, &gain, &out, 1, vDSP_Length(count))
+            vDSP_vmul(out, 1, envelope, 1, &out, 1, vDSP_Length(count))
+        }
+        // Onset: zero up to the strike (or the note start), then 0.5 - 0.5 cos(pi u) over `onset` seconds.
         let rampFrames = max(1, Int((cue.onset * rate).rounded()))
         let start = max(0, onset)
         let silent = min(count, start)
         if silent > 0 { out.withUnsafeMutableBufferPointer { vDSP_vclr($0.baseAddress!, 1, vDSP_Length(silent)) } }
-        // Frames before the ramp's end (a negative onset starts the ramp before the note).
-        let rampEnd = min(count, onset + rampFrames)
+        // A strike shifted before the note (negative onset) still starts the ramp from zero at the note's first
+        // frame: an aligned partial can start at any phase, so a ramp already part-way up would click.
+        let rampEnd = min(count, start + rampFrames)
         if rampEnd > start {
             let length = rampEnd - start
-            var u0 = Float(Double.pi * Double(start - onset) / Double(rampFrames)), du = Float(Double.pi / Double(rampFrames))
+            var u0: Float = 0, du = Float(Double.pi / Double(rampFrames))
             var ramp = [Float](repeating: 0, count: length)
             vDSP_vramp(&u0, &du, &ramp, 1, vDSP_Length(length))
             var m = Int32(length)
@@ -561,6 +583,50 @@ nonisolated enum LofiBassVoice: Int, CaseIterable, Sendable {
             out.withUnsafeMutableBufferPointer { o in
                 vDSP_vmul(o.baseAddress! + start, 1, ramp, 1, o.baseAddress! + start, 1, vDSP_Length(length))
             }
+        }
+        return out
+    }
+
+    /// Cue partials whose phase follows the body's own component at each harmonic (`Cue.alignToTone`): a
+    /// sampled body carries its own harmonics with the recording's phase, and a partial in sine phase with the
+    /// sub can land against them and cancel (round body, MIDI 39: h3 and h4 about 2 dB lower with the cue on,
+    /// D129). For each partial k the body is projected on sin and cos of k times the note's phase over the
+    /// whole note, and the partial takes that one phase for the note, so it stays exactly harmonic (no phase
+    /// modulation, nothing new off the series) and adds to the body's locked harmonic; a partial the body
+    /// lets drift averages out. The sub's own partial at k (sine phase) joins as a known in-phase term, and a
+    /// quarter of the cue's own amplitude biases toward sine phase, so a harmonic the body lacks keeps the
+    /// sub's phase. The amplitude is exactly the unaligned partial's. Includes gain and envelope.
+    private static func alignedPartials(_ p: [Float], body: [Float], known: [Double], envelope: [Float], gain: Float,
+                                        first: Int, amplitudes: [Double], f0: Double, rate: Double) -> [Float] {
+        let count = p.count
+        var out = [Float](repeating: 0, count: count)
+        guard count > 0, body.count == count, envelope.count == count else { return out }
+        var s = [Float](repeating: 0, count: count), c = s, x = s
+        var n = Int32(count)
+        var meanEnvelope: Float = 0
+        vDSP_meanv(envelope, 1, &meanEnvelope, vDSP_Length(count))
+        let phaseBias = 0.25
+        for (index, amplitude) in amplitudes.enumerated() where amplitude != 0 {
+            let harmonic = index + first
+            guard f0 * Double(harmonic) < 0.45 * rate else { continue }
+            var h = Float(harmonic)
+            vDSP_vsmul(p, 1, &h, &x, 1, vDSP_Length(count))
+            vvsincosf(&s, &c, x, &n)
+            // 2 mean(body sin) = B cos(theta), 2 mean(body cos) = B sin(theta) for a component B sin(k phase + theta).
+            var sinPart: Float = 0, cosPart: Float = 0
+            vDSP_dotpr(body, 1, s, 1, &sinPart, vDSP_Length(count))
+            vDSP_dotpr(body, 1, c, 1, &cosPart, vDSP_Length(count))
+            let scale = 2 / Double(count)
+            let reference = Double(gain) * Double(meanEnvelope)
+            let u = Double(sinPart) * scale + (phaseBias * amplitude + known[index]) * reference
+            let v = Double(cosPart) * scale
+            let length = (u * u + v * v).squareRoot()
+            let (cosTheta, sinTheta) = length > 1e-12 ? (u / length, v / length) : (1.0, 0.0)
+            // out += a e (cos(theta) sin(k phase) + sin(theta) cos(k phase))
+            var ws = Float(amplitude * cosTheta) * gain, wc = Float(amplitude * sinTheta) * gain
+            vDSP_vsmul(s, 1, &ws, &s, 1, vDSP_Length(count))
+            vDSP_vsma(c, 1, &wc, s, 1, &s, 1, vDSP_Length(count))
+            vDSP_vma(s, 1, envelope, 1, out, 1, &out, 1, vDSP_Length(count))
         }
         return out
     }
