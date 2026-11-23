@@ -31,10 +31,20 @@ nonisolated enum DialogueMovePool {
         // Never translate a complete cell: a spelling turnaround can occur in only one pass.
         let chopCells = cells.filter { $0.kind == .chopBeat }
         var fillMoves: [Int: Int] = [:]
+        var fillColour: (slot: Int, effect: Item.Effect)?
         if chopCells.count == 2 {
             let first = chopCells[0].items
             let second = chopCells[1].items
             let old = oldSlots(.chopBeat)
+            let colours = first.filter { !$0.skeleton && !$0.stutter && !fragments[$0.fragment].isUnit
+                && $0.slot < 28 && second.contains($0) }
+            if !colours.isEmpty {
+                let chosen = colours[rng.int(0...(colours.count - 1))]
+                let oldFiltered = previous.first { $0.kind == .chopBeat }?.items.contains {
+                    $0.slot == chosen.slot && $0.effect == .filtered
+                } ?? false
+                fillColour = (chosen.slot, oldFiltered ? .none : .filtered)
+            }
             for item in first where !item.skeleton && !item.stutter && !fragments[item.fragment].isUnit && item.slot < 28 {
                 guard second.contains(item) else { continue }
                 let candidates = [item.slot - 2, item.slot, item.slot + 2].filter { slot in
@@ -94,16 +104,29 @@ nonisolated enum DialogueMovePool {
                 items = shifted
             case .chopBeat:
                 items = items.map { item in
-                    if let slot = fillMoves[item.slot], !item.skeleton { return moved(item, to: slot) }
-                    return item
+                    var moved = Self.moved(item, to: fillMoves[item.slot] ?? item.slot)
+                    if let colour = fillColour, item.slot == colour.slot { moved.effect = colour.effect }
+                    return moved
                 }
             case .build:
                 // Shift a complete repeat gesture as one group; metrical shifts keep its shape, and
                 // the performer drops conflicts whole instead of choking an earlier word. Spelling
                 // figures keep their dedicated uniform grid and whole-word landing.
                 if !items.contains(where: { fragments[$0.fragment].isUnit && fragments[$0.fragment].kind != .half }) {
-                    let shift = [-8, -4, 0][rng.int(0...2)]
-                    items = items.map { $0.slot >= 16 ? moved($0, to: $0.slot + shift) : $0 }
+                    let head = items.filter { $0.slot < 16 }.max { $0.slot < $1.slot }
+                    let gesture = items.filter { $0.slot >= 16 }
+                    if let first = gesture.min(by: { $0.slot < $1.slot }) {
+                        let shifts = [-8, -4, 0].filter { shift in
+                            guard let head else { return true }
+                            let room = first.slot + shift - head.slot
+                            return room > 0 && DialogueMotif.fitsRoom(head.fragment, steps: room,
+                                fragments: fragments, sampleRate: sampleRate, beatDuration: beatDuration)
+                        }
+                        if !shifts.isEmpty {
+                            let shift = shifts[rng.int(0...(shifts.count - 1))]
+                            items = items.map { $0.slot >= 16 ? moved($0, to: $0.slot + shift) : $0 }
+                        }
+                    }
                 }
             case .outro:
                 if let index = items.firstIndex(where: { $0.slot < 16 && $0.fragment != 0 }) {
@@ -159,6 +182,9 @@ nonisolated enum DialogueMovePool {
                 // Dynamic chains have unknown end positions; leave the outro's restatement alone.
                 if cell.kind == .outro && slot >= 16 { continue }
                 if cell.kind == .chopBeat && (slot >= 28 || oldReverses.contains(absolute + 32)) { continue }
+                if cell.kind == .breakdown, !cell.items.contains(where: {
+                    $0.slot / 16 == slot / 16 && !fragments[$0.fragment].isUnit
+                }) { continue }
                 if cell.items.contains(where: { $0.slot == slot && $0.after == nil && $0.follow == nil }) { continue }
                 let clear = !cell.items.contains { item in
                     let end = item.slot + Int(ceil(Double(fragments[item.fragment].frames.count) / sampleRate / step))
@@ -171,6 +197,11 @@ nonisolated enum DialogueMovePool {
             let chosen = candidates.remove(at: rng.int(0...(candidates.count - 1)))
             let cell = result[chosen.0]
             var items = cell.items
+            // A sparse bar trades one forward word for its pickup instead of becoming as busy as
+            // the chop beat. Split units stay together; candidate selection requires a whole word.
+            if cell.kind == .breakdown, let replaced = items.firstIndex(where: {
+                $0.slot / 16 == chosen.1 / 16 && !fragments[$0.fragment].isUnit
+            }) { items.remove(at: replaced) }
             let reverse = Item(fragment: signature, slot: chosen.1, effect: .reversed, fixed: true)
             if cell.kind == .outro {
                 // Only the quiet entrance participates; keep the line/after/follow execution chain

@@ -320,6 +320,18 @@ struct DialogueMotifTests {
                     answered[s / 32, default: false] = answered[s / 32, default: false]
                         || (e.piece == hook.response && [4, 12].contains(s % 16))
                 }
+                if answered.isEmpty || !answered.values.allSatisfy({ $0 }) {
+                    print("BACKBEAT-MISS \(shape) seed=\(seed) loop=\(k) line=\(motif.text ?? "-") response=\(hook.response) rate=\(motif.transform.playbackRate)")
+                    for cell in motif.cells where cell.kind == .chopBeat {
+                        print("BACKBEAT-CELL bar=\(cell.bar) items=\(cell.items)")
+                    }
+                    for e in loop.events where e.cell == .chopBeat || e.cell == .intro {
+                        print("BACKBEAT-EVENT block=\(e.block) slot=\(e.slot) piece=\(e.piece ?? -1) effect=\(e.effect) start=\(e.startTime) dry=\(e.drySeconds ?? e.duration)")
+                    }
+                    for fr in motif.fragments where motif.pieces.contains(fr.id) {
+                        print("BACKBEAT-FRAGMENT id=\(fr.id) text=\(fr.text ?? "-") duration=\(motif.seconds(fr.id)) offset=\(motif.accentOffset(fr.id)) words=\(fr.words)")
+                    }
+                }
                 #expect(!answered.isEmpty && answered.values.allSatisfy { $0 }, "\(shape) seed \(seed) loop \(k): \(answered)")
             }
         }

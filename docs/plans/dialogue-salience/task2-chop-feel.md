@@ -127,3 +127,15 @@ The regression records the stored and newly detected offsets to distinguish reje
 remeasurement from selection of the wrong syllable peak. `Dialogue regression diagnosis`
 runs the musical, word-integrity and timing suites plus the unchanged measurement harness
 on `verify/chop-fix/**`; its artifacts preserve failures as well as successes.
+
+Run `45179434556` confirmed that the original source anchor was 8.08 ms while the resampled
+pad's measured attack was 74.96 ms: the old +20 ms native correction bound rejected the
+measurement. Linked-rate pads now use their rendered attack; native pads retain their prior
+bound. No PCM, word boundaries or acceptance thresholds are changed. Independent audible-lead
+and attack tests are still required, including their 84 BPM case.
+
+The build's backward moves now require room after bar 7's last word, and a breakdown pickup
+replaces one whole word in its bar rather than increasing the sparse section's density. One
+shared nonstructural fill can take a filtered colour in both hook passes; its skeleton, source
+order and spelling are preserved. The next diagnosis run records every outlying attack and
+any missing backbeat's complete arrangement/events to expose remaining source failures.

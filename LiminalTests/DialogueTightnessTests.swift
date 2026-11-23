@@ -98,6 +98,15 @@ struct DialogueTightnessTests {
                                                                 analysis: part.motif.analysis, prerendered: part.motif.renders)
                         let weak = Set(part.motif.fragments.filter(\.weakLead).map(\.id))
                         all += DialogueTightnessMetrics.hits(chops, sixteenth: run.snapshot.beatDuration / 4, weakLead: weak)
+                        for chop in chops {
+                            let measured = DialogueTightnessMetrics.hits([chop], sixteenth: run.snapshot.beatDuration / 4, weakLead: weak)
+                            for hit in measured where !hit.line && !hit.weakLead && abs(hit.attackMs) > 12 {
+                                let e = chop.event, fr = part.motif.fragments[chop.event.padID]
+                                let detail = "TIGHT-HIT bpm=\(bpm) seed=\(seed) transcript=\(transcribed) pad=\(e.padID) rate=\(e.transform.playbackRate) attackMs=\(hit.attackMs) audibleMs=\(hit.audibleMs) offset=\(part.motif.accentOffset(e.padID)) source=\(fr.frames) kind=\(fr.kind) effect=\(e.effect) gate=\(e.gateEnd) duration=\(e.duration)"
+                                print(detail)
+                                Attachment.record(detail, named: "tight-hit-\(bpm)-\(seed)-\(transcribed)-\(e.padID)-\(e.block)-\(e.slot).txt")
+                            }
+                        }
                     }
                 }
             }

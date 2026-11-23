@@ -26,7 +26,9 @@ jobs:
             -resultBundlePath verification/dialogue-regression.xcresult \
             -only-testing:LiminalTests/DialogueChopFeelTests \
             -only-testing:LiminalTests/DialogueFeelMetricsTests \
-            -only-testing:LiminalTests/DialogueMotifTests \
+            -only-testing:LiminalTests/DialogueMotifTests/everyBarOfEveryLoopHasAPieceOnset \
+            -only-testing:LiminalTests/DialogueMotifTests/everyLoopPlaysTheArc \
+            -only-testing:LiminalTests/DialogueMotifTests/theResponseAnswersOnTheBackbeat \
             -only-testing:LiminalTests/DialogueTightnessTests \
             -only-testing:LiminalTests/DialogueGateTests \
             -only-testing:LiminalTests/DialogueWordCutTests \

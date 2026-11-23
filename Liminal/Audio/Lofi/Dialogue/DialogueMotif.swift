@@ -868,9 +868,12 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
                                               firstPeakShare: fr.weakLead ? DialogueMotifTuning.weakLeadPeakShare : 0.5)
             let beat = fr.frames.lowerBound + Int((Double(attack.beatFrame) * transform.playbackRate).rounded())
             let range = DialogueMotifTuning.renderedAccentRange
+            // At native rate the bound rejects a different syllable picked by levelling. Linked
+            // playback can change which rise survives the spectral chain: its rendered attack is
+            // authoritative, even when it moved farther than the native-only correction window.
+            let correction = Double(beat - fr.accentFrame) / (rate * transform.playbackRate)
             guard attack.beatFrame > 0, beat < fr.frames.upperBound,
-                  Double(beat - fr.accentFrame) / (rate * transform.playbackRate) >= range.lowerBound, Double(beat - fr.accentFrame) / (rate * transform.playbackRate) <= range.upperBound
-            else { return fr }
+                  !transform.isNative || range.contains(correction) else { return fr }
             var out = fr
             out.accentFrame = beat
             return out
