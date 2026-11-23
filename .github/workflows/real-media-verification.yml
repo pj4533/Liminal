@@ -37,7 +37,7 @@ jobs:
       - name: Record toolchain and dataset comparison scope
         run: |
           mkdir -p "$RUNNER_TEMP/real-media"
-          { sw_vers; uname -a; arch; sysctl hw.model hw.machine hw.memsize hw.optional.arm64 kern.hv_vmm_present machdep.cpu.brand_string; system_profiler SPHardwareDataType; xcodebuild -version; xcodebuild -showsdks; } > "$RUNNER_TEMP/real-media/toolchain.txt"
+          { sw_vers; uname -a; arch; sysctl hw.model hw.machine hw.memsize hw.optional.arm64 kern.hv_vmm_present machdep.cpu.brand_string || true; system_profiler SPHardwareDataType; xcodebuild -version; xcodebuild -showsdks; } > "$RUNNER_TEMP/real-media/toolchain.txt"
           echo 'Historical 12-film IDs are unknown. These runs compare freshly regenerated baseline and after on the same recorded 12-film dataset, 8 chunks, 72 BPM, seed 1. Historical absolute 159-line denominator is not assumed identical.' > "$RUNNER_TEMP/real-media/comparison-scope.txt"
       - name: Verify stage 3 integration before media preparation
         id: stage3
@@ -207,7 +207,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p "$RUNNER_TEMP/speech-alternative"
-          { sw_vers; uname -a; arch; sysctl hw.model hw.machine hw.memsize hw.optional.arm64 kern.hv_vmm_present machdep.cpu.brand_string; system_profiler SPHardwareDataType; xcodebuild -version; } > "$RUNNER_TEMP/speech-alternative/hardware.txt" 2>&1
+          { sw_vers; uname -a; arch; sysctl hw.model hw.machine hw.memsize hw.optional.arm64 kern.hv_vmm_present machdep.cpu.brand_string || true; system_profiler SPHardwareDataType; xcodebuild -version; } > "$RUNNER_TEMP/speech-alternative/hardware.txt" 2>&1
           xcrun swiftc -parse-as-library scripts/provision-verification-speech.swift -o "$RUNNER_TEMP/speech-alternative/provision-speech" > "$RUNNER_TEMP/speech-alternative/build.log" 2>&1
           python3 -c 'import subprocess,sys; sys.exit(subprocess.run([sys.argv[1]], timeout=600).returncode)' "$RUNNER_TEMP/speech-alternative/provision-speech" > "$RUNNER_TEMP/speech-alternative/availability.log" 2>&1
       - uses: actions/upload-artifact@v4
