@@ -4,6 +4,31 @@ import Testing
 @testable import Liminal
 
 struct DialogueChopFeelTests {
+    @Test func separateHookPocketsCanVaryTogetherWithoutMovingTheCallOrAnswers() {
+        typealias Item = DialogueMotifCell.Item
+        let fragments = (0..<5).map { id in
+            DialogueMotifFragment(id: id, kind: id == 0 ? .line : .piece, order: id, parent: nil,
+                frames: (id * 1000)..<(id * 1000 + 200), accentFrame: id * 1000,
+                fadeIn: 0, fadeOut: 0, text: nil, weight: 0.8)
+        }
+        let items = [Item(fragment: 1, slot: 0, skeleton: true), Item(fragment: 3, slot: 6),
+                     Item(fragment: 2, slot: 12, skeleton: true), Item(fragment: 1, slot: 16, skeleton: true),
+                     Item(fragment: 4, slot: 22), Item(fragment: 2, slot: 28, skeleton: true)]
+        let cells = [2, 4].map { DialogueMotifCell(kind: .chopBeat, bar: $0, bars: 2, variant: 0, items: items) }
+        for seed: UInt64 in 1...20 {
+            let changed = DialogueMovePool.arrange(cells, fragments: fragments, signature: 1, sampleRate: 1000,
+                beatDuration: 0.8, seed: seed, avoiding: cells)
+            for cell in changed {
+                #expect(cell.items.filter(\.skeleton) == items.filter(\.skeleton))
+                let fills = cell.items.filter { !$0.skeleton && $0.effect != .reversed }
+                #expect(fills.count == 2 && fills.allSatisfy { ![6, 22].contains($0.slot) })
+                let forward = cell.items.filter { $0.effect != .reversed }
+                #expect(zip(forward, forward.dropFirst()).allSatisfy { ($1.slot - $0.slot) * 200 >= 212 })
+            }
+            #expect(changed[0].items == changed[1].items)
+        }
+    }
+
     @Test func wholeWordFillSelectionTriesAUsablePocketBeforeGivingUp() {
         let lengths = [2500, 900, 800, 500]
         let fragments = lengths.enumerated().map { id, length in
@@ -327,6 +352,22 @@ struct DialogueChopFeelTests {
         }
         #expect(chainStart == 60 ? (completed == 0 && dropped == 30) : (completed == 30 && dropped == 0),
                 "chainStart=\(chainStart) complete=\(completed) dropped=\(dropped)")
+        // An entrance syllable followed by a reverse pickup is deliberately incomplete.
+        // If an earlier word occupies its slot, it must not be relocated as a closing tag
+        // into the whole line's restatement at step 16.
+        let entrance = [DialogueMotifCell(kind: .outro, bar: 12, bars: 4, variant: 0, items: [
+            Item(fragment: 2, slot: 8, fixed: true), Item(fragment: 3, slot: 8, fixed: true),
+            Item(fragment: 1, slot: 12, effect: .reversed, fixed: true), Item(fragment: 0, slot: 16)])]
+        let entranceMotif = DialogueMotif(loop: 0, source: base.source, analysis: base.analysis, lineUnit: base.lineUnit,
+            lineKey: base.lineKey, fragments: fragments, pieces: [2], halves: [1: [3, 4, 5]], bank: bank,
+            usedTranscript: false, reorderAllowed: false, cells: entrance, carried: false, seed: 1)
+        var entranceMemory = DialoguePerformanceMemory()
+        let entranceWindow = snapshot.time(beat: 48)..<snapshot.time(beat: 64)
+        let entrancePlan = DialogueMotifPerformer.perform(entranceMotif, snapshot: snapshot, window: entranceWindow, owned: 48..<64,
+            earliestStart: entranceWindow.lowerBound, memory: &entranceMemory, seed: 1, cueToken: 1, revision: 0)
+        #expect(!entrancePlan.events.contains { $0.effect == .reversed })
+        #expect(entrancePlan.events.contains { $0.piece == 2 && $0.slot == 8 })
+        #expect(entrancePlan.events.contains { $0.piece == 0 && $0.slot == 16 })
     }
 
     /// Run the independent D126 detector on native and speed-matched renders of the same chosen lines.

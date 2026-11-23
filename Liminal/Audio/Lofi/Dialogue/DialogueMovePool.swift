@@ -50,7 +50,11 @@ nonisolated enum DialogueMovePool {
                 let candidates = [item.slot - 2, item.slot, item.slot + 2].filter { slot in
                     guard slot > 0, slot < 28 else { return false }
                     return chopCells.allSatisfy { cell in
-                        let neighbours = cell.items.filter { $0 != item }
+                        // Apply earlier moves before testing this pocket: two fills moving
+                        // toward one another must still leave both whole words their room.
+                        let neighbours = cell.items.filter { $0 != item }.map {
+                            Self.moved($0, to: fillMoves[$0.slot] ?? $0.slot)
+                        }
                         let before = neighbours.last { $0.slot < item.slot }
                         let after = neighbours.first { $0.slot > item.slot }
                         guard slot > (before?.slot ?? -1), slot < (after?.slot ?? 32) else { return false }
@@ -65,11 +69,10 @@ nonisolated enum DialogueMovePool {
                     }
                 }
                 let moved = candidates.filter { $0 != item.slot }
-                // An unchanged legal slot is not a move. Keep looking when this fill is boxed
-                // in, so an immovable first fill cannot prevent a later open pocket varying.
+                // An unchanged legal slot is not a move. Visit every independent pocket:
+                // stopping at the first movable fill left the other quiet gaps recurring.
                 if !moved.isEmpty {
                     fillMoves[item.slot] = draw(moved, avoiding: old)
-                    break
                 }
             }
         }

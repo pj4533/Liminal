@@ -2200,7 +2200,14 @@ nonisolated enum DialogueMotifPerformer {
                         // end can overrun the tag's drawn start. Move the complete figure by
                         // beats into remaining space, retaining its unit order, spacing and
                         // whole-word landing instead of discarding it or cutting the chain.
-                        if group.allSatisfy({ $0.after == nil && $0.follow == nil }) {
+                        let parent = motif.fragments[item.fragment].parent
+                        let units = parent.flatMap { motif.halves[$0] } ?? []
+                        // A quiet entrance unit followed by a reversed parent is not a closing
+                        // spelling figure. Moving that pair can put its pickup into the line's
+                        // restatement. Relocate only every ordered unit and its forward landing.
+                        if units.count >= 2, group.last?.fragment == parent,
+                           group.dropLast().map(\.fragment) == units,
+                           group.allSatisfy({ $0.after == nil && $0.follow == nil && $0.effect != .reversed }) {
                             figureShift = stride(from: 0, to: cell.bars * 16 - item.slot, by: 4).first { shift in
                                 var lastEnd = max(prevEnd + DialogueTuning.dryGapSeconds, floor)
                                 for part in group {
