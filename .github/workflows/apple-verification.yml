@@ -63,7 +63,7 @@ jobs:
           done
           xcodebuild test CODE_SIGNING_ALLOWED=NO -project Liminal.xcodeproj -scheme Liminal \
             -destination 'platform=macOS,arch=arm64' \
-            -parallel-testing-enabled NO -maximum-concurrent-test-macos-destinations 1 \
+            -parallel-testing-enabled NO \
             -derivedDataPath "$RUNNER_TEMP/LiminalDerivedData" \
             -resultBundlePath verification/dialogue-tests.xcresult \
             "${suites[@]}" -only-testing:LiminalTests/DialogueLineLedgerTests \
@@ -75,7 +75,7 @@ jobs:
           set -o pipefail
           xcodebuild test CODE_SIGNING_ALLOWED=NO -project Liminal.xcodeproj -scheme Liminal \
             -destination 'platform=macOS,arch=arm64' \
-            -parallel-testing-enabled NO -maximum-concurrent-test-macos-destinations 1 \
+            -parallel-testing-enabled NO \
             -derivedDataPath "$RUNNER_TEMP/LiminalDerivedData" \
             -resultBundlePath verification/unit-tests.xcresult \
             -only-testing:LiminalTests 2>&1 | tee verification/unit-tests.log

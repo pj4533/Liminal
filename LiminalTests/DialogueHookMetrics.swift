@@ -77,7 +77,12 @@ enum DialogueHookMetrics {
     /// A 16-row trigger grid (row = bar, column = sixteenth, cell = fragment id).
     static func grid(_ bars: [[Hit]]) -> [String] {
         bars.enumerated().map { b, hits in
-            "bar \(String(format: "%2d", b + 1)): " + (0..<16).map { s in hits.first { $0.step == s }.map { String($0.fragment) } ?? "." }.joined(separator: " ")
+            let columns: [String] = (0..<16).map { step in
+                guard let hit = hits.first(where: { $0.step == step }) else { return "." }
+                return String(hit.fragment)
+            }
+            let label = String(format: "%2d", b + 1)
+            return "bar \(label): " + columns.joined(separator: " ")
         }
     }
 }
