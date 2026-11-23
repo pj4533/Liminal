@@ -630,3 +630,61 @@ The film cache gained two films (LivingSt1958, SoundAndTheS) during the work; th
 **Tests replaced on purpose** (they encoded the old density or halves; no tightness test changed): `DialogueMotifTests.everyLoopPlaysTheArc` (chop beat 5-7 onsets a bar to 2-7; build "bar 8 busier than bar 7 with six onsets in its last two beats" to "bars 7-8 at least as busy as the chop beat, at least 3"; gates at most two steps 0.7 to 0.5 and the quarter at one step dropped; sub-line median two steps to three; breakdown at most 0.4 of the chop beat to 0.7; bars 5-6 equal to bars 3-4 to a Jaccard of 0.7), `piecesSplitAtWordAndSyllableBoundaries` (at least one piece halved, to: units are syllables or letters with a transcript and halves without; units may be 60 ms), `theSignatureIsTheStrongestWord` (the signature at least as often as any piece, to within three: without halves it has no 1/16 stabs to count), `DialogueChopVarietyTests.theChopBeatMixesItsPiecesOffTheKicks` (same cut in a row now leaves out the hook's own skeleton repeats, `DialogueChopMetrics.fillRepeats`; three cuts a cell to two; off the kicks 0.65 to 0.6; recurrence 0.8 to 0.7), `installedTakesGetAnInterlockingChopBeat` (repeats 0.20 to 0.35 with `fillRepeats`), `theChopBeatIsSeededAndItsFillChangesEveryLoop` (every pair to four in five), `DialogueGateTests.gatedChopsReleaseWithoutAClickAndShareTheirPadsGain` (word-end gates count, and a gated hit is compared with a whole play of its pad). New: `DialogueWordCutTests` (groups carry a content word, syllables and letters from the text, no piece edge inside a word and units only in salient words, no function-only piece, hits end at word ends and chokes spare content words, no start past the first content word, same seed same plan).
 
 **Not done or not met in stage 1.** A-mode accidental partials stay at 0.341: without a transcript a real dip between syllable nuclei is often a stop closure inside a word, and a stricter rule (12 dB for 25 ms, or a 60 ms pause) halved the acoustic plan's hits and left 26 bars empty, so it was taken out. Function-only hits are 0.083 (the rest are hook roles of weight 0 and untexted pieces; the hook roles are stage 2's). The chop beat's same-cut pairs rose because a whole long signature (0.6-0.9 s) leaves no room for a fill between the push template's two signature hits; leaving those skeleton repeats out, 43 remain. The tightness median moved 2.8 ms towards zero and the over-35 ms count fell, but it is not "none". The mix matrix was captured before the change (`matrix-base`: fail-level ref C-B8, C-B9; fast C-B2, C-B8; same C-B9; transcribe C-B9; C-D1 to C-D9 pass in all four) and not yet after; that check is stage 4's. Nothing was heard by ear or on a device. The curated cases now read: "LSD." and "marijuana" whole in every play at their film seconds, "UFO" as U-F-O letters or whole, "grebe", "is", "Yes, they" and "The kids" whole; "Pure cane" and "the Air Force" lines were not chosen in this run, so those cases do not reproduce.
+
+### D130 continuation: salience, learned footage and chop feel (2026-11-23; acceptance open)
+
+This is the **dialogue** D130; image interest packs have a separate D130 in `images.md`.
+The original request above remains the reason for content-first cuts and lower density. Task 2 adds
+"match the pitch to the BPM to slow it down or speed it up" and "feel random, but intentional",
+with "A few more reverses throughout." These requests do not authorize changing tightness, hook,
+backbeat, occupancy or mix criteria to make failures pass.
+
+`DialogueLineInterest` now exposes word salience, including 2–5-letter/dotted/spaced initialisms
+(excluding I, A and OK), drug terms, significant numbers, names and concrete nouns. Recutting recovers
+salient words absent from ranked lines. Ranking uses salience tiers, compressed sound, choppability
+and a pool within 0.10 interest of its leader. Hook roles and individual hits carry content outside
+whole-line statements. Eligible salient multi-syllable words (≥0.7, up to four units) and initialisms
+can spell in order then state the whole word. The performed figure is atomic: a partial figure is
+omitted as a group. Safe boundaries, whole-word gates, acoustic fallback and lower density remain.
+The interrupted stage-2 restriction to ≥0.85/three/lexicon-only syllables was replaced to match the
+original plan, not to relax a measured failure.
+
+Played timely/late transcripts populate a lexicon-versioned `DialogueSalienceIndex`, with mutex
+access and coalesced atomic JSON saves. Learning is deferred to a serial utility queue after cue
+publication. Its scanned span uses actual feature-frame bounds and source rate; missing features
+mark nothing scanned. Sound requests draw independently at 65%, weighted among the best five feasible
+unplayed striking lines, 3–10 source seconds into the actual sound cue. Sound-only film recency boosts
+are at most 2×. Catalog draws, film eligibility and the bed/music start remain independent. The
+background scanner is not implemented or enabled (`scannerEnabled = false`), using the plan's allowed
+off path; no scanner-on performance or cue-latency claim is made.
+
+`DialogueVarispeed` derives a bounded ±2.5-semitone linked speed/pitch ratio from each line's cadence.
+Source frames stay native; rendering resamples once, caches transformed pads and remeasures attacks.
+`DialogueMovePool` retains prior-loop history across lines and varies gestures with a deterministic
+seed. After regression evidence, `a024ce7` keeps structural hook/backbeat hits fixed and moves only a
+shared nonstructural fill in both passes; source changes alone do not prove the repair. Ordered
+spelling and dynamic outro chains keep their structure. More whole-signature reverse pickups may
+occur where room and dry budget permit; the old mandatory bar-13 reverse is removed.
+
+Paired pattern measurements use unchanged production baseline `3d4c3a6`, instrumented at `06c1095`,
+with compiler/measurement adapters recorded separately. The same 108 loops / 72 cross-line pairs and
+same definitions are evaluated at both commits in full-arc and chop-beat scopes. At `da23b73`, run
+[45175446431](https://github.com/pj4533/Liminal/actions/runs/45175446431), all 18 pattern gates passed,
+but the 35-test regression run reported 69 issues (6 hook recurrence, 2 tightness, 5 density, 22 arc,
+34 response). That is a failing candidate, not acceptance. One independently detected attack was
+66.8 ms late. Diagnosis run 45179434556 and real-media run 45180018915 were pending at this record;
+no success is inferred. Latest scope-by-scope measurements, all original numerical gates, historical
+stage-1 misses, model/media limitations and remaining work are in the
+[acceptance ledger](../plans/dialogue-salience/acceptance-ledger.md).
+
+The historical 159 salient-word occurrences are a corpus denominator, not a portable constant for a
+fresh twelve-film dataset. Paired fresh results retain their own denominators and provenance.
+`verify-salience-gates.py` checks no-worse over-35 counts; this does not establish the original plan's
+zero-over-35 target. The task-2 paired timing requirement is additional. No tightness or mix criteria
+were intentionally relaxed here. Earlier deliberate stage-1 density-test replacements and their
+reasons remain listed above; current regression failures must be fixed and rerun.
+
+No authentic private AJ Hall pack/grid was available in the inspected checkouts/artifact inventory.
+Bundled captures are separately labelled and cannot qualify private-matrix acceptance. An authentic
+public World of LSD file decoded to 2907.901 s, proving only that route, not the twelve-film/model/mix
+pipeline. No new sound has been confirmed by user listening, and no device install is authorized.
