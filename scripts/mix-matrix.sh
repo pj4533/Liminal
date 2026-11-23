@@ -26,6 +26,7 @@
 # when a tap drops a block under machine load (`skippedTapFrames`, see --capture-attempts). Extra check-lofi.sh options can follow a literal "--".
 set -uo pipefail
 cd "$(dirname "$0")/.."
+report="${LIMINAL_MIX_REPORT_CHECKOUT:-$PWD}/scripts/mix-report.py"
 
 out=""
 baseline=""
@@ -104,7 +105,7 @@ for name in ${cases//,/ }; do
         echo "$out/$name has a report and pruned WAVs; keeping the report (delete the directory to recapture)"
     elif [ -f "$out/$name/manifest.json" ]; then
         echo "$out/$name holds a capture; skipping capture and reporting on it (delete it to recapture)"
-        python3 scripts/mix-report.py "$out/$name" --case "$name" ${baseline:+--baseline "$baseline/$name"} $strict || rc=$?
+        python3 "$report" "$out/$name" --case "$name" ${baseline:+--baseline "$baseline/$name"} $strict || rc=$?
     else
         scripts/mix-report.sh "${case_args[@]}" ${extra[@]+"${extra[@]}"} || rc=$?
     fi
@@ -137,6 +138,6 @@ if [ -z "$summary_list" ]; then
     echo "no case produced a report" >&2
     exit 1
 fi
-python3 scripts/mix-report.py --matrix-summary "$out" --cases "$summary_list" ${baseline:+--baseline "$baseline"} $strict || summary_status=$?
+python3 "$report" --matrix-summary "$out" --cases "$summary_list" ${baseline:+--baseline "$baseline"} $strict || summary_status=$?
 [ "$summary_status" -ne 0 ] && status=$summary_status
 exit "$status"

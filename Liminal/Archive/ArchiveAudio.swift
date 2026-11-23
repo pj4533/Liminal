@@ -324,6 +324,13 @@ nonisolated enum ArchiveDialogueSource {
         min(DialogueTuning.analysisSeconds, max(0, cue.endAt - cue.beginAt))
     }
 
+    /// Film material that can be both heard in the bed and analyzed by the dialogue source.
+    static func containedSeconds(_ cue: ArchiveAudioCuePlan) -> Double {
+        let sourceRate = cue.rate >= reuseRate ? Double(cue.rate) : 1
+        let heard = (cue.endAt - cue.beginAt) * Double(cue.rate)
+        return min(heard, cue.sourceLength, analysedSeconds(cue) * sourceRate)
+    }
+
     /// Reuses `bed` when `cue.rate >= 0.97`, otherwise decodes the same film range again at rate 1.
     static func make(cue: ArchiveAudioCuePlan, bed: AVAudioPCMBuffer, url: URL, contentID: String, cueToken: Int,
                      format: AVAudioFormat) async throws -> DialogueSource {

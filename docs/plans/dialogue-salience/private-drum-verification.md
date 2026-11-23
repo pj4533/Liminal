@@ -45,7 +45,12 @@ checkouts, with explicit macOS arm64 destination. It records actual test complet
 coverage (disabled/skipped tests do not count) and independently verifies that each
 built app contains the exact grid and all 100 byte-hashed original WAVs. Both
 checkouts are attempted even when baseline tests fail. Native tests are independent
-of public film preparation or speech availability.
+of public film preparation or speech availability. Install NumPy and SciPy for
+the native phase's independent kick check. It uses the original WAVs to verify
+strong, low-band-supported kick labels within 20 ms and checks mixed transients
+for a nearby onset. The report retains observed counts for class recall, precision
+and mixed-attack coverage. It requires complete logs for all 100 WAVs. The legacy
+kick detector remains an arrangement compatibility check and a diagnostic reference.
 
 `prepare` fetches one authentic public film cache for both checkouts. Each matrix
 runs serial `ref,fast,same,transcribe`, private drums, strict criteria, with candidate
@@ -76,3 +81,24 @@ test coverage, matrix criteria and phase status. Detailed evidence stays under
 `$PRIVATE_OUT/raw`. A verified result requires exactly one successful completion
 of each required step, exact built-resource hashes, executed native tests and
 complete paired matrix cases.
+
+## Recorded kick attacks
+
+The controlled drum fixture keeps its 20% rise limit. The installed test
+continues to log the original 80 ms full-take ratio. The recorded-take gate
+uses shared raw kick anchors and the 40–150 Hz envelopes before and after the
+chain. The first supported raw trough bounds both the first audible crossing
+and the −6 dB body crossing. The absolute timing error limits are the C-B2
+scale of 5 ms median and 12 ms p90, using the same linear percentiles.
+
+The comparison requires an early signal at least 6 dB above its own pre-hit
+floor. It uses the 25 ms early body to test for smearing without letting a
+later body peak change the gate. If the shared lobe remains unresolved, a
+comparison of the first 25 ms to the first 80 ms records energy only.
+The median and p90 energy-loss limits are 3 and 6 dB. This distinguishes
+timing-qualified, energy-only and unresolved observations in each take.
+At least half of the attempted corpus anchors need qualifying evidence, and
+every take with confident kick anchors requires at least one measured result.
+A sparse take with no confident anchors can use lower-confidence kick
+candidates if the audio supports them. The native log records a take with
+neither source of support explicitly.

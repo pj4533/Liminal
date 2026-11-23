@@ -1,0 +1,43 @@
+--- a/Liminal/Audio/Lofi/LofiDrumLibrary.swift
++++ b/Liminal/Audio/Lofi/LofiDrumLibrary.swift
+@@ -97,6 +97,11 @@
+         let n = entry.frameCount
+         let left = Array(UnsafeBufferPointer(start: pcm.1[0], count: n))
+         let right = entry.channels == 1 ? left : Array(UnsafeBufferPointer(start: pcm.1[1], count: n))
++        return normalizedBreak(entry: entry, left: left, right: right)
++    }
++
++    /// Apply the whole-take stereo calibration used by playback and by offline drum fixtures.
++    static func normalizedBreak(entry: Entry, left: [Float], right: [Float]) -> Break {
+         let energy = 0.5 * (vDSP.meanSquare(left) + vDSP.meanSquare(right))
+         let gain = min(2.6, 0.11 / max(0.025, energy.squareRoot()))
+         return Break(entry: entry, left: left, right: right, gain: gain)
+--- a/LiminalTests/LofiMixRenderTests.swift
++++ b/LiminalTests/LofiMixRenderTests.swift
+@@ -11,6 +11,8 @@
+ /// Offline execution of the same sources, buses and dynamics as Lo-Fi playback. The export
+ /// is opt-in, and private sources must also be explicitly selected by the caller.
+ struct LofiMixRenderTests {
++    static let publicDrumFixtureID = "public-test-fixture-v2"
++
+     nonisolated struct Config: Decodable {
+         let runToken: String
+         var out: URL {
+@@ -105,7 +107,7 @@
+         #endif
+         try audio.avEngine.enableManualRenderingMode(.offline, format: format, maximumFrameCount: 4096)
+
+-        var sourceHash = "public-test-fixture-v1"
++        var sourceHash = Self.publicDrumFixtureID
+         var drums: LofiDrumTake
+         if config.privateDrums {
+             let eligible = LofiDrumLibrary.assets().filter { config.drumName == nil || $0.entry.name == config.drumName }
+@@ -676,7 +678,7 @@
+                                           beats: 64, sampleRate: clock.sampleRate, channels: 2,
+                                           frameCount: frames, framesPerBeat: clock.framesPerBeat,
+                                           onsetPhaseMilliseconds: 0, beatSupport: 1)
+-        return .init(entry: entry, left: left, right: right, gain: 1)
++        return LofiDrumLibrary.normalizedBreak(entry: entry, left: left, right: right)
+     }
+
+     private func voiceFixture(clock: LofiClock) throws -> AVAudioPCMBuffer {

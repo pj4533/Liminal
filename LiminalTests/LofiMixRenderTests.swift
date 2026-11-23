@@ -11,6 +11,8 @@ import Testing
 /// Offline execution of the same sources, buses and dynamics as Lo-Fi playback. The export
 /// is opt-in, and private sources must also be explicitly selected by the caller.
 struct LofiMixRenderTests {
+    static let publicDrumFixtureID = "public-test-fixture-v2"
+
     nonisolated struct Config: Decodable {
         let runToken: String
         var out: URL {
@@ -105,7 +107,7 @@ struct LofiMixRenderTests {
         #endif
         try audio.avEngine.enableManualRenderingMode(.offline, format: format, maximumFrameCount: 4096)
 
-        var sourceHash = "public-test-fixture-v1"
+        var sourceHash = Self.publicDrumFixtureID
         var drums: LofiDrumTake
         if config.privateDrums {
             let eligible = LofiDrumLibrary.assets().filter { config.drumName == nil || $0.entry.name == config.drumName }
@@ -413,7 +415,7 @@ struct LofiMixRenderTests {
                             "cell": e.cell?.rawValue ?? NSNull(), "piece": e.piece.map { $0 as Any } ?? NSNull(),
                             "effect": e.effect.name, "reversed": e.effect == .reversed,
                             "gateSteps": e.gateSteps.map { $0 as Any } ?? NSNull(), "gateEnd": e.gateEnd,
-                            "stutter": e.stutter, "feelMs": e.feelSeconds * 1000,
+                            "stutter": e.stutter, "feelMs": e.feelSeconds * 1000, "authoredGainDB": e.gainDB,
                             "sourceFrames": e.sourceFrames.map { [$0.lowerBound, $0.upperBound] as Any } ?? NSNull(),
                             "dryFrames": Int(chop.buffer.frameLength) - { if case .echoThrow(_, let tail) = e.effect {
                                 return Int((tail * format.sampleRate).rounded()) } else { return 0 } }()] as [String: Any]
@@ -676,7 +678,7 @@ struct LofiMixRenderTests {
                                           beats: 64, sampleRate: clock.sampleRate, channels: 2,
                                           frameCount: frames, framesPerBeat: clock.framesPerBeat,
                                           onsetPhaseMilliseconds: 0, beatSupport: 1)
-        return .init(entry: entry, left: left, right: right, gain: 1)
+        return LofiDrumLibrary.normalizedBreak(entry: entry, left: left, right: right)
     }
 
     private func voiceFixture(clock: LofiClock) throws -> AVAudioPCMBuffer {

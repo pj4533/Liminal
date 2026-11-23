@@ -197,6 +197,33 @@ struct DialogueSalienceTests {
         }
     }
 
+    @Test func longContentGroupOffersAWholeWordForTheHookAndKeepsItsParent() throws {
+        let source = Self.spelled.source(contentID: "hook-word")
+        let features = try #require(DialogueEngine.analyze(source, speech: []).features)
+        let samples = try #require(source.buffer.floatChannelData?[0])
+        let cutter = DialogueMotifCutter(f: features, samples: samples, count: source.frameCount, rate: source.sampleRate)
+        let frames = [0..<84_000, 0..<35_000, 35_000..<84_000]
+        let original = frames.enumerated().map { i, range in
+            DialogueMotifFragment(id: i, kind: i == 0 ? .line : .piece, order: i - 1, parent: nil,
+                                  frames: range, accentFrame: range.lowerBound, fadeIn: 0, fadeOut: 0)
+        }
+        let word = DialogueWordSpan(index: 2, text: "lies.", frames: 60_000..<83_000, confidence: 1)
+        for token in ["it", "not"] {
+            let words = [DialogueWordSpan(index: 0, text: "direction", frames: 0..<34_000, confidence: 1),
+                         DialogueWordSpan(index: 1, text: token, frames: 35_000..<60_000, confidence: 1), word]
+            var fragments = original
+            cutter.addHookWords(to: &fragments, pieces: [1, 2], words: words, weights: [0.45, 0, 0.7])
+            #expect(Array(fragments.prefix(3)) == original)
+            if token == "it" {
+                let alternate = try #require(fragments.dropFirst(3).first)
+                #expect(alternate.parent == 2 && alternate.kind == .piece)
+                #expect(alternate.text == word.text && alternate.frames == word.frames)
+            } else {
+                #expect(fragments.count == 3)
+            }
+        }
+    }
+
     @Test func spacedLettersHaveOneParentAndOrderedUnits() throws {
         let source = Self.spelled.source(contentID: "spaced")
         let analysis = DialogueEngine.analyze(source, speech: [])

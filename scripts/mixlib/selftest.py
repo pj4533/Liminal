@@ -352,6 +352,59 @@ def test_all_piece_sii():
                f"featured skipped, allPiecesSiiMean {status}")
 
 
+def test_featured_snr_time_weighting():
+    """A half-second solo and a two-second line contribute in proportion to their time."""
+    rng = np.random.default_rng(181)
+    rival = rng.normal(0, 0.025, 4 * RATE)
+    hits = [(RATE // 4, RATE // 2), (RATE, 2 * RATE)]
+    for levels, should_fail in [([8, 0], False), ([5.7, 5.7], True)]:
+        speech = np.zeros_like(rival)
+        for (start, length), level in zip(hits, levels):
+            speech[start:start + length] = rival[start:start + length] * 10 ** (level / 20)
+        events = [{"frame": a, "durationFrames": n, "dryFrames": n} for a, n in hits]
+        cap = Capture(manifest=manifest(len(rival), dialogueChops=events),
+                      arrays={"dialogue-chops": stereo(speech), "texture": stereo(rival)})
+        grid = BandGrid(RATE)
+        grids = {s: grid.for_section(cap, s) for s in ("dialogue", "mids")}
+        measured = dialogue.measure_dialogue(cap, grid, grids)
+        expected = np.average(levels, weights=[n for _, n in hits])
+        expect(abs(measured["snr1to4kMeanDb"] - expected) < 0.15 and
+               abs(measured["snr1to4kEventMeanDb"] - np.mean(levels)) < 0.15,
+               "featured SNR reports both presented-time and per-event means")
+        criteria = [c for c in load_criteria(CRITERIA) if c["id"] == "C-B8"]
+        checks = result(evaluate({"dialogue": measured}, cap, criteria), "C-B8").get("failedChecks") or []
+        expect(("snr1to4kMeanDb" in checks) == should_fail, "C-B8 retains its upper SNR bound")
+
+
+def test_authored_chop_levels():
+    criteria = [c for c in load_criteria(CRITERIA) if c["id"] == "C-B8"]
+    grid = BandGrid(RATE)
+    phrase = tone(950, 0.6, 0.1)
+    for residual, include_gain, fail in [(0, True, False), (-4, True, True), (0, False, True)]:
+        dry = np.zeros(3 * RATE)
+        events = []
+        for i, gain in enumerate([0, -3, 0]):
+            a = i * RATE + RATE // 5
+            dry[a:a + len(phrase)] = phrase * 10 ** ((gain + (residual if i == 1 else 0)) / 20)
+            e = {"frame": a, "durationFrames": len(phrase), "dryFrames": len(phrase)}
+            if include_gain:
+                e["authoredGainDB"] = gain
+            events.append(e)
+        cap = Capture(manifest=manifest(len(dry), dialogueChops=events),
+                      arrays={"dialogue-chops": stereo(dry), "dialogue-dry": stereo(dry),
+                              "texture": stereo(tone(950, 3, 0.1))})
+        grids = {s: grid.for_section(cap, s) for s in ("dialogue", "mids")}
+        d = dialogue.measure_dialogue(cap, grid, grids)
+        checks = result(evaluate({"dialogue": d}, cap, criteria), "C-B8").get("failedChecks") or []
+        expect(abs(d["rawLoudnessSpreadLu"] - abs(-3 + residual)) < 0.01 and
+               (("loudnessSpreadLu" in checks) == fail), "authored trim, unmatched pad and legacy raw spread")
+    overlap = [{"frame": 0, "durationFrames": 100, "authoredGainDB": 0},
+               {"frame": 90, "durationFrames": 40, "authoredGainDB": -3}]
+    spans = dialogue.authored_levels(overlap)
+    expect(dialogue.untrimmed_dry_lufs(np.zeros((130, 2)), RATE, 0, 130, spans, -20) is None,
+           "overlapping differently trimmed events retain the raw check")
+
+
 def test_lead_salience():
     """C-B11: a 1 kHz lead over a 2 kHz dialogue at a known level difference in every lead note."""
     criteria = [c for c in load_criteria(CRITERIA) if c["id"] == "C-B11"]
@@ -715,5 +768,5 @@ def _run_tests(tests):
 def run_self_test():
     return _run_tests([test_loudness_and_peak, test_masking, test_cadence, test_kick_bass, test_lowband_mono, test_pumping,
                        test_full_pipeline_v1, test_plan_fingerprints, test_gain_reduction_trace, test_bass_attack_lag,
-                       test_all_piece_sii, test_lead_salience, test_lead_time_simulation, test_kick_attack_not_measured,
+                       test_all_piece_sii, test_featured_snr_time_weighting, test_authored_chop_levels, test_lead_salience, test_lead_time_simulation, test_kick_attack_not_measured,
                        test_nofilm_master_gating, test_engine_paths_skip_cleanly, test_bass_tone] + TRANSLATION_TESTS)

@@ -11,6 +11,8 @@ nonisolated struct LofiTimingField: Sendable {
     /// Interpolated offsets fade to zero this far from the nearest anchor.
     static let fadeBeats = 1.0
 
+    /// Finished kick body rise in take frames, keyed by the original broadband attack frame.
+    let bassRises: [Int: Int]
     let landmarks: [LofiDrumLandmark]
     let framesPerBeat: Double
     let phraseFrames: Int
@@ -18,7 +20,8 @@ nonisolated struct LofiTimingField: Sendable {
     let fills: LofiTakeFills
     private let anchors: [(beat: Double, offset: Double)]
 
-    init(landmarks: [LofiDrumLandmark], clock: LofiClock) {
+    init(landmarks: [LofiDrumLandmark], clock: LofiClock, bassRises: [Int: Int] = [:]) {
+        self.bassRises = bassRises
         self.landmarks = landmarks.sorted { $0.attackFrame < $1.attackFrame }
         framesPerBeat = clock.framesPerBeat
         phraseFrames = clock.frameCount

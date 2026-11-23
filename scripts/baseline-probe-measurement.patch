@@ -1,5 +1,5 @@
 diff --git a/LiminalTests/DialogueSalienceProbeTests.swift b/LiminalTests/DialogueSalienceProbeTests.swift
-index 22ddc2c..a446205 100644
+index 22ddc2c..8a0bcbf 100644
 --- a/LiminalTests/DialogueSalienceProbeTests.swift
 +++ b/LiminalTests/DialogueSalienceProbeTests.swift
 @@ -51,6 +51,35 @@ struct DialogueSalienceProbeTests {
@@ -71,7 +71,31 @@ index 22ddc2c..a446205 100644
          print("SALIENCE-TRANSCRIBER \(provider == nil ? "none" : "apple") films=\(clips.count)")
          var snippetDir: URL?
          if let d = config.snippetDirectory {
-@@ -214,16 +260,45 @@ struct DialogueSalienceProbeTests {
+@@ -197,16 +243,20 @@ struct DialogueSalienceProbeTests {
+         }
+
+         /// What the recogniser hears in a played chop alone (0.6 s of silence either side).
+-        func reheard(_ chop: AVAudioPCMBuffer) async -> String? {
++        func reheard(_ chop: AVAudioPCMBuffer, frames: Range<Int>? = nil) async -> String? {
+             guard let provider, let from = chop.floatChannelData else { return nil }
+-            let pad = Int(0.6 * format.sampleRate), n = Int(chop.frameLength)
++            let span = frames ?? 0..<Int(chop.frameLength)
++            guard !span.isEmpty, (0..<Int(chop.frameLength)).contains(span.lowerBound),
++                  span.upperBound <= Int(chop.frameLength) else { return nil }
++            let pad = Int(0.6 * format.sampleRate), n = span.count
+             guard chop.format.sampleRate == format.sampleRate,
+                   let b = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(n + 2 * pad)),
+                   let to = b.floatChannelData else { return nil }
+             b.frameLength = AVAudioFrameCount(n + 2 * pad)
+             for c in 0..<Int(format.channelCount) {
+                 to[c].update(repeating: 0, count: n + 2 * pad)
+-                to[c].advanced(by: pad).update(from: from[min(c, Int(chop.format.channelCount) - 1)], count: n)
++                let input = from[min(c, Int(chop.format.channelCount) - 1)].advanced(by: span.lowerBound)
++                to[c].advanced(by: pad).update(from: input, count: n)
+             }
+             let source = DialogueSource(contentID: "reheard", cueToken: 99, buffer: b, sourceStart: 0, rate: 1)
+             return await provider.transcript(for: source, deadline: .now.advanced(by: .seconds(10)))?.words.map(\.text).joined(separator: " ")
+@@ -214,16 +264,45 @@ struct DialogueSalienceProbeTests {
 
          for clip in clips {
              let usable = clip.duration - Self.windowSeconds - 1
@@ -121,7 +145,7 @@ index 22ddc2c..a446205 100644
                  let rate = buffer.format.sampleRate
                  let frameCount = Int(buffer.frameLength)
                  let speech = LofiSpeechFocus.classify(buffer, seconds: Self.windowSeconds)
-@@ -258,6 +333,8 @@ struct DialogueSalienceProbeTests {
+@@ -258,6 +337,8 @@ struct DialogueSalienceProbeTests {
                  }
                  var windowLine: [String: Any] = [
                      "film": clip.id, "title": String(clip.title.prefix(60)), "chunk": chunk, "offset": Self.r3(offset),
@@ -130,11 +154,16 @@ index 22ddc2c..a446205 100644
                      "duration": Self.r3(clip.duration), "transcribed": transcript != nil, "transcribeMs": Self.r3(transcribeMs),
                      "speechWindows": speech.filter { $0.speech > max(0.3, $0.singing, $0.music) }.count, "windows": speech.count,
                      "raw": raw.map { ["t": $0.text, "s": film($0.frames.lowerBound), "e": film($0.frames.upperBound),
-@@ -301,6 +378,21 @@ struct DialogueSalienceProbeTests {
+@@ -301,15 +382,39 @@ struct DialogueSalienceProbeTests {
                  var perWindow = 0, controlsThisWindow = 0
                  var mechanisms = Set<String>()
 
 +                var renderOutcomes: [String: [String: Int]] = [:]
++                var renderDecisions: [String: [String: Any]] = [:]
++                // Choose the recognition sample from distinct forward, whole-content renders.
++                // Diagnostic snippets are intentionally biased toward cuts already suspected of a defect.
++                var rehearingKeys = Set<String>()
++                var rehearingSample: (word: String, buffer: AVAudioPCMBuffer, frames: Range<Int>)?
 +                func recordRenders(mode: String, events: [DialogueEvent], chops: [DialogueChop]) {
 +                    var counts = renderOutcomes[mode] ?? ["planned": 0, "rendered": 0, "audible": 0]
 +                    counts["planned", default: 0] += events.count
@@ -152,7 +181,20 @@ index 22ddc2c..a446205 100644
                  for mode in modes {
                      let useTranscript = mode == "T" ? transcript : nil
                      if mode == "T", transcript == nil { continue }
-@@ -330,10 +422,12 @@ struct DialogueSalienceProbeTests {
+                     let seed = baseSeed &+ UInt64(chunk) &* 7919 &+ (clip.id.utf8.reduce(UInt64(0)) { $0 &* 31 &+ UInt64($1) })
+                     let bank = DialogueEngine.bank(analysis, transcript: useTranscript, seed: seed)
+                     var memory = DialoguePerformanceMemory()
++                    var rehearingRNG = MusicRNG(seed: seed).fork(0x4845_4152)
++                    renderOutcomes[mode] = ["planned": 0, "rendered": 0, "audible": 0]
++                    var cueAttempts = 0
+                     var loopEvents: [Int: [DialogueEvent]] = [:]
+                     var loopMotif: [Int: DialogueMotif] = [:]
+                     for piece in 0..<4 {
++                        cueAttempts += 1
+                         let take = piece / 2
+                         let source = DialogueSource(contentID: clip.id, cueToken: piece + 1, buffer: buffer, sourceStart: offset, rate: 1)
+                         let info = LofiTransportInfo(revision: 1, takeIndex: take, phraseAtTakeStart: 4 * take, origin: Double(take * 64) * beat,
+@@ -330,10 +435,12 @@ struct DialogueSalienceProbeTests {
                                                                seed: seed &+ UInt64(piece), cueToken: piece + 1, revision: 0)
                              print("SALIENCE-NOPLAN \(clip.id) chunk=\(chunk) mode=\(mode) piece=\(piece) fallbackEvents=\(plan.events.count)")
                              guard let playedBank else { continue }
@@ -166,7 +208,7 @@ index 22ddc2c..a446205 100644
                                  func covers(_ list: [Word]) -> [[String: Any]] {
                                      list.filter { $0.frames.upperBound > played.lowerBound && $0.frames.lowerBound < played.upperBound }.map { w in
                                          let ov = min(w.frames.upperBound, played.upperBound) - max(w.frames.lowerBound, played.lowerBound)
-@@ -351,12 +445,12 @@ struct DialogueSalienceProbeTests {
+@@ -351,12 +458,12 @@ struct DialogueSalienceProbeTests {
                                  let heard = words.filter { ($0["cov"] as? Double ?? 0) >= 0.3 }
                                  var hit: [String: Any] = [
                                      "film": clip.id, "chunk": chunk, "mode": mode, "piece": piece, "loop": -1, "ev": e, "line": "-", "interest": -1,
@@ -181,7 +223,7 @@ index 22ddc2c..a446205 100644
                                      "functionOnly": !heard.isEmpty && heard.allSatisfy { ($0["fn"] as? Bool) == true },
                                  ]
                                  if let w = inside(played.lowerBound) {
-@@ -368,6 +462,12 @@ struct DialogueSalienceProbeTests {
+@@ -368,6 +475,12 @@ struct DialogueSalienceProbeTests {
                                                      "mech": event.chokeAt != nil && pad.frames.upperBound >= w.frames.upperBound - tol ? "padChoke" : "padEdge",
                                                      "drop": ""] as [String: Any]
                                  }
@@ -194,7 +236,7 @@ index 22ddc2c..a446205 100644
                                  print("SALIENCE-HIT " + Self.json(hit))
                              }
                              continue
-@@ -403,6 +503,7 @@ struct DialogueSalienceProbeTests {
+@@ -403,6 +516,7 @@ struct DialogueSalienceProbeTests {
                              if !chosen.contains(lineKey) { chosen.append(lineKey) }
                              let chops = DialogueChopRenderer.render(part.plan, bank: motif.bank, source: motif.source, analysis: motif.analysis,
                                                                      prerendered: motif.renders)
@@ -202,7 +244,7 @@ index 22ddc2c..a446205 100644
                              loopEvents[motif.loop, default: []] += part.plan.events
                              loopMotif[motif.loop] = motif
                              for (e, event) in part.plan.events.enumerated() {
-@@ -459,11 +560,21 @@ struct DialogueSalienceProbeTests {
+@@ -459,11 +573,34 @@ struct DialogueSalienceProbeTests {
                                      "peak": Self.r3(peak), "preDB": Self.r3(pre - peak), "postDB": Self.r3(post - peak), "tailDB": Self.r3(tail - peak),
                                      "words": covers(accepted), "rawWords": covers(raw),
                                  ]
@@ -210,7 +252,6 @@ index 22ddc2c..a446205 100644
 -                                if id != 0, motif.isSubLine(id), let chop = chops.first(where: { $0.event == event }),
 -                                   let ms = Self.bandOnsetMs(chop) {
 -                                    hit["onsetMs"] = Self.r3(ms)
--                                }
 +                                // Planned source overlap earns no audible credit without an actual rendered signal.
 +                                let actual = chops.first(where: { $0.event == event })
 +                                let audible = actual.map { chop in
@@ -225,15 +266,52 @@ index 22ddc2c..a446205 100644
 +                                hit["onsetStatus"] = !eligible ? "excluded" : (onset == nil ? "undetectable" : "detected")
 +                                if eligible, let onset { hit["onsetMs"] = Self.r3(onset) }
 +                                if !audible { hit["words"] = []; hit["rawWords"] = [] }
++                                if mode == "T", fr.kind == .piece, event.effect != .reversed, audible,
++                                   let actual, let main = accepted.filter({ word in
++                                       let overlap = min(word.frames.upperBound, played.upperBound)
++                                           - max(word.frames.lowerBound, played.lowerBound)
++                                       return overlap > 0 && Double(overlap) / Double(word.frames.count) >= 0.9
++                                           && !DialogueLineInterest.functionWords.contains(DialogueLineInterest.normalize(word.text))
++                                   }).max(by: { $0.weight < $1.weight }) {
++                                    let key = "\(played.lowerBound):\(played.upperBound):\(event.effect)"
++                                    if rehearingKeys.insert(key).inserted,
++                                       rehearingRNG.unitD() < 1 / Double(rehearingKeys.count) {
++                                        rehearingSample = (main.text, actual.buffer, played)
++                                    }
+                                 }
 +
                                  if let parent = fr.parent { hit["parentText"] = motif.fragments[parent].text ?? "" }
                                  let sEdge = startEdge(accepted), eEdge = endEdge(accepted)
                                  if let sEdge { hit["startIn"] = sEdge }
-@@ -543,6 +654,7 @@ struct DialogueSalienceProbeTests {
+@@ -505,6 +642,9 @@ struct DialogueSalienceProbeTests {
+                             }
+                         }
+                     }
++                    let planned = renderOutcomes[mode]?["planned"] ?? 0
++                    let decision = planned > 0 ? "planned" : (bank == nil ? "noSafeBank" : "missingPlan")
++                    renderDecisions[mode] = ["result": decision, "cueAttempts": cueAttempts]
+                     // Variety per loop (D127, `DialogueChopMetrics`): the chop beat's unmarked same-cut
+                     // pairs and longest run, distinct cuts per 2-bar cell of the chop beat and build,
+                     // onsets per bar and dry occupancy per 8-bar section.
+@@ -543,6 +683,21 @@ struct DialogueSalienceProbeTests {
                      }
                  }
                  windowLine["chosen"] = chosen
 +                windowLine["renderOutcomes"] = renderOutcomes
++                windowLine["renderDecisions"] = renderDecisions
++                windowLine["rehearingEligible"] = rehearingKeys.count
++                if let sample = rehearingSample {
++                    let name = "rehearing-\(clip.id)-\(chunk).wav"
++                    let sourceName = "rehearing-\(clip.id)-\(chunk)-source.wav"
++                    emitSnippet(name, Self.wav(sample.buffer))
++                    emitSnippet(sourceName, Self.wav(buffer, frames: sample.frames))
++                    windowLine["rehearingSample"] = ["expected": sample.word,
++                                                      "heard": await reheard(sample.buffer) ?? "",
++                                                      "audio": name,
++                                                      "sourceHeard": await reheard(buffer, frames: sample.frames) ?? "",
++                                                      "sourceAudio": sourceName,
++                                                      "sourceFrames": sample.frames.count]
++                }
                  print("SALIENCE-WINDOW " + Self.json(windowLine))
              }
          }

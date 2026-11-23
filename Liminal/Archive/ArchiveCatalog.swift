@@ -238,7 +238,7 @@ nonisolated enum ArchiveCatalog {
         return (edges + midpoints).max { $0.gap < $1.gap }?.start ?? 0
     }
 
-    private static func freshRanges(in bounds: ClosedRange<Double>, shown: [Double],
+    static func freshRanges(in bounds: ClosedRange<Double>, shown: [Double],
                                     separation: Double) -> [ClosedRange<Double>] {
         var ranges: [ClosedRange<Double>] = []
         var cursor = bounds.lowerBound

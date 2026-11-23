@@ -256,7 +256,7 @@ struct LofiArrangementTests {
                     }
                     #expect(t.gain == 1)
                 }
-                #expect(abs(20 * log10(LofiScore.returnRevealGain) - 3) < 0.001)
+                #expect(abs(20 * log10(LofiScore.returnRevealGain) - 3.6) < 0.001)
                 #expect(part(reprise, .texture).allSatisfy { $0.beat >= 2 })
                 let boundary = LofiScore.firstCellBoundary(b)
                 #expect(boundary >= b[1].beat)

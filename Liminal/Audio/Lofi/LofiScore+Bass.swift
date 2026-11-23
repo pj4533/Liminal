@@ -25,8 +25,8 @@ nonisolated extension LofiScore {
     /// One breath per two-bar cell: the note before a pickup keeps its drawn length when that leaves at
     /// least this many beats of rest.
     static let bassBreathRest = 0.35
-    /// The strike layer moves at most this far (seconds) from its note's start onto the kick's attack.
-    static let bassStrikeAdvance = 0.025
+    /// The latest finished body can be 80 ms after the click. The strike peaks just after its own onset.
+    static let bassStrikeAdvance = LofiBassVoice.lowRiseWindowEnd + LofiBassVoice.strikePeakTime
     /// A sustained note whose last `bassEndingKickWindow` beats would sound over a kick it is not anchored
     /// to (confidence at least `bassEndingKickConfidence`, the C-B2 measure's) ends `bassAccentClearance`
     /// before that kick instead: a note fading out under a kick at the same level cancels it (D119).
@@ -605,7 +605,7 @@ nonisolated extension LofiScore {
         return notes
     }
 
-    /// Where a kick's C-B2 rise (the -6 dB point of its 40-160 Hz Hilbert envelope) sits between its
+    /// Fallback for a kick without a distinct measured envelope rise. Where a kick's C-B2 rise (the -6 dB point of its 40-160 Hz Hilbert envelope) sits between its
     /// broadband attack and its 2 ms-power low-band rise (`lowRiseFrame`). Measured on the 25 installed
     /// AJ Hall takes (20 November 2026): median 0.48 on the 72 BPM take (11.6 ms after the attack, p10 to
     /// p90 10.7 to 12.2 ms over 70 kicks); over all takes the error of 0.47 has median 0.5 ms, p10 -7 ms,
@@ -625,6 +625,9 @@ nonisolated extension LofiScore {
             guard landmark.kind == .kick, landmark.confidence >= bassAccentConfidence,
                   (start..<end).contains(landmark.attackFrame) else { return nil }
             let attack = Double(landmark.attackFrame - start) / fpb
+            if let measured = timing.bassRises[landmark.attackFrame] {
+                return (attack, Double(measured - start) / fpb)
+            }
             let lowRise = Double(max(landmark.attackFrame, landmark.lowRiseFrame) - start) / fpb
             return (attack, attack + bassKickRiseShare * (lowRise - attack))
         }

@@ -4,7 +4,11 @@ import json
 from pathlib import Path
 import sys
 
+from mixlib import strict_failures
+
 REQUIRED = ('ref', 'fast', 'same', 'transcribe')
+CRITERIA_LEVELS = {row['id']: row['level'] for row in json.loads(
+    Path(__file__).with_name('mix-criteria.json').read_text())['criteria']}
 
 TARGETED_LEVELS = {
     'C-B8': 'fail', 'C-B9': 'fail',
@@ -57,13 +61,17 @@ def inventory(root, baseline=None, revision=None, baseline_revision=None):
             criteria = report['criteria']
             ready = case != 'transcribe' or any(r.get('status') == 'ready' and r.get('words', 0) > 0 and r.get('transcriptUsed') is True and not r.get('error') for r in manifest.get('dialogueTranscripts', []))
             revision_matches = bool(revision) and manifest.get('gitRevision') == revision
-            complete = bool(criteria) and revision_matches and ready and not (directory / 'skipped.txt').exists()
-            strict = complete and not any(r.get('level') == 'fail' and r.get('status') != 'pass' for r in criteria)
+            measured = {row['id']: row['level'] for row in criteria}
+            criteria_complete = (len(criteria) == len(measured) and measured == CRITERIA_LEVELS
+                                 and all(row.get('status') in ('pass', 'fail', 'warn', 'skipped') for row in criteria))
+            complete = criteria_complete and revision_matches and ready and not (directory / 'skipped.txt').exists()
+            failures = strict_failures(criteria)
+            strict = complete and not failures
             paired = None
             if baseline:
                 previous = json.loads((baseline / case / 'report/mix-report.json').read_text())
                 paired = complete and baseline_complete and no_new_targeted_failures(previous['criteria'], criteria)
-            cases[case] = dict(complete=complete, gitRevision=manifest.get('gitRevision'), expectedRevision=revision, transcriptionReady=ready, rawStrictPassed=strict, noNewTargetedFailures=paired)
+            cases[case] = dict(complete=complete, gitRevision=manifest.get('gitRevision'), expectedRevision=revision, transcriptionReady=ready, rawStrictPassed=strict, strictFailures=failures, noNewTargetedFailures=paired)
         except (OSError, ValueError, KeyError) as error:
             cases[case] = dict(complete=False, error=str(error), rawStrictPassed=False, noNewTargetedFailures=None)
     return dict(cases=cases, complete=all(c['complete'] for c in cases.values()),

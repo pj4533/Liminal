@@ -117,7 +117,7 @@ nonisolated enum DialogueCueCoordinator {
         var snapshot = DialogueTransportSnapshot(revision: info.revision, takeIndex: info.takeIndex, origin: info.origin,
                                                  beatDuration: info.beatDuration, nextBeatDuration: info.nextBeatDuration,
                                                  phraseAtOrigin: info.phraseAtTakeStart, kicks: kicks, snares: snares)
-        snapshot.leadNotes = leadNotes(info, blocks: blocks(snapshot, window: window))
+        addLeadNotes(info, window: window, to: &snapshot)
         if let timing = info.timing {
             // Each step follows only its own kick or snare (D126), never a neighbour's.
             snapshot.grooveOffsets = timing.sixteenthOffsets(count: DialogueTransportSnapshot.takeSixteenths)
@@ -132,20 +132,32 @@ nonisolated enum DialogueCueCoordinator {
         return first...last
     }
 
-    static func leadNotes(_ info: LofiTransportInfo, blocks: ClosedRange<Int>) -> [ClosedRange<Double>] {
-        var notes: [ClosedRange<Double>] = []
-        for k in blocks {
+    static func addLeadNotes(_ info: LofiTransportInfo, window: Range<Double>, to snapshot: inout DialogueTransportSnapshot) {
+        let audible = blocks(snapshot, window: window)
+        // A motif can finish after its bed ends. Protect a return just beyond that bed too.
+        let tail = window.lowerBound..<(window.upperBound + DialogueMotifTuning.tailAfterBedSeconds)
+        for k in blocks(snapshot, window: tail) {
             let phrase = info.phraseAtTakeStart + k
             guard phrase >= 0 else { continue }
             let request = LofiPlayback.Request(seed: info.seed, index: phrase, options: info.options)
+            guard audible.contains(k) || request.section == .returnTheme else { continue }
             let score = LofiScore.make(seed: request.compositionSeed, section: request.section, drift: LofiDrift(seed: info.seed),
                                        startBeat: Double(phrase) * LofiClock.beats, pinnedScale: info.options.scale,
                                        timing: info.timing, timingStartBeat: request.drumStartBeat,
                                        beatSeconds: info.beatDuration)
             let base = Double(k) * LofiClock.beats
-            notes += score.notes.filter { $0.part.playsLead }.map { (base + $0.beat)...(base + $0.beat + $0.length) }
+            for note in score.notes where note.part.playsLead {
+                let beat = base + note.beat
+                if audible.contains(k) { snapshot.leadNotes.append(beat...(beat + note.length)) }
+                // The score marks the two identifying melody notes. Ornaments and strums share
+                // their stem, but do not define the return. M14 measures up to one second per note.
+                if request.section == .returnTheme, note.part == .lead, note.gain == LofiScore.returnRevealGain {
+                    let start = snapshot.time(beat: beat)
+                    let end = min(start + 1, snapshot.time(beat: beat + note.length))
+                    snapshot.returnLeadWindows.append(start..<end)
+                }
+            }
         }
-        return notes
     }
 
     /// The cue's transport window, ending at the 8-bar fill boundary that closes its piece, so a

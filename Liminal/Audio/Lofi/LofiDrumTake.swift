@@ -49,7 +49,6 @@ nonisolated struct LofiDrumTake: @unchecked Sendable {
         }
         landmarks = try LofiDrumLandmarks.detect(left: channels[0], right: channels[1], count: count,
                                                  sampleRate: clock.sampleRate)
-        timing = LofiTimingField(landmarks: landmarks, clock: clock)
         kicks = try Self.detectKicks(channels, count: count, sampleRate: clock.sampleRate)
         if let chain {
             try Task.checkCancellation()
@@ -75,6 +74,30 @@ nonisolated struct LofiDrumTake: @unchecked Sendable {
             for i in 0..<attack { channel[i] *= Float(i) / Float(attack - 1) }
             for i in 0..<release { channel[count - 1 - i] *= Float(i) / Float(release - 1) }
         }
+        let rises = try Self.bassRises(landmarks, channels: channels, count: count, sampleRate: clock.sampleRate)
+        timing = LofiTimingField(landmarks: landmarks, clock: clock, bassRises: rises)
+    }
+
+    /// Time bass against what the listener hears after the drum chain. The drummer's broadband
+    /// landmarks and the raw power rise used by kick ducking retain their original frames.
+    static func bassRises(_ raw: [LofiDrumLandmark], channels: UnsafePointer<UnsafeMutablePointer<Float>>,
+                          count: Int, sampleRate: Double) throws -> [Int: Int] {
+        var measured: [Int: Int] = [:]
+        let kicks = raw.indices.filter { raw[$0].kind == .kick }
+        for (position, i) in kicks.enumerated() where raw[i].confidence >= LofiScore.bassAccentConfidence {
+            try Task.checkCancellation()
+            let attack = raw[i].attackFrame
+            let start = max(0, attack - Int(0.120 * sampleRate))
+            let end = min(count, attack + Int(0.160 * sampleRate))
+            let next = position + 1 < kicks.count ? raw[kicks[position + 1]].attackFrame : end
+            guard start < end else { continue }
+            let mono = (start..<end).map { (channels[0][$0] + channels[1][$0]) * 0.5 }
+            if let rise = LofiBassVoice.smoothLowRise(mono, from: attack - start, sampleRate: sampleRate,
+                                                       until: next - start), start + rise >= attack {
+                measured[attack] = start + rise
+            }
+        }
+        return measured
     }
 
     /// The strongest confident kicks of a take (at most 24), for the attack-time probe.

@@ -411,6 +411,12 @@ nonisolated struct DialogueTransportSnapshot: Sendable {
     var kicks: [DialogueLandmark]
     var snares: [DialogueLandmark]
     var leadNotes: [ClosedRange<Double>] = []
+    /// Dry conductor-time windows of the first two melody notes in a return (M14).
+    var returnLeadWindows: [Range<Double>] = []
+
+    func clearsReturnLead(start: Double, end: Double) -> Bool {
+        !returnLeadWindows.contains { start < $0.upperBound && end > $0.lowerBound }
+    }
     /// The drummer's human offset in beats at each sixteenth of the take (256 values, from
     /// `LofiTimingField.sixteenthOffsets`); empty means a straight grid. The motif's slots follow it.
     var grooveOffsets: [Double] = []

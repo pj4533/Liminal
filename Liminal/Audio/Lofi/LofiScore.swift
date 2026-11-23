@@ -163,7 +163,7 @@ nonisolated struct LofiScore: Sendable, Equatable {
         let noteBeat: Double
         /// The kick's broadband attack.
         let kickBeat: Double
-        /// The kick's 40-160 Hz half-amplitude rise (`LofiDrumLandmark.lowRiseFrame`), the alignment target.
+        /// The finished kick's 40-160 Hz half-amplitude rise, or the raw-landmark estimate when unavailable.
         var kickLowRiseBeat: Double
         /// The voice's own low-band rise after note start, in beats (`LofiBassVoice.lowRiseLead`).
         var bassLowRiseBeats: Double
@@ -198,9 +198,9 @@ nonisolated struct LofiScore: Sendable, Equatable {
     var strumEvents: [LofiStrum.Event] = []
 
     static let phrasesPerForm = 8
-    /// The return's first two lead notes are revealed: +3 dB dry (+1.5 dB before mix calibration; a
+    /// The return's first two lead notes are revealed: +3.6 dB dry (+1.5 dB before mix calibration; a
     /// low-register hook read under 6 dB of salience, C-B6), 40 percent less send.
-    static let returnRevealGain: Float = 1.412_537_5
+    static let returnRevealGain: Float = 1.513_561_2
     static let returnRevealSend: Float = 0.6
 
     /// Each intact sixteen-bar drum break has a call, open space, variation and actual return.

@@ -119,6 +119,23 @@ class PrivateAssetTests(unittest.TestCase):
         self.assertNotIn(str(self.root), json.dumps(summary))
         self.assertNotIn('error', json.dumps(summary))
 
+    def test_historical_baseline_exit_preserves_exact_issue_inventory(self):
+        lines = [f'Test {method}() recorded an issue at Test.swift:1:1: Expectation failed: {assertion}'
+                 for (method, assertion), count in runner.BASELINE_ISSUES.items() for _ in range(count)]
+        footer = ['Test run with 52 tests in 3 suites failed after 99 seconds with 16 issues.', '** TEST FAILED **']
+        log = '\n'.join(lines + footer)
+        self.assertTrue(runner.baseline_native_issues(log, 65)['known'])
+        self.assertFalse(runner.baseline_native_issues(log, 124)['known'])
+        self.assertFalse(runner.baseline_native_issues('\n'.join(lines[1:] + footer), 65)['known'])
+        self.assertFalse(runner.baseline_native_issues(log + '\nTest unexpected() recorded an issue', 65)['known'])
+        (self.root / 'baseline-native.log').write_text(log)
+        steps = [dict(step=name, exit=65 if name == 'baseline-native' else 0) for name in runner.REQUIRED_STEPS]
+        (self.root / 'steps.jsonl').write_text('\n'.join(json.dumps(row) for row in steps))
+        execution = runner.phase_status(self.root)
+        self.assertTrue(execution['passed'])
+        self.assertEqual(execution['phases']['baseline-native'],
+                         dict(exits=[65], status='KNOWN_BASELINE_FAILURES'))
+
     def test_final_requires_successful_phase_exits_even_with_passing_reports(self):
         repo = Path(__file__).resolve().parents[1]
         bundle = self.root / 'bundle'; bundle.mkdir()
@@ -126,10 +143,10 @@ class PrivateAssetTests(unittest.TestCase):
             eligible=100, excluded=12, packs=[], beatGridSHA256='a'*64, bytePreserved=True, files=[])))
         out = self.root / 'run'; raw = out / 'raw'; raw.mkdir(parents=True)
         criteria = [dict(id=criterion, level=level, status='pass')
-                    for criterion, level in module('verify-matrix-integrity').TARGETED_LEVELS.items()]
+                    for criterion, level in module('verify-matrix-integrity').CRITERIA_LEVELS.items()]
         for label, revision in [('baseline', runner.BASELINE), ('after', 'candidate')]:
             (raw / (label + '-native.json')).write_text(json.dumps(dict(exit=0,
-                resourceIdentity=True, coverage=dict(passed=True))))
+                resourceIdentity=True, coverage=dict(passed=True), independentKickReference=True)))
             for case in ('ref', 'fast', 'same', 'transcribe'):
                 directory = raw / (label + '-matrix') / case
                 (directory / 'report').mkdir(parents=True)

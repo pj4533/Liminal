@@ -5,6 +5,7 @@ set -uo pipefail
 umask 077
 export LIMINAL_CAPTURE_CODE_SIGNING_ALLOWED=NO
 AFTER=$(cd "$1" && pwd)
+export LIMINAL_MIX_REPORT_CHECKOUT="$AFTER"
 BASELINE=$(cd "$2" && pwd)
 mkdir -p "$3"
 OUT=$(cd "$3" && pwd)
@@ -30,6 +31,7 @@ prepare)
     run_step baseline-cache-check git -C "$BASELINE" apply --check "$AFTER/scripts/baseline-verification-cache.patch" || exit $?
     run_step baseline-cache-adapter git -C "$BASELINE" apply "$AFTER/scripts/baseline-verification-cache.patch" || exit $?
     run_step baseline-matrix-adapter cp "$AFTER/scripts/mix-matrix.sh" "$BASELINE/scripts/mix-matrix.sh" || exit $?
+    run_step baseline-mix-shell-adapter cp "$AFTER/scripts/mix-report.sh" "$BASELINE/scripts/mix-report.sh" || exit $?
     run_step baseline-report-adapter cp "$AFTER/scripts/dialogue-salience-report.py" "$BASELINE/scripts/dialogue-salience-report.py" || exit $?
     run_step baseline-probe-adapter-check git -C "$BASELINE" apply --check "$AFTER/scripts/baseline-probe-measurement.patch" || exit $?
     run_step baseline-probe-adapter git -C "$BASELINE" apply "$AFTER/scripts/baseline-probe-measurement.patch" || exit $?
@@ -38,6 +40,8 @@ prepare)
     printf 'baseline-compiler-adapter\t%s\n' "$adapter" >> "$STATUS"
     [ "$adapter" -eq 0 ] || exit "$adapter"
     run_step baseline-capture-adapter python3 "$AFTER/scripts/prepare-baseline-capture.py" "$BASELINE" || exit $?
+    run_step baseline-public-fixture-adapter python3 "$AFTER/scripts/prepare-baseline-capture.py" --public-fixture "$BASELINE" || exit $?
+    run_step baseline-event-gain-adapter python3 "$AFTER/scripts/prepare-baseline-capture.py" --event-gain "$BASELINE" || exit $?
     git -C "$BASELINE" diff > "$OUT/baseline-verification-adapters.patch" || exit $?
     ;;
 speech)
@@ -130,16 +134,26 @@ final)
         baseline_revision=$(cat "$OUT/baseline-commit.txt" 2>/dev/null) || baseline_revision=missing
         run_step "$label-public-inventory" python3 "$AFTER/scripts/verify-matrix-integrity.py" "$OUT/$label-public-matrix" "$pair" "$revision" "$baseline_revision"
     done
-    python3 - "$STATUS" <<'PY'
-import csv, sys
+    python3 - "$STATUS" "$OUT" <<'PY'
+import csv, json, sys
+from pathlib import Path
 rows = list(csv.DictReader(open(sys.argv[1]), delimiter='\t'))
-required = {'prepare-media', 'provision-speech', 'baseline-build', 'after-build', 'baseline-probe', 'after-probe', 'baseline-public-matrix', 'after-public-matrix', 'media-gates', 'auditions', 'app-survived-200s', 'app-playback-evidence', 'baseline-cache-adapter', 'baseline-matrix-adapter', 'baseline-report-adapter', 'baseline-probe-adapter-check', 'baseline-probe-adapter', 'baseline-compiler-adapter', 'baseline-capture-adapter', 'baseline-public-inventory', 'after-public-inventory'}
+required = {'prepare-media', 'provision-speech', 'baseline-build', 'after-build', 'baseline-probe', 'after-probe', 'baseline-public-matrix', 'after-public-matrix', 'media-gates', 'auditions', 'app-survived-200s', 'app-playback-evidence', 'baseline-cache-adapter', 'baseline-matrix-adapter', 'baseline-mix-shell-adapter', 'baseline-report-adapter', 'baseline-probe-adapter-check', 'baseline-probe-adapter', 'baseline-compiler-adapter', 'baseline-capture-adapter', 'baseline-public-fixture-adapter', 'baseline-event-gain-adapter', 'baseline-public-inventory', 'after-public-inventory'}
 latest = {r['step']: r for r in rows}
 missing = required - latest.keys()
-failed = [r for r in latest.values() if int(r['exit'])]
+try:
+    prior = json.loads((Path(sys.argv[2]) / 'baseline-public-matrix/integrity.json').read_text())
+    baseline_failure_measured = prior['complete'] and not prior['rawStrictPassed']
+except (OSError, ValueError, KeyError):
+    baseline_failure_measured = False
+failed = [r for r in latest.values() if int(r['exit']) and not (
+    r['step'] == 'baseline-public-matrix' and int(r['exit']) == 1 and baseline_failure_measured)]
 earlier_failures = [r for r in rows if int(r['exit']) and r is not latest[r['step']]]
 print('Missing required steps:', sorted(missing))
 print('Latest failed steps:', failed)
+if baseline_failure_measured:
+    print('Baseline matrix completed with measured strict failures:', {
+        case: row['strictFailures'] for case, row in prior['cases'].items()})
 print('Earlier failed attempts retained in steps.tsv:', earlier_failures)
 raise SystemExit(1 if missing or failed else 0)
 PY

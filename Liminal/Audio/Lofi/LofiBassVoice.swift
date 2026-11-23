@@ -224,12 +224,14 @@ nonisolated enum LofiBassVoice: Int, CaseIterable, Sendable {
 
     // MARK: Smooth low-band rise (the C-B2 measure)
 
+    static let lowRiseWindowEnd = 0.080
+
     /// The C-B2 rise of a signal (scripts/mixlib/lowend.py): the 40-160 Hz band (4th-order Butterworth
     /// high- and low-pass, forward then backward), its analytic (Hilbert) envelope, a centred 2 ms
     /// average, then in `[from - 30 ms, from + 80 ms)` the last frame more than 6 dB under the window's
     /// peak before that peak, plus one. Unlike the 2 ms power of `LofiDrumLandmarks.lowBandRise`, this
     /// envelope does not ripple with a low note's waveform, so the frame is stable across pitches.
-    static func smoothLowRise(_ input: [Float], from center: Int, sampleRate: Double) -> Int? {
+    static func smoothLowRise(_ input: [Float], from center: Int, sampleRate: Double, until limit: Int? = nil) -> Int? {
         let count = input.count
         guard count > 16 else { return nil }
         var band = input
@@ -270,7 +272,7 @@ nonisolated enum LofiBassVoice: Int, CaseIterable, Sendable {
             let lo = min(count, max(0, k - w / 2)), hi = min(count, max(0, k - w / 2 + w))
             return hi > lo ? (sums[hi] - sums[lo]) / Double(hi - lo) : 0
         }
-        let a = max(0, center - Int(0.030 * sampleRate)), b = min(count, center + Int(0.080 * sampleRate))
+        let a = max(0, center - Int(0.030 * sampleRate)), b = min(count, center + Int(lowRiseWindowEnd * sampleRate), limit ?? count)
         guard b - a >= 4 else { return nil }
         let values = (a..<b).map(smooth)
         guard let peakIndex = values.indices.max(by: { values[$0] < values[$1] }), values[peakIndex] > 1e-9 else { return nil }

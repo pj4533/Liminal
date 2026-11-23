@@ -224,6 +224,51 @@ def compare(ref, ref_hits, swift_frames, scale, rate, verbose=False):
     return out
 
 
+def supported_kick_evidence(ref, kicks, row, scale, rate):
+    """Only require a kick classification when the independent spectrum is clear."""
+    tol = MATCH_MS * rate / 1000
+    candidate = [point[0] * scale for point in row['kicks']]
+    confident = [point[0] * scale for point in row['kicks'] if point[2] >= 0.5]
+    all_attacks = candidate + [point[0] * scale for point in row['snares']]
+    if not kicks:
+        return dict(references=0, matched=0, confidentMatched=0, precisionObservations=0, confirmed=0,
+                    ambiguous=0, ambiguousMatched=0)
+    median = float(np.median([hit['strength'] for hit in kicks]))
+    strong = [hit['frame'] for hit in kicks if hit['strength'] >= median]
+    # The reference's 0.50 low-band split includes mixed events. Require a 0.60 share
+    # before using the reference as a class label, consistent with confident Swift kicks.
+    clear = [frame for frame in strong if ref.low_share(frame) >= 0.60]
+    ambiguous = [frame for frame in strong if frame not in clear]
+    precision = [frame for frame in confident
+                 if ref.rise('low', frame) >= median and ref.low_share(round(frame)) >= 0.60]
+
+    def matches(frames, reference):
+        return sum(any(abs(frame - other) <= tol for other in reference) for frame in frames)
+
+    return dict(references=len(clear), matched=matches(clear, candidate),
+                confidentMatched=matches(clear, confident),
+                precisionObservations=len(precision), confirmed=matches(precision, [h['frame'] for h in kicks]),
+                ambiguous=len(ambiguous), ambiguousMatched=matches(ambiguous, all_attacks))
+
+
+def verified_kick_evidence(evidence):
+    # The original agreement floor was one half. Test recall, precision, and mixed-attack
+    # coverage independently now that each denominator has a defined audio-based meaning.
+    limits = (('matched', 'references'), ('confirmed', 'precisionObservations'),
+              ('ambiguousMatched', 'ambiguous'))
+    aggregate = {(numerator, denominator): (sum(row[numerator] for row in evidence),
+                                            sum(row[denominator] for row in evidence))
+                 for numerator, denominator in limits}
+    for numerator, denominator, floor in (('matched', 'references', 95),
+                                         ('confirmed', 'precisionObservations', 90),
+                                         ('ambiguousMatched', 'ambiguous', 95)):
+        found, total = aggregate[numerator, denominator]
+        if total == 0 or 100 * found < floor * total:
+            return False
+    return all(2 * row[numerator] >= row[denominator]
+               for row in evidence for numerator, denominator in limits)
+
+
 def plot(path, ref, ref_hits, swift_frames, scale, rate, name, start_beat, beats, frames_per_beat_raw):
     import matplotlib
     matplotlib.use("Agg")
@@ -261,6 +306,8 @@ def main():
     parser.add_argument("--out", required=True, help="directory for PNGs and summary.json")
     parser.add_argument("--plots", type=int, default=3)
     parser.add_argument("--only", help="analyse only takes whose name contains this text")
+    parser.add_argument("--verify-corpus", action="store_true",
+                        help="require all 100 private takes and verify independent kick evidence")
     parser.add_argument("--verbose", action="store_true", help="list missed and unconfirmed hits")
     parser.add_argument("--plot-at", type=float, help="plot window start in beats (default 4)", default=4)
     parser.add_argument("--plot-beats", type=float, default=4)
@@ -268,19 +315,27 @@ def main():
     os.makedirs(args.out, exist_ok=True)
 
     swift = {}
+    duplicate_rows = set()
     with open(args.swift_log, errors="replace") as log:
         for line in log:
             at = line.find("LANDMARKS {")
             if at < 0:
                 continue
             row = json.loads(line[at + len("LANDMARKS "):].strip())
+            if row["name"] in swift:
+                duplicate_rows.add(row["name"])
             swift[row["name"]] = row
     if not swift:
         sys.exit("no LANDMARKS lines in the Swift log; did the private-take test run?")
 
-    rows, worst = [], []
+    rows, kick_evidence = [], {}
     names = sorted(n for n in swift if os.path.exists(os.path.join(args.takes, n + ".wav"))
                    and (args.only is None or args.only in n))
+    if args.verify_corpus:
+        expected = {os.path.splitext(name)[0] for name in os.listdir(args.takes)
+                    if name.endswith(".wav")}
+        if args.only or len(expected) != 100 or set(names) != expected or set(swift) != expected or duplicate_rows:
+            sys.exit("private landmark verification requires exactly one row per WAV in the 100-take corpus")
     for index, name in enumerate(names):
         row = swift[name]
         rate, mono = load(os.path.join(args.takes, name + ".wav"))
@@ -295,6 +350,8 @@ def main():
             print(name)
         result = compare(ref, hits, frames, scale, rate, args.verbose)
         rows.append((name, result))
+        if args.verify_corpus:
+            kick_evidence[name] = supported_kick_evidence(ref, hits['kick'], row, scale, rate)
         if index < args.plots:
             fpb_raw = row["framesPerBeat"] * scale
             plot(os.path.join(args.out, f"{name}.png"), ref, hits, frames, scale, rate, name, args.plot_at,
@@ -329,8 +386,14 @@ def main():
         s = summary[kind]
         print(f"ALL {kind}: recall {s['recall']:.3f} (min {s['min_recall']:.3f}), precision {s['precision']:.3f} "
               f"(min {s['min_precision']:.3f}), median {s['median_ms']:.2f} ms, p90 {s['p90_ms']:.2f} ms")
+    report = {"overall": summary, "takes": {n: r for n, r in rows}}
+    if args.verify_corpus:
+        report["kickEvidence"] = kick_evidence
+        report["kickEvidencePassed"] = verified_kick_evidence(list(kick_evidence.values()))
     with open(os.path.join(args.out, "summary.json"), "w") as f:
-        json.dump({"overall": summary, "takes": {n: r for n, r in rows}}, f, indent=1)
+        json.dump(report, f, indent=1)
+    if args.verify_corpus and not report["kickEvidencePassed"]:
+        sys.exit("private kick evidence did not meet the coverage, recall and precision limits")
 
 
 if __name__ == "__main__":

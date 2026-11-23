@@ -696,3 +696,24 @@ a cut whose zero crossing was one sample into the voiced core. The onset clamp
 now selects an earlier crossing within the fragment, with an exact core-start
 fallback and the existing fade. This preserves all samples required by the
 whole-word landing.
+
+The local return captures found dry dialogue competing with the first two
+notes of the theme, particularly when a reverse pickup began before its grid
+point. The phrase planner now checks each dry interval against those two scored
+notes and applies the same check when repairing an empty bar. The two return
+notes get 3.6 dB of reveal gain, with the existing wet send and phrase level.
+
+The first seconds of a quiet breakdown can use the outgoing room while its pad
+opens. The renderer gives the carry a short, tapered lift in proportion to the
+incoming phrase trim. Seed 2077's phrase-six boundary improved from 6.21 to
+5.87 dB, within the original six-decibel limit. The drum tape crest solver can
+extend its existing search by 0.4 dB if the normal range is exhausted. That
+puts two recordings previously measured at 14.16 and 14.11 dB below 14 dB.
+
+The private fast-case capture measured the bass body about 36 ms ahead of its
+kicks. The previous fixed share of the raw attack interval worked on many takes,
+including the reference, and moved this slower kick's body too early. Take
+preparation now measures the finished kick's low-band envelope and stores that
+target separately from the raw onset used by the strike and sidechain. The voice
+still compensates for its own rise time. The estimated target serves as a fallback
+when the finished kick has no measurable rise.

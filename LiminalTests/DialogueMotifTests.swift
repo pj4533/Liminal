@@ -120,6 +120,41 @@ struct DialogueMotifTests {
 
     static let seeds: [UInt64] = [1, 2, 3, 5, 8, 13]
 
+    @Test func returnMelodyHasRoomForItsFirstTwoNotesAndBarThirteenStillSpeaks() throws {
+        let film = MotifShape.film(MotifShape.corpus, id: "return-clearance", transcribed: true)
+        let beat = 60.0 / 72
+        let window = (32 * beat)..<(64 * beat)
+        // Both seeds previously put a reversed pickup and a forward word across the melody.
+        for seed: UInt64 in [2, 10] {
+            let info = LofiTransportInfo(revision: 1, takeIndex: 0, phraseAtTakeStart: 0, origin: 0,
+                beatDuration: beat, nextBeatDuration: nil, seed: seed, options: .init(tempo: 72), timing: nil)
+            let snapshot = DialogueCueCoordinator.snapshot(info, window: window)
+            let score = LofiScore.make(seed: seed, section: .returnTheme, drift: .init(seed: seed),
+                                       startBeat: 48, beatSeconds: beat)
+            let notes = score.notes.filter { $0.part == .lead }.sorted { $0.beat < $1.beat }.prefix(2)
+            let openings = notes.map { note in
+                let start = snapshot.time(beat: 48 + note.beat)
+                return start..<min(start + 1, snapshot.time(beat: 48 + note.beat + note.length))
+            }
+            #expect(openings.count == 2)
+            #expect(snapshot.returnLeadWindows == openings)
+            var memory = DialoguePerformanceMemory()
+            let planned = try #require(DialogueMotif.plan(source: film.source, analysis: film.analysis,
+                bank: film.bank, transcript: film.transcript, snapshot: snapshot, window: window,
+                earliestStart: window.lowerBound, memory: &memory, seed: seed, cueToken: 1, revision: 0))
+            let chops = planned.render()
+            #expect(chops.contains { $0.event.block == 3 && $0.event.slot < 16 })
+            for chop in chops {
+                let total = Int(chop.buffer.frameLength), rate = chop.buffer.format.sampleRate
+                var dry = total
+                if case .echoThrow(_, let tail) = chop.event.effect { dry -= Int((tail * rate).rounded()) }
+                let start = chop.event.startTime
+                let end = start + Double(dry) / rate
+                #expect(openings.allSatisfy { start >= $0.upperBound || end <= $0.lowerBound })
+            }
+        }
+    }
+
     @Test(arguments: MotifShape.all) fileprivate func everyBarOfEveryLoopHasAPieceOnset(_ shape: MotifShape) throws {
         for seed in Self.seeds {
             let r = run(shape, seed: seed)

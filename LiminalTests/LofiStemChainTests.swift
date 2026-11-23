@@ -95,11 +95,12 @@ struct LofiStemChainTests {
 
     /// 10 to 90 percent rise of the 40 to 150 Hz band envelope (1 ms RMS) after each attack, seconds.
     static func attackTimes(_ left: [Float], _ right: [Float], at onsets: [Int]) -> [Double] {
-        var l = left, r = right
-        let q = 0.7071067811865476
-        var band = LofiFilterChain([.highpass(hz: 40, q: q), .highpass(hz: 40, q: q),
-                                    .lowpass(hz: 150, q: q), .lowpass(hz: 150, q: q)], sampleRate: rate)
-        band.process(left: &l, right: &r)
+        let band = LofiRecordedKickCheck.bandLimited(left, right, rate: rate)
+        return attackTimesInBand(band, at: onsets)
+    }
+
+    private static func attackTimesInBand(_ band: (left: [Float], right: [Float]), at onsets: [Int]) -> [Double] {
+        let (l, r) = band
         let hop = Int(rate * 0.001)
         return onsets.compactMap { onset in
             let windows = stride(from: max(0, onset - 5 * hop), to: min(l.count - hop, onset + 80 * hop), by: hop).map {
@@ -299,9 +300,39 @@ struct LofiStemChainTests {
         #expect(20 * log10(peak) <= -4 + 1e-3)
     }
 
+    @Test func recordedAttackCheckSeparatesFirstLobeDamageFromALaterPeakChange() {
+        let anchor = 2_400
+        func signal(delay: Double = 0, swell: Double = 0.004, laterPeak: Double = 0.10) -> [Float] {
+            (0..<7_200).map { frame in
+                let time = Double(frame - anchor) / Self.rate - delay
+                guard time >= 0 else { return 0 }
+                let first = min(1, time / swell) * exp(-time * 55)
+                let later = laterPeak * exp(-pow((time - 0.058) / 0.008, 2))
+                return Float(sin(2 * .pi * 80 * time) * (first + later))
+            }
+        }
+        let raw = signal()
+        func check(_ processed: [Float]) -> LofiRecordedKickCheck.Result {
+            LofiRecordedKickCheck.evaluate(before: (raw, raw), after: (processed, processed),
+                                           onsets: [anchor], rate: Self.rate)
+        }
+        let original = check(raw)
+        #expect(original.tracked == 1 && original.passed)
+        let delayed = check(signal(delay: 0.008))
+        #expect(!delayed.passed)
+        let smeared = check(signal(swell: 0.016))
+        #expect(smeared.tracked == 1 && !smeared.passed)
+        let later = check(signal(laterPeak: 0.70))
+        #expect(later.tracked == 1 && later.passed)
+        let silent = check(Array(repeating: 0, count: raw.count))
+        #expect(silent.energyFallback == 1 && !silent.passed)
+    }
+
     @Test(.enabled(if: !LofiDrumLibrary.assets().isEmpty), .responsivePool)
     func installedTakesLandInsideTheDrumBusTargets() throws {
         var worst = 0.0
+        var expectedAttacks = 0
+        var measuredAttacks = 0
         for asset in LofiDrumLibrary.assets() {
             let recording = try LofiDrumLibrary.load(asset)
             // A tempo 6 percent off the recording exercises the resampler, as the app does.
@@ -316,18 +347,39 @@ struct LofiStemChainTests {
                 return Self.db(Double(all.map(abs).max() ?? 0)) - Self.db(Self.rms(all[...]))
             }
             let before = Self.channels(raw.buffer), after = Self.channels(take.buffer)
-            let kicks = take.landmarks.filter { $0.kind == .kick && $0.confidence >= 0.5 }.map(\.attackFrame)
-            let rise = Self.attackTimes(after.left, after.right, at: kicks).reduce(0, +)
-                / max(1e-9, Self.attackTimes(before.left, before.right, at: kicks).reduce(0, +))
+            let kickLandmarks = take.landmarks.filter { $0.kind == .kick }
+            let kicks = kickLandmarks.filter { $0.confidence >= 0.5 }.map(\.attackFrame)
+            // A sparse take can have no confident classified kick. Use the remaining kick
+            // candidates only when they provide an independently measurable early waveform.
+            let anchors = kicks.isEmpty ? kickLandmarks.map(\.attackFrame) : kicks
+            func measure(_ audio: (left: [Float], right: [Float])) -> (legacy: Double, windows: [[Double]?]) {
+                let band = LofiRecordedKickCheck.bandLimited(audio.left, audio.right, rate: Self.rate)
+                return (Self.attackTimesInBand(band, at: kicks).reduce(0, +),
+                        LofiRecordedKickCheck.envelopes(in: band, onsets: anchors, rate: Self.rate))
+            }
+            let beforeAttack = measure(before), afterAttack = measure(after)
+            let rise = afterAttack.legacy / max(1e-9, beforeAttack.legacy)
             let peak = Self.db(Double((after.left + after.right).map(abs).max() ?? 0))
             print(String(format: "PREP take %@ %.3f s; crest %.2f -> %.2f dB; peak %.2f dBFS; kick rise ratio %.3f",
                          asset.entry.name, seconds, crest(before), crest(after), peak, rise))
             #expect((10...14).contains(crest(after)), "\(asset.entry.name) crest \(crest(after))")
             #expect(peak <= -4 + 1e-3)
-            #expect(rise <= 1.2)
+            let attack = LofiRecordedKickCheck.evaluate(before: beforeAttack.windows, after: afterAttack.windows)
+            expectedAttacks += anchors.count
+            measuredAttacks += attack.tracked + attack.energyFallback
+            let coverage = "first lobe \(attack.tracked), energy only \(attack.energyFallback), unresolved \(attack.unresolved), expected \(anchors.count)"
+            #expect(attack.readings.count == anchors.count)
+            if kicks.isEmpty && attack.tracked + attack.energyFallback == 0 {
+                // An independent waveform landmark check covers the source classification.
+                print("PREP attacks \(asset.entry.name): no supported kick, \(coverage)")
+            } else {
+                print("PREP attacks \(asset.entry.name): \(coverage)")
+                #expect(attack.passed, "\(asset.entry.name): \(coverage)")
+            }
             #expect(take.kicks == raw.kicks && take.landmarks == raw.landmarks)
         }
         print(String(format: "PREP worst take preparation %.3f s", worst))
+        #expect(expectedAttacks > 0 && 2 * measuredAttacks >= expectedAttacks)
         #expect(worst < 3.0)
     }
 
@@ -743,5 +795,144 @@ struct LofiStemChainTests {
         print(String(format: "PREP synthetic take (resample, landmarks, chain) %.3f s; worst phrase %.3f s", takeSeconds, worstPhrase))
         #expect(takeSeconds < 3.0)
         #expect(worstPhrase < 1.5)
+    }
+}
+/// Paired take measurement on the original kick anchors. A later peak can change under tape
+/// rounding without changing the attack, so the raw first trough bounds both measurements.
+enum LofiRecordedKickCheck {
+    struct Reading {
+        var first: Double?
+        var body: Double?
+        var firstLobeEnergyLossDB: Double?
+        var earlyEnergyLossDB: Double?
+    }
+
+    struct Result {
+        let readings: [Reading]
+        var tracked: Int { readings.filter { $0.body != nil }.count }
+        var energyFallback: Int { readings.filter { $0.body == nil && $0.earlyEnergyLossDB != nil }.count }
+        var unresolved: Int { readings.count - tracked - energyFallback }
+
+        private func within(_ values: [Double], median: Double, p90: Double) -> Bool {
+            guard !values.isEmpty else { return true }
+            let sorted = values.sorted()
+            func percentile(_ fraction: Double) -> Double {
+                let position = fraction * Double(sorted.count - 1)
+                let lower = Int(position), upper = min(lower + 1, sorted.count - 1)
+                return sorted[lower] + (position - Double(lower)) * (sorted[upper] - sorted[lower])
+            }
+            return percentile(0.5) <= median && percentile(0.9) <= p90
+        }
+
+        var passed: Bool {
+            // C-B2 uses −6 dB low-band rise as an acoustic anchor (5 ms median, 12 ms p90).
+            // The energy-only fallback protects against a halving of early energy. It remains
+            // explicitly labeled as energy evidence, with no claimed timing observation.
+            tracked + energyFallback > 0 &&
+            within(readings.compactMap { $0.first.map(abs) }, median: 5, p90: 12) &&
+            within(readings.compactMap { $0.body.map(abs) }, median: 5, p90: 12) &&
+            within(readings.compactMap(\.firstLobeEnergyLossDB), median: 3, p90: 6) &&
+            within(readings.compactMap { $0.body == nil ? $0.earlyEnergyLossDB : nil }, median: 3, p90: 6)
+        }
+    }
+
+    private static let before = 16
+    private static let end = 80
+
+    static func bandLimited(_ left: [Float], _ right: [Float], rate: Double) -> (left: [Float], right: [Float]) {
+        var left = left, right = right
+        let q = LofiStemChains.butterworthQ
+        var band = LofiFilterChain([.highpass(hz: 40, q: q), .highpass(hz: 40, q: q),
+                                    .lowpass(hz: 150, q: q), .lowpass(hz: 150, q: q)], sampleRate: rate)
+        band.process(left: &left, right: &right)
+        return (left, right)
+    }
+
+    static func envelopes(in band: (left: [Float], right: [Float]), onsets: [Int], rate: Double) -> [[Double]?] {
+        let (left, right) = band
+        let hop = Int(rate * 0.001)
+        return left.withUnsafeBufferPointer { l in
+            right.withUnsafeBufferPointer { r in
+                onsets.map { onset in
+                    guard onset >= before * hop, onset + end * hop <= l.count else { return nil }
+                    return (-before..<end).map { ms in
+                        let start = onset + ms * hop
+                        let window = start..<(start + hop)
+                        return Double((vDSP.meanSquare(l[window]) + vDSP.meanSquare(r[window])) * 0.5)
+                    }
+                }
+            }
+        }
+    }
+
+    private static func smoothed(_ power: [Double]) -> [Double] {
+        power.indices.map { i in
+            let nearby = power[max(0, i - 1)..<min(power.count, i + 2)]
+            return (nearby.reduce(0, +) / Double(nearby.count)).squareRoot()
+        }
+    }
+
+    static func measure(_ rawPower: [Double]?, _ postPower: [Double]?) -> Reading {
+        guard let rawPower, let postPower else { return Reading() }
+        let raw = smoothed(rawPower), post = smoothed(postPower)
+        let rawFloor = raw[1..<(before - 5)].sorted()[5]
+        let postFloor = post[1..<(before - 5)].sorted()[5]
+        let earlyEnd = before + 25
+        let onset = before - 2
+        let earlyMax = raw[onset..<earlyEnd].max() ?? 0
+        // Require an early peak at least 6 dB above the window's actual background.
+        guard earlyMax > max(1e-5, 2 * rawFloor) else { return Reading() }
+
+        func share(_ power: [Double], end: Int, total: Int) -> Double {
+            power[before..<end].reduce(0, +) / max(1e-20, power[before..<total].reduce(0, +))
+        }
+        func loss(end: Int, total: Int) -> Double {
+            let a = share(rawPower, end: end, total: total)
+            let b = share(postPower, end: end, total: total)
+            return 10 * log10(max(1e-10, a) / max(1e-10, b))
+        }
+        var reading = Reading(earlyEnergyLossDB: loss(end: earlyEnd, total: before + end))
+        let prominent = rawFloor + 0.5 * (earlyMax - rawFloor)
+        guard let peak = (onset..<(earlyEnd - 2)).first(where: {
+            raw[$0] >= prominent && raw[$0 - 1] < raw[$0] && raw[$0] >= raw[$0 + 1]
+        }), let trough = ((peak + 2)..<(peak + 19)).first(where: {
+            raw[$0 - 1] > raw[$0] && raw[$0] <= raw[$0 + 1] && raw[$0] <= raw[peak] * 0.85
+        }), let postPeak = (onset...trough).max(by: { post[$0] < post[$1] }),
+            post[postPeak] > max(1e-5, postFloor * 2) else { return reading }
+
+        func crossing(_ signal: [Double], peak: Int, floor: Double, fraction: Double) -> Double? {
+            let threshold = floor + fraction * (signal[peak] - floor)
+            guard let index = ((before - 5)...peak).first(where: { signal[$0] >= threshold }),
+                index > before - 5 else { return nil }
+            let prior = signal[index - 1]
+            return Double(index - 1) + (threshold - prior) / (signal[index] - prior)
+        }
+        guard let r10 = crossing(raw, peak: peak, floor: rawFloor, fraction: 0.1),
+            let r90 = crossing(raw, peak: peak, floor: rawFloor, fraction: 0.9),
+            let p10 = crossing(post, peak: postPeak, floor: postFloor, fraction: 0.1),
+            let r50 = crossing(raw, peak: peak, floor: rawFloor, fraction: 0.5),
+            let p50 = crossing(post, peak: postPeak, floor: postFloor, fraction: 0.5),
+            r90 - r10 >= 1_000 / (2 * 150) else { return reading }
+        reading.first = p10 - r10
+        // Smearing also redistributes the first lobe's energy without necessarily
+        // delaying the first crossing. Later peaks beyond 25 ms cannot affect this check.
+        let lobeEnd = min(earlyEnd - 1, max(before + 1, (before + peak) / 2))
+        reading.firstLobeEnergyLossDB = loss(end: lobeEnd, total: earlyEnd)
+        // A peak still rising at the boundary cannot establish the body crossing.
+        if postPeak != trough {
+            reading.body = p50 - r50
+        }
+        return reading
+    }
+
+    static func evaluate(before: ([Float], [Float]), after: ([Float], [Float]),
+                         onsets: [Int], rate: Double) -> Result {
+        let raw = envelopes(in: bandLimited(before.0, before.1, rate: rate), onsets: onsets, rate: rate)
+        let post = envelopes(in: bandLimited(after.0, after.1, rate: rate), onsets: onsets, rate: rate)
+        return evaluate(before: raw, after: post)
+    }
+
+    static func evaluate(before: [[Double]?], after: [[Double]?]) -> Result {
+        Result(readings: zip(before, after).map { measure($0, $1) })
     }
 }

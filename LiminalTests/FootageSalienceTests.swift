@@ -60,6 +60,59 @@ struct FootageSalienceTests {
         }
     }
 
+    @Test func feasibleSliverBetweenShownStartsRemainsTargetable() throws {
+        // Lead 3...10 gives starts 110...117. Only 114...115 clears both previous starts.
+        let lines = [Self.line(120)]
+        for seed: UInt64 in 0..<100 {
+            var draw = MusicRNG(seed: seed)
+            let expected = draw.chance(0.65)
+            let pick = Self.pick(seed: seed, lines: lines, shown: [94, 135], preroll: 0, delay: 0)
+            #expect((pick != nil) == expected)
+            if let pick { #expect((114...115).contains(pick.segmentStart)) }
+        }
+    }
+
+    @Test func slowedBedAndNativeDialogueUseTheirOwnTimeBases() throws {
+        let request = FootageWeaver.Request(index: 0, slot: 0, start: 0, fadeIn: 2, length: 48,
+                                            recipe: .plain(.window), seed: 0.1, rate: 0.75,
+                                            warp: 0, level: 0.5, swell: 0, sound: true)
+        let cue = try #require(ArchiveAudioCuePlan(piece: request.piece(clipID: "film", segmentStart: 60),
+                                                   clipDuration: 600))
+        #expect(cue.rate == 0.75)
+        #expect(ArchiveDialogueSource.containedSeconds(cue) == 32)
+        let short = try #require(ArchiveAudioCuePlan(piece: request.piece(clipID: "film", segmentStart: 60, length: 12),
+                                                     clipDuration: 600))
+        let heard = (short.endAt - short.beginAt) * Double(short.rate)
+        #expect(short.sourceLength > heard)
+        #expect(ArchiveDialogueSource.containedSeconds(short) == heard)
+    }
+
+    @Test func measuringMissedOpportunitiesPreservesTheSelectedPieceAndCatalogStream() throws {
+        let clip = ArchiveCachePolicyTests.clip("film", mb: 1, used: nil)
+        let index = DialogueSalienceIndex(), ledger = DialogueLineLedger()
+        index.record(contentID: clip.id, scanned: 100..<150, lines: [Self.line()])
+        var targeted = Set<Bool>()
+        for piece in 0..<100 {
+            let request = FootageWeaver.Request(index: piece, slot: 0, start: 0, fadeIn: 2, length: 48,
+                                                recipe: .plain(.window), seed: 0.1, rate: 0.75,
+                                                warp: 0, level: 0.5, swell: 0, sound: true)
+            var liveRNG = MusicRNG(seed: UInt64(piece)), measuredRNG = liveRNG
+            var liveWeaver = FootageWeaver(seed: 1, timing: .standard), measuredWeaver = liveWeaver
+            let live = try #require(FootageSalience.prepare(request, clips: [clip], weaver: &liveWeaver,
+                rng: &liveRNG, elapsed: 0, index: index, ledger: ledger))
+            let measured = try #require(FootageSalience.prepare(request, clips: [clip], weaver: &measuredWeaver,
+                rng: &measuredRNG, elapsed: 0, index: index, ledger: ledger, measureOpportunity: true))
+            targeted.insert(live.targeted)
+            #expect(measured.measuredFeasible == true)
+            #expect(measured.targeted == live.targeted)
+            #expect(measured.catalogStart == live.catalogStart)
+            #expect(measured.piece == live.piece)
+            let nextLive = liveRNG.next(), nextMeasured = measuredRNG.next()
+            #expect(nextLive == nextMeasured)
+        }
+        #expect(targeted == [true, false])
+    }
+
     @Test func sourceDelayUsesThePictureRateAndFillHasNoDelay() {
         for rate in [0.6, 0.85, 1.0] {
             for delay in [0.0, 0.75] {

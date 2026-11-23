@@ -1,4 +1,5 @@
 import Accelerate
+import AVFoundation
 import Foundation
 import Testing
 @testable import Liminal
@@ -43,6 +44,36 @@ struct LofiBassLineTests {
                                           confidence: 0.3))
         }
         return LofiTimingField(landmarks: marks, clock: clock)
+    }
+
+    @Test func slowKickBodyAndBroadbandStrikeHaveIndependentTargets() throws {
+        let clock = Self.clock
+        let count = Int(0.2 * clock.sampleRate)
+        let attack = Int(0.012 * clock.sampleRate)
+        let buffer = try LofiRenderer.stereoBuffer(clock: clock, frames: count)
+        let channels = try #require(buffer.floatChannelData)
+        for frame in attack..<count {
+            let t = Double(frame - attack) / clock.sampleRate
+            let envelope = exp(-pow((t - 0.075) / 0.016, 2))
+            let sample = frame == attack ? Float(1) : Float(envelope * sin(2 * .pi * 75 * t))
+            channels[0][frame] = sample
+            channels[1][frame] = sample
+        }
+        let kick = LofiDrumLandmark(kind: .kick, attackFrame: attack, peakFrame: attack, strength: 1,
+                                    confidence: 1, lowRiseFrame: attack + Int(0.061 * clock.sampleRate))
+        let rises = try LofiDrumTake.bassRises([kick], channels: channels, count: count, sampleRate: clock.sampleRate)
+        let rise = try #require(rises[attack])
+        #expect((0.052...0.070).contains(Double(rise - attack) / clock.sampleRate))
+        let timing = LofiTimingField(landmarks: [kick], clock: clock, bassRises: rises)
+        let score = Self.score(0, seed: 1042, timing: timing)
+        let anchor = try #require(score.bassAnchors.first)
+        let note = try #require(Self.bass(score).first { $0.beat == anchor.noteBeat && $0.strike > 0 })
+        let start = clock.frame(at: note.beat)
+        #expect(abs(clock.frame(at: anchor.kickLowRiseBeat) - rise) <= 1)
+        #expect(abs(start + Int((anchor.bassLowRiseBeats * clock.framesPerBeat).rounded()) - rise) <= 1)
+        let peak = start + score.bassStrikeShift(note, clock: clock) + Int((LofiBassVoice.strikePeakTime * clock.sampleRate).rounded())
+        #expect(abs(peak - attack) <= 1)
+        #expect(timing.landmarks == [kick])
     }
 
     static func release(_ note: LofiScore.Note, _ score: LofiScore, clock: LofiClock = Self.clock) -> Double {

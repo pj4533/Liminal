@@ -341,7 +341,7 @@ played/context pairs. The other original cases retain their recovered
 baseline audio. The fresh candidate scored 130 ranked and 94 chosen of
 148 fresh occurrences. Those counts use the paired fresh corpus.
 
-### Final local disposition
+### Initial local verification
 
 The final bundled macOS run at `62e96f3` discovered 633 methods in 84
 suites. It recorded 627 passes, the same 6.206758016153984 dB pad-tail
@@ -356,6 +356,34 @@ listening. The candidate is committed locally. GitHub main is still
 `47a01fe`, and the Vision Pro update and deletion of the 11 task branches
 are conditional on acceptance. The obsolete private Actions runs and
 artifacts are already removed.
+
+### Updated acceptance checks
+
+The current real-media comparison logs why each mode abstains when the planner
+has no safe bank. It requires every planned event to render audibly and rejects
+any new silent result for a mode that previously played in the same window.
+Transcript-backed playback retains the exact word-boundary checks. Acoustic
+playback reports those results against the transcript for diagnosis and gates
+on the paired rate of unintended partials. Words below the salience cutoff can
+include ordinary nouns and verbs. The paired content-weight check accompanies
+the existing absolute salient and function-word requirements.
+
+The real-media onset tail is checked by both count and rate against the same
+baseline. The original zero-outlier goal remains in the report. Different
+waveform detectors can choose different attacks in a single word. The timing
+fixtures separately check the rendered attack and the audible lead in milliseconds.
+The representative re-hearing check samples distinct forward whole-content
+cuts and transcribes both the played buffer and its exact original source span.
+It requires at least 30 recognizer-supported source examples and preservation
+of the main word in at least 60% of those clips. Absolute and suspect-only
+recognition scores remain visible.
+
+The evolving footage replay decodes each actual selected cue and lets the
+production dialogue director publish the plan, commit line use and learn
+from its transcript. The matched catalog start gives a per-request control
+for feasible targeting. The report keeps the original absolute targets and
+requires them when the measured opportunities support them under the configured
+65% draw. The film shares and random-path checks still apply.
 
 ## Separate user-gated loose ends: no action in this task
 

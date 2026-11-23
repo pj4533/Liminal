@@ -6,6 +6,9 @@
 # env:   DD (derived data, default /private/tmp/liminal-salience-dd), FOCUS (comma list of words that
 #        always get a snippet), BUILD=0 to skip build-for-testing.
 #        PROBE_FILM (film ID filter), PROBE_CHUNK (zero-based diagnostic window).
+#        PROBE_FOOTAGE_SEED (saved matching salience index) replays just footage.
+#        PROBE_FOOTAGE_PICKS (default 500 per arm) permits a shorter diagnostic smoke test.
+#        PROBE_SKIP_FOOTAGE=1 saves the probe results and learned index for a separate replay.
 #
 # Transcribes with the installed on-device model only (never downloads), never calls Gemini and never
 # touches the network. Run one capture or test at a time on a machine. Output: <out-dir>/probe.log,
@@ -23,6 +26,11 @@ python3 - "$CONFIG" "$ROOT" "$CHUNKS" "$BPM" "$FOCUS" "$OUT/bugs" <<'PY'
 import json, os, sys
 path, root, chunks, bpm, focus, bugs = sys.argv[1:]
 selection = {}
+if footage_seed := os.getenv("PROBE_FOOTAGE_SEED"):
+    selection["footageSeed"] = os.path.abspath(footage_seed)
+    selection["footagePicks"] = int(os.getenv("PROBE_FOOTAGE_PICKS", "500"))
+if os.getenv("PROBE_SKIP_FOOTAGE") == "1":
+    selection["skipFootage"] = True
 if film := os.getenv("PROBE_FILM"):
     selection["only"] = [film]
 if value := os.getenv("PROBE_CHUNK"):

@@ -56,7 +56,7 @@ def export(source, destination, summary, reviews=None):
         whole = row['events'][-1].get('sourceFrames', []) if row.get('events') else []
         context = row.get('contextFrames', [])
         qualified = (qualified and build_ok and source_ok and row.get('usedTranscript') is True
-                     and row.get('mixRender') == 'LofiMasterBus/public-test-fixture-v1'
+                     and row.get('mixRender') == 'LofiMasterBus/public-test-fixture-v2'
                      and row.get('transcriptModel') not in (None, '', 'missing')
                      and len(core) == len(whole) == len(context) == 2
                      and max(context[0], whole[0]) <= core[0] < core[1] <= min(context[1], whole[1])
@@ -105,7 +105,7 @@ def export(source, destination, summary, reviews=None):
     passed = complete and all(item['matched'] for item in listening)
     (destination / 'provenance.json').write_text(json.dumps(dict(renderSource=build, qualified=selected, extras=extras, missing=missing,
         completeExports=complete, listening=listening, passed=passed), indent=2) + '\n')
-    return passed
+    return complete, passed
 
 
 if __name__ == '__main__':
@@ -115,5 +115,8 @@ if __name__ == '__main__':
     parser.add_argument('--reviews', type=Path, help='Human review JSON keyed by example name')
     args = parser.parse_args()
     reviews = json.loads(args.reviews.read_text()) if args.reviews else None
-    if not export(args.source, args.destination, json.loads(args.summary.read_text()), reviews):
-        raise SystemExit('Audition acceptance incomplete. See completeExports and listening in provenance.json.')
+    complete, reviewed = export(args.source, args.destination, json.loads(args.summary.read_text()), reviews)
+    if not complete or (args.reviews and not reviewed):
+        raise SystemExit('Audition checks incomplete. See completeExports and listening in provenance.json.')
+    if not reviewed:
+        print('Audition exports verified. Human listening review remains unconfirmed.')

@@ -33,7 +33,7 @@ if [ ! -f "$out/manifest.json" ]; then
     exit "${capture_status:-1}"
 fi
 report_status=0
-python3 scripts/mix-report.py "$out" ${report_args[@]+"${report_args[@]}"} || report_status=$?
+python3 "${LIMINAL_MIX_REPORT_CHECKOUT:-$PWD}/scripts/mix-report.py" "$out" ${report_args[@]+"${report_args[@]}"} || report_status=$?
 if [ "$capture_status" -ne 0 ]; then
     echo "check-lofi.sh reported a routing or peak failure (status $capture_status); see $out/analysis.json" >&2
     exit "$capture_status"

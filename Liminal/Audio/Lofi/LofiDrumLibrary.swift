@@ -97,6 +97,11 @@ nonisolated enum LofiDrumLibrary {
         let n = entry.frameCount
         let left = Array(UnsafeBufferPointer(start: pcm.1[0], count: n))
         let right = entry.channels == 1 ? left : Array(UnsafeBufferPointer(start: pcm.1[1], count: n))
+        return normalizedBreak(entry: entry, left: left, right: right)
+    }
+
+    /// Apply the whole-take stereo calibration used by playback and by offline drum fixtures.
+    static func normalizedBreak(entry: Entry, left: [Float], right: [Float]) -> Break {
         let energy = 0.5 * (vDSP.meanSquare(left) + vDSP.meanSquare(right))
         let gain = min(2.6, 0.11 / max(0.025, energy.squareRoot()))
         return Break(entry: entry, left: left, right: right, gain: gain)

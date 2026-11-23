@@ -28,12 +28,28 @@ in `baseline-verification-adapters.patch`. No baseline signal-processing behavio
 
 The footage experiment shares `FootageSalience.prepare` with the production decoder. It includes
 pinned/discovery eligibility, current/on-screen exclusion, recency weighting, duration/audio filtering,
-shown-start avoidance and final `ArchiveAudioCuePlan` containment. Its independent paired simulations
-separate fresh-index policy sampling from evolving playback. The latter advances recency, use counts,
-shown starts and its own line ledger, conservatively consuming completely contained salient lines.
-This is a finite-pool depletion stress test, not a claim that every contained line was chosen by the
-performer. Neither result replaces the other. The doubling, 0.60 salient, 0.25 random and per-film
-half-baseline-share thresholds stay unchanged; depletion failures remain failures in the output.
+shown-start avoidance and final sound-cue containment. The frozen-index experiment starts each arm
+with the same transcript-derived lines. In evolving playback, each arm also advances its own shown
+starts, film recency and performance ledger. For each selected cue it decodes the authentic soundtrack,
+runs the installed speech provider and the production dialogue director, renders the scheduled chops,
+and waits for that cue’s transcript learning before the next simulated request. Only committed motif
+lines enter the ledger. Each pick is scored against information available before its cue played.
+
+Each arm runs 500 requests. The report retains the original double-control and 60% comparisons.
+Their applicability depends on the configured 65% override and on the measured opportunities.
+For the indexed arm, the probe also measures whether the original catalog start on the same film
+already contained an unplayed striking line. Among catalog misses with a feasible alternative, the
+policy-supported expected number of additional hits is 0.65 times the opportunity count. The release
+check requires net uplift over the independent control and observes the one-sided 95% binomial
+score lower bound on additional hits. An original absolute threshold above the resulting expected
+share remains a diagnostic with its actual result. The random share must reach 25%, and every
+control film must retain at least half of its control share. Evolving arms also report native decode
+outcomes, transcripts, rendered posts, committed line uses and newly learned film seconds.
+
+For a separate footage-only replay, pass the same archive/provenance overrides and set
+`PROBE_FOOTAGE_SEED` to the saved `salience-index.json` from the matching full probe. Give
+`dialogue-salience-probe.sh` a fresh output directory. `PROBE_FOOTAGE_PICKS=20` exercises
+40 evolving cues for a smoke test. The 500-request acceptance check always requires a full replay.
 
 Index learning runs on a serial utility queue after cue publication finishes. It captures source,
 analysis and transcript values independently of the cue task's cancellation lifetime. Cached timely
@@ -131,7 +147,9 @@ including recognizability, unit order and the whole-word landing against the mus
 For each example, add an entry keyed by its name to `OUT/audition-reviews.json` with
 `sha256` mapping `context`, `dry` and `mix` to the reviewed M4A hashes, a written
 `outcome` and a Boolean `accepted`. Rerun the auditions phase to check the reviews
-against those exact exports. Missing or rejected listening keeps acceptance open.
+against those exact exports. A run without a review file verifies the exports and
+records listening as unconfirmed. A supplied review file must match every selected
+export and accept it.
 
 Media cache sidecars authenticate chosen metadata filename/URL/hash and source metadata hash;
 legacy or mismatching cache entries are refetched. ffprobe facts are metadata only. Actual
@@ -139,7 +157,10 @@ FFmpeg decoded sample counts cover the eight probe windows, with no full-film de
 Required ref/fast/same/transcribe cases are inventoried per revision; unavailable transcription
 is unmet, and ready status without actual used recognized words cannot qualify. Raw strict
 results remain separate from the paired no-new-targeted-fail result. Private after captures
-now receive the private baseline. Preparation assertion/copy/adapter failures stop the phase
+now receive the private baseline. The current public fixture applies the same whole-take
+level normalization as playback. It is marked `public-test-fixture-v2` in the matrix and
+audition manifests. Public baseline preparation applies that same fixture adjustment after
+checking the exact source digests. Preparation assertion/copy/adapter failures stop the phase
 and preserve failure status. The app's process-survival step is separate from automated
 hook/footage/salient-pick evidence; neither establishes human visual or listening acceptance.
 

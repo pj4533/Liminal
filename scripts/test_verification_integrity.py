@@ -54,6 +54,43 @@ class IntegrityTests(unittest.TestCase):
         after['windowOutcomes'][1]['renderOutcomes']['T']['rendered'] = 2
         self.assertFalse(gates.evaluate(before, after)['windowRenderCoverage']['passed'])
 
+    def test_silent_window_requires_an_explicit_failed_bank_attempt(self):
+        before, after = self.corpus(), self.corpus()
+        for corpus in (before, after):
+            row = corpus['windowOutcomes'][0]
+            row['renderOutcomes']['T'] = dict(planned=0, rendered=0, audible=0)
+            row['renderDecisions'] = {'T': {'result': 'noSafeBank', 'cueAttempts': 4}}
+        self.assertTrue(gates.evaluate(before, after)['windowRenderCoverage']['passed'])
+        after['windowOutcomes'][0]['renderDecisions']['T']['cueAttempts'] = 3
+        self.assertFalse(gates.evaluate(before, after)['windowRenderCoverage']['passed'])
+        after['windowOutcomes'][0]['renderDecisions']['T']['cueAttempts'] = 4
+        before['windowOutcomes'][0]['renderOutcomes']['T'] = dict(planned=1, rendered=1, audible=1)
+        self.assertFalse(gates.evaluate(before, after)['windowRenderCoverage']['passed'])
+
+    def test_representative_rehearing_needs_the_export_and_an_exact_token(self):
+        import wave
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            audio = 'rehearing-f-2.wav'
+            original = 'rehearing-f-2-source.wav'
+            row = dict(film='f', chunk=2, sampleRate=48000, rehearingEligible=3,
+                       rehearingSample=dict(expected='trip', heard='tripping', audio=audio,
+                                            sourceHeard='the trip', sourceAudio=original, sourceFrames=1000))
+            self.assertEqual(report.representative_rehearing([row], folder)['missing'], [['f', 2]])
+            for name in (audio, original):
+                with wave.open(str(folder / name), 'wb') as source:
+                    source.setparams((1, 2, 48000, 0, 'NONE', 'not compressed'))
+                    source.writeframes(bytes(2000))
+            result = report.representative_rehearing([row], folder)
+            self.assertEqual(result['checked'], 1)
+            self.assertEqual(result['mainWord'], 0)
+            self.assertEqual(result['sourceRecognized'], 1)
+            self.assertEqual(result['retained'], 0)
+            row['rehearingSample']['heard'] = 'A trip.'
+            self.assertEqual(report.representative_rehearing([row], folder)['retained'], 1)
+            row['rehearingSample']['sourceFrames'] += 1
+            self.assertEqual(report.representative_rehearing([row], folder)['missing'], [['f', 2]])
+
     def test_one_transcript_cannot_qualify_and_silence_is_separate(self):
         before, after = self.corpus(), self.corpus()
         after['windowOutcomes'][3]['transcribed'] = False
@@ -66,6 +103,27 @@ class IntegrityTests(unittest.TestCase):
         self.assertFalse(gates.evaluate({}, after)['T.stage2.inRankedLine']['passed'])
         after['historicalMatch'] = dict(verified=True, provenance='authenticated original corpus identity record')
         self.assertTrue(gates.evaluate({}, after)['T.stage2.inRankedLine']['passed'])
+
+    def test_fresh_coverage_uses_shares_and_requires_a_paired_corpus(self):
+        before, after = self.corpus(), self.corpus()
+        after['salientWords'] = dict(inWindows=148, inRankedLine=105, inChosenLine=50)
+        result = gates.evaluate(before, after)
+        self.assertTrue(result['T.fresh.inRankedLine']['passed'])
+        self.assertFalse(result['T.stage2.inRankedLine']['required'])
+        after['corpus']['films'][0]['sha256'] = 'different'
+        self.assertFalse(gates.evaluate(before, after)['T.fresh.inRankedLine']['passed'])
+
+    def test_acoustic_word_boundary_diagnostics_preserve_the_paired_check(self):
+        before, after = self.corpus(), self.corpus()
+        before['A'] = dict(categories={'accidental': .287})
+        after['A'] = dict(categories={'accidental': .270}, functionOnly=.370)
+        result = gates.evaluate(before, after)
+        self.assertTrue(result['A.pairedAccidental']['passed'])
+        self.assertFalse(result['A.accidental']['passed'])
+        self.assertFalse(result['A.accidental']['required'])
+        self.assertFalse(result['A.functionOnly']['required'])
+        after['A']['categories']['accidental'] = .300
+        self.assertFalse(gates.evaluate(before, after)['A.pairedAccidental']['passed'])
 
     def test_render_and_detection_missing_fail_even_with_good_timing(self):
         coverage = dict(planned=10, inventoryPlanned=10, rendered=10, audible=10, onsetEligible=8, onsetDetected=8)
@@ -132,11 +190,23 @@ class IntegrityTests(unittest.TestCase):
     def test_matrix_requires_all_cases_and_real_transcription(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            rows = [dict(id=criterion, level=level, status='pass')
+                    for criterion, level in matrix.CRITERIA_LEVELS.items()]
+            motif_rest = next(row for row in rows if row['id'] == 'C-D4')
+            motif_rest.update(status='skipped', reason=matrix.SHARED_SKIP_REASONS['C-D4'])
             for case in matrix.REQUIRED:
                 target = root/case; (target/'report').mkdir(parents=True)
                 (target/'manifest.json').write_text(json.dumps(dict(gitRevision='candidate', dialogueTranscripts=[dict(status='ready', words=3, transcriptUsed=True)])))
-                (target/'report/mix-report.json').write_text(json.dumps(dict(criteria=[dict(id='C-D1', level='fail', status='pass')])))
+                (target/'report/mix-report.json').write_text(json.dumps(dict(criteria=rows)))
             self.assertTrue(matrix.inventory(root, revision='candidate')['complete'])
+            self.assertTrue(matrix.inventory(root, revision='candidate')['rawStrictPassed'])
+            target = root/'fast/report/mix-report.json'
+            motif_rest['reason'] = 'measurement missing'
+            target.write_text(json.dumps(dict(criteria=rows)))
+            self.assertFalse(matrix.inventory(root, revision='candidate')['rawStrictPassed'])
+            target.write_text(json.dumps(dict(criteria=rows[:-1])))
+            self.assertFalse(matrix.inventory(root, revision='candidate')['complete'])
+            target.write_text(json.dumps(dict(criteria=rows)))
             self.assertFalse(matrix.inventory(root, revision='wrong-revision')['complete'])
             (root/'transcribe/skipped.txt').write_text('unavailable')
             self.assertFalse(matrix.inventory(root, revision='candidate')['complete'])

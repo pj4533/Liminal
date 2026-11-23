@@ -8,12 +8,11 @@ from pathlib import Path
 
 import numpy as np
 
-from . import cadence, dialogue, dynamics, lowend, masking, music, spectral
+from . import cadence, dialogue, dynamics, lowend, masking, music, spectral, strict_failures
 from .audio import BAND_NAMES, SECTION_ORDER, BandGrid, Capture, db10
 from .loudness import ffmpeg_ebur128, measure_loudness, true_peak_db
 
 SCHEMA = "liminal-mix-report-v1"
-SKIP_OK = ("no dialogue", "no footage")
 
 
 def safe(metrics, key, fn, *args):
@@ -687,10 +686,7 @@ def summarize(results):
     counts = {"pass": 0, "fail": 0, "warn": 0, "skipped": 0}
     for r in results:
         counts[r["status"]] += 1
-    strict_failures = [r["id"] for r in results if r["level"] == "fail" and (
-        r["status"] == "fail" or (r["status"] == "skipped" and r.get("reason") not in SKIP_OK
-                                  and "not applicable" not in str(r.get("reason", ""))))]
-    return {"counts": counts, "strictFailures": strict_failures}
+    return {"counts": counts, "strictFailures": strict_failures(results)}
 
 
 # ---------------------------------------------------------------------------------- writing

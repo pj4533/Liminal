@@ -454,6 +454,23 @@ nonisolated enum LofiRenderer {
                     carryR[frame] = previous.right
                 }
             }
+            if score.section == .breakdown {
+                // A quiet breakdown can open before its own pad and return support the dry breath.
+                // Let the outgoing room hold through that handoff in proportion to the incoming trim.
+                let lift = min(0.18, (1 - balance.gain) / 3)
+                let rise = max(1, Int(sampleRate * 0.05))
+                let release = Int(sampleRate * 0.65)
+                let end = Int(sampleRate * 0.85)
+                if lift > 0, release < end {
+                    for frame in 0..<min(end, n) {
+                        let u = max(0, min(1, Float(frame) / Float(rise),
+                                             Float(end - frame) / Float(end - release)))
+                        let gain = 1 + lift * u * u * (3 - 2 * u)
+                        carryL[frame] *= gain
+                        carryR[frame] *= gain
+                    }
+                }
+            }
         }
         duck.gain.withUnsafeBufferPointer { ducked in
             carryL.withUnsafeBufferPointer { carryL in

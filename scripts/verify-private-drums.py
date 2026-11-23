@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Verify private drums and matrices serially on the local Mac."""
 import argparse
+from collections import Counter
 import importlib.util
 import json
 import math
@@ -14,9 +15,34 @@ import sys
 BASELINE = '47a01fe267a3972241ed6918d031fffe55f26ed2'
 SUITES = ('LofiTests', 'LofiRhythmTests', 'LofiStemChainTests')
 REQUIRED_STEPS = ('baseline-cache-adapter-check', 'baseline-cache-adapter',
-                  'baseline-capture-adapter', 'baseline-compiler-adapter',
-                  'baseline-native', 'after-native', 'public-media',
+                  'baseline-capture-adapter', 'baseline-event-gain-adapter', 'baseline-compiler-adapter',
+                  'baseline-native', 'after-native',
+                  'baseline-kick-reference', 'after-kick-reference', 'public-media',
                   'baseline-matrix', 'after-matrix')
+
+# Exact 47a01fe assertions observed in the verified 100-take historical run.
+BASELINE_ISSUES = {
+    ('installedTakesHaveSaneLandmarks', 'coverage >= 0.5'): 6,
+    ('installedTakesHaveSaneLandmarks', '(16...200).contains(kicks.count)'): 1,
+    ('installedTakesLandInsideTheDrumBusTargets', 'rise <= 1.2'): 7,
+    ('installedTakesLandInsideTheDrumBusTargets', '(10...14).contains(crest(after))'): 2,
+}
+BASELINE_ISSUE_PATTERN = re.compile(
+    r'Test (\w+)\(\) recorded an issue at [^:]+:\d+:\d+: Expectation failed: (.+)$')
+
+
+def baseline_native_issues(log, exit_code):
+    reported = [line for line in log.splitlines() if 'recorded an issue' in line]
+    matches = Counter(match.groups() for line in reported
+                      if (match := BASELINE_ISSUE_PATTERN.search(line)))
+    inventory = [dict(method=method, assertion=assertion, count=matches[method, assertion])
+                 for method, assertion in BASELINE_ISSUES]
+    known = (exit_code == 65 and matches == BASELINE_ISSUES
+             and len(reported) == sum(BASELINE_ISSUES.values())
+             and '** TEST FAILED **' in log
+             and re.search(r'Test run with 52 tests in 3 suites failed .* with 16 issues\.', log) is not None)
+    return dict(known=known, inventory=inventory,
+                unexpected=len(reported) - sum(item['count'] for item in inventory))
 
 
 def load(name, after):
@@ -83,10 +109,21 @@ def phase_status(raw):
     for name in REQUIRED_STEPS:
         exits = [row['exit'] for row in rows if isinstance(row, dict)
                  and row.get('step') == name and type(row.get('exit')) is int]
-        passed = valid and exits == [0]
-        phases[name] = dict(exits=exits, status='VERIFIED' if passed else 'UNMET')
+        status = 'VERIFIED' if valid and exits == [0] else 'UNMET'
+        if valid and name == 'baseline-native' and exits == [65]:
+            log = raw / 'baseline-native.log'
+            if log.is_file() and baseline_native_issues(log.read_text(errors='replace'), 65)['known']:
+                status = 'KNOWN_BASELINE_FAILURES'
+        if valid and name == 'baseline-matrix' and exits == [1]:
+            try:
+                baseline = json.loads((raw / 'baseline-inventory.json').read_text())
+                if baseline['complete'] and not baseline['rawStrictPassed']:
+                    status = 'MEASURED_BASELINE_FAILURES'
+            except (OSError, ValueError, KeyError):
+                pass
+        phases[name] = dict(exits=exits, status=status)
     return dict(ledgerValid=valid, phases=phases,
-                passed=valid and all(row['status'] == 'VERIFIED' for row in phases.values()))
+                passed=valid and all(row['status'] != 'UNMET' for row in phases.values()))
 
 
 def main():
@@ -101,7 +138,7 @@ def main():
     raw = out / 'raw'; raw.mkdir(parents=True, exist_ok=True)
     assets = load('private-verification-assets', after)
     archive_dir = (args.archive_dir or out / 'ArchiveFootage').resolve()
-    env = dict(os.environ, LIMINAL_CAPTURE_CODE_SIGNING_ALLOWED='NO',
+    env = dict(os.environ, LIMINAL_CAPTURE_CODE_SIGNING_ALLOWED='NO', LIMINAL_MIX_REPORT_CHECKOUT=str(after),
                LIMINAL_VERIFICATION_ARCHIVE_DIR=str(archive_dir),
                TEST_RUNNER_LIMINAL_VERIFICATION_ARCHIVE_DIR=str(archive_dir))
     if args.phase == 'setup':
@@ -117,12 +154,17 @@ def main():
         if cache_adapter:
             return cache_adapter
         shutil.copyfile(after / 'scripts/mix-matrix.sh', baseline / 'scripts/mix-matrix.sh')
+        shutil.copyfile(after / 'scripts/mix-report.sh', baseline / 'scripts/mix-report.sh')
         capture = run('baseline-capture-adapter', [sys.executable, str(after / 'scripts/prepare-baseline-capture.py'), str(baseline)], after, raw)
+        event_gain = run('baseline-event-gain-adapter', [sys.executable, str(after / 'scripts/prepare-baseline-capture.py'), '--event-gain', str(baseline)], after, raw)
         result = run('baseline-compiler-adapter', [sys.executable, str(after / 'scripts/prepare-baseline-compiler.py'), str(baseline)], after, raw)
         with (raw / 'baseline-compiler-adapter.patch').open('wb') as patch:
             subprocess.run(['git', 'diff'], cwd=baseline, stdout=patch, check=True)
-        return result or capture
+        return result or capture or event_gain
     if args.phase == 'native':
+        actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=baseline, text=True).strip()
+        if actual != BASELINE:
+            raise ValueError('baseline revision mismatch')
         passed = True
         for label, tree in [('baseline', baseline), ('after', after)]:
             dd = out / ('dd-' + label)
@@ -130,11 +172,21 @@ def main():
                        '-destination', 'platform=macOS,arch=arm64', '-parallel-testing-enabled', 'NO',
                        '-derivedDataPath', str(dd)] + ['-only-testing:LiminalTests/' + s for s in SUITES]
             rc = run(label + '-native', command, tree, raw, env)
-            coverage = load('verify-swift-test-coverage', after).coverage(
-                (raw / (label + '-native.log')).read_text(errors='replace'), tree / 'LiminalTests', SUITES)
+            log = (raw / (label + '-native.log')).read_text(errors='replace')
+            coverage = load('verify-swift-test-coverage', after).coverage(log, tree / 'LiminalTests', SUITES)
             identity = resource_identity(bundle, dd / 'Build/Products/Debug', assets)
-            (raw / (label + '-native.json')).write_text(json.dumps(dict(exit=rc, coverage=coverage, resourceIdentity=identity)))
-            passed = passed and rc == 0 and coverage['passed'] and identity
+            reference_exit = run(label + '-kick-reference', [
+                sys.executable, str(after / 'scripts/drum-landmark-reference.py'),
+                '--takes', str(bundle / assets.DRUMS), '--swift-log', str(raw / (label + '-native.log')),
+                '--out', str(raw / (label + '-kick-reference')), '--plots', '0', '--verify-corpus',
+            ], after, raw, env)
+            native = dict(exit=rc, coverage=coverage, resourceIdentity=identity,
+                          independentKickReference=reference_exit == 0)
+            if label == 'baseline':
+                native['historicalIssues'] = baseline_native_issues(log, rc)
+            (raw / (label + '-native.json')).write_text(json.dumps(native))
+            exit_accepted = rc == 0 or (label == 'baseline' and native['historicalIssues']['known'])
+            passed = passed and exit_accepted and coverage['passed'] and identity and reference_exit == 0
         return 0 if passed else 1
     if args.phase == 'prepare':
         return run('public-media', [sys.executable, str(after / 'scripts/prepare-verification-media.py'),
@@ -174,8 +226,16 @@ def main():
                 row['criteria'] = []
         (raw / (label + '-inventory.json')).write_text(json.dumps(inventory, indent=2))
     summary['phaseExecution'] = phase_status(raw)
-    summary['passed'] = (summary['phaseExecution']['passed'] and all(n['exit'] == 0 and n['resourceIdentity'] and n['coverage']['passed'] for n in summary['native'].values())
-        and all(m['complete'] and m['rawStrictPassed'] for m in summary['matrices'].values())
+    native = summary['native']
+    baseline_exit_accepted = (native['baseline']['exit'] == 0
+                              or (native['baseline']['exit'] == 65
+                                  and summary['phaseExecution']['phases']['baseline-native']['status'] == 'KNOWN_BASELINE_FAILURES'))
+    summary['passed'] = (summary['phaseExecution']['passed'] and summary['revisions']['baseline'] == BASELINE
+        and baseline_exit_accepted and native['after']['exit'] == 0
+        and all(n['resourceIdentity'] and n['coverage']['passed'] and n.get('independentKickReference') is True
+                for n in native.values())
+        and all(m['complete'] for m in summary['matrices'].values())
+        and summary['matrices']['after']['rawStrictPassed']
         and summary['matrices']['after']['noNewTargetedFailures'] is True)
     summary['status'] = 'VERIFIED' if summary['passed'] else 'UNMET'
     summary_dir = out / 'sanitized'; summary_dir.mkdir(exist_ok=True)

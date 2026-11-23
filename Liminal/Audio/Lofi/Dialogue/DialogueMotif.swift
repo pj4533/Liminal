@@ -157,6 +157,8 @@ nonisolated enum DialogueMotifTuning {
     static let weakLeadPeakShare: Float = 0.25
     /// A rendered pad's accent replaces the source one only within this many seconds of it.
     static let renderedAccentRange: ClosedRange<Double> = -0.050...0.020
+    /// Speech-band weighting can refine a rendered word's beat within its opening transient.
+    static let speechAccentRefinementSeconds = 0.004
     /// The line's statement tries these sixteenths after its slot, never an off-sixteenth (D126 part 2:
     /// the intro states the whole line on the downbeat so the listener understands it).
     static let lineSteps = [0, 4, 8, 16]
@@ -866,16 +868,30 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
             let rate = buffer.format.sampleRate
             // The attack needs the first 300 ms peak window and a little after it.
             let head = min(n, Int(0.45 * rate))
-            let envelope = DialogueOnsetEnvelope(samples: x, count: n, rate: rate, span: 0..<head, filtered: false)
-            let attack = DialogueOnset.attack(envelope, samples: x, count: n, rate: rate, search: 0..<head, line: fr.kind == .line,
-                                              firstPeakShare: fr.weakLead ? DialogueMotifTuning.weakLeadPeakShare : 0.5)
-            let beat = fr.frames.lowerBound + Int((Double(attack.beatFrame) * transform.playbackRate).rounded())
+            func attack(filtered: Bool) -> DialogueAttack {
+                let envelope = DialogueOnsetEnvelope(samples: x, count: n, rate: rate, span: 0..<head, filtered: filtered)
+                return DialogueOnset.attack(envelope, samples: x, count: n, rate: rate, search: 0..<head,
+                                            line: fr.kind == .line,
+                                            firstPeakShare: fr.weakLead ? DialogueMotifTuning.weakLeadPeakShare : 0.5)
+            }
+            let broadband = attack(filtered: false)
+            var renderedBeat = broadband.beatFrame
+            if !transform.isNative, fr.kind != .line, fr.text != nil, !fr.weakLead {
+                // Varispeed can change where the speech band rises inside the same transient.
+                // Keep the broadband attack as the anchor when the band favours a later syllable.
+                let speech = attack(filtered: true)
+                let limit = Int(rate * DialogueMotifTuning.speechAccentRefinementSeconds)
+                let delta = max(-limit, min(limit, speech.beatFrame - renderedBeat))
+                let leadRoom = max(0, Int(0.030 * rate) - (renderedBeat - broadband.audibleFrame))
+                renderedBeat += min(delta, leadRoom)
+            }
+            let beat = fr.frames.lowerBound + Int((Double(renderedBeat) * transform.playbackRate).rounded())
             let range = DialogueMotifTuning.renderedAccentRange
             // At native rate the bound rejects a different syllable picked by levelling. Linked
             // playback can change which rise survives the spectral chain: its rendered attack is
             // authoritative, even when it moved farther than the native-only correction window.
             let correction = Double(beat - fr.accentFrame) / (rate * transform.playbackRate)
-            guard attack.beatFrame > 0, beat < fr.frames.upperBound,
+            guard renderedBeat > 0, beat < fr.frames.upperBound,
                   !transform.isNative || range.contains(correction) else { return fr }
             var out = fr
             out.accentFrame = beat
@@ -1485,7 +1501,32 @@ nonisolated struct DialogueMotifCutter {
             }
             halves[id] = ids
         }
-        return Result(fragments: trimmed(fragments, words: words, weights: weights), pieces: pieces, halves: halves)
+        var cut = trimmed(fragments, words: words, weights: weights)
+        if pieces.count == 2, halves.isEmpty, DialogueReorderGuard.allowsPieceReorder(words.map(\.text)) {
+            addHookWords(to: &cut, pieces: pieces, words: words, weights: weights)
+        }
+        return Result(fragments: cut, pieces: pieces, halves: halves)
+    }
+
+    /// Keep both source-order pieces for the walk and restatement. When one is too long
+    /// to be a sub-line hook, "it lies" can also play as the whole word "lies".
+    func addHookWords(to cut: inout [DialogueMotifFragment], pieces: [Int], words: [DialogueWordSpan], weights: [Float]) {
+        let lineFrames = cut[0].frames.count
+        for id in pieces where cut[id].frames.count * 2 >= lineFrames {
+            let piece = cut[id]
+            let covered = words.indices.filter { piece.frames.contains((words[$0].frames.lowerBound + words[$0].frames.upperBound) / 2) }
+            guard covered.count >= 2, let last = covered.last, weights[last] > 0,
+                  covered.dropLast().allSatisfy({ weights[$0] == 0 &&
+                    ["a", "an", "the", "it"].contains(DialogueLineInterest.normalize(words[$0].text)) })
+            else { continue }
+            let word = words[last], core = word.frames
+            guard piece.frames.lowerBound <= core.lowerBound, core.upperBound <= piece.frames.upperBound,
+                  core.count >= frames(DialogueMotifTuning.minimumCutSeconds), core.count * 2 < lineFrames else { continue }
+            let alternate = DialogueMotifFragment(id: cut.count, kind: .piece, order: piece.order,
+                parent: id, frames: core, accentFrame: accent(core), fadeIn: fadeIn(at: core.lowerBound),
+                fadeOut: min(frames(DialogueMotifTuning.fadeOutSeconds), core.count / 4), text: word.text)
+            cut += trimmed([alternate], words: words, weights: weights)
+        }
     }
 
     /// Every fragment starts at its waveform onset and lands its attack on the step (D126): the
@@ -1536,6 +1577,11 @@ nonisolated struct DialogueMotifCutter {
                     }
                     start = clamped
                     fade = fadeIn(at: clamped)
+                }
+                // The hook's alternate already starts on the accepted word boundary.
+                if fr.kind == .piece && fr.parent != nil {
+                    start = fr.frames.lowerBound
+                    fade = fr.fadeIn
                 }
                 // A weak lead word trimmed off a piece ("to the" before "time") leaves its text too.
                 let dropped = words.filter { (fr.frames.lowerBound..<start).contains(($0.frames.lowerBound + $0.frames.upperBound) / 2) }.count
@@ -1815,7 +1861,10 @@ nonisolated extension DialogueMotif {
         func fits(_ f: Int, _ steps: Int) -> Bool {
             fitsRoom(f, steps: steps, fragments: fragments, sampleRate: sampleRate, beatDuration: beatDuration)
         }
-        let roles = hookRoles(fragments: fragments, pieces: pieces, halves: halves, reorderAllowed: reorderAllowed,
+        let hookPieces = pieces.map { id in
+            fragments.first { $0.kind == .piece && $0.parent == id }?.id ?? id
+        }
+        let roles = hookRoles(fragments: fragments, pieces: hookPieces, halves: halves, reorderAllowed: reorderAllowed,
                               sampleRate: sampleRate, anchors: anchors)
         let (s, r, t) = roles
         let sa = headHalf(s, fragments: fragments, halves: halves)
@@ -2296,7 +2345,9 @@ nonisolated enum DialogueMotifPerformer {
                     let gated = item.effect == .reversed ? (end: start + length, kind: "natural")
                         : gatedEnd(item.fragment, start: start, sixteenth: s, gate: item.gate, motif: motif, snapshot: snapshot)
                     let end = gated.end
-                    guard start >= floor else { continue }
+                    // A reversed pickup starts before its accent. Keep its whole dry playback,
+                    // and the full duration of a forward word, outside the return's opening notes.
+                    guard start >= floor, snapshot.clearsReturnLead(start: start, end: end) else { continue }
                     if budgeted, item.gate != nil, drySeconds() + (end - start) > budget { break }
                     if item.landing {
                         // The landing piece sits on the next loop's downbeat only when this window reaches it.
@@ -2454,7 +2505,7 @@ nonisolated enum DialogueMotifPerformer {
                     end = cut
                     chokedSelf = true
                 }
-                guard end <= upper else { continue }
+                guard end <= upper, snapshot.clearsReturnLead(start: start, end: end) else { continue }
                 if let clean = shortenPrevious, let p = previous {
                     placed[p].end = clean
                     placed[p].gateEnd = "word"

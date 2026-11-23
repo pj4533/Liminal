@@ -46,6 +46,38 @@ def segment_lufs(sig, rate, a, b):
     return float(-0.691 + db10(np.sum(np.mean(k ** 2, axis=0)))) if len(k) else None
 
 
+def authored_levels(events):
+    """Gain spans include baked effects tails. Split gains cannot be undone in an overlapping sum."""
+    if not events or any(c.get("authoredGainDB") is None for c in events):
+        return None
+    spans = sorted((c["frame"], c["frame"] + chop_duration_frames(c), float(c["authoredGainDB"])) for c in events)
+    return spans if all(np.isfinite(gain) for _, _, gain in spans) else None
+
+
+def untrimmed_dry_lufs(dry, rate, a, b, spans, dry_lufs):
+    """Undo the actual dry gain before K weighting, including its settling time; mixed gains cannot be separated."""
+    start = max(0, a - int(0.5 * rate))
+    merged = []
+    for lo, hi, gain in spans:
+        if hi <= start or lo >= b:
+            continue
+        left, right = max(lo, start) - start, min(hi, b) - start
+        if merged and left < merged[-1][1]:
+            first, previous_end, previous_gain = merged[-1]
+            if previous_gain != gain:
+                return None
+            merged[-1] = (first, max(previous_end, right), gain)
+        else:
+            merged.append((left, right, gain))
+    edits = [(lo, hi, gain) for lo, hi, gain in merged if gain]
+    if not edits:
+        return dry_lufs
+    x = np.array(dry[start:b], dtype=np.float64, copy=True)
+    for lo, hi, gain in edits:
+        x[lo:hi] *= 10 ** (-gain / 20)
+    return segment_lufs(x, rate, a - start, b - start)
+
+
 def dry_pieces(cap, min_seconds=MIN_PIECE_SECONDS):
     """(start, end) of every scheduled dry piece at least `min_seconds` long, one per chop (not merged).
     The dry length excludes a motif echo throw's rendered tail."""
@@ -102,6 +134,7 @@ def measure_dialogue(cap, grid, grids):
     per = _score(grid, d, others, chops, nfr)
     for p in per:
         p["lufs"] = segment_lufs(dsig, cap.rate, p["startFrame"], min(p["endFrame"], len(dsig)))
+    spans = authored_levels(cap.chops())
     if cap.has("dialogue-dry"):
         dry = cap.signal(["dialogue-dry"])
         gains = []
@@ -110,17 +143,30 @@ def measure_dialogue(cap, grid, grids):
             dl = segment_lufs(dry, cap.rate, a, b)
             p["dryLufs"] = dl
             if dl is not None and p["lufs"] is not None:
-                gains.append(p["lufs"] - dl)
+                wet_delta = p["lufs"] - dl
+                gains.append(wet_delta)
+                if spans is not None:
+                    normalized = untrimmed_dry_lufs(dry, cap.rate, a, b, spans, dl)
+                    if normalized is not None:
+                        p["levelMatchedDryLufs"] = normalized
+                        p["levelMatchedLufs"] = normalized + wet_delta
         dry_info = {"chains": float(np.median(gains)) if gains else None}
     else:
         dry_info = None
     sii = np.array([p["sii"] for p in per])
     snr14 = np.array([p["snr1to4kDb"] for p in per])
+    durations = [p["endFrame"] - p["startFrame"] for p in per]
     lufs = np.array([p["lufs"] for p in per if p["lufs"] is not None])
+    corrected = sum("levelMatchedLufs" in p for p in per)
+    effective = [p.get("levelMatchedLufs", p["lufs"]) for p in per if p["lufs"] is not None]
+    basis = "authored-gain-corrected" if corrected == len(per) else "partial" if corrected else "raw"
     few = len(per) < 3  # a 10th percentile and a spread over one or two chops say nothing
     out.update({"chops": len(per), "siiMean": float(sii.mean()), "siiP10": None if few else float(np.percentile(sii, 10)),
                 "fewChops": few,
-                "snr1to4kMeanDb": float(snr14.mean()), "loudnessSpreadLu": float(lufs.max() - lufs.min()) if len(lufs) and not few else None,
+                "snr1to4kMeanDb": float(np.average(snr14, weights=durations)),
+                "snr1to4kEventMeanDb": float(snr14.mean()), "loudnessSpreadLu": float(np.ptp(effective)) if len(effective) and not few else None,
+                "rawLoudnessSpreadLu": float(np.ptp(lufs)) if len(lufs) and not few else None,
+                "spreadBasis": basis, "authoredGainWindows": corrected,
                 "perChop": per,
                 "dialogueDryTap": None if dry_info is None else {"processedMinusDryLuMedian": dry_info["chains"]}})
     return out

@@ -34,6 +34,7 @@ import json
 import re
 import statistics
 import sys
+import wave
 from pathlib import Path
 
 
@@ -335,7 +336,7 @@ def metrics(hits, windows):
         if sum(w["transcribed"] for w in windows) > 10 else None
     out["corpus"] = CORPUS[-1] if len(CORPUS) == 1 else {}
     out["attempts"] = ATTEMPTS
-    out["windowOutcomes"] = [{k: w.get(k) for k in ("film", "chunk", "offset", "decode", "decodedFrames", "sampleRate", "playbackOutcome", "nativeRMSdB", "reason", "windows", "renderOutcomes", "speechWindows", "model", "transcriptOutcome", "transcriptWords", "transcriptLocale", "transcriptModelVersion", "transcribed")} for w in windows]
+    out["windowOutcomes"] = [{k: w.get(k) for k in ("film", "chunk", "offset", "decode", "decodedFrames", "sampleRate", "playbackOutcome", "nativeRMSdB", "reason", "windows", "renderOutcomes", "renderDecisions", "speechWindows", "model", "transcriptOutcome", "transcriptWords", "transcriptLocale", "transcriptModelVersion", "transcribed")} for w in windows]
     return out
 
 
@@ -363,6 +364,54 @@ def reheard_table(hits):
         tokens = {norm(t) for t in re.findall(r"[^\W_]+(?:['’][^\W_]+)*", x.get("reheard", ""))}
         rows[key][2] += bool(main and norm(main["t"]) in tokens)
     return {k: {"n": v[0], "anything": v[1], "mainWord": v[2]} for k, v in sorted(rows.items())}
+
+
+
+def representative_rehearing(windows, audio_directory):
+    """One stable sample per window with forward, whole content renders."""
+    eligible = checked = matches = source_matches = retained = 0
+    missing = []
+    def recognizes(word, text):
+        tokens = {norm(token) for token in re.findall(r"[^\W_]+(?:['’][^\W_]+)*", text)}
+        return norm(word) in tokens
+
+    for row in windows:
+        count = row.get("rehearingEligible")
+        if type(count) is not int or count < 0:
+            # The below-floor native window is intentionally silent.
+            if row.get("playbackOutcome") != "belowFloor" and row.get("speechWindows", 0) > 0:
+                missing.append([row["film"], row["chunk"]])
+            continue
+        if not count:
+            continue
+        eligible += 1
+        sample = row.get("rehearingSample") or {}
+        word, heard, audio, source_heard, original, original_frames = (
+            sample.get(k) for k in ("expected", "heard", "audio", "sourceHeard", "sourceAudio", "sourceFrames"))
+        name = f"rehearing-{row['film']}-{row['chunk']}"
+        if (not isinstance(word, str) or not norm(word) or not isinstance(heard, str) or audio != name + '.wav'
+                or not isinstance(source_heard, str) or original != name + '-source.wav'
+                or type(original_frames) is not int or original_frames <= 0):
+            missing.append([row["film"], row["chunk"]])
+            continue
+        try:
+            with wave.open(str(audio_directory / audio), "rb") as source:
+                if source.getnframes() <= 0 or source.getframerate() != row["sampleRate"]:
+                    raise ValueError("Missing rendered samples or wrong sample rate")
+            with wave.open(str(audio_directory / original), "rb") as source:
+                if source.getnframes() != original_frames or source.getframerate() != row["sampleRate"]:
+                    raise ValueError("Source samples do not match the selected cut")
+        except (OSError, EOFError, ValueError, wave.Error):
+            missing.append([row["film"], row["chunk"]])
+            continue
+        checked += 1
+        heard_correctly = recognizes(word, heard)
+        source_recognized = recognizes(word, source_heard)
+        matches += heard_correctly
+        source_matches += source_recognized
+        retained += source_recognized and heard_correctly
+    return dict(eligibleWindows=eligible, checked=checked, mainWord=matches,
+                sourceRecognized=source_matches, retained=retained, missing=missing)
 
 
 def main():
@@ -404,6 +453,7 @@ def main():
     summary["footage"] = FOOTAGE
     summary["auditions"] = AUDITIONS
     summary["reheard"] = reheard_table(hits)
+    summary["representativeRehearing"] = representative_rehearing(windows, bugs)
     summary["snippetsWritten"] = written
     summary["snippetsCorrupt"] = corrupt
     (out / "summary.json").write_text(json.dumps(summary, indent=1))

@@ -51,6 +51,8 @@ nonisolated enum LofiStemChains {
         /// reaches this target: AJ Hall's takes differ by 7 dB in crest, one setting cannot fit all.
         var targetCrestDB: Float = 12.5
         var saturationMaxRoundingDB: Float = 4.5
+        /// Extra reach only when the standard range cannot control the take's crest.
+        var saturationCrestHeadroomDB: Float = 0.4
         var oversampling = 2
         var air: [LofiBiquad.Kind] = [.highShelf(hz: 11_000, gainDB: -2)]
         /// The processed take is trimmed down (never up) to peak at or below this level.
@@ -179,9 +181,11 @@ nonisolated enum LofiStemChains {
             // Rounding sized from the crest left after compression: the drive that brings the
             // take to `targetCrestDB`, bounded at its typical hits to the configured range.
             let hits = dbToGain(referenceDB(left, right, count, sampleRate: sampleRate))
+            let limit = max(settings.saturationPeakRoundingDB, settings.saturationMaxRoundingDB)
             let rounding = crestRounding(left, right, count, hits: hits, targetCrestDB: settings.targetCrestDB,
-                                         range: settings.saturationPeakRoundingDB...max(settings.saturationPeakRoundingDB,
-                                                                                         settings.saturationMaxRoundingDB))
+                                         range: settings.saturationPeakRoundingDB...limit,
+                                         headroom: limit > settings.saturationPeakRoundingDB
+                                             ? settings.saturationCrestHeadroomDB : 0)
             // Capture only: keep the tape stage's input for its null test (D121); the audio is unchanged.
             let tapeInput = LofiCaptureHooks.isEnabled
                 ? (left: Array(UnsafeBufferPointer(start: left, count: count)),
@@ -492,7 +496,7 @@ nonisolated enum LofiStemChains {
     /// The tape rounding (dB at `hits`) whose drive brings the crest factor to `targetCrestDB`,
     /// found by bisection on a 1x, every-fourth-sample estimate (the oversampled pass follows).
     static func crestRounding(_ left: UnsafePointer<Float>, _ right: UnsafePointer<Float>, _ count: Int,
-                              hits: Float, targetCrestDB: Float, range: ClosedRange<Float>) -> Float {
+                              hits: Float, targetCrestDB: Float, range: ClosedRange<Float>, headroom: Float) -> Float {
         let peak = max(peakLinear(left, count), peakLinear(right, count))
         guard peak > 1e-6, hits > 1e-6, count > 8 else { return range.lowerBound }
         let stride = 4, n = count / stride
@@ -511,8 +515,13 @@ nonisolated enum LofiStemChains {
             return 20 * log10f(shapedPeak) - 10 * log10f(max(meanSquare, 1e-20))
         }
         if crest(range.lowerBound) <= targetCrestDB { return range.lowerBound }
-        if crest(range.upperBound) >= targetCrestDB { return range.upperBound }
         var low = range.lowerBound, high = range.upperBound
+        if crest(high) >= targetCrestDB {
+            guard headroom > 0 else { return high }
+            low = high
+            high += headroom
+            if crest(high) >= targetCrestDB { return high }
+        }
         for _ in 0..<10 {
             let mid = 0.5 * (low + high)
             if crest(mid) > targetCrestDB { low = mid } else { high = mid }
