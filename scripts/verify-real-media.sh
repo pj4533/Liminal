@@ -120,9 +120,11 @@ app)
 final)
     for label in baseline after; do
         for kind in public private; do
-            pair=()
-            if [ "$label" = after ]; then pair=("$OUT/baseline-$kind-matrix"); fi
-            run_step "$label-$kind-inventory" python3 "$AFTER/scripts/verify-matrix-integrity.py" "$OUT/$label-$kind-matrix" "${pair[@]}"
+            pair=-
+            if [ "$label" = after ]; then pair="$OUT/baseline-$kind-matrix"; fi
+            revision=$(cat "$OUT/$label-commit.txt" 2>/dev/null) || revision=missing
+            baseline_revision=$(cat "$OUT/baseline-commit.txt" 2>/dev/null) || baseline_revision=missing
+            run_step "$label-$kind-inventory" python3 "$AFTER/scripts/verify-matrix-integrity.py" "$OUT/$label-$kind-matrix" "$pair" "$revision" "$baseline_revision"
         done
     done
     python3 - "$STATUS" <<'PY'

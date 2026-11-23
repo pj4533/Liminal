@@ -122,14 +122,15 @@ class IntegrityTests(unittest.TestCase):
             root = Path(directory)
             for case in matrix.REQUIRED:
                 target = root/case; (target/'report').mkdir(parents=True)
-                (target/'manifest.json').write_text(json.dumps(dict(dialogueTranscripts=[dict(status='ready', words=3, transcriptUsed=True)])))
+                (target/'manifest.json').write_text(json.dumps(dict(gitRevision='candidate', dialogueTranscripts=[dict(status='ready', words=3, transcriptUsed=True)])))
                 (target/'report/mix-report.json').write_text(json.dumps(dict(criteria=[dict(id='C-D1', level='fail', status='pass')])))
-            self.assertTrue(matrix.inventory(root)['complete'])
+            self.assertTrue(matrix.inventory(root, revision='candidate')['complete'])
+            self.assertFalse(matrix.inventory(root, revision='wrong-revision')['complete'])
             (root/'transcribe/skipped.txt').write_text('unavailable')
-            self.assertFalse(matrix.inventory(root)['complete'])
+            self.assertFalse(matrix.inventory(root, revision='candidate')['complete'])
             (root/'transcribe/skipped.txt').unlink()
             (root/'transcribe/manifest.json').write_text(json.dumps(dict(dialogueTranscripts=[dict(status='ready', words=0, transcriptUsed=False)])))
-            self.assertFalse(matrix.inventory(root)['complete'])
+            self.assertFalse(matrix.inventory(root, revision='candidate')['complete'])
 
     def test_app_survival_alone_is_no_playback_evidence(self):
         self.assertFalse(app.evidence('process survived 200s')['hook'])
