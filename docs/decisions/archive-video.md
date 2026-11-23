@@ -42,6 +42,44 @@ Rejected (user decision, 2026-11-19): a first version also capped each clip at 6
 
 Expected effect on the headset after the next launch: about 0.94 GB of stale downloads and the fixture folders are deleted; all twelve cached films stay.
 
+## A32 (2026-11-23) Interest routes and three reviewed pins
+
+The user asked for footage that matches their interests (consciousness, AI and analog machines, night transit, record-era rooms and equipment, inner-world and natural patterns, quiet ponds) to come first, with nothing removed: "Don't remove anything, just prioritize this stuff."
+
+Routes. Five Prelinger routes join `ArchiveCatalog.queries`, each `collection:prelinger AND (<clause>)` through the unchanged `fullQuery`/`searchURL`, so every exclusion, the 1950-1969 window, `mediatype:movies` and the metadata re-check apply with no exceptions. All allow colour (the global `colourOdds` 0.2 is unchanged). Live counts on 2026-11-23 with the full exclusions (`archive-curate.py`, page one, 50 rows; kept after the year, title and colour filters and the script's cross-route de-duplication):
+
+| Route | Clause | Route weight | Found | Kept |
+| --- | --- | ---: | ---: | ---: |
+| `machines` | `computer OR cybernetics OR "magnetic tape" OR "data processing" OR "electronic brain" OR "analog computer"` | 9 | 25 | 25 |
+| `perception` | `perception OR "optical illusion" OR consciousness` | 7 | 8 | 8 |
+| `recording` | `"sound recording" OR phonograph OR jukebox OR "magnetic recording" OR "radio broadcasting" OR "record player"` | 9 | 26 | 24 |
+| `ecosystems` | `microscope OR pond OR astronomy OR microscopy OR "plant growth" OR "time lapse" OR "water surface"` | 5 | 27 | 26 |
+| `nightcity` | `"city lights" OR subway OR "elevated railway" OR "urban transportation" OR "neon sign"` | 4 | 16 | 14 |
+
+- The existing six routes keep weight 23, so the interest routes are 34 of 57: 60% of searches. `Query.candidateWeight` is now a stored property (trippy and drug-education keep 5, the other old routes 1) and the interest routes carry 5, so their films are also favoured when the next discovery is drawn from the bag. A film found by both `spaceage` and `machines` keeps the heavier route.
+- Expansion terms were each checked with one request (2.5 s apart). Merged: the machine terms (5 hits, all computer films, adding *The Information Machine*), the recording terms (5 hits, adding *New Stars in Stereo*) and the ecosystem terms (10 hits, adding *Exploring With the Time Lapse Camera*, *Bee City*, *Plants Make Food*). Left out: `"visual perception" OR seeing OR memory OR learning` (73 hits, mostly classroom and etiquette films); `"visual perception"` alone added nothing.
+- `nightcity` passed its test (14 accepted; BART, the WABCO Chicago El, the Lake Street El, the Pan Am building, the Delaware bridge). `futures` (`planetarium OR observatory OR "space travel" OR "space station"`) found 4 and accepted 2, both *Key to Our Horizons*, so it is not added.
+- Known wrong-direction hits (*County Government*, *Self-Conscious Guy*, meat inspection and fashion films) are tolerated; no exclusions were added or removed.
+
+Pins. Each film was reviewed alone: metadata and licence record, the main MP4 downloaded to an empty scratch folder, `ffprobe`, 24 evenly spaced frames on a contact sheet, the whole soundtrack transcribed with whisper and scanned for the exclusion terms, then deleted.
+
+| Id | Route | File | Bytes | Result |
+| --- | --- | --- | ---: | --- |
+| `LivingSt1958` *Living Stereo* (1958) | `recording` | `LivingSt1958.mp4`, H.264 640x480, 462 s | 48,130,485 | Turntables, consoles, animated stereo groove and stylus. RCA narration. No exclusion term. |
+| `SoundAndTheS` *Sound and the Story* (1956) | `recording` | `SoundAndTheS.mp4`, H.264 640x480, 1,423 s | 148,640,862 | Symphony Hall session, tape decks, lacquer cutting, plating, record presses. Only "operation" and "patient" in their everyday sense ("a delicate operation", "patient electroplating"). |
+| `SpringCo1952` *Spring Comes to a Pond* (1952) | `ecosystems` | `SpringCo1952.mp4`, H.264 640x480, 742 s | 77,321,447 | Lily pads, nests, toads, dragonflies, clouds, bird song under gentle narration. No exclusion term. |
+
+- All three carry `licenseurl` `http://creativecommons.org/licenses/publicdomain/` in the Prelinger collection. Each pin sets `preferredFile` to the main encode: a pin otherwise takes the smallest file, the 320x240 `_512kb` derivative.
+- Not added: `OnGuard1956` and `HowtoLis1957` (excluded by the filters, no exception) and the lookalike uploads without a `licenseurl` (`Logic_by_Machine`, `0577_Logic_by_Machine_15_01_03_00`, `Sound_and_the_Story_The`, `0372_Secrets_of_the_Pond_E01245_03_14_56_00`) are not pinned. The automatic seed pass and live discovery can still find them, as before for every route.
+
+Cache. The ten pins measured 2.75 GB (A31) and the three new files add 0.27 GB, so thirteen pins (about 3.02 GB) and two discoveries no longer fit 3 GB. Following A31 (raise storage, never cap what plays), `ArchiveCachePolicy.capBytes` is 4 GB; the 2 GB free-space reserve, pinned protection and discovery rotation are unchanged. The pool is fifteen films.
+
+Seeds. `scripts/archive-curate.py` mirrors the routes (a unit test parses its `QUERIES` and `EXCLUDE` and compares them with the catalog) and gains `--only`, `--merge` and `--print-urls`. `--only machines,perception,recording,ecosystems,nightcity --rows 50 --merge --write` appended 65 seeds after the 164 existing ones (unchanged), 229 in all.
+
+Expected footage mix. Pins are four pieces in five. Interest-aligned pins are 5 of 13 (8 counting *The Flow of Zen*, *Design for Dreaming* and *Ergot*); discoveries come about 60% from the interest routes, more once candidate weight is counted. That is roughly 43-61% of pieces. The 4:1 pin-to-discovery ratio is unchanged; raising the discovery share is a question for the user.
+
+Tests: `ArchiveInterestRouteTests` (script mirror, full exclusions on every route, interest share 55-65%, candidate weights, every pin names a route, the preferred main file, the bundled seeds, the 4 GB cap); `ArchiveCachePolicyTests` now expects 13 pins and 15 clips.
+
 ## Original implementation summary (A1–A25)
 
 - Queries (all `collection:prelinger`, 1950-1969, `mediatype:movies`, weighted): newsreel / news magazine /

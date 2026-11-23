@@ -32,7 +32,7 @@ Lo-Fi at about 69 BPM with AJ Hall’s drums and pictures from public libraries 
 - **Record** — a button under Play records the rendered picture and the final mix (HEVC at 60 Hz, lossless 24-bit audio) straight from the renderer, not the screen, and saves the movie to Photos. Works on macOS and Vision Pro. [How recording works](docs/recording.md).
 - **Living imagery** — pictures blend through effects that respond to the music. Every image change is a drop: through the drum fill the old picture tears, crushes, smears or scrambles through one of nineteen glitch styles, then cuts clean to the new image on the first hit of the next loop.
 - **Immersive space** — depth gives the imagery relief as it wraps around you on Vision Pro.
-- **Traces of old film** — Ten pinned films include *Thinking Machines* and Stanford’s *Hear Here*, a 1969 demonstration of speech recognition. Two more slots rotate through discoveries from the Internet Archive. [Film list and credits](docs/experience.md#pinned-films-and-rotating-discoveries)
+- **Traces of old film** — Thirteen pinned films include *Thinking Machines*, Stanford’s *Hear Here* (a 1969 demonstration of speech recognition), RCA’s record-era *Living Stereo* and *Sound and the Story*, and *Spring Comes to a Pond*. Two more slots rotate through discoveries from the Internet Archive. [Film list and credits](docs/experience.md#pinned-films-and-rotating-discoveries)
 - **Make it yours** — set the tempo, pin a scale, and adjust footage volume and effect intensity.
 
 <details>

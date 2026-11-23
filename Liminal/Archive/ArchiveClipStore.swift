@@ -4,8 +4,8 @@
 //
 //  Disk cache of downloaded footage (docs/plans/archive-video.md 1.4): films and excerpts in
 //  Application Support/Liminal/ArchiveFootage/ with an index.json. Holds the pinned titles and
-//  two discoveries, within a 3 GB budget. At load it deletes files the index does not list
-//  (docs/decisions/archive-video.md A31).
+//  two discoveries, within a 4 GB budget (raised from 3 GB for the interest pins, A32). At load it
+//  deletes files the index does not list (docs/decisions/archive-video.md A31).
 //
 
 import AVFoundation
@@ -41,7 +41,8 @@ nonisolated struct ArchiveClip: Codable, Sendable, Equatable, Identifiable {
 
 /// Pure eviction rules (unit-tested).
 nonisolated enum ArchiveCachePolicy {
-    static let capBytes: Int64 = 3_000_000_000
+    /// Thirteen pins (about 3.0 GB) plus two discoveries (A31: raise storage, never cap what plays; A32).
+    static let capBytes: Int64 = 4_000_000_000
     static let discoverySlots = 2
     static let discoveryPlayLimit = 2
     static var poolTarget: Int { ArchiveSeedList.pinned.count + discoverySlots }

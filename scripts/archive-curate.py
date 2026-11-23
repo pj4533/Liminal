@@ -6,7 +6,12 @@ Runs the same queries as Liminal/Archive/ArchiveCatalog.swift against advancedse
 white unless the query allows colour, the exclusion terms), and prints the survivors' titles for a human
 pass. With --write it stores them as Liminal/Archive/archive-seeds.json.
 
-    python3 scripts/archive-curate.py [--rows 100] [--write] [--save-raw DIR]
+    python3 scripts/archive-curate.py [--rows 100] [--only NAME[,NAME]] [--write [--merge]] [--save-raw DIR]
+    python3 scripts/archive-curate.py --print-urls [--only NAME[,NAME]]
+
+--only runs just the named routes. --merge (with --write) keeps every seed already in the file and
+appends the new unique ids after them. --print-urls prints each route's full request URL (every
+exclusion included) and makes no request.
 
 --save-raw keeps each raw JSON response (one is trimmed into the unit-test fixture); --from-raw DIR
 re-filters saved responses without any request.
@@ -31,6 +36,12 @@ QUERIES = [
     ("educational", 'collection:prelinger AND subject:(animation OR cartoon OR "visual effects" OR psychology OR science OR future)', False),
     ("spaceage", 'collection:prelinger AND (rocket OR satellite OR "outer space" OR computer OR electronic OR television)', True),
     ("bw", 'collection:prelinger AND color:"B&W"', False),
+    # Interest routes (docs/decisions/archive-video.md A32).
+    ("machines", 'collection:prelinger AND (computer OR cybernetics OR "magnetic tape" OR "data processing" OR "electronic brain" OR "analog computer")', True),
+    ("perception", 'collection:prelinger AND (perception OR "optical illusion" OR consciousness)', True),
+    ("recording", 'collection:prelinger AND ("sound recording" OR phonograph OR jukebox OR "magnetic recording" OR "radio broadcasting" OR "record player")', True),
+    ("ecosystems", 'collection:prelinger AND (microscope OR pond OR astronomy OR microscopy OR "plant growth" OR "time lapse" OR "water surface")', True),
+    ("nightcity", 'collection:prelinger AND ("city lights" OR subway OR "elevated railway" OR "urban transportation" OR "neon sign")', True),
 ]
 EXCLUDE = ["war", "bomb", "casualty", "casualties", "surgery", "operation", "disease", "nazi", "hitler",
            "execution", "biological", "venereal", "accident", "crash", "autopsy", "civil defense",
@@ -68,11 +79,15 @@ def is_bw(color):
     return None
 
 
-def search(q, rows, name):
+def search_url(q, rows, name):
     params = [("q", full_query(q, name)), ("rows", str(rows)), ("page", "1"), ("output", "json"), ("sort[]", "downloads desc")]
     for f in ["identifier", "title", "year", "sound", "color", "licenseurl", "runtime"]:
         params.append(("fl[]", f))
-    url = "https://archive.org/advancedsearch.php?" + urllib.parse.urlencode(params)
+    return "https://archive.org/advancedsearch.php?" + urllib.parse.urlencode(params)
+
+
+def search(q, rows, name):
+    url = search_url(q, rows, name)
     req = urllib.request.Request(url, headers={"User-Agent": "Liminal/1.0"})
     with urllib.request.urlopen(req, timeout=30) as r:
         return json.loads(r.read().decode("utf-8"))
@@ -84,9 +99,29 @@ def main():
     ap.add_argument("--write", action="store_true")
     ap.add_argument("--save-raw")
     ap.add_argument("--from-raw", help="re-filter responses saved by --save-raw (no requests)")
+    ap.add_argument("--only", help="comma-separated route names to run (default: all)")
+    ap.add_argument("--merge", action="store_true", help="with --write: keep existing seeds, append new ids")
+    ap.add_argument("--print-urls", action="store_true", help="print the full request URLs, no requests")
     a = ap.parse_args()
+    routes = QUERIES
+    if a.only:
+        wanted = [n.strip() for n in a.only.split(",") if n.strip()]
+        unknown = [n for n in wanted if n not in [r[0] for r in QUERIES]]
+        if unknown:
+            sys.exit("unknown route(s): %s" % ", ".join(unknown))
+        routes = [r for r in QUERIES if r[0] in wanted]
+    if a.print_urls:
+        for name, q, _ in routes:
+            print("# %s" % name)
+            print(search_url(q, a.rows, name))
+        return
     seeds, seen = [], set()
-    for i, (name, q, allow_colour) in enumerate(QUERIES):
+    existing = []
+    if a.merge:
+        with open(SEEDS) as f:
+            existing = json.load(f).get("seeds", [])
+        seen = {s["id"] for s in existing}
+    for i, (name, q, allow_colour) in enumerate(routes):
         if a.from_raw:
             with open(os.path.join(a.from_raw, "search-%s.json" % name)) as f:
                 data = json.load(f)
@@ -124,7 +159,10 @@ def main():
             print("%-10s %4d %s  %-40s %s" % (name, year, "C " if bw is False else "BW", ident[:40], title[:70]))
         print("# %s: %d docs, %d kept (numFound %s)" % (name, len(docs), kept,
                                                        data.get("response", {}).get("numFound")), file=sys.stderr)
-    print("# total %d seeds" % len(seeds), file=sys.stderr)
+    print("# total %d new seeds" % len(seeds), file=sys.stderr)
+    if a.merge:
+        seeds = existing + seeds
+        print("# merged: %d existing + new = %d" % (len(existing), len(seeds)), file=sys.stderr)
     if a.write:
         with open(SEEDS, "w") as f:
             json.dump({"source": "scripts/archive-curate.py", "collection": "prelinger",

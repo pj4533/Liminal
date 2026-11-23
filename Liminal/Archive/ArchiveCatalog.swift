@@ -21,8 +21,13 @@ nonisolated enum ArchiveCatalog {
         let weight: Float
         /// Colour items are allowed from this query (at `colourOdds`); otherwise black and white only.
         let allowsColour: Bool
+        /// Weight of this route's films when the next discovery is drawn from the accumulated bag
+        /// (separate from `weight`, which picks the route to search).
+        var candidateWeight: Float = 1
+        /// Routes built around what the user enjoys most (A32). Their route weights are held at a clear
+        /// majority of searches (unit-tested).
+        var isInterest: Bool = false
 
-        var candidateWeight: Float { name == "trippy" || name == "drug-education" ? 5 : 1 }
         var excludedTerms: [String] {
             guard name == "drug-education" else { return ArchiveCatalog.exclusions }
             return ArchiveCatalog.exclusions.filter { !ArchiveCatalog.drugEducationExceptions.contains($0) }
@@ -37,10 +42,10 @@ nonisolated enum ArchiveCatalog {
               weight: 3, allowsColour: false),
         Query(name: "trippy",
               text: #"collection:prelinger AND (psychedelic OR psychedelia OR kaleidoscope OR surreal OR hypnosis OR "light show" OR "optical illusion" OR "abstract film" OR "experimental film" OR "dream sequence")"#,
-              weight: 10, allowsColour: true),
+              weight: 10, allowsColour: true, candidateWeight: 5),
         Query(name: "drug-education",
               text: #"collection:prelinger AND (title:("drug abuse" OR "drug addiction" OR "drug education" OR narcotics OR marijuana OR marihuana OR LSD OR hallucinogens) OR subject:("drug abuse" OR "drug addiction" OR "drug education" OR "drug prevention" OR marijuana OR LSD))"#,
-              weight: 5, allowsColour: true),
+              weight: 5, allowsColour: true, candidateWeight: 5),
         Query(name: "educational",
               text: "collection:prelinger AND subject:(animation OR cartoon OR \"visual effects\" OR psychology OR science OR future)",
               weight: 2, allowsColour: false),
@@ -49,6 +54,23 @@ nonisolated enum ArchiveCatalog {
               weight: 2, allowsColour: true),
         // color:"B&W" (quoted): the unquoted form makes the search backend fail.
         Query(name: "bw", text: "collection:prelinger AND color:\"B&W\"", weight: 1, allowsColour: false),
+        // Interest routes (docs/decisions/archive-video.md A32): 34 of 57 route weight (60% of searches),
+        // candidate weight 5 like trippy, the full exclusions with no exceptions, colour at `colourOdds`.
+        Query(name: "machines",
+              text: #"collection:prelinger AND (computer OR cybernetics OR "magnetic tape" OR "data processing" OR "electronic brain" OR "analog computer")"#,
+              weight: 9, allowsColour: true, candidateWeight: 5, isInterest: true),
+        Query(name: "perception",
+              text: #"collection:prelinger AND (perception OR "optical illusion" OR consciousness)"#,
+              weight: 7, allowsColour: true, candidateWeight: 5, isInterest: true),
+        Query(name: "recording",
+              text: #"collection:prelinger AND ("sound recording" OR phonograph OR jukebox OR "magnetic recording" OR "radio broadcasting" OR "record player")"#,
+              weight: 9, allowsColour: true, candidateWeight: 5, isInterest: true),
+        Query(name: "ecosystems",
+              text: #"collection:prelinger AND (microscope OR pond OR astronomy OR microscopy OR "plant growth" OR "time lapse" OR "water surface")"#,
+              weight: 5, allowsColour: true, candidateWeight: 5, isInterest: true),
+        Query(name: "nightcity",
+              text: #"collection:prelinger AND ("city lights" OR subway OR "elevated railway" OR "urban transportation" OR "neon sign")"#,
+              weight: 4, allowsColour: true, candidateWeight: 5, isInterest: true),
     ]
 
     /// Odds that a colour item from a colour-allowing query is accepted (plan 1.2, tune).
@@ -302,6 +324,13 @@ nonisolated struct ArchiveSeedList: Decodable, Sendable {
              query: "spaceage", color: true),
         Seed(id: "sailfilm_hear", title: "Hear Here", year: 1969,
              query: "spaceage", color: true),
+        // Interest pins (A32), each reviewed on 2026-11-23. The main 640x480 encode, not the 320x240 derivative.
+        Seed(id: "LivingSt1958", title: "Living Stereo", year: 1958,
+             query: "recording", color: true, preferredFile: "LivingSt1958.mp4"),
+        Seed(id: "SoundAndTheS", title: "Sound And The Story", year: 1956,
+             query: "recording", color: true, preferredFile: "SoundAndTheS.mp4"),
+        Seed(id: "SpringCo1952", title: "Spring Comes to a Pond", year: 1952,
+             query: "ecosystems", color: true, preferredFile: "SpringCo1952.mp4"),
     ]
     static let pinnedIDs = Set(pinned.map(\.id))
 

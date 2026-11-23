@@ -164,7 +164,7 @@ The pipeline fetches from free public APIs, so its verification runs may use the
 | `sim-drag.sh` | Drag in the Simulator (needed for sliders) |
 | `vibrance-eval.sh IN OUT` | Offline vibrance evaluation of the effect pipeline over a folder of images (`vibrance-check.py` checks the result) |
 | `analyze-lofi.py`, `plot-lofi.py` | Analysis and plots of a `check-lofi.sh` capture (see Lo-Fi checks above) |
-| `archive-curate.py`, `archive-fetch-fixture.sh` | Build the bundled Prelinger seed list / download one fixture clip to a scratch folder |
+| `archive-curate.py`, `archive-fetch-fixture.sh` | Build the bundled Prelinger seed list (`--only` routes, `--merge` to append to the existing seeds, `--print-urls` for the full request URLs without a request) / download one fixture clip to a scratch folder |
 | `mix-report.sh`, `mix-matrix.sh` | Capture Lo-Fi audio offline and measure the mix against `mix-criteria.json` (one capture or the five-case matrix); `mixlib/` holds the analysis modules. See Mix verification above |
 | `solo-stems.py` | Turn a capture into a full-mix file plus one file per channel (drums, bass, chords, melody, reverb-echo, chops, film footage) at its level in the final mix, through the same master gain trace, so the stems sum to `master.wav`. `scripts/solo-stems.py CAPTURE OUT [--wav]` |
 | `strum-report.py` | Guitar and harp hook measures of one capture (D128): events, strings, drum sites, chop overlap, loudness, tone and echo per phrase. With `--baseline` and `--off` (the same build with `--hook strumHook=off`) it prints PASS/FAIL per capture criterion C2-C10 and measures the hook alone as on minus off; exits 1 on a failure |

@@ -6,7 +6,7 @@
 | --- | --- |
 | [Getting started](getting-started.md) | Requirements, builds and tests |
 | [Recording](recording.md) | The Record button: picture and mix captured from the renderer, HEVC plus 24-bit LPCM, saved to Photos; measurements and the test flag |
-| [Experience and controls](experience.md) | Lo-Fi music, visuals, the ten pinned films, rotating discoveries, source credits and playback settings |
+| [Experience and controls](experience.md) | Lo-Fi music, visuals, the thirteen pinned films, rotating discoveries, source credits and playback settings |
 | [Research index](research/README.md) | All research by topic: producers and what Liminal took from each, Lo-Fi production, dialogue chopping, instruments, bass and pads, mix and distortion, visuals and image APIs, simulator tooling |
 | [Mix verification](mix-verification.md) | How to capture per-bus stems and measure loudness, true peak, masking, low end, intelligibility and chop cadence, and how to read the report |
 | [MPC chopping plan](plans/mpc-chopping.md) | Work packages, acceptance criteria and deferred items |

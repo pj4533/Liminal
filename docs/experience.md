@@ -15,7 +15,7 @@
 
 ## Pinned films and rotating discoveries
 
-Psychedelic and experimental footage and vintage drug education films get extra weight in the rotating pool. Liminal plays four short excerpts from the pinned films for every discovery when both are available. The 12-film cache holds ten pinned films and two rotating discoveries. Pinned films download in the background during online playback and can play offline once cached. After a discovery has played twice, Liminal brings in a new title in the background once the old one has faded out. All pieces use the same visual and audio effects. The cache remembers previous start times and looks for a fresh stretch whenever a film returns.
+Films about machines and computers, perception, sound recording and record players, ponds and microscopes, and city transit get the largest share of discovery searches (about 60%), and they and the psychedelic, experimental and vintage drug education films get extra weight in the rotating pool. Liminal plays four short excerpts from the pinned films for every discovery when both are available. The 15-film cache holds thirteen pinned films and two rotating discoveries. Pinned films download in the background during online playback and can play offline once cached. After a discovery has played twice, Liminal brings in a new title in the background once the old one has faded out. All pieces use the same visual and audio effects. The cache remembers previous start times and looks for a fresh stretch whenever a film returns.
 
 | Pinned film | Year | Source |
 | --- | --- | --- |
@@ -29,8 +29,11 @@ Psychedelic and experimental footage and vintage drug education films get extra 
 | Design for Dreaming | 1956 | [Prelinger Archives](https://archive.org/details/Designfo1956) |
 | Horizons of Science: Thinking Machines | 1959 | [Educational Testing Service via Internet Archive](https://archive.org/details/horizons-of-science-thinking-machines) · [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) |
 | Hear Here | 1969 | [Stanford Artificial Intelligence Laboratory via Internet Archive](https://archive.org/details/sailfilm_hear) |
+| Living Stereo | 1958 | [Prelinger Archives via Internet Archive](https://archive.org/details/LivingSt1958) · [Public domain dedication](http://creativecommons.org/licenses/publicdomain/) |
+| Sound and the Story | 1956 | [Prelinger Archives via Internet Archive](https://archive.org/details/SoundAndTheS) · [Public domain dedication](http://creativecommons.org/licenses/publicdomain/) |
+| Spring Comes to a Pond | 1952 | [Prelinger Archives via Internet Archive](https://archive.org/details/SpringCo1952) · [Public domain dedication](http://creativecommons.org/licenses/publicdomain/) |
 
-Liminal prefers smaller playable versions when available and keeps full copies of pinned titles when they fit in the 3 GB cache. For larger discovery downloads it tries to keep an excerpt of up to four minutes and removes the temporary source afterward. Each launch deletes footage files the cache index does not list and abandoned download files in the app's temporary folder; nothing that can play is removed.
+Liminal prefers smaller playable versions when available and keeps full copies of pinned titles when they fit in the 4 GB cache. For larger discovery downloads it tries to keep an excerpt of up to four minutes and removes the temporary source afterward. Each launch deletes footage files the cache index does not list and abandoned download files in the app's temporary folder; nothing that can play is removed.
 
 ## Image sources
 
