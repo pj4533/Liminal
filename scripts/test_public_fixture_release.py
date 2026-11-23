@@ -26,8 +26,13 @@ def capture(case='ref', addition=0):
                   loudnessSpreadLu=2, allPiecesSiiMean=.5, allPiecesSiiP10=.37, allPiecesSnr1to4kMeanDb=amp)
     rows = [dict(id='C-B8', level='fail', status='fail', values=values, failedChecks=['snr1to4kMeanDb']),
             dict(id='C-M1', level='fail', status='fail', values=dict(integratedLufs=-14.56), failedChecks=['integratedLufs'])]
+    sections = ['drums', 'bass', 'mids', 'lead', 'space', 'dialogue', 'bed']
+    levels = {s: [-38, -40] for s in sections}
+    levels['dialogue'] = [-26 + addition, -27 + addition]
+    masked = dict(chopActiveFraction=.5, duringChops=dict(
+        bands=['1-2k', '2-4k'], sections=sections, levelDb=levels))
     report = dict(case=case, gitRevision='rev', captureSchema=manifest['schema'],
-                  metrics=dict(dialogue=dialogue, loudness=dict(integratedLufs=-14.56)), criteria=rows)
+                  metrics=dict(masking=masked, dialogue=dialogue, loudness=dict(integratedLufs=-14.56)), criteria=rows)
     return manifest, report
 
 
@@ -41,7 +46,44 @@ class PublicFixtureRelease(unittest.TestCase):
                 result = matrix.public_fixture_release(case, *before, *after)
                 self.assertEqual(result['passed'], passed)
                 self.assertEqual(result['pieceSnrDeltaDb'], delta)
+                self.assertEqual(result['chopActiveSnrDeltaDb'], delta)
                 self.assertEqual(after[1]['criteria'], raw)
+
+    def test_recutting_a_piece_changes_event_mean_without_changing_active_audio(self):
+        before = capture()
+        after = capture()
+        for source, recut in [(before, False), (after, True)]:
+            report = source[1]
+            pieces = report['metrics']['dialogue']['allPieces']
+            # Three halves of a second, with the loudest cut split into four 125 ms stabs.
+            rows = [dict(startFrame=a, endFrame=a + 24000, snr1to4kDb=-1) for a in (0, 48000)]
+            splits = 4 if recut else 1
+            for n in range(splits):
+                rows.append(dict(startFrame=96000 + n * 24000 // splits,
+                                 endFrame=96000 + (n + 1) * 24000 // splits, snr1to4kDb=8))
+            mean = sum(r['snr1to4kDb'] for r in rows) / len(rows)
+            pieces.update(perPiece=rows, count=len(rows), snr1to4kMeanDb=mean)
+            report['criteria'][0]['values'].update(allPieces=len(rows), allPiecesSnr1to4kMeanDb=mean)
+        result = matrix.public_fixture_release('ref', *before, *after)
+        self.assertEqual(result['pieceSnrDeltaDb'], 3)
+        self.assertEqual(result['chopActiveSnrDeltaDb'], 0)
+        self.assertTrue(result['passed'])
+        # An actual 3 dB change in the masked dialogue must fail even with those same event rows.
+        masked = after[1]['metrics']['masking']['duringChops']['levelDb']
+        masked['dialogue'] = [v + 3 for v in masked['dialogue']]
+        self.assertFalse(matrix.public_fixture_release('ref', *before, *after)['passed'])
+
+    def test_missing_or_silent_mask_cannot_qualify(self):
+        changes = [lambda m: m.pop('duringChops'), lambda m: m.update(chopActiveFraction=0),
+                   lambda m: m['duringChops']['bands'].remove('2-4k'),
+                   lambda m: m['duringChops']['levelDb'].pop('drums'),
+                   lambda m: m['duringChops']['levelDb'].update(dialogue=[-200, -200]),
+                   lambda m: m['duringChops']['levelDb'].update(dialogue=[float('nan'), -35])]
+        for change in changes:
+            before, after = capture(), capture()
+            change(after[1]['metrics']['masking'])
+            with self.assertRaises((KeyError, ValueError)):
+                matrix.public_fixture_release('ref', *before, *after)
 
     def test_private_other_footage_and_different_seed_or_offsets_do_not_qualify(self):
         before = capture()

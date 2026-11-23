@@ -779,8 +779,15 @@ transcription cases. The narrower original readings remain visible.
 
 For featured dialogue the absolute −3 dB floor, both SII checks, the loudness spread and the
 all-piece SII checks still apply. The +2.5 dB featured ceiling remains in the raw report.
-The portable companion compares mean 1–4 kHz SNR across every dry piece of at least 120 ms
-against that same case's baseline. An increase over 1 dB fails even if the raw criterion passed.
-One dB allows for changed spoken-piece inventories and is a regression tolerance, not a measured
-uncertainty or an absolute claim about dialogue balance. A uniform 3 dB increase fails.
+The portable companion compares dialogue and backing energy over the M8 chop-active mask. For each
+case it sums linear power across 1–2 and 2–4 kHz, first for dialogue and then for all six backing
+sections. The difference between those two levels gives the 1–4 kHz margin. M8 measures the union
+of scheduled chop windows, including their rendered tails and merged gaps up to 100 ms. Each 10 ms
+hop contributes once. An increase of more than 1 dB against the matched baseline fails. This is a
+regression tolerance. A 3 dB increase in dialogue against the same backing fails.
+
+The report retains the equal-piece mean and its paired delta as diagnostics. Recutting one held
+word into several stabs can change that mean even when the audio over the same time span stays
+identical. In the public transcription capture, 56 baseline pieces became 68 candidate pieces.
+Their equal-piece SNR increased by 1.6101 dB, while the chop-active margin increased by 0.5283 dB.
 All other strict failures continue to block release.

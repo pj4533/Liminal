@@ -122,6 +122,36 @@ def check_public_measurements(case, manifest, report):
     return values, loudness
 
 
+def chop_active_balance(report):
+    # M8 averages each band's linear power over the same union of scheduled chop windows.
+    # Summing these powers gives the dialogue/backing energy ratio over that mask.
+    masking = report['metrics']['masking']
+    fraction = masking['chopActiveFraction']
+    if not math.isfinite(fraction) or not 0 < fraction <= 1:
+        raise ValueError('missing or invalid chop-active coverage')
+    matrix = masking['duringChops']
+    bands, levels = matrix['bands'], matrix['levelDb']
+    sections = {'drums', 'bass', 'mids', 'lead', 'space', 'bed', 'dialogue'}
+    if (set(matrix['sections']) != sections or len(matrix['sections']) != len(sections)
+            or set(levels) != sections or len(bands) != len(set(bands))):
+        raise ValueError('incomplete chop-active masking matrix')
+    indices = [bands.index(band) for band in ('1-2k', '2-4k')]
+    groups = {'dialogue': [], 'backing': []}
+    for section, row in levels.items():
+        if len(row) != len(bands) or not all(math.isfinite(row[i]) for i in indices):
+            raise ValueError('missing chop-active speech-band levels')
+        groups['dialogue' if section == 'dialogue' else 'backing'].extend(row[i] for i in indices)
+
+    def combined_db(values):
+        peak = max(values)
+        if peak <= -200:  # mixlib.audio.db10's silence floor
+            raise ValueError('no measurable chop-active energy')
+        return peak + 10 * math.log10(sum(10 ** ((v - peak) / 10) for v in values))
+
+    dialogue, backing = combined_db(groups['dialogue']), combined_db(groups['backing'])
+    return dict(activeFraction=fraction, dialogueDb=dialogue, backingDb=backing, snrDb=dialogue - backing)
+
+
 def public_fixture_release(case, before_manifest, before, manifest, report):
     previous, _ = check_public_measurements(case, before_manifest, before)
     current, loudness = check_public_measurements(case, manifest, report)
@@ -129,7 +159,9 @@ def public_fixture_release(case, before_manifest, before, manifest, report):
         raise ValueError('paired source offsets differ')
     rows = {row['id']: row for row in report['criteria']}
     failures = strict_failures(report['criteria'])
-    delta = current['allPiecesSnr1to4kMeanDb'] - previous['allPiecesSnr1to4kMeanDb']
+    piece_delta = current['allPiecesSnr1to4kMeanDb'] - previous['allPiecesSnr1to4kMeanDb']
+    prior_balance, balance = chop_active_balance(before), chop_active_balance(report)
+    delta = balance['snrDb'] - prior_balance['snrDb']
     allowed_delta = 1.0
     measured_bounds = CRITERIA['C-B8']['bounds']
     remaining = list(failures)
@@ -150,7 +182,9 @@ def public_fixture_release(case, before_manifest, before, manifest, report):
                 integratedLufs=loudness, generalFilmRangeLufs=[lo, hi],
                 featuredSnrDb=current['snr1to4kMeanDb'], baselinePieceSnrDb=previous['allPiecesSnr1to4kMeanDb'],
                 candidatePieceSnrDb=current['allPiecesSnr1to4kMeanDb'],
-                pieceSnrDeltaDb=round(delta, 4), maxPieceSnrRiseDb=allowed_delta)
+                pieceSnrDeltaDb=round(piece_delta, 4), baselineChopActive=prior_balance,
+                candidateChopActive=balance, chopActiveSnrDeltaDb=round(delta, 4),
+                maxChopActiveSnrRiseDb=allowed_delta)
 
 
 def inventory(root, baseline=None, revision=None, baseline_revision=None, *, public_fixture=False):
