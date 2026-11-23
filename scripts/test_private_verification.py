@@ -22,6 +22,7 @@ def module(name):
 assets = module('private-verification-assets')
 runner = module('verify-private-drums')
 cleanup = module('private-verification-cleanup')
+transport = module('private-ciphertext-download')
 
 
 def wav(path, frames=705600, rate=22050, channels=1, bits=16, encoding=1):
@@ -285,7 +286,9 @@ class PrivateAssetTests(unittest.TestCase):
         self.assertIn("branches: ['verify/private-execute/**']", text)
         self.assertNotIn("branches: ['verify/dialogue-private-20261123']", text)
         self.assertNotIn('pull_request', text)
-        self.assertIn('.draft == true', text)
+        self.assertIn('secrets.LIMINAL_PRIVATE_DRUMS_URL_20261123', text)
+        self.assertNotIn('GH_TOKEN:', text)
+        self.assertNotIn('contents: write', text)
         self.assertNotIn('releases/tags/', text)
         self.assertIn('group: private-drums-pj4533-liminal', text)
         self.assertNotIn('group: private-drums-${{ github.run_id }}', text)
@@ -297,6 +300,58 @@ class PrivateAssetTests(unittest.TestCase):
         self.assertNotIn('path: ${{ runner.temp }}/private-verification/raw', text)
         self.assertIn('Remove runner plaintext, private build resources and key\n        if: always()', text)
         self.assertIn('unset PRIVATE_KEY_B64\n          python3', text)
+
+
+class CiphertextTransportTests(unittest.TestCase):
+    def url(self, host='release-assets.githubusercontent.com', minutes=60):
+        import datetime
+        expires = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=minutes)
+        return 'https://' + host + '/asset?se=' + expires.isoformat().replace('+00:00', 'Z') + '&sig=private-capability'
+
+    def test_url_host_scheme_expiry_credentials_and_fragment_fail_closed(self):
+        transport.validate_url(self.url())
+        for value in [self.url('evil.example'), self.url(minutes=29), self.url().replace('https:', 'http:'),
+                      self.url().replace('https://', 'https://user@'), self.url() + '#fragment',
+                      'https://release-assets.githubusercontent.com/asset?se=bad']:
+            with self.subTest(value=value), self.assertRaises(ValueError): transport.validate_url(value)
+
+    def test_owner_capture_stores_only_one_validated_location_privately(self):
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'url'
+            value = self.url()
+            result = Mock(returncode=0, stdout=('> Authorization: redacted\n< Location: ' + value + '\n').encode(), stderr=b'')
+            with patch.object(transport.subprocess, 'run', return_value=result):
+                transport.capture('783833664', output)
+            self.assertEqual(output.read_text(), value)
+            self.assertEqual(output.stat().st_mode & 0o777, 0o600)
+            output.unlink()
+            for data in (b'HTTP 200', ('Location: ' + value + '\nLocation: ' + value).encode()):
+                result.stdout = data
+                with patch.object(transport.subprocess, 'run', return_value=result), self.assertRaises(ValueError):
+                    transport.capture('783833664', output)
+                self.assertFalse(output.exists())
+
+    def test_download_hash_mismatch_network_errors_and_redirects_never_leak_capability(self):
+        import hashlib
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'fixtures.enc'
+            opener = Mock(); opener.open.return_value = io.BytesIO(b'ciphertext')
+            transport.download(self.url(), output, hashlib.sha256(b'ciphertext').hexdigest(), opener)
+            self.assertEqual(output.read_bytes(), b'ciphertext')
+            self.assertEqual(output.stat().st_mode & 0o777, 0o600)
+            output.unlink()
+            for error in (False, True):
+                opener = Mock()
+                if error: opener.open.side_effect = RuntimeError(self.url())
+                else: opener.open.return_value = io.BytesIO(b'tampered')
+                with self.assertRaises(ValueError) as caught:
+                    transport.download(self.url(), output, 'a'*64, opener)
+                self.assertNotIn('private-capability', str(caught.exception))
+                self.assertFalse(output.exists())
+                self.assertFalse(output.with_name('fixtures.enc.download').exists())
+            with self.assertRaises(ValueError): transport.NoRedirect().redirect_request(None, None, 302, None, None, self.url('evil.example'))
 
 
 if __name__ == '__main__': unittest.main()

@@ -5,9 +5,6 @@ on:
     branches: ['verify/private-execute/**']
   workflow_dispatch:
     inputs:
-      asset_id:
-        description: Draft release ciphertext asset ID (digits only)
-        required: false
       ciphertext_sha256:
         description: SHA256 of reviewed encrypted fixture archive
         required: false
@@ -43,27 +40,13 @@ jobs:
           echo "$RUNNER_TEMP/private-venv/bin" >> "$GITHUB_PATH"
       - name: Fetch ciphertext (never fetch plaintext)
         env:
-          GH_TOKEN: ${{ github.token }}
-          ASSET_ID: ${{ inputs.asset_id }}
+          PRIVATE_CIPHERTEXT_URL: ${{ secrets.LIMINAL_PRIVATE_DRUMS_URL_20261123 }}
           EXPECTED_SHA256: ${{ inputs.ciphertext_sha256 || '7a77cc69f487e2fb33808085589fde56734d217050f9bf94276fd12067dc5913' }}
         run: |
           set -euo pipefail
           umask 077
-          if [ -z "$ASSET_ID" ]; then
-            ASSET_ID=$(gh api repos/pj4533/Liminal/releases --jq '.[] | select(.tag_name == "private-drums-20261123" and .draft == true) | .assets[] | select(.name == "fixtures.enc" and .state == "uploaded") | .id')
-          fi
-          [[ "$ASSET_ID" =~ ^[0-9]+$ ]]
-          [[ "$EXPECTED_SHA256" =~ ^[a-f0-9]{64}$ ]]
-          gh api -H 'Accept: application/octet-stream' "repos/pj4533/Liminal/releases/assets/$ASSET_ID" > "$RUNNER_TEMP/private-verification/fixtures.enc"
-          python3 - <<'PY'
-          import hashlib, os
-          from pathlib import Path
-          p = Path(os.environ['RUNNER_TEMP']) / 'private-verification/fixtures.enc'
-          h = hashlib.sha256()
-          with p.open('rb') as f:
-              for block in iter(lambda: f.read(1024*1024), b''): h.update(block)
-          assert h.hexdigest() == os.environ['EXPECTED_SHA256'], 'ciphertext identity mismatch'
-          PY
+          python3 after/scripts/private-ciphertext-download.py download "$RUNNER_TEMP/private-verification/fixtures.enc" --sha256 "$EXPECTED_SHA256"
+          unset PRIVATE_CIPHERTEXT_URL
       - name: Authenticate and install paired corpus
         id: fixtures
         env:

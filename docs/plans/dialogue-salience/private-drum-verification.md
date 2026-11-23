@@ -74,14 +74,29 @@ gh release create private-drums-20261123 \
 git push origin REVIEWED_COMMIT:refs/heads/verify/private-execute/20261123
 ```
 
-The new workflow uses only `contents: read`, the ordinary job token scoped to the
-ciphertext fetch, and the temporary AES secret scoped to key materialization. The
-shell unsets that secret before starting any decrypt/verification subprocess.
-The fixed draft tag is `private-drums-20261123`, asset name `fixtures.enc`; push
-execution looks up its uploaded asset ID through the release list, filtered to the exact unpublished draft tag, and requires the ciphertext hash above. The tag endpoint returns 404 for this unpublished draft and is deliberately not used. Dispatch inputs
-can override asset ID/hash on the trusted verification refs. A missing/inaccessible
-draft asset fails closed; the token is never escalated or printed. Draft access with
-the hosted job token is a remote prerequisite that has not yet been verified.
+The workflow uses only `contents: read`. The hosted read token cannot access the
+unpublished draft: initial run `45226611308` failed at ciphertext fetch, before any
+private corpus reached the runner. The authorized owner CLI captures the draft
+asset's signed HTTPS redirect using its documented verbose HEAD response:
+
+```sh
+python3 scripts/private-ciphertext-download.py capture 783833664 \
+  /app/state/liminal-private-verification/ciphertext-download-url
+gh secret set LIMINAL_PRIVATE_DRUMS_URL_20261123 --repo pj4533/Liminal \
+  < /app/state/liminal-private-verification/ciphertext-download-url
+```
+
+The capture command saves only a validated redirect, mode 600, and never logs HTTP
+headers, credentials or the URL. Refresh it immediately before executing: only
+`https://release-assets.githubusercontent.com` is allowed, without userinfo,
+fragments or whitespace and with over 30 minutes until the signed `se` expiry.
+The URL grants temporary access only to ciphertext and is scoped to the download
+step's ephemeral secret. The downloader removes the secret from its environment,
+rejects redirects, verifies the pinned SHA256 above before completing the output,
+and emits only a fixed failure message. No owner credential enters Actions. The
+AES secret remains separately scoped to key materialization, and the shell unsets
+it before starting decrypt/verification subprocesses. No public release or broader
+job permission is used. Delete both ephemeral secrets after evidence retrieval.
 
 Only `verify/private-execute/**` pushes trigger this workflow; there is no PR trigger.
 The review branch stays inert. This push route avoids a dependency on registering
@@ -138,5 +153,5 @@ private files.
 Local tests cover byte preservation, RIFF metadata and exclusions, the known name
 repairs, inventory rejection, GCM roundtrip/fresh nonce/tamper/wrong-key/truncation,
 key permissions and archive boundaries, no overwrite, safe artifacts, truthful
-transcription failure, post-report command failures/timeouts and targeted crash/cache cleanup (19 tests). Native Apple execution remains pending: this environment
+transcription failure, post-report command failures/timeouts, targeted crash/cache cleanup and signed URL host/expiry/hash/error boundaries (22 tests). Native Apple execution remains pending: this environment
 has no Xcode or Apple audio framework, and no remote run is implied by those tests.
