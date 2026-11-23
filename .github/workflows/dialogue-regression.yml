@@ -37,7 +37,7 @@ jobs:
         run: |
           set -o pipefail
           set +e
-          allowed='DialogueEngineTests DialogueChopVarietyTests DialogueSalienceTests DialogueChopFeelTests DialogueFeelMetricsTests DialogueMotifTests DialogueTightnessTests DialogueGateTests DialogueWordCutTests'
+          allowed='DialogueEngineTests DialogueChopVarietyTests DialogueSalienceTests DialogueChopFeelTests DialogueFeelMetricsTests DialogueMotifTests DialogueLineLedgerTests DialogueTightnessTests DialogueGateTests DialogueWordCutTests'
           selected=${REQUESTED_SUITES//,/ }
           if [ -z "$selected" ]; then selected=$allowed; fi
           args=()

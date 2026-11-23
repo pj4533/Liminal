@@ -142,12 +142,39 @@ class SwiftRunnerIntegrityTests(unittest.TestCase):
         runner = module('verify-swift-test-coverage')
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
-            (root/'Example.swift').write_text('@Test func one() {}\n@Test(arguments: [1,2]) func two(_ value: Int) {}')
+            (root/'Example.swift').write_text('struct Example { @Test func one() {}\n@Test(arguments: [1,2]) func two(_ value: Int) {} }')
             text='✔ Suite Example passed after 1 second.\n✔ Test one() passed after 0.1 seconds.\n'
             self.assertFalse(runner.coverage('', root, ['Example'])['passed'])
             self.assertFalse(runner.coverage(text, root, ['Example'])['passed'])
             text+='✘ Test two(_:) with 2 test cases failed after 0.2 seconds with 1 issue.\n'
             self.assertTrue(runner.coverage(text, root, ['Example'])['passed'])
+
+    def test_shared_file_suite_scope_ignores_siblings_nested_types_and_literals(self):
+        runner = module('verify-swift-test-coverage')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root/'Shared.swift').write_text('''// struct Fake { @Test func fake() {} }
+struct First {
+    let ordinary = "} @Test func fake() {"
+    let raw = #"} \" @Test func rawFake() {}"#
+    let multiline = """ } @Test func multilineFake() {} """
+    /* } /* nested { */ @Test func commentFake() {} */
+    @Test func one() { let closure = { 1 }; _ = closure() }
+    struct Nested { @Test func nested() {} }
+}
+struct Sibling { @Test func two() {} }
+extension First { @Test func three() {} }
+''')
+            self.assertEqual(runner.declared_tests(root)['First'], {'one', 'three'})
+            self.assertEqual(runner.declared_tests(root)['Sibling'], {'two'})
+            text = '✔ Suite First passed after 1 second.\n✔ Test one() passed after 0.1 seconds.\n'
+            result = runner.coverage(text, root, ['First'])
+            self.assertEqual(result['suites']['First']['missing'], ['three'])
+            self.assertFalse(result['passed'])
+            text += '✔ Test three() passed after 0.1 seconds.\n'
+            self.assertTrue(runner.coverage(text, root, ['First'])['passed'])
+            self.assertFalse(runner.coverage(text, root, ['Sibling'])['passed'])
+            self.assertFalse(runner.coverage(text, root, ['Absent'])['passed'])
 
     def test_exact_historical_adapters_have_single_window_loop_and_compiler_expansion(self):
         import subprocess
