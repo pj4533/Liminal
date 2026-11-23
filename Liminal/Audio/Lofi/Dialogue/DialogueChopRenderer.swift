@@ -205,8 +205,17 @@ nonisolated enum DialogueChopRenderer {
         if !levelling.isFinite { levelling = 0 }
         vDSP_vsmul(out, 1, &levelling, &out, 1, vDSP_Length(full))
         DialogueChopChain.limitCrest(&out, sampleRate: sr, absolute: DialogueChopChain.limiterCeiling)
-        for i in 0..<full {
-            out[i] = LofiSaturation.softClip(out[i], threshold: DialogueChopChain.peakKnee, ceiling: DialogueChopChain.peakCeiling)
+        let knee = DialogueChopChain.peakKnee
+        let ceiling = DialogueChopChain.peakCeiling
+        out.withUnsafeMutableBufferPointer { buffer in
+            guard let samples = buffer.baseAddress else { return }
+            // The shoulder is an identity below the knee. Leave those samples as they are.
+            var peak: Float = 0
+            vDSP_maxmgv(samples, 1, &peak, vDSP_Length(full))
+            guard !(peak <= knee) else { return }
+            for i in 0..<full where abs(samples[i]) > knee {
+                samples[i] = LofiSaturation.softClip(samples[i], threshold: knee, ceiling: ceiling)
+            }
         }
         if pad.role == .stab, levelling < DialogueChopChain.maxLevelGain {
             var residual = DialogueChopChain.residualStabGain(out, sampleRate: sr)
