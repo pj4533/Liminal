@@ -255,17 +255,17 @@ established the paired file identities. The raw logs retain the missing
 sidecar fields. The local harness now keeps those identities in its
 separate provenance directory.
 
-The authenticated diagnostic comparison passed 53 of 71 checks. Both
-revisions had 14 speech-window/mode outcomes without a planned render.
-The candidate measured 109 transcript-mode and 47 acoustic attacks
-outside 35 ms, versus 266 and 104 on the baseline. The transcript-mode
-median shifted from −0.1 to 3.5 ms. Acoustic accidental partials were .27,
-and exact whole-content re-hearing was 20/50. The measurement code now
-bounds its read on short PCM buffers. The prior counts remain diagnostic
-pending a rerun with that fix. Independent remeasurement of two long
-rendered cuts confirmed a −57.849 ms and a +129.327 ms outlier. In those
-cases the scheduler placed the production attack within 0.006 ms of its
-target while the independent detector picked another rise.
+The final bounded-read probes recorded all 12 derivative identities
+directly and confirmed 96 windows and 91 speech-eligible transcripts per
+revision. The comparison passed 53 of 71 checks. Both revisions had 14
+speech-window/mode outcomes without a planned render. The candidate
+measured 109 transcript-mode and 47 acoustic attacks outside 35 ms,
+versus 266 and 104 on the baseline. The transcript-mode median shifted
+from −0.1 to 3.5 ms. Acoustic accidental partials were .27, and exact
+whole-content re-hearing was 20/50. Independent remeasurement of two
+long rendered cuts confirmed a −57.849 ms and a +129.327 ms outlier.
+In those cases the scheduler placed the production attack within 0.006
+ms of its target while the independent detector picked another rise.
 
 The fresh-index experiment reached .806 salient share against .412
 baseline, below twice the baseline. Evolving playback reached .190
@@ -327,11 +327,35 @@ evidence. The raw strict results still fail. Both transcribe cases retain
 the baseline C-D9 failure and the candidate adds C-B6 failures outside
 the specified paired targets.
 
+Direct comparison of the dry events to the first two lead notes in each
+theme return found 12 overlaps across 20 candidate returns, versus zero
+in the baseline. They lasted 33–434 ms. The first outro bar accounted for
+all 12 events, nine reversed and three forward. The motif move pool can
+place these events at steps 0, 4, 8 and 12 while the lead clearance applies
+to the fallback grammar. Restoring the old quiet step alone still
+overlaps four of those dry events.
+
 Exact replay matching against the recovered historical log found 48 of
 95 window identities, 85 of 159 word occurrences and two of 19 candidate
 played/context pairs. The other original cases retain their recovered
 baseline audio. The fresh candidate scored 130 ranked and 94 chosen of
 148 fresh occurrences. Those counts use the paired fresh corpus.
+
+### Final local disposition
+
+The final bundled macOS run at `62e96f3` discovered 633 methods in 84
+suites. It recorded 627 passes, the same 6.206758016153984 dB pad-tail
+failure, and the five installed-drum or opt-in skips exercised in the
+earlier paired supplemental runs. The 34 focused tests on the final
+audio changes, all 18 chop-feel gates, and 55 Python tests passed.
+macOS and visionOS Simulator builds succeeded.
+
+Release acceptance remains open on authentic-media timing and content,
+evolving footage selection, strict mix, historical matching and human
+listening. The candidate is committed locally. GitHub main is still
+`47a01fe`, and the Vision Pro update and deletion of the 11 task branches
+are conditional on acceptance. The obsolete private Actions runs and
+artifacts are already removed.
 
 ## Separate user-gated loose ends: no action in this task
 

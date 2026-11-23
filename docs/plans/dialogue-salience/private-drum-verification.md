@@ -2,8 +2,10 @@
 
 Keep the source packs, prepared bundle, builds, raw reports, and capture audio
 on the Mac outside public Git. Continue from the [local handoff](../HANDOFF-2026-11-23-CODEX-LOCAL.md).
-Private verification remains open until both native runs and the paired matrix
-complete with the required evidence.
+The local continuation completed both native runs and the paired matrix with
+all 100 built sample hashes verified. Both revisions reproduced the same
+native failures. The strict mix gate remains unmet, and the specified paired
+criteria found zero new fail-level failures. See the [acceptance ledger](acceptance-ledger.md).
 
 Use the four original Slow Burn packs for fresh baseline and candidate verification.
 The regenerated D122 corpus has a separate identity from the historical installed
