@@ -638,7 +638,13 @@ nonisolated enum LofiDrumLandmarks {
                     kept.append(landmark)
                 }
             }
-            result += kept
+            // The estimated floor can exceed the local peak on a decaying shoulder.
+            // Bound the reported strength after selection to preserve the chosen attack.
+            result += kept.map { mark in
+                guard mark.strength < 0 else { return mark }
+                return LofiDrumLandmark(kind: mark.kind, attackFrame: mark.attackFrame, peakFrame: mark.peakFrame,
+                                        strength: 0, confidence: mark.confidence)
+            }
         }
         return result.sorted { $0.attackFrame == $1.attackFrame ? $0.kind.rawValue < $1.kind.rawValue
             : $0.attackFrame < $1.attackFrame }
