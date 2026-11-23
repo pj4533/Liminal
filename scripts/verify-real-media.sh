@@ -12,6 +12,7 @@ PHASE=${4:-prepare}
 CACHE="$OUT/ArchiveFootage"
 export LIMINAL_VERIFICATION_ARCHIVE_DIR="$CACHE"
 export TEST_RUNNER_LIMINAL_VERIFICATION_ARCHIVE_DIR="$CACHE"
+export TEST_RUNNER_LIMINAL_VERIFICATION_PROVENANCE_DIR="$OUT/provenance"
 STATUS="$OUT/steps.tsv"
 if [ ! -f "$STATUS" ]; then printf 'step\texit\n' > "$STATUS"; fi
 run_step() {
@@ -98,18 +99,26 @@ app)
     fi
     APP="$OUT/dd-after/Build/Products/Debug/Liminal.app/Contents/MacOS/Liminal"
     [ -x "$APP" ] || { printf 'Build the candidate before app verification.\n' >&2; exit 2; }
+    cd "$OUT" || exit $?
     /usr/bin/log stream --level info --predicate 'subsystem == "com.saygoodnight.Liminal"' > "$OUT/app-200s.log" 2>&1 &
     LOGGER=$!
     "$APP" -LiminalAutoPlay YES -audio.musicMode lofi -archive.enabled YES -LiminalDialogueTranscription installedOnly -LiminalImageAPIFresh YES -LiminalVideoOffline YES -LiminalMusicSeed 1042 -LiminalVideoSeed 1 > "$OUT/app-stdout.log" 2>&1 &
     APP_PID=$!
+    cleanup_app() {
+        kill "$APP_PID" "$LOGGER" 2>/dev/null || true
+        wait "$APP_PID" "$LOGGER" 2>/dev/null || true
+    }
+    trap cleanup_app EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
     sleep 200
     if kill -0 "$APP_PID" 2>/dev/null; then
         printf 'app-survived-200s\t0\n' >> "$STATUS"
-        kill "$APP_PID"
     else
         printf 'app-survived-200s\t1\n' >> "$STATUS"
     fi
-    kill "$LOGGER" 2>/dev/null || true
+    cleanup_app
+    trap - EXIT INT TERM
     run_step app-playback-evidence python3 "$AFTER/scripts/verify-app-playback.py" "$OUT/app-200s.log" "$OUT/app-stdout.log"
 
     ;;
@@ -125,10 +134,14 @@ final)
 import csv, sys
 rows = list(csv.DictReader(open(sys.argv[1]), delimiter='\t'))
 required = {'prepare-media', 'provision-speech', 'baseline-build', 'after-build', 'baseline-probe', 'after-probe', 'baseline-public-matrix', 'after-public-matrix', 'media-gates', 'auditions', 'app-survived-200s', 'app-playback-evidence', 'baseline-cache-adapter', 'baseline-matrix-adapter', 'baseline-report-adapter', 'baseline-probe-adapter-check', 'baseline-probe-adapter', 'baseline-compiler-adapter', 'baseline-capture-adapter', 'baseline-public-inventory', 'after-public-inventory'}
-seen = {r['step'] for r in rows}
-print('Missing required steps:', sorted(required - seen))
-print('Failed steps:', [r for r in rows if int(r['exit'])])
-raise SystemExit(1 if required - seen or any(int(r['exit']) for r in rows) else 0)
+latest = {r['step']: r for r in rows}
+missing = required - latest.keys()
+failed = [r for r in latest.values() if int(r['exit'])]
+earlier_failures = [r for r in rows if int(r['exit']) and r is not latest[r['step']]]
+print('Missing required steps:', sorted(missing))
+print('Latest failed steps:', failed)
+print('Earlier failed attempts retained in steps.tsv:', earlier_failures)
+raise SystemExit(1 if missing or failed else 0)
 PY
     ;;
 *) echo "Unknown phase: $PHASE" >&2; exit 2 ;;

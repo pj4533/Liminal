@@ -157,7 +157,7 @@ struct DialogueSalienceProbeTests {
             }
             return out
         }
-        let raw = Array(UnsafeBufferPointer(start: x, count: limit + half))
+        let raw = Array(UnsafeBufferPointer(start: x, count: min(n, limit + half)))
         let band = biquad(biquad(raw, hz: 300, highPass: true), hz: 3400, highPass: false)
         var prefix = [Double](repeating: 0, count: band.count + 1)
         for i in band.indices { prefix[i + 1] = prefix[i] + Double(band[i] * band[i]) }
@@ -228,12 +228,21 @@ struct DialogueSalienceProbeTests {
             provider = AppleSpeechTranscriptProvider.live()
         }
         let expectedChunks = max(1, config.chunks ?? 6)
-        print("SALIENCE-CORPUS " + Self.json(["films": clips.map { clip -> [String: Any] in
-            let sidecar = directory.appending(path: clip.fileName).deletingPathExtension().appendingPathExtension("provenance.json")
+        let provenancePath = ProcessInfo.processInfo.environment["LIMINAL_VERIFICATION_PROVENANCE_DIR"]
+        let provenanceDirectory = provenancePath.map { URL(fileURLWithPath: $0, isDirectory: true) } ?? directory
+        let films = try clips.map { clip -> [String: Any] in
+            let sidecar = provenanceDirectory.appending(path: clip.fileName).deletingPathExtension().appendingPathExtension("provenance.json")
             let identity = (try? Data(contentsOf: sidecar)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            if provenancePath != nil {
+                let valid = identity?["id"] as? String == clip.id &&
+                    (identity?["sha256"] as? String)?.count == 64 &&
+                    (identity?["url"] as? String)?.hasPrefix("https://") == true
+                try #require(valid, "Missing or inconsistent prepared identity for \(clip.id) at \(sidecar.path)")
+            }
             return ["id": clip.id, "file": clip.fileName, "duration": clip.duration,
                     "sha256": identity?["sha256"] as? String ?? "missing", "url": identity?["url"] as? String ?? "missing"]
-        },
+        }
+        print("SALIENCE-CORPUS " + Self.json(["films": films,
             "chunks": expectedChunks, "bpm": bpm, "seed": baseSeed, "modes": modes]))
         print("SALIENCE-TRANSCRIBER \(provider == nil ? "none" : "apple") films=\(clips.count)")
         var snippetDir: URL?

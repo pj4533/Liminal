@@ -1526,7 +1526,10 @@ nonisolated struct DialogueMotifCutter {
                 if fr.kind != .line, !fr.isUnit || fr.kind == .half,
                    let w = words.first(where: { $0.frames.overlaps(fr.frames) && $0.frames.lowerBound + core < start
                        && start < $0.frames.upperBound - core }) {
-                    let clamped = zero(max(fr.frames.lowerBound, w.frames.lowerBound), bounds: fr.frames)
+                    let first = max(fr.frames.lowerBound, w.frames.lowerBound)
+                    // Protect the first sample too: a zero crossing just after the voiced core
+                    // would trim it again. Keep the existing fade if no earlier crossing is available.
+                    let clamped = zero(first, bounds: fr.frames.lowerBound..<(first + 1))
                     if Double(beat - clamped) / rate > DialogueMotifTuning.maximumLeadSeconds {
                         beat = min(max(clamped, accent(clamped..<fr.frames.upperBound)), fr.frames.upperBound - 1)
                         out.weakLead = true

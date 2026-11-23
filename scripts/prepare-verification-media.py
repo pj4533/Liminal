@@ -54,14 +54,22 @@ def digest(path):
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
-def cached_matches(destination, sidecar, identifier, file, url, metadata_hash):
+def read_record(path):
     try:
-        saved = json.loads(sidecar.read_text())
-        return (destination.is_file() and saved['id'] == identifier and saved['url'] == url and
-                saved['archiveFile'] == file and saved['metadataSHA256'] == metadata_hash and
-                saved['sha256'] == digest(destination))
-    except (OSError, ValueError, KeyError):
-        return False
+        record = json.loads(path.read_text())
+        return record if isinstance(record, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def matches_record(destination, record, identifier, file, url, metadata_hash):
+    return (destination.is_file() and record.get('id') == identifier and record.get('url') == url and
+            record.get('archiveFile') == file and record.get('metadataSHA256') == metadata_hash and
+            record.get('sha256') == digest(destination))
+
+
+def cached_matches(destination, sidecar, identifier, file, url, metadata_hash):
+    return matches_record(destination, read_record(sidecar), identifier, file, url, metadata_hash)
 
 
 def decoded_windows(path, duration):
@@ -81,8 +89,12 @@ def decoded_windows(path, duration):
 
 
 def prepare(cache, provenance, count):
+    if provenance.resolve().is_relative_to(cache.resolve()):
+        raise ValueError('provenance directory must be outside the managed footage cache')
     cache.mkdir(parents=True, exist_ok=True)
     provenance.mkdir(parents=True, exist_ok=True)
+    previous = {r['id']: r for r in read_record(provenance / 'dataset.json').get('films', [])
+                if isinstance(r, dict) and 'id' in r}
     clips, records, failures = [], [], []
     for identifier in PINS:
         if len(clips) == count:
@@ -98,10 +110,14 @@ def prepare(cache, provenance, count):
                 url = f"https://archive.org/download/{identifier}/{quote(file['name'], safe='/')}"
                 destination = cache / f"{identifier}.mp4"
                 try:
-                    sidecar = destination.with_suffix('.provenance.json')
-                    if not cached_matches(destination, sidecar, identifier, file, url, metadata_hash):
+                    legacy = destination.with_suffix('.provenance.json')
+                    sidecar = provenance / legacy.name
+                    identity_args = (identifier, file, url, metadata_hash)
+                    if not (cached_matches(destination, sidecar, *identity_args)
+                            or cached_matches(destination, legacy, *identity_args)
+                            or matches_record(destination, previous.get(identifier, {}), *identity_args)):
                         destination.unlink(missing_ok=True)
-                        sidecar.unlink(missing_ok=True)
+                        legacy.unlink(missing_ok=True)
                         partial = destination.with_suffix(".part")
                         fetch(url, partial)
                         partial.rename(destination)
@@ -113,7 +129,10 @@ def prepare(cache, provenance, count):
                     coverage = decoded_windows(destination, duration)
                     identity = dict(id=identifier, url=url, archiveFile=file, metadataSHA256=metadata_hash,
                                     sha256=digest(destination))
-                    sidecar.write_text(json.dumps(identity, indent=2))
+                    serialized = json.dumps(identity, indent=2)
+                    sidecar.write_text(serialized)
+                    # Standalone probes without a verification directory use this legacy copy.
+                    legacy.write_text(serialized)
                     info = metadata.get("metadata", {})
                     clips.append(dict(id=identifier, title=str(info.get("title", identifier)),
                         fileName=destination.name, bytes=destination.stat().st_size, duration=duration,

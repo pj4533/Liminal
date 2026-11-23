@@ -1,6 +1,8 @@
+diff --git a/LiminalTests/DialogueSalienceProbeTests.swift b/LiminalTests/DialogueSalienceProbeTests.swift
+index 22ddc2c..a446205 100644
 --- a/LiminalTests/DialogueSalienceProbeTests.swift
 +++ b/LiminalTests/DialogueSalienceProbeTests.swift
-@@ -51,6 +51,35 @@
+@@ -51,6 +51,35 @@ struct DialogueSalienceProbeTests {
          return String(decoding: data, as: UTF8.self)
      }
 
@@ -36,22 +38,40 @@
      /// Max RMS (dB, 10 ms windows, hop 5 ms) of channel 0 in `range`.
      static func peakDB(_ samples: UnsafePointer<Float>, count: Int, range: Range<Int>, rate: Double) -> Double {
          let w = max(1, Int(0.010 * rate)), hop = max(1, w / 2)
-@@ -174,6 +203,14 @@
+@@ -120,7 +149,7 @@ struct DialogueSalienceProbeTests {
+             }
+             return out
+         }
+-        let raw = Array(UnsafeBufferPointer(start: x, count: limit + half))
++        let raw = Array(UnsafeBufferPointer(start: x, count: min(n, limit + half)))
+         let band = biquad(biquad(raw, hz: 300, highPass: true), hz: 3400, highPass: false)
+         var prefix = [Double](repeating: 0, count: band.count + 1)
+         for i in band.indices { prefix[i + 1] = prefix[i] + Double(band[i] * band[i]) }
+@@ -174,6 +203,23 @@ struct DialogueSalienceProbeTests {
             await DialogueSpeechAssets.status(mode: .installedOnly, environment: environment) == .ready {
              provider = AppleSpeechTranscriptProvider.live()
          }
 +        let expectedChunks = max(1, config.chunks ?? 6)
-+        print("SALIENCE-CORPUS " + Self.json(["films": clips.map { clip -> [String: Any] in
-+            let sidecar = directory.appending(path: clip.fileName).deletingPathExtension().appendingPathExtension("provenance.json")
++        let provenancePath = ProcessInfo.processInfo.environment["LIMINAL_VERIFICATION_PROVENANCE_DIR"]
++        let provenanceDirectory = provenancePath.map { URL(fileURLWithPath: $0, isDirectory: true) } ?? directory
++        let films = try clips.map { clip -> [String: Any] in
++            let sidecar = provenanceDirectory.appending(path: clip.fileName).deletingPathExtension().appendingPathExtension("provenance.json")
 +            let identity = (try? Data(contentsOf: sidecar)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
++            if provenancePath != nil {
++                let valid = identity?["id"] as? String == clip.id &&
++                    (identity?["sha256"] as? String)?.count == 64 &&
++                    (identity?["url"] as? String)?.hasPrefix("https://") == true
++                try #require(valid, "Missing or inconsistent prepared identity for \(clip.id) at \(sidecar.path)")
++            }
 +            return ["id": clip.id, "file": clip.fileName, "duration": clip.duration,
 +                    "sha256": identity?["sha256"] as? String ?? "missing", "url": identity?["url"] as? String ?? "missing"]
-+        },
++        }
++        print("SALIENCE-CORPUS " + Self.json(["films": films,
 +            "chunks": expectedChunks, "bpm": bpm, "seed": baseSeed, "modes": modes]))
          print("SALIENCE-TRANSCRIBER \(provider == nil ? "none" : "apple") films=\(clips.count)")
          var snippetDir: URL?
          if let d = config.snippetDirectory {
-@@ -214,16 +251,45 @@
+@@ -214,16 +260,45 @@ struct DialogueSalienceProbeTests {
 
          for clip in clips {
              let usable = clip.duration - Self.windowSeconds - 1
@@ -101,7 +121,7 @@
                  let rate = buffer.format.sampleRate
                  let frameCount = Int(buffer.frameLength)
                  let speech = LofiSpeechFocus.classify(buffer, seconds: Self.windowSeconds)
-@@ -258,6 +324,8 @@
+@@ -258,6 +333,8 @@ struct DialogueSalienceProbeTests {
                  }
                  var windowLine: [String: Any] = [
                      "film": clip.id, "title": String(clip.title.prefix(60)), "chunk": chunk, "offset": Self.r3(offset),
@@ -110,7 +130,7 @@
                      "duration": Self.r3(clip.duration), "transcribed": transcript != nil, "transcribeMs": Self.r3(transcribeMs),
                      "speechWindows": speech.filter { $0.speech > max(0.3, $0.singing, $0.music) }.count, "windows": speech.count,
                      "raw": raw.map { ["t": $0.text, "s": film($0.frames.lowerBound), "e": film($0.frames.upperBound),
-@@ -301,6 +369,21 @@
+@@ -301,6 +378,21 @@ struct DialogueSalienceProbeTests {
                  var perWindow = 0, controlsThisWindow = 0
                  var mechanisms = Set<String>()
 
@@ -132,7 +152,7 @@
                  for mode in modes {
                      let useTranscript = mode == "T" ? transcript : nil
                      if mode == "T", transcript == nil { continue }
-@@ -330,10 +413,12 @@
+@@ -330,10 +422,12 @@ struct DialogueSalienceProbeTests {
                                                                seed: seed &+ UInt64(piece), cueToken: piece + 1, revision: 0)
                              print("SALIENCE-NOPLAN \(clip.id) chunk=\(chunk) mode=\(mode) piece=\(piece) fallbackEvents=\(plan.events.count)")
                              guard let playedBank else { continue }
@@ -146,7 +166,7 @@
                                  func covers(_ list: [Word]) -> [[String: Any]] {
                                      list.filter { $0.frames.upperBound > played.lowerBound && $0.frames.lowerBound < played.upperBound }.map { w in
                                          let ov = min(w.frames.upperBound, played.upperBound) - max(w.frames.lowerBound, played.lowerBound)
-@@ -351,12 +436,12 @@
+@@ -351,12 +445,12 @@ struct DialogueSalienceProbeTests {
                                  let heard = words.filter { ($0["cov"] as? Double ?? 0) >= 0.3 }
                                  var hit: [String: Any] = [
                                      "film": clip.id, "chunk": chunk, "mode": mode, "piece": piece, "loop": -1, "ev": e, "line": "-", "interest": -1,
@@ -161,7 +181,7 @@
                                      "functionOnly": !heard.isEmpty && heard.allSatisfy { ($0["fn"] as? Bool) == true },
                                  ]
                                  if let w = inside(played.lowerBound) {
-@@ -368,6 +453,12 @@
+@@ -368,6 +462,12 @@ struct DialogueSalienceProbeTests {
                                                      "mech": event.chokeAt != nil && pad.frames.upperBound >= w.frames.upperBound - tol ? "padChoke" : "padEdge",
                                                      "drop": ""] as [String: Any]
                                  }
@@ -174,7 +194,7 @@
                                  print("SALIENCE-HIT " + Self.json(hit))
                              }
                              continue
-@@ -403,6 +494,7 @@
+@@ -403,6 +503,7 @@ struct DialogueSalienceProbeTests {
                              if !chosen.contains(lineKey) { chosen.append(lineKey) }
                              let chops = DialogueChopRenderer.render(part.plan, bank: motif.bank, source: motif.source, analysis: motif.analysis,
                                                                      prerendered: motif.renders)
@@ -182,7 +202,7 @@
                              loopEvents[motif.loop, default: []] += part.plan.events
                              loopMotif[motif.loop] = motif
                              for (e, event) in part.plan.events.enumerated() {
-@@ -459,11 +551,21 @@
+@@ -459,11 +560,21 @@ struct DialogueSalienceProbeTests {
                                      "peak": Self.r3(peak), "preDB": Self.r3(pre - peak), "postDB": Self.r3(post - peak), "tailDB": Self.r3(tail - peak),
                                      "words": covers(accepted), "rawWords": covers(raw),
                                  ]
@@ -209,7 +229,7 @@
                                  if let parent = fr.parent { hit["parentText"] = motif.fragments[parent].text ?? "" }
                                  let sEdge = startEdge(accepted), eEdge = endEdge(accepted)
                                  if let sEdge { hit["startIn"] = sEdge }
-@@ -543,6 +645,7 @@
+@@ -543,6 +654,7 @@ struct DialogueSalienceProbeTests {
                      }
                  }
                  windowLine["chosen"] = chosen

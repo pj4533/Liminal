@@ -174,6 +174,29 @@ struct DialogueSalienceTests {
         }
     }
 
+    @Test func protectedOnsetKeepsTheFirstVoicedSample() throws {
+        let source = Self.spelled.source(contentID: "protected-onset")
+        let features = try #require(DialogueEngine.analyze(source, speech: []).features)
+        let rate = source.sampleRate
+        let coreStart = Int(0.05 * rate)
+        let attack = Int(0.15 * rate)
+        let count = Int(0.4 * rate)
+        let word = DialogueWordSpan(index: 0, text: "LSD", frames: coreStart..<count, confidence: 1)
+        // The nearest crossing sits one sample inside the voiced core. The later loud attack
+        // triggers the protected-start clamp, as it did in the public aapb LSD landing.
+        var samples = [Float](repeating: -0.00001, count: count)
+        for i in (coreStart + 1)..<attack { samples[i] = 0.00001 }
+        for i in attack..<count { samples[i] = Float(sin(Double(i - attack) * 2 * .pi * 400 / rate)) * 0.5 }
+        let fragment = DialogueMotifFragment(id: 1, kind: .piece, order: 0, parent: nil,
+            frames: 0..<count, accentFrame: attack, fadeIn: 0, fadeOut: 0, text: "LSD")
+        samples.withUnsafeBufferPointer { pcm in
+            let cutter = DialogueMotifCutter(f: features, samples: pcm.baseAddress!, count: count, rate: rate)
+            let result = cutter.trimmed([fragment], words: [word], weights: [1])[0]
+            #expect(result.frames.lowerBound == coreStart)
+            #expect(result.frames.upperBound == fragment.frames.upperBound)
+        }
+    }
+
     @Test func spacedLettersHaveOneParentAndOrderedUnits() throws {
         let source = Self.spelled.source(contentID: "spaced")
         let analysis = DialogueEngine.analyze(source, speech: [])
