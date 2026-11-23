@@ -223,8 +223,16 @@ def spell_figures(hits):
                 run.append(xs[j])
                 j += 1
             if len(run) >= 2 and j < len(xs) and xs[j]["frag"] == run[0].get("parent"):
-                found = True
-                break
+                expected = run[0].get("spellUnits", [])
+                ids = [x["frag"] for x in run]
+                steps = [x["block"] * 64 + x["slot"] for x in run]
+                strides = {b - a for a, b in zip(steps, steps[1:])}
+                whole = xs[j]["block"] * 64 + xs[j]["slot"]
+                # Complete source-order units on a uniform eighth/sixteenth grid, completed
+                # on the first beat after the final unit (never a prefix or a distant word).
+                if ids == expected and strides in ({1}, {2}) and whole == (steps[-1] // 4 + 1) * 4:
+                    found = True
+                    break
         out[mode] += found
     return dict(out)
 

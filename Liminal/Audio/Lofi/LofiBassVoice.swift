@@ -367,7 +367,7 @@ nonisolated enum LofiBassVoice: Int, CaseIterable, Sendable {
                                 peak: Float(strike) * subPeak * powf(10, strikeLevelDB(voice) / 20))
         }
         let cuePartials = cue.map {
-            cuePartials(note, voice: voice, envelope: envelope, rate: rate, onset: cueOnset, cue: $0, sub: sub, tone: tone)
+            Self.cuePartials(note, voice: voice, envelope: envelope, rate: rate, onset: cueOnset, cue: $0, sub: sub, tone: tone)
         } ?? []
         return (tone, layer, cuePartials)
     }

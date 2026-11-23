@@ -198,7 +198,7 @@ nonisolated enum DialogueLineInterest {
     static func initialismLetters(_ raw: String) -> String? {
         let letters = raw.filter(\.isLetter)
         guard (2...5).contains(letters.count), letters.allSatisfy({ $0.isUppercase && $0.isASCII }),
-              !notInitialisms.contains(String(letters)) || raw.contains("."),
+              !notInitialisms.contains(String(letters)),
               raw.allSatisfy({ $0.isLetter || ".,!?;:'\u{2019}-".contains($0) }) else { return nil }
         return String(letters)
     }

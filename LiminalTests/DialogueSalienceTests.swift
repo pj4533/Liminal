@@ -67,7 +67,7 @@ struct DialogueSalienceTests {
                     guard motif.fragments.dropFirst().contains(where: { $0.weight > 0 }) else { continue }
                     for e in part.plan.events {
                         guard let p = e.piece, p != 0, motif.fragments[p].weight == 0 else { continue }
-                        #expect(e.cell == .outro, "\(id) seed \(seed): '\(motif.fragments[p].text ?? "-")' in \(e.cell.map { "\($0)" } ?? "-") of '\(motif.text ?? "-")'")
+                        #expect(e.cell == .outro && motif.arc.outro == 0 && e.slot >= 16 && e.slot < 56, "\(id) seed \(seed): '\(motif.fragments[p].text ?? "-")' in \(e.cell.map { "\($0)" } ?? "-") of '\(motif.text ?? "-")'")
                     }
                 }
             }
@@ -122,9 +122,9 @@ struct DialogueSalienceTests {
                         let steps = events[i..<j].map(step)
                         let strides = Set(zip(steps, steps.dropFirst()).map { $1 - $0 })
                         if j < events.count, events[j].piece == hook.signature, strides.count == 1, let d = strides.first, d <= 2,
-                           ids == Array(units.prefix(ids.count)) {
+                           ids == units {
                             let whole = step(events[j])
-                            if whole % 4 == 0, whole - steps.last! <= 4 { figures += 1 }
+                            if whole % 4 == 0, whole == (steps.last! / 4 + 1) * 4 { figures += 1 }
                         }
                     }
                     i = max(j, i + 1)
@@ -147,6 +147,56 @@ struct DialogueSalienceTests {
                                                         memory: DialoguePerformanceMemory(), seed: seed, beatDuration: DialogueLineInterestTests.beat))
             #expect(motif.interest >= best - DialogueMotifTuning.linePoolInterest - 1e-4, "seed \(seed): '\(motif.text ?? "-")' \(motif.interest) against \(best)")
         }
+    }
+
+    @Test func trailingPunctuationDoesNotTurnOKIntoAnInitialism() {
+        for text in ["OK", "OK.", "OK!"] { #expect(DialogueLineInterest.initialismLetters(text) == nil) }
+        #expect(DialogueLineInterest.initialismLetters("U.F.O.") == "UFO")
+    }
+
+    @Test func aLateRecutWithOnlyOneContentPieceKeepsContentRolesAndTags() {
+        let fragments = [
+            DialogueMotifFragment(id: 0, kind: .line, order: -1, parent: nil, frames: 0..<1300, accentFrame: 0, fadeIn: 0, fadeOut: 0),
+            DialogueMotifFragment(id: 1, kind: .piece, order: 0, parent: nil, frames: 0..<500, accentFrame: 0, fadeIn: 0, fadeOut: 0, text: "DMT", weight: 0.95),
+            DialogueMotifFragment(id: 2, kind: .piece, order: 1, parent: nil, frames: 500..<1300, accentFrame: 500, fadeIn: 0, fadeOut: 0, text: "and the"),
+        ]
+        let roles = DialogueMotif.hookRoles(fragments: fragments, pieces: [1, 2], halves: [:], reorderAllowed: true,
+                                          sampleRate: 1000, anchors: [0..<500, 500..<1300])
+        #expect(roles.s == 1 && roles.r == 1 && roles.t == 1)
+        for seed: UInt64 in 1...20 {
+            let arranged = DialogueMotif.arrange(fragments: fragments, pieces: [1, 2], halves: [:], reorderAllowed: true,
+                                                seed: seed, lineSeconds: 1.3, sampleRate: 1000, hookSeed: seed, loop: 0, beatDuration: 60 / 72)
+            for cell in arranged.cells {
+                for item in cell.items where item.fragment == 2 {
+                    #expect(cell.kind == .outro && arranged.arc.outro == 0 && item.slot == 16)
+                }
+            }
+        }
+    }
+
+    @Test func spacedLettersHaveOneParentAndOrderedUnits() throws {
+        let source = Self.spelled.source(contentID: "spaced")
+        let analysis = DialogueEngine.analyze(source, speech: [])
+        let features = try #require(analysis.features)
+        let samples = try #require(source.buffer.floatChannelData?[0])
+        var cutter = DialogueMotifCutter(f: features, samples: UnsafePointer(samples), count: source.frameCount, rate: source.sampleRate)
+        let rate = source.sampleRate
+        let words = ["D", "M", "T"].enumerated().map { i, text in
+            DialogueWordSpan(index: i, text: text, frames: Int(Double(i) * 0.30 * rate)..<Int(Double(i + 1) * 0.30 * rate), confidence: nil)
+        }
+        let groups = DialogueMotifCutter.wordGroups(words, weights: DialogueLineInterest.wordWeights(words), rate: rate)
+        #expect(groups == [[0, 1, 2]])
+        // A line with recognized spaced letters must retain that group as a single parent.
+        let template = try #require(analysis.units.first)
+        let line = SpeechUnit(id: template.id, parentID: nil, level: .wordGroup, frames: 0..<Int(0.9 * rate),
+                              text: "D M T", boundaryConfidence: 1, speechScore: 1, interferenceScore: 0,
+                              stressAnchors: [], protectedSpans: [], tail: 0..<0, score: template.score,
+                              fadeIn: 0, fadeOut: 0, onset: .burst, nuclei: 3, bandSNR: .zero, peakEnergy: 1)
+        let cut = try #require(cutter.cut(line, words: words, weights: DialogueLineInterest.wordWeights(words), salience: DialogueLineInterest.wordSalience(words)))
+        #expect(cut.pieces.count == 1)
+        let units = try #require(cut.halves[try #require(cut.pieces.first)])
+        #expect(units.map { cut.fragments[$0].text ?? "" } == ["D", "M", "T"])
+        #expect(units.allSatisfy { cut.fragments[$0].kind == .letter })
     }
 
     /// The same seed gives the same plan.

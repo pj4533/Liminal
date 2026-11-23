@@ -358,23 +358,24 @@ nonisolated extension DialogueMotif {
         // D130 stage 2: a spell run inside the fill. Before the cell's first signature hit, the fills that
         // lead into it take the signature's letters or syllables in source order, so "D", "M" ascend into
         // "DMT" (each unit whole in its room, the run kept in order like `orderOK`'s runs).
-        if let units = v.spellUnits, let target = steps.first(where: { hits[$0]!.skeleton && hits[$0]!.fragment == v.s && !dropped.contains($0) }) {
-            var run: [Int] = []
-            for k in steps.filter({ $0 < target && !dropped.contains($0) }).reversed() {
-                guard !hits[k]!.skeleton, run.count < units.count else { break }
-                run.insert(k, at: 0)
-            }
-            if run.count >= 2 {
-                let assigned = Array(units.prefix(run.count))
-                let ok = run.indices.allSatisfy { i in
-                    let room = (i + 1 < run.count ? run[i + 1] : target) - run[i]
-                    return fits(assigned[i], room)
+        if let units = v.spellUnits {
+            for target in steps where hits[target]!.skeleton && hits[target]!.fragment == v.s && !dropped.contains(target) {
+                guard target % 4 == 0 else { continue }
+                var installed = false
+                for stride in [1, 2] {
+                    let run = units.indices.map { target - (units.count - $0) * stride }
+                    guard let first = run.first, first >= 0,
+                          run.allSatisfy({ hits[$0] != nil && !hits[$0]!.skeleton && !dropped.contains($0) }),
+                          units.allSatisfy({ fits($0, stride) }) else { continue }
+                    let between = steps.filter { $0 >= first && $0 < target && !dropped.contains($0) }
+                    guard between == run else { continue }
+                    let before = steps.last { $0 < first && !dropped.contains($0) }
+                    guard before.map({ fits(hits[$0]!.fragment, first - $0) }) ?? true else { continue }
+                    for (i, k) in run.enumerated() { hits[k]!.fragment = units[i]; hits[k]!.gate = stride }
+                    installed = true
+                    break
                 }
-                let before = steps.last { $0 < run[0] && !dropped.contains($0) }
-                let clear = before.map { hits[$0]!.fragment != assigned[0] && fits(hits[$0]!.fragment, run[0] - $0) } ?? true
-                if ok, clear {
-                    for (i, k) in run.enumerated() { hits[k]!.fragment = assigned[i]; hits[k]!.gate = 1 }
-                }
+                if installed { break }
             }
         }
 

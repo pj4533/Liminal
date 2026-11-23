@@ -238,8 +238,8 @@ nonisolated enum DialogueMotifTuning {
     static let singleCutFactor: Float = 0.5
     /// A word splits into syllables only at this weight (a lexicon word, not a name: "Mi-" of "Miliaris,"
     /// was heard as nothing), into at most this many.
-    static let syllableSplitWeight: Float = 0.85
-    static let maximumSyllableUnits = 3
+    static let syllableSplitWeight: Float = 0.7
+    static let maximumSyllableUnits = 4
     static let minimumSyllableShare = 0.3
 }
 
@@ -793,7 +793,7 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
         let relaxed = within(DialogueMotifTuning.relaxedLineSeconds).filter { seen.insert($0.unit.id).inserted }
         let short = within(DialogueMotifTuning.shortLineSeconds, striking).filter { seen.insert($0.unit.id).inserted }
         // Tier first, then preferred lengths before relaxed and short ones, then value.
-        func key(_ l: RankedLine, _ band: Int) -> (Int, Int, Float, Int) { (tier(l.interest), band, l.value, -l.unit.id) }
+        func key(_ l: RankedLine, _ band: Int) -> (Int, Float, Int) { (tier(l.interest), l.value, -l.unit.id) }
         let all = preferred.map { ($0, 2) } + relaxed.map { ($0, 1) } + short.map { ($0, 0) }
         return all.sorted { key($0.0, $0.1) > key($1.0, $1.1) }.map(\.0)
     }
@@ -1176,7 +1176,15 @@ nonisolated struct DialogueMotifCutter {
             }
             k += 1
         }
-        return groups
+        let runs = DialogueLineInterest.spelledRuns(words.map(\.text))
+        var merged: [[Int]] = []
+        for group in groups {
+            if let previous = merged.last, let a = previous.last, let b = group.first,
+               runs.contains(a), runs.contains(b), b == a + 1 {
+                merged[merged.count - 1] += group
+            } else { merged.append(group) }
+        }
+        return merged
     }
 
     /// The vowel groups of a word, counting a silent final "e" out: "psilocybin" 4, "trip" 1, "frogs" 1.
@@ -1283,7 +1291,7 @@ nonisolated struct DialogueMotifCutter {
                 // D130 stage 2: only a lexicon-strong word ("psilocybin", "mescaline"), never a name or a plain
                 // noun, and in at most `maximumSyllableUnits` so each syllable still says some of the word.
                 guard weights[k] >= DialogueMotifTuning.syllableSplitWeight,
-                      salience.isEmpty || [.lexicon, .number].contains(salience[k].kind) else { continue }
+                      salience.isEmpty || salience[k].kind != .initialism else { continue }
                 let syllables = Self.textSyllables(w.text)
                 // Each syllable keeps at least `minimumSyllableShare` of the word, so it still says some of it:
                 // fewer, longer syllables when the deepest valleys leave a sliver.
@@ -1647,6 +1655,7 @@ nonisolated extension DialogueMotif {
                fragments[other].weight > 0 {
                 r = other
             }
+            if weighted, fragments[r].weight == 0 { r = s }
         } else {
             if weighted {
                 // Ties go to the later piece: English puts the sentence stress on its last content
@@ -1800,7 +1809,7 @@ nonisolated extension DialogueMotif {
         // D130: the walks through the line's pieces (the stand-in pair, the build's ladder, the breakdown's
         // first word) take its content pieces when it has two or more, not its connective ones.
         let content = pieces.filter { fragments[$0].weight > 0 }
-        let walk = content.count >= 2 ? content : pieces
+        let walk = content.isEmpty ? pieces : content
         let pair = zip(walk, walk.dropFirst()).min { seconds($0.0) + seconds($0.1) < seconds($1.0) + seconds($1.1) }
         let (splitA, splitB) = split.flatMap { halves[$0] }.map { ($0[0], $0[1]) } ?? pair.map { ($0.0, $0.1) } ?? (s, r)
         typealias Item = DialogueMotifCell.Item
@@ -1893,12 +1902,12 @@ nonisolated extension DialogueMotif {
             return out
         }
         let barA = g.filter { $0.slot < 16 }
-        let last = pieces.last ?? r
+        let last = walk.last ?? r
         // The return's short piece carries a real word when the line has a short one (it stays short:
         // at -3 dB a long piece reads as a quiet chop, C-B8's loudness spread).
         let shorts = [sa, s, splitB, ra] + pieces
         let worded = shorts.filter { fragments[$0].weight > 0 && seconds($0) <= DialogueMotifTuning.returnPieceSeconds }
-        let short = (worded.isEmpty ? shorts : worded).min { seconds($0) < seconds($1) } ?? s
+        let short = (worded.isEmpty ? (anyContent ? shorts.filter { fragments[$0].weight > 0 } : shorts) : worded).min { seconds($0) < seconds($1) } ?? s
 
         // Intro (bars 1-2): the whole line on the downbeat, then a tag on bar 2's backbeat.
         let tag: [Item]
@@ -2012,7 +2021,7 @@ nonisolated extension DialogueMotif {
             outro += [Item(fragment: 0, slot: 16), chain(last, from: 16, gate: 2), chain(last, from: 16, .echoThrow)]
         default:
             // The line, then its first words again.
-            outro += [Item(fragment: 0, slot: 16), chain(first, from: 16), chain(pieces.count > 1 ? pieces[1] : s, from: 16),
+            outro += [Item(fragment: 0, slot: 16), chain(first, from: 16), chain(walk.count > 1 ? walk[1] : s, from: 16),
                       chain(last, from: 36, gate: 2)]
         }
         // The tag (D130 stage 2): the signature spelled from step 56 and stated whole when it fits before
@@ -2023,7 +2032,7 @@ nonisolated extension DialogueMotif {
             spellFigure(s, from: from, end: 63, fragments: fragments, halves: halves, sampleRate: sampleRate,
                         beatDuration: beatDuration, wholeOptional: optional)
         }
-        if let spell = tagSpell(56, false) ?? tagSpell(52, false) ?? tagSpell(56, true) {
+        if let spell = tagSpell(56, false) ?? tagSpell(52, false)  {
             outro += fitted(spell, end: 63, rolls: false)
         } else if fragments[sa].kind == .half {
             outro += fitted([at(sa, 56, gate: 1), at(sa, 57, gate: 1), at(sa, 58, gate: 1), at(r, 60, gate: 2)], end: 64, rolls: false)
