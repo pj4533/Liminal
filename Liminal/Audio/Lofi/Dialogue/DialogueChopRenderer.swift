@@ -120,7 +120,7 @@ nonisolated enum DialogueChopRenderer {
     /// `level` caches the levelling gain of the full-length render so choked copies match it.
     static func renderPad(_ pad: DialoguePad, source: DialogueSource, analysis: DialogueAnalysis, frames requested: Int? = nil,
                           release releaseSeconds: Double = DialogueTuning.chokeReleaseSeconds,
-                          gainDB: Float, level: inout Float?) -> AVAudioPCMBuffer? {
+                          gainDB: Float, level: inout Float?, preserveLinkedAttack: Bool = true) -> AVAudioPCMBuffer? {
         let rate = pad.transform.playbackRate
         let sr = source.sampleRate
         let n = source.frameCount
@@ -208,7 +208,7 @@ nonisolated enum DialogueChopRenderer {
         for i in 0..<full {
             out[i] = LofiSaturation.softClip(out[i], threshold: DialogueChopChain.peakKnee, ceiling: DialogueChopChain.peakCeiling)
         }
-        if !pad.transform.isNative {
+        if preserveLinkedAttack && !pad.transform.isNative {
             preserveAttack(&out, expected: pad.accentOffset / rate, line: pad.role == .anchor, sampleRate: sr)
         }
         var gain = powf(10, gainDB / 20)

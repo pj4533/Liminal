@@ -87,6 +87,57 @@ enum DialogueTightnessMetrics {
 }
 
 struct DialogueTightnessTests {
+    @Test func retainedOpeningCorrectionPreservesHeadroomAndBodyOnTheTimingCorpus() throws {
+        var inspected = Set<String>()
+        var rows: [String] = []
+        var corrected = 0
+        for bpm in [72.0, 84.0] {
+            for (fixture, transcribed) in [(GateRun.investigate, false), (GateRun.investigate, true), (GateRun.corpus, true)] {
+                for seed: UInt64 in [1, 2] {
+                    let run = GateRun.make(fixture, bpm: bpm, seed: seed, transcribed: transcribed)
+                    for motif in run.motifs {
+                        for pad in motif.bank.pads {
+                            let key = "\(transcribed)-\(pad.frames)-\(pad.transform.playbackRate)"
+                            guard inspected.insert(key).inserted else { continue }
+                            var level: Float?
+                            let before = try #require(DialogueChopRenderer.renderPad(pad, source: motif.source,
+                                analysis: motif.analysis, gainDB: 0, level: &level, preserveLinkedAttack: false))
+                            let after = try #require(motif.renders[pad.padID])
+                            let n = Int(before.frameLength), sr = before.format.sampleRate
+                            #expect(after.frameLength == before.frameLength)
+                            let a = try #require(before.floatChannelData?[0]), b = try #require(after.floatChannelData?[0])
+                            var beforePeak: Float = 0, afterPeak: Float = 0
+                            var beforePower = 0.0, afterPower = 0.0, beforeK = 0.0, afterK = 0.0
+                            var wa = LofiKWeighting(sampleRate: sr), wb = LofiKWeighting(sampleRate: sr)
+                            var changed = false, finite = true, bodyUnchanged = true
+                            for i in 0..<n {
+                                finite = finite && b[i].isFinite
+                                changed = changed || a[i] != b[i]
+                                if i >= Int(0.2 * sr) { bodyUnchanged = bodyUnchanged && a[i] == b[i] }
+                                beforePeak = max(beforePeak, abs(a[i])); afterPeak = max(afterPeak, abs(b[i]))
+                                beforePower += Double(a[i]) * Double(a[i]); afterPower += Double(b[i]) * Double(b[i])
+                                let ka = wa.process(Double(a[i])), kb = wb.process(Double(b[i]))
+                                beforeK += ka * ka; afterK += kb * kb
+                            }
+                            #expect(finite && afterPeak < DialogueChopChain.peakCeiling, key)
+                            #expect(bodyUnchanged, "Opening correction changed the body: \(key)")
+                            if changed {
+                                corrected += 1
+                                let rmsDB = 10 * log10(max(1e-12, afterPower) / max(1e-12, beforePower))
+                                let weightedDB = 10 * log10(max(1e-12, afterK) / max(1e-12, beforeK))
+                                #expect(rmsDB >= -0.001 && rmsDB <= 9.001, key)
+                                rows.append("bpm=\(bpm) seed=\(seed) transcript=\(transcribed) pad=\(pad.padID) source=\(pad.frames) rate=\(pad.transform.playbackRate) peak=\(beforePeak),\(afterPeak) rmsDeltaDB=\(rmsDB) kWeightedDeltaDB=\(weightedDB)")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        #expect(corrected > 0, "The timing corpus must exercise the opening correction")
+        Attachment.record("inspected=\(inspected.count) corrected=\(corrected)\n" + rows.joined(separator: "\n"),
+                          named: "opening-correction-headroom.txt")
+    }
+
     @Test(arguments: [62.0, 72.0, 84.0]) func renderedAttacksLandOnTheirSteps(_ bpm: Double) throws {
         var all: [DialogueTightnessMetrics.Hit] = []
         var diagnosed = Set<String>()
