@@ -91,7 +91,11 @@ app)
     # Playback updates the index and sweeps files outside it, including probe provenance.
     # Give this run a disposable copy so later verification sees the same corpus.
     APP_CACHE=$(mktemp -d "$OUT/app-archive.XXXXXX") || exit $?
-    cp -cR "$CACHE/." "$APP_CACHE" || exit $?
+    cp -cR "${LIMINAL_APP_SMOKE_CACHE:-$CACHE}/." "$APP_CACHE" || exit $?
+    provenance=(python3 "$AFTER/scripts/verify-app-smoke-cache.py" "$APP_CACHE"
+        "${LIMINAL_APP_SMOKE_DATASET:-$OUT/provenance/dataset.json}")
+    if [ -n "${LIMINAL_APP_SMOKE_IDENTITY:-}" ]; then provenance+=(--identity "$LIMINAL_APP_SMOKE_IDENTITY"); fi
+    run_step app-cache-provenance "${provenance[@]}" || exit $?
     export LIMINAL_VERIFICATION_ARCHIVE_DIR="$APP_CACHE"
     SEED="$OUT/after-probe/salience-index.json"
     if [ -s "$SEED" ]; then
@@ -138,7 +142,7 @@ final)
 import csv, json, sys
 from pathlib import Path
 rows = list(csv.DictReader(open(sys.argv[1]), delimiter='\t'))
-required = {'prepare-media', 'provision-speech', 'baseline-build', 'after-build', 'baseline-probe', 'after-probe', 'baseline-public-matrix', 'after-public-matrix', 'media-gates', 'auditions', 'app-survived-200s', 'app-playback-evidence', 'baseline-cache-adapter', 'baseline-matrix-adapter', 'baseline-mix-shell-adapter', 'baseline-report-adapter', 'baseline-probe-adapter-check', 'baseline-probe-adapter', 'baseline-compiler-adapter', 'baseline-capture-adapter', 'baseline-public-fixture-adapter', 'baseline-event-gain-adapter', 'baseline-public-inventory', 'after-public-inventory'}
+required = {'prepare-media', 'provision-speech', 'baseline-build', 'after-build', 'baseline-probe', 'after-probe', 'baseline-public-matrix', 'after-public-matrix', 'media-gates', 'auditions', 'app-cache-provenance', 'app-survived-200s', 'app-playback-evidence', 'baseline-cache-adapter', 'baseline-matrix-adapter', 'baseline-mix-shell-adapter', 'baseline-report-adapter', 'baseline-probe-adapter-check', 'baseline-probe-adapter', 'baseline-compiler-adapter', 'baseline-capture-adapter', 'baseline-public-fixture-adapter', 'baseline-event-gain-adapter', 'baseline-public-inventory', 'after-public-inventory'}
 latest = {r['step']: r for r in rows}
 missing = required - latest.keys()
 try:

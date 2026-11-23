@@ -185,3 +185,20 @@ finish, so successful zero-test selections cannot qualify. This also repairs the
 workflow's omitted Motif method selectors. The public capture's inner xcodebuild accepts only
 an explicitly set `LIMINAL_CAPTURE_CODE_SIGNING_ALLOWED=YES|NO`; the hosted harness sets `NO`,
 while direct/default and device/project signing remain unchanged. The repaired exact baseline and candidate builds plus whole probe/footage tests passed in45189257392. This does not establish authentic-media acceptance. Local Python regressions at final handoff passed61/61.
+
+### App-smoke media identity
+
+The paired probe and mix corpus uses authentic Archive audio. Its smallest *World of LSD* MP4 has
+VP9 video on the measured corpus. Production selects the H.264 IA file ending in
+`The World of LSD.ia.mp4`. The app phase checks the disposable cache against the paired dataset
+and writes the actual source URLs, paired and playback hashes, and conversion scope in
+`OUT/app-cache-provenance.log` before launch.
+
+For a separate playback cache, set `LIMINAL_APP_SMOKE_CACHE` to the compatible indexed cache and
+`LIMINAL_APP_SMOKE_DATASET` to the paired `provenance/dataset.json`. When the VP9 pin was locally
+converted, set `LIMINAL_APP_SMOKE_IDENTITY` to its conversion evidence JSON. The evidence binds
+both file hashes, unchanged audio packet payload and timeline, decoded PCM and video packet timestamps.
+The app phase accepts that one H.264 conversion or a paired corpus prepared with the production pin.
+Every other indexed file must match the paired corpus. The paired probe and mix phases keep using
+`OUT/ArchiveFootage`. A successful provenance check establishes input identity. The playback
+log and visual review establish what the app rendered.
