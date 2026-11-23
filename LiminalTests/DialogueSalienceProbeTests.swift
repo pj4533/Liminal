@@ -27,6 +27,7 @@ struct DialogueSalienceProbeTests {
         let checkout: String
         /// Windows per film.
         let chunks: Int?
+        let onlyChunk: Int?
         let films: Int?
         let bpm: Double?
         let seed: UInt64?
@@ -297,7 +298,7 @@ struct DialogueSalienceProbeTests {
             let lo = usable > 2 * margin ? margin : 0, hi = usable > 2 * margin ? usable - margin : usable
             let count = max(1, config.chunks ?? 6)
             let offsets = (0..<count).map { k in count == 1 ? (lo + hi) / 2 : lo + (hi - lo) * Double(k) / Double(count - 1) }
-            for (chunk, offset) in offsets.enumerated() {
+            for (chunk, offset) in offsets.enumerated() where config.onlyChunk == nil || config.onlyChunk == chunk {
                 print("SALIENCE-ATTEMPT " + Self.json(["film": clip.id, "chunk": chunk, "offset": Self.r3(offset), "decode": "attempted"]))
                 let url = directory.appending(path: clip.fileName)
                 let buffer: AVAudioPCMBuffer
