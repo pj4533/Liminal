@@ -45,6 +45,7 @@ PY
     adapter=$?
     printf 'baseline-compiler-adapter\t%s\n' "$adapter" >> "$STATUS"
     [ "$adapter" -eq 0 ] || exit "$adapter"
+    run_step baseline-capture-adapter python3 "$AFTER/scripts/prepare-baseline-capture.py" "$BASELINE" || exit $?
     git -C "$BASELINE" diff > "$OUT/baseline-verification-adapters.patch" || exit $?
     ;;
 speech)
@@ -123,7 +124,7 @@ final)
     python3 - "$STATUS" <<'PY'
 import csv, sys
 rows = list(csv.DictReader(open(sys.argv[1]), delimiter='\t'))
-required = {'prepare-media', 'provision-speech', 'baseline-build', 'after-build', 'baseline-probe', 'after-probe', 'baseline-public-matrix', 'after-public-matrix', 'baseline-private-matrix', 'after-private-matrix', 'media-gates', 'auditions', 'app-survived-200s', 'app-playback-evidence', 'baseline-matrix-adapter', 'baseline-report-adapter', 'baseline-probe-adapter-check', 'baseline-probe-adapter', 'baseline-compiler-adapter', 'private-prerequisite-inventory', 'baseline-public-inventory', 'after-public-inventory', 'baseline-private-inventory', 'after-private-inventory'}
+required = {'prepare-media', 'provision-speech', 'baseline-build', 'after-build', 'baseline-probe', 'after-probe', 'baseline-public-matrix', 'after-public-matrix', 'baseline-private-matrix', 'after-private-matrix', 'media-gates', 'auditions', 'app-survived-200s', 'app-playback-evidence', 'baseline-matrix-adapter', 'baseline-report-adapter', 'baseline-probe-adapter-check', 'baseline-probe-adapter', 'baseline-compiler-adapter', 'baseline-capture-adapter', 'private-prerequisite-inventory', 'baseline-public-inventory', 'after-public-inventory', 'baseline-private-inventory', 'after-private-inventory'}
 seen = {r['step'] for r in rows}
 print('Missing required steps:', sorted(required - seen))
 print('Failed steps:', [r for r in rows if int(r['exit'])])
