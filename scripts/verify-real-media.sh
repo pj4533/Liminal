@@ -134,12 +134,16 @@ final)
     for label in baseline after; do
         pair=-
         if [ "$label" = after ]; then pair="$OUT/baseline-public-matrix"; fi
+        release=()
+        if [ "$label" = after ] && [ "${LIMINAL_PUBLIC_FIXTURE_RELEASE:-0}" = 1 ]; then
+            release+=(--public-fixture-release)
+        fi
         revision=$(cat "$OUT/$label-commit.txt" 2>/dev/null) || revision=missing
         baseline_revision=$(cat "$OUT/baseline-commit.txt" 2>/dev/null) || baseline_revision=missing
-        run_step "$label-public-inventory" python3 "$AFTER/scripts/verify-matrix-integrity.py" "$OUT/$label-public-matrix" "$pair" "$revision" "$baseline_revision"
+        run_step "$label-public-inventory" python3 "$AFTER/scripts/verify-matrix-integrity.py" "$OUT/$label-public-matrix" "$pair" "$revision" "$baseline_revision" ${release[@]+"${release[@]}"}
     done
     python3 - "$STATUS" "$OUT" <<'PY'
-import csv, json, sys
+import csv, json, os, sys
 from pathlib import Path
 rows = list(csv.DictReader(open(sys.argv[1]), delimiter='\t'))
 required = {'prepare-media', 'provision-speech', 'baseline-build', 'after-build', 'baseline-probe', 'after-probe', 'baseline-public-matrix', 'after-public-matrix', 'media-gates', 'auditions', 'app-cache-provenance', 'app-survived-200s', 'app-playback-evidence', 'baseline-cache-adapter', 'baseline-matrix-adapter', 'baseline-mix-shell-adapter', 'baseline-report-adapter', 'baseline-probe-adapter-check', 'baseline-probe-adapter', 'baseline-compiler-adapter', 'baseline-capture-adapter', 'baseline-public-fixture-adapter', 'baseline-event-gain-adapter', 'baseline-public-inventory', 'after-public-inventory'}
@@ -150,8 +154,16 @@ try:
     baseline_failure_measured = prior['complete'] and not prior['rawStrictPassed']
 except (OSError, ValueError, KeyError):
     baseline_failure_measured = False
+fixture_release = False
+if os.environ.get('LIMINAL_PUBLIC_FIXTURE_RELEASE') == '1':
+    try:
+        candidate = json.loads((Path(sys.argv[2]) / 'after-public-matrix/integrity.json').read_text())
+        fixture_release = candidate['releasePassed'] and candidate['noNewTargetedFailures']
+    except (OSError, ValueError, KeyError):
+        pass
 failed = [r for r in latest.values() if int(r['exit']) and not (
-    r['step'] == 'baseline-public-matrix' and int(r['exit']) == 1 and baseline_failure_measured)]
+    int(r['exit']) == 1 and ((r['step'] == 'baseline-public-matrix' and baseline_failure_measured)
+                           or (r['step'] == 'after-public-matrix' and fixture_release)))]
 earlier_failures = [r for r in rows if int(r['exit']) and r is not latest[r['step']]]
 print('Missing required steps:', sorted(missing))
 print('Latest failed steps:', failed)

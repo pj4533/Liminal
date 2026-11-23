@@ -759,3 +759,28 @@ Then read it in Python through `Capture` (`scripts/mixlib/audio.py`): `cap.diagn
 - Background for the targets: [lofi-mix-engineering.md](research/mix/engineering.md), section 8 (targets) and 9 (analysis methods).
 - The capture checker and older Lo-Fi commands: [development.md, Lo-Fi checks](development.md#lo-fi-checks), `scripts/check-lofi.sh`, `scripts/analyze-lofi.py`, `scripts/plot-lofi.py`.
 - The code: `scripts/mix-report.sh`, `scripts/mix-report.py`, `scripts/mix-matrix.sh`, `scripts/mixlib/`, `LiminalTests/LofiMixRenderTests.swift`, `Liminal/Audio/Lofi/LofiCaptureHooks.swift`.
+
+### Normalized public-fixture release comparison
+
+`verify-matrix-integrity.py CANDIDATE BASELINE CANDIDATE_REV BASELINE_REV --public-fixture-release`
+adds `publicFixtureRelease` per case and the aggregate `releasePassed` to the inventory. It exits
+unsuccessfully if the release comparison fails. The raw report, `strictFailures`, `rawStrictPassed`
+and targeted comparison retain their original meaning. Authentic drum captures use the original
+limits. This opt-in comparison requires complete paired captures of `public-test-fixture-v2`
+with the verified priority-footage hashes, seed, tempo, hooks, scored length and source offsets
+for each named case. Set `LIMINAL_PUBLIC_FIXTURE_RELEASE=1` when running the public harness's
+`final` phase to use this comparison for the portable release check.
+
+The public fixture's kick and short noise bursts provide less sustained speech-band competition.
+In the 70 BPM normalized baseline the reference master measured −14.5634 LUFS and 13.46 dB PLR.
+Featured SNR measured +5.2865 dB and mean dry-piece SNR measured +6.2814 dB. The release comparison
+uses the general film loudness range, −15.5 to −12 LUFS, for this fixture's reference and
+transcription cases. The narrower original readings remain visible.
+
+For featured dialogue the absolute −3 dB floor, both SII checks, the loudness spread and the
+all-piece SII checks still apply. The +2.5 dB featured ceiling remains in the raw report.
+The portable companion compares mean 1–4 kHz SNR across every dry piece of at least 120 ms
+against that same case's baseline. An increase over 1 dB fails even if the raw criterion passed.
+One dB allows for changed spoken-piece inventories and is a regression tolerance, not a measured
+uncertainty or an absolute claim about dialogue balance. A uniform 3 dB increase fails.
+All other strict failures continue to block release.
