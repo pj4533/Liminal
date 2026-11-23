@@ -55,3 +55,40 @@ Local verification before the remote run: report regressions 13 passed, media pr
 2 passed, gate isolation/missing-evidence tests 2 passed; Bash syntax checks and `git diff --check`
 passed. Swift compilation, SpeechTranscriber availability, full media gates and app behavior require
 the remote artifacts; this document does not claim their success in advance.
+
+
+## Hosted availability and independent execution follow-up
+
+Run [45180018915](https://github.com/pj4533/Liminal/actions/runs/45180018915) passed
+31 stage-3 tests in two suites (61.951 seconds), prepared twelve authentic films with zero
+preparation failures, and compiled the standalone provisioner. Its runtime reported
+`SpeechTranscriber.isAvailable == false` on macOS 26.7.2 / Xcode 26.6 / SDK 26.5.
+The throwing Swift entry point then trapped; the follow-up reports errors cleanly and flushes
+device capabilities, supported locales and installed locales before exit.
+
+[Apple's API documentation](https://developer.apple.com/documentation/speech/speechtranscriber)
+defines availability by the device's hardware/capabilities and recommends another transcriber
+when unsupported; it does not publish an exhaustive hardware support list. An
+[Apple DTS response](https://developer.apple.com/forums/thread/802863) likewise recommends
+the runtime availability check. [Apple's authorization guidance](https://developer.apple.com/documentation/speech/asking-permission-to-use-speech-recognition)
+explicitly limits the server-recognition permission process to `SFSpeechRecognizer` and excludes
+`SpeechAnalyzer` modules. Microphone entitlements do not enable prerecorded-file model hardware.
+[GitHub's standard runner specification](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
+lists macOS 26 as a three-core M1 virtual machine. This makes VM capability a plausible cause,
+not a demonstrated universal restriction on all virtual machines. The workflow now records
+`uname`, architecture, sysctl model/virtualization facts and hardware profiler output, tests the
+native executable and an ad hoc signed application bundle, and runs availability/provisioning
+on the standard `macos-26-intel` and `xcode-27` alternatives. No paid larger runner or new service
+is enabled. macOS 15 cannot run this macOS-26-only API; mobile/vision simulators cannot establish
+physical-device compatibility. DictationTranscriber or externally injected text would be a
+different backend and cannot qualify the application's Apple SpeechTranscriber end-to-end gate.
+
+Preparation, speech, baseline, after, gates, auditions and app phases now have separate time
+budgets and immediate artifacts. Speech failure does not prevent acoustic probes, strict public
+ref/fast/same captures or the 200-second app run. The transcribe matrix's unavailable-model
+`skipped.txt` is preserved, and the final required-gate check still fails on unmet transcript,
+private-matrix and audition requirements. The public cache is saved with Actions cache outside
+Git; both revisions continue to use exactly the same cache within a run. Acoustic six-second
+performed figures can be exported as explicitly named acoustic m4a listening evidence; they
+cannot satisfy the required initialism/proper-noun syllable audition classes. Original
+zero-attacks-over-35ms gates and later task-2 no-worse counts are now emitted separately.

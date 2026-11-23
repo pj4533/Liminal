@@ -15,6 +15,7 @@ for path in sorted(source.glob('audition-*.wav')):
                     str(destination / path.with_suffix('.m4a').name)], check=True)
     selected.append(path.name)
 (destination / 'provenance.json').write_text(json.dumps(dict(files=selected,
+    limitation='Acoustic figures are listening evidence only; they cannot satisfy the initialism/syllable requirement.',
     source='Actual performed dialogue chops with original event timing and effects. SALIENCE-AUDITION log rows give film/chunk/text; paired context WAVs are in probe/bugs.'), indent=2))
 if len(selected) < 3 or not any('letter' in p for p in selected) or not any('syllable' in p for p in selected):
     raise SystemExit('Missing 3-4 authentic initialism/syllable figures; inspect probe output')

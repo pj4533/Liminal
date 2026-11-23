@@ -37,7 +37,7 @@ jobs:
       - name: Record toolchain and dataset comparison scope
         run: |
           mkdir -p "$RUNNER_TEMP/real-media"
-          { sw_vers; xcodebuild -version; xcodebuild -showsdks; } > "$RUNNER_TEMP/real-media/toolchain.txt"
+          { sw_vers; uname -a; arch; sysctl hw.model hw.machine hw.memsize hw.optional.arm64 kern.hv_vmm_present machdep.cpu.brand_string; system_profiler SPHardwareDataType; xcodebuild -version; xcodebuild -showsdks; } > "$RUNNER_TEMP/real-media/toolchain.txt"
           echo 'Historical 12-film IDs are unknown. These runs compare freshly regenerated baseline and after on the same recorded 12-film dataset, 8 chunks, 72 BPM, seed 1. Historical absolute 159-line denominator is not assumed identical.' > "$RUNNER_TEMP/real-media/comparison-scope.txt"
       - name: Verify stage 3 integration before media preparation
         id: stage3
@@ -55,8 +55,128 @@ jobs:
             ${{ runner.temp }}/real-media/*.log
             ${{ runner.temp }}/real-media/*.txt
           retention-days: 14
-      - name: Run serial real media verification
-        run: after/scripts/verify-real-media.sh "$GITHUB_WORKSPACE/after" "$GITHUB_WORKSPACE/baseline" "$RUNNER_TEMP/real-media"
+      - uses: actions/cache/restore@v4
+        id: media-cache
+        with:
+          path: ~/Library/Application Support/Liminal/ArchiveFootage
+          key: liminal-real-media-canonical12-v1
+      - name: Prepare authentic public media
+        id: prepare
+        timeout-minutes: 45
+        run: after/scripts/verify-real-media.sh "$GITHUB_WORKSPACE/after" "$GITHUB_WORKSPACE/baseline" "$RUNNER_TEMP/real-media" prepare
+      - uses: actions/cache/save@v4
+        if: steps.prepare.outcome == 'success' && steps.media-cache.outputs.cache-hit != 'true'
+        with:
+          path: ~/Library/Application Support/Liminal/ArchiveFootage
+          key: liminal-real-media-canonical12-v1
+      - name: Preserve prepared dataset provenance
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-media-dataset-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/real-media/provenance/
+            ${{ runner.temp }}/real-media/private-prerequisites.json
+            ${{ runner.temp }}/real-media/baseline-verification-adapters.patch
+            ${{ runner.temp }}/real-media/prepare-media.log
+      - name: Run speech verification
+        if: ${{ !cancelled() && steps.prepare.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 15
+        run: after/scripts/verify-real-media.sh "$GITHUB_WORKSPACE/after" "$GITHUB_WORKSPACE/baseline" "$RUNNER_TEMP/real-media" speech
+      - name: Preserve speech evidence immediately
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-media-speech-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/real-media/*.log
+            ${{ runner.temp }}/real-media/*.txt
+            ${{ runner.temp }}/real-media/*.json
+            ${{ runner.temp }}/real-media/*.tsv
+      - name: Run baseline verification
+        if: ${{ !cancelled() && steps.prepare.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 90
+        run: after/scripts/verify-real-media.sh "$GITHUB_WORKSPACE/after" "$GITHUB_WORKSPACE/baseline" "$RUNNER_TEMP/real-media" baseline
+      - name: Preserve baseline evidence immediately
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-media-baseline-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/real-media/*.log
+            ${{ runner.temp }}/real-media/*.txt
+            ${{ runner.temp }}/real-media/*.json
+            ${{ runner.temp }}/real-media/*.tsv
+            ${{ runner.temp }}/real-media/baseline-probe/
+            ${{ runner.temp }}/real-media/baseline-public-matrix/
+      - name: Run after verification
+        if: ${{ !cancelled() && steps.prepare.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 90
+        run: after/scripts/verify-real-media.sh "$GITHUB_WORKSPACE/after" "$GITHUB_WORKSPACE/baseline" "$RUNNER_TEMP/real-media" after
+      - name: Preserve after evidence immediately
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-media-after-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/real-media/*.log
+            ${{ runner.temp }}/real-media/*.txt
+            ${{ runner.temp }}/real-media/*.json
+            ${{ runner.temp }}/real-media/*.tsv
+            ${{ runner.temp }}/real-media/after-probe/
+            ${{ runner.temp }}/real-media/after-public-matrix/
+      - name: Run gates verification
+        if: ${{ !cancelled() && steps.prepare.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 5
+        run: after/scripts/verify-real-media.sh "$GITHUB_WORKSPACE/after" "$GITHUB_WORKSPACE/baseline" "$RUNNER_TEMP/real-media" gates
+      - name: Preserve gates evidence immediately
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-media-gates-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/real-media/*.log
+            ${{ runner.temp }}/real-media/*.txt
+            ${{ runner.temp }}/real-media/*.json
+            ${{ runner.temp }}/real-media/*.tsv
+      - name: Run auditions verification
+        if: ${{ !cancelled() && steps.prepare.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 5
+        run: after/scripts/verify-real-media.sh "$GITHUB_WORKSPACE/after" "$GITHUB_WORKSPACE/baseline" "$RUNNER_TEMP/real-media" auditions
+      - name: Preserve auditions evidence immediately
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-media-auditions-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/real-media/*.log
+            ${{ runner.temp }}/real-media/*.txt
+            ${{ runner.temp }}/real-media/*.json
+            ${{ runner.temp }}/real-media/*.tsv
+            ${{ runner.temp }}/real-media/auditions/
+      - name: Run app verification
+        if: ${{ !cancelled() && steps.prepare.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 6
+        run: after/scripts/verify-real-media.sh "$GITHUB_WORKSPACE/after" "$GITHUB_WORKSPACE/baseline" "$RUNNER_TEMP/real-media" app
+      - name: Preserve app evidence immediately
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-media-app-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/real-media/*.log
+            ${{ runner.temp }}/real-media/*.txt
+            ${{ runner.temp }}/real-media/*.json
+            ${{ runner.temp }}/real-media/*.tsv
+      - name: Enforce every required gate
+        if: always()
+        run: after/scripts/verify-real-media.sh "$GITHUB_WORKSPACE/after" "$GITHUB_WORKSPACE/baseline" "$RUNNER_TEMP/real-media" final
       - name: Preserve media evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -73,3 +193,27 @@ jobs:
             ${{ runner.temp }}/real-media/*-matrix/
             ${{ runner.temp }}/real-media/auditions/
           retention-days: 14
+
+  speech-alternatives:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-26-intel, xcode-27]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Diagnose alternate standard runner
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/speech-alternative"
+          { sw_vers; uname -a; arch; sysctl hw.model hw.machine hw.memsize hw.optional.arm64 kern.hv_vmm_present machdep.cpu.brand_string; system_profiler SPHardwareDataType; xcodebuild -version; } > "$RUNNER_TEMP/speech-alternative/hardware.txt" 2>&1
+          xcrun swiftc -parse-as-library scripts/provision-verification-speech.swift -o "$RUNNER_TEMP/speech-alternative/provision-speech" > "$RUNNER_TEMP/speech-alternative/build.log" 2>&1
+          python3 -c 'import subprocess,sys; sys.exit(subprocess.run([sys.argv[1]], timeout=600).returncode)' "$RUNNER_TEMP/speech-alternative/provision-speech" > "$RUNNER_TEMP/speech-alternative/availability.log" 2>&1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: speech-alternative-${{ matrix.runner }}-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/speech-alternative/*.txt
+            ${{ runner.temp }}/speech-alternative/*.log

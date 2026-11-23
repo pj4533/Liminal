@@ -6,7 +6,7 @@ import unittest
 
 
 class MediaHarnessPrerequisiteTests(unittest.TestCase):
-    def run_harness(self, preparation_exit=0, compiler_exit=0):
+    def run_harness(self, preparation_exit=0, compiler_exit=0, phase="prepare"):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             after, baseline, output, binaries = [root / name for name in ('after', 'baseline', 'output', 'bin')]
@@ -19,7 +19,7 @@ class MediaHarnessPrerequisiteTests(unittest.TestCase):
                 executable.chmod(0o755)
             env = dict(os.environ, PATH=str(binaries) + os.pathsep + os.environ['PATH'])
             script = Path(__file__).with_name('verify-real-media.sh').resolve()
-            result = subprocess.run(['bash', str(script), str(after), str(baseline), str(output)],
+            result = subprocess.run(['bash', str(script), str(after), str(baseline), str(output), phase],
                                     env=env, text=True, capture_output=True)
             return result.returncode, trace.read_text().splitlines(), (output / 'steps.tsv').read_text()
 
@@ -30,7 +30,7 @@ class MediaHarnessPrerequisiteTests(unittest.TestCase):
         self.assertIn('prepare-media\t23', status)
 
     def test_failed_model_compiler_does_not_launch_provisioning_or_captures(self):
-        code, calls, status = self.run_harness(compiler_exit=29)
+        code, calls, status = self.run_harness(compiler_exit=29, phase="speech")
         self.assertEqual(code, 29)
-        self.assertEqual(calls, ['python3', 'xcrun'])
+        self.assertEqual(calls, ['xcrun'])
         self.assertIn('compile-provisioner\t29', status)

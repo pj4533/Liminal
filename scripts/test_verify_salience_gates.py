@@ -23,3 +23,9 @@ class SalienceGateTests(unittest.TestCase):
         self.assertTrue(results['freshIndex.salient2x']['passed'])
         self.assertFalse(results['evolvingPlayback.salient60']['passed'])
         self.assertFalse(results['evolvingPlayback.salient2x']['passed'])
+
+    def test_no_worse_over35_does_not_satisfy_original_zero_target(self):
+        results = gates.evaluate({'A': {'tightness': {'over35': 12}}},
+                                 {'A': {'tightness': {'over35': 10}}})
+        self.assertTrue(results['A.over35']['passed'])
+        self.assertFalse(results['A.originalZeroOver35']['passed'])

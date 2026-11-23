@@ -409,11 +409,11 @@ struct DialogueSalienceProbeTests {
                                                                     prerendered: motif.renders)
                             // Preserve short actual performed figures, with event timing and FX intact.
                             // Two distinct examples per class give four auditions when the real corpus offers them.
-                            if mode == "T", !auditionLines.contains(clip.id + lineText) {
-                                for kind in ["letter", "syllable"] where auditionCounts[kind, default: 0] < 2 {
+                            if !auditionLines.contains(mode + clip.id + (mode == "T" ? lineText : String(chunk))) {
+                                for kind in (mode == "T" ? ["letter", "syllable"] : ["acoustic"]) where auditionCounts[kind, default: 0] < (mode == "T" ? 2 : 4) {
                                     let unitHits = chops.filter { chop in
                                         guard let id = chop.event.piece, motif.fragments.indices.contains(id) else { return false }
-                                        return motif.fragments[id].kind.rawValue == kind
+                                        return kind == "acoustic" || motif.fragments[id].kind.rawValue == kind
                                     }.sorted { $0.event.startTime < $1.event.startTime }
                                     if unitHits.count >= 2, let first = unitHits.first {
                                         let start = first.event.startTime - 0.3
@@ -439,7 +439,7 @@ struct DialogueSalienceProbeTests {
                                             emitSnippet(name + "-context.wav", Self.wav(buffer, frames: motif.line.frames))
                                             print("SALIENCE-AUDITION " + Self.json(["name": name, "film": clip.id, "chunk": chunk,
                                                 "line": lineText, "kind": kind, "transportStart": start, "seconds": seconds]))
-                                            auditionLines.insert(clip.id + lineText)
+                                            auditionLines.insert(mode + clip.id + (mode == "T" ? lineText : String(chunk)))
                                         }
                                     }
                                 }

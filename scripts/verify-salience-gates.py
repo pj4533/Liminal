@@ -21,6 +21,7 @@ def evaluate(before, after):
         bt, at = b.get('tightness', {}), a.get('tightness', {})
         medians = [bt.get('median'), at.get('median')]
         gate(f'{mode}.tightnessMedian', None not in medians and abs(medians[1] - medians[0]) <= 2, medians)
+        gate(f'{mode}.originalZeroOver35', at.get('over35') == 0, at.get('over35'))
         gate(f'{mode}.over35', at.get('over35', float('inf')) <= bt.get('over35', -1), [bt.get('over35'), at.get('over35')])
         bv, av = b.get('variety') or {}, a.get('variety') or {}
         gate(f'{mode}.sameCutPairs', av.get('chopSamePairs', float('inf')) <= bv.get('chopSamePairs', -1),
