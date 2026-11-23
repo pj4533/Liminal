@@ -717,3 +717,11 @@ preparation now measures the finished kick's low-band envelope and stores that
 target separately from the raw onset used by the strike and sidechain. The voice
 still compensates for its own rise time. The estimated target serves as a fallback
 when the finished kick has no measurable rise.
+
+The same spoken pad could remain over 2.5 LU from another after the chop
+chain's limiter and soft shoulder. A bounded correction of at most 1.5 dB
+now brings the entire finished stab toward the existing integrated target.
+It leaves half the available peak headroom, preserves the shared gain when
+the stab is gated, and runs before the linked attack correction and any
+authored event trim. The mix report measures comparable dry pad consistency
+and retains the overall wet spread, SNR and intelligibility checks.

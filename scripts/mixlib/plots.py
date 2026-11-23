@@ -269,7 +269,10 @@ def plot_intelligibility(m, outdir):
         axes[2].set_title("octave SNR (dB) by featured chop")
         fig.colorbar(im, ax=axes[2])
         axes[3].bar(range(len(per)), [p["lufs"] if p.get("lufs") is not None else np.nan for p in per], color="#8c564b")
-        axes[3].set_title(f"per-chop LUFS (spread {d.get('loudnessSpreadLu')})")
+        if d.get("spreadBasis") == "authored-gain-corrected-dry":
+            axes[3].plot(range(len(per)), [p["levelMatchedDryLufs"] for p in per], "k.", label="gain-corrected dry")
+            axes[3].legend()
+        axes[3].set_title(f"Featured LUFS, wet spread {fmt_num2(d.get('rawLoudnessSpreadLu', d.get('loudnessSpreadLu')))} LU")
     save(fig, outdir, "intelligibility")
 
 

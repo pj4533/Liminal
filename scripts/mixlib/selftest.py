@@ -398,6 +398,20 @@ def test_authored_chop_levels():
         checks = result(evaluate({"dialogue": d}, cap, criteria), "C-B8").get("failedChecks") or []
         expect(abs(d["rawLoudnessSpreadLu"] - abs(-3 + residual)) < 0.01 and
                (("loudnessSpreadLu" in checks) == fail), "authored trim, unmatched pad and legacy raw spread")
+    # Identical direct pads can sit in different return tails. The wet change remains measured.
+    cap.manifest["dialogueChops"] = [dict(e, authoredGainDB=0) for e in events]
+    dry = np.tile(np.r_[np.zeros(RATE // 5), phrase, np.zeros(RATE - RATE // 5 - len(phrase))], 3)
+    wet = dry.copy()
+    wet[RATE:2 * RATE] *= 10 ** (4 / 20)
+    cap = Capture(manifest=cap.manifest, arrays={"dialogue-chops": stereo(wet), "dialogue-dry": stereo(dry),
+                                                 "texture": stereo(tone(950, 3, 0.1))})
+    grid = BandGrid(RATE)
+    grids = {s: grid.for_section(cap, s) for s in ("dialogue", "mids")}
+    measured = dialogue.measure_dialogue(cap, grid, grids)
+    checks = result(evaluate({"dialogue": measured}, cap, criteria), "C-B8").get("failedChecks") or []
+    expect("loudnessSpreadLu" not in checks and abs(measured["loudnessSpreadLu"]) < 0.01 and
+           abs(measured["levelMatchedWetSpreadLu"] - 4) < 0.01 and abs(measured["rawLoudnessSpreadLu"] - 4) < 0.01,
+           "identical direct pads under different returns retain their measured 4 LU wet spread")
     overlap = [{"frame": 0, "durationFrames": 100, "authoredGainDB": 0},
                {"frame": 90, "durationFrames": 40, "authoredGainDB": -3}]
     spans = dialogue.authored_levels(overlap)

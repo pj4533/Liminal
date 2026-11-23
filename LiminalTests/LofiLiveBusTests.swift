@@ -503,4 +503,18 @@ struct LofiLiveBusTests {
         let faint = try render(scale: 0.002, spikes: false)
         #expect(offTarget(faint) < -6, "a faint source stays \(offTarget(faint)) dB from the target")
     }
+
+    @Test func finishedStabCorrectsOnlySmallResidualsWithinPeakHeadroom() {
+        let rate = Self.rate
+        let tone = (0..<Int(rate / 2)).map { Float(sin(2 * .pi * 950 * Double($0) / rate)) }
+        func gain(_ amplitude: Float) -> Float {
+            DialogueChopChain.residualStabGain(tone.map { $0 * amplitude }, sampleRate: rate)
+        }
+        #expect(gain(0.25) > 1 && gain(0.25) <= powf(10, 1.5 / 20))
+        #expect(gain(0.38) < 1 && gain(0.38) >= powf(10, -1.5 / 20))
+        #expect(gain(0.001) == 1)
+        var peaked = tone.map { $0 * 0.24 }
+        peaked[peaked.count / 2] = (DialogueChopChain.limiterCeiling + DialogueChopChain.peakCeiling) / 2
+        #expect(DialogueChopChain.residualStabGain(peaked, sampleRate: rate) == 1)
+    }
 }

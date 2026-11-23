@@ -208,6 +208,10 @@ nonisolated enum DialogueChopRenderer {
         for i in 0..<full {
             out[i] = LofiSaturation.softClip(out[i], threshold: DialogueChopChain.peakKnee, ceiling: DialogueChopChain.peakCeiling)
         }
+        if pad.role == .stab, levelling < DialogueChopChain.maxLevelGain {
+            var residual = DialogueChopChain.residualStabGain(out, sampleRate: sr)
+            if residual != 1 { vDSP_vsmul(out, 1, &residual, &out, 1, vDSP_Length(full)) }
+        }
         if preserveLinkedAttack && !pad.transform.isNative {
             preserveAttack(&out, expected: pad.accentOffset / rate, line: pad.role == .anchor, sampleRate: sr)
         }
@@ -486,6 +490,29 @@ nonisolated enum DialogueChopChain {
     static let densityMaxDB: Float = 6
     /// The post-gain limiter's ceiling; the soft shoulder from `peakKnee` to `peakCeiling` follows it.
     static let limiterCeiling: Float = 0.9
+
+    /// Measure the full pad after its limiter and shoulder. The linked-opening correction follows
+    /// so it can still preserve the exact body; the authored trim and gate also follow.
+    static func residualStabGain(_ samples: [Float], sampleRate: Double) -> Float {
+        guard !samples.isEmpty else { return 1 }
+        var filter = LofiKWeighting(sampleRate: sampleRate)
+        var power = 0.0
+        var peak: Float = 0
+        for x in samples {
+            let weighted = filter.process(Double(x))
+            power += weighted * weighted
+            peak = max(peak, abs(x))
+        }
+        let rms = Float(sqrt(power / Double(samples.count)))
+        let target = levelTarget * powf(10, densityTargetDB / 20)
+        guard rms > target / 2, peak > 0 else { return 1 }
+        let difference = 20 * log10f(target / rms)
+        // A finished stab may move at most 1.5 dB. Spend at most half the headroom from
+        // the post-gain limiter (0.9) to the final ceiling (1.0); never pull a peak up to it.
+        let db = min(1.5, max(-1.5, difference))
+        let headroom = (limiterCeiling + peakCeiling) / 2
+        return min(powf(10, db / 20), max(1, headroom / peak))
+    }
 
     static func densityGain(_ x: [Float], gain: Float, sampleRate: Double) -> Float {
         // The levelling put the loud part (the 80th percentile of 50 ms powers) at the target, so the

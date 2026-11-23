@@ -158,13 +158,18 @@ def measure_dialogue(cap, grid, grids):
     durations = [p["endFrame"] - p["startFrame"] for p in per]
     lufs = np.array([p["lufs"] for p in per if p["lufs"] is not None])
     corrected = sum("levelMatchedLufs" in p for p in per)
-    effective = [p.get("levelMatchedLufs", p["lufs"]) for p in per if p["lufs"] is not None]
-    basis = "authored-gain-corrected" if corrected == len(per) else "partial" if corrected else "raw"
+    wet = [p.get("levelMatchedLufs", p["lufs"]) for p in per if p["lufs"] is not None]
+    # Direct pad gain and decaying sends have different jobs. Use the direct stem when every
+    # featured window is comparable; an old or ambiguous capture retains its previous check.
+    comparable = corrected == len(per)
+    effective = [p["levelMatchedDryLufs"] for p in per] if comparable else wet
+    basis = "authored-gain-corrected-dry" if comparable else "partial" if corrected else "raw"
     few = len(per) < 3  # a 10th percentile and a spread over one or two chops say nothing
     out.update({"chops": len(per), "siiMean": float(sii.mean()), "siiP10": None if few else float(np.percentile(sii, 10)),
                 "fewChops": few,
                 "snr1to4kMeanDb": float(np.average(snr14, weights=durations)),
                 "snr1to4kEventMeanDb": float(snr14.mean()), "loudnessSpreadLu": float(np.ptp(effective)) if len(effective) and not few else None,
+                "levelMatchedWetSpreadLu": float(np.ptp(wet)) if len(wet) and not few else None,
                 "rawLoudnessSpreadLu": float(np.ptp(lufs)) if len(lufs) and not few else None,
                 "spreadBasis": basis, "authoredGainWindows": corrected,
                 "perChop": per,
