@@ -1,0 +1,146 @@
+name: Private drum verification
+# The review branch never triggers. Only a separately approved execute push runs private work.
+on:
+  push:
+    branches: ['verify/private-execute/**']
+  workflow_dispatch:
+    inputs:
+      asset_id:
+        description: Draft release ciphertext asset ID (digits only)
+        required: false
+      ciphertext_sha256:
+        description: SHA256 of reviewed encrypted fixture archive
+        required: false
+permissions:
+  contents: read
+concurrency:
+  group: private-drums-${{ github.run_id }}
+  cancel-in-progress: false
+jobs:
+  private:
+    if: github.repository == 'pj4533/Liminal' && (github.ref == 'refs/heads/verify/dialogue-private-20261123' || startsWith(github.ref, 'refs/heads/verify/private-execute/'))
+    runs-on: macos-26
+    timeout-minutes: 300
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: after
+      - uses: actions/checkout@v4
+        with:
+          ref: 47a01fe267a3972241ed6918d031fffe55f26ed2
+          path: baseline
+      - name: Install verification dependencies
+        run: |
+          umask 077
+          mkdir -p "$RUNNER_TEMP/private-verification"
+          brew install ffmpeg
+          python3 -m venv "$RUNNER_TEMP/private-venv"
+          "$RUNNER_TEMP/private-venv/bin/pip" install cryptography numpy scipy matplotlib
+          echo "$RUNNER_TEMP/private-venv/bin" >> "$GITHUB_PATH"
+      - name: Fetch ciphertext (never fetch plaintext)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ASSET_ID: ${{ inputs.asset_id }}
+          EXPECTED_SHA256: ${{ inputs.ciphertext_sha256 || '7a77cc69f487e2fb33808085589fde56734d217050f9bf94276fd12067dc5913' }}
+        run: |
+          set -euo pipefail
+          umask 077
+          if [ -z "$ASSET_ID" ]; then
+            ASSET_ID=$(gh api repos/pj4533/Liminal/releases/tags/private-drums-20261123 --jq '.assets[] | select(.name == "fixtures.enc") | .id')
+          fi
+          [[ "$ASSET_ID" =~ ^[0-9]+$ ]]
+          [[ "$EXPECTED_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          gh api -H 'Accept: application/octet-stream' "repos/pj4533/Liminal/releases/assets/$ASSET_ID" > "$RUNNER_TEMP/private-verification/fixtures.enc"
+          python3 - <<'PY'
+          import hashlib, os
+          from pathlib import Path
+          p = Path(os.environ['RUNNER_TEMP']) / 'private-verification/fixtures.enc'
+          h = hashlib.sha256()
+          with p.open('rb') as f:
+              for block in iter(lambda: f.read(1024*1024), b''): h.update(block)
+          assert h.hexdigest() == os.environ['EXPECTED_SHA256'], 'ciphertext identity mismatch'
+          PY
+      - name: Authenticate and install paired corpus
+        id: fixtures
+        env:
+          PRIVATE_KEY_B64: ${{ secrets.LIMINAL_PRIVATE_DRUMS_KEY_20261123 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          # The secret is scoped to this Python process, removed before any child starts.
+          python3 - <<'PY'
+          import base64, os
+          from pathlib import Path
+          key = base64.b64decode(os.environ.pop('PRIVATE_KEY_B64'), validate=True)
+          assert len(key) == 32, 'missing/invalid private verification key'
+          path = Path(os.environ['RUNNER_TEMP']) / 'private-verification/key'
+          fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+          with os.fdopen(fd, 'wb') as f: f.write(key)
+          PY
+          unset PRIVATE_KEY_B64
+          python3 after/scripts/private-verification-assets.py decrypt "$RUNNER_TEMP/private-verification/fixtures.enc" "$RUNNER_TEMP/private-verification/bundle" --key-file "$RUNNER_TEMP/private-verification/key"
+          python3 after/scripts/verify-private-drums.py setup --after after --baseline baseline --out "$RUNNER_TEMP/private-verification" --bundle "$RUNNER_TEMP/private-verification/bundle"
+      - name: Native drum tests and exact built resource identities
+        if: ${{ !cancelled() && steps.fixtures.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 65
+        run: python3 after/scripts/verify-private-drums.py native --after after --baseline baseline --out "$RUNNER_TEMP/private-verification" --bundle "$RUNNER_TEMP/private-verification/bundle"
+      - name: Prepare same authentic public film cache
+        id: media
+        if: ${{ !cancelled() && steps.fixtures.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 45
+        run: python3 after/scripts/verify-private-drums.py prepare --after after --baseline baseline --out "$RUNNER_TEMP/private-verification" --bundle "$RUNNER_TEMP/private-verification/bundle"
+      - name: Baseline strict private matrix
+        if: ${{ !cancelled() && steps.fixtures.outcome == 'success' && steps.media.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 75
+        run: python3 after/scripts/verify-private-drums.py baseline --after after --baseline baseline --out "$RUNNER_TEMP/private-verification" --bundle "$RUNNER_TEMP/private-verification/bundle"
+      - name: Candidate strict paired private matrix
+        if: ${{ !cancelled() && steps.fixtures.outcome == 'success' && steps.media.outcome == 'success' }}
+        continue-on-error: true
+        timeout-minutes: 75
+        run: python3 after/scripts/verify-private-drums.py after --after after --baseline baseline --out "$RUNNER_TEMP/private-verification" --bundle "$RUNNER_TEMP/private-verification/bundle"
+      - name: Enforce native, strict, paired and real transcription evidence
+        if: ${{ always() && steps.fixtures.outcome == 'success' }}
+        run: python3 after/scripts/verify-private-drums.py final --after after --baseline baseline --out "$RUNNER_TEMP/private-verification" --bundle "$RUNNER_TEMP/private-verification/bundle"
+      - name: Encrypt detailed audio and diagnostics before upload
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/private-verification/key" ] && [ -d "$RUNNER_TEMP/private-verification/raw" ]; then
+            python3 after/scripts/private-verification-assets.py encrypt "$RUNNER_TEMP/private-verification/raw" "$RUNNER_TEMP/private-evidence.enc" --key-file "$RUNNER_TEMP/private-verification/key"
+          fi
+      - name: Upload sanitized metrics only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: private-drum-summary-${{ github.sha }}
+          path: ${{ runner.temp }}/private-verification/sanitized/summary.json
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Upload authenticated encrypted evidence only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: private-drum-encrypted-${{ github.sha }}
+          path: ${{ runner.temp }}/private-evidence.enc
+          if-no-files-found: warn
+          compression-level: 0
+          retention-days: 7
+      - name: Remove runner plaintext, private build resources and key
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import os, shutil
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP'])
+          shutil.rmtree(root / 'private-verification', ignore_errors=True)
+          (root / 'private-evidence.enc').unlink(missing_ok=True)
+          for checkout in ('after', 'baseline'):
+              tree = Path(os.environ['GITHUB_WORKSPACE']) / checkout
+              shutil.rmtree(tree / 'Liminal/SlowBurnDrums', ignore_errors=True)
+              (tree / 'Liminal/Audio/Lofi/SlowBurnBeatGrid.json').unlink(missing_ok=True)
+          PY
