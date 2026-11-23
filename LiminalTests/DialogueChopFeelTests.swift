@@ -26,6 +26,7 @@ struct DialogueChopFeelTests {
                 let replay = DialogueChopVarietyTests.run(film, bpm: bpm, seed: seed)
                 #expect(loops.map { $0.motif.cells } == replay.map { $0.motif.cells })
                 for loop in loops {
+                    #expect(loop.motif.hook?.items == loop.motif.cells.first { $0.kind == .chopBeat }?.items)
                     rates.insert(Int((loop.motif.transform.playbackRate * 10000).rounded()))
                     reverses.formUnion(DialogueMovePool.positions(loop.motif.cells) { $0.effect == .reversed })
                     #expect(loop.events.allSatisfy { $0.transform == loop.motif.transform })
@@ -96,6 +97,30 @@ struct DialogueChopFeelTests {
             }
             #expect(arranged[0].items.filter { $0.slot < 28 } == arranged[1].items.filter { $0.slot < 28 })
             previous = arranged
+        }
+    }
+
+    @Test func anImmovableFirstFillDoesNotHideALaterOpenPocket() {
+        typealias Item = DialogueMotifCell.Item
+        let fragments = (0..<3).map { id in
+            DialogueMotifFragment(id: id, kind: id == 0 ? .line : .piece, order: id, parent: nil,
+                frames: 0..<100, accentFrame: 0, fadeIn: 0, fadeOut: 0, text: nil)
+        }
+        let shared = [Item(fragment: 1, slot: 0, skeleton: true), Item(fragment: 2, slot: 2, skeleton: true),
+                      Item(fragment: 1, slot: 4), Item(fragment: 2, slot: 6, skeleton: true),
+                      Item(fragment: 1, slot: 12), Item(fragment: 2, slot: 20, skeleton: true)]
+        let cells = [DialogueMotifCell(kind: .chopBeat, bar: 2, bars: 2, variant: 0, items: shared),
+                     DialogueMotifCell(kind: .chopBeat, bar: 4, bars: 2, variant: 0, items: shared)]
+        for seed: UInt64 in 1...20 {
+            let result = DialogueMovePool.arrange(cells, fragments: fragments, signature: 1,
+                sampleRate: 1000, beatDuration: 0.8, seed: seed, avoiding: [])
+            for cell in result {
+                let fills = cell.items.filter { !$0.skeleton && $0.effect != .reversed }.map(\.slot)
+                #expect(fills.contains(4))
+                #expect(fills.contains(10) || fills.contains(14))
+                #expect(!fills.contains(12))
+                #expect(cell.items.filter(\.skeleton) == shared.filter(\.skeleton))
+            }
         }
     }
 

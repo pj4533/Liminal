@@ -64,9 +64,13 @@ nonisolated enum DialogueMovePool {
                         return true
                     }
                 }
-                if !candidates.isEmpty { fillMoves[item.slot] = draw(candidates, avoiding: old) }
-                // One pocket changes at a time; later fills still see the authored neighbours.
-                if fillMoves[item.slot] != nil { break }
+                let moved = candidates.filter { $0 != item.slot }
+                // An unchanged legal slot is not a move. Keep looking when this fill is boxed
+                // in, so an immovable first fill cannot prevent a later open pocket varying.
+                if !moved.isEmpty {
+                    fillMoves[item.slot] = draw(moved, avoiding: old)
+                    break
+                }
             }
         }
         var result: [Cell] = []

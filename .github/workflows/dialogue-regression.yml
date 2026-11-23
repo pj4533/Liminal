@@ -14,17 +14,22 @@ jobs:
     timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
-      - name: Build and run dialogue regressions
+      - name: Build dialogue test bundle
         shell: bash
         run: |
           mkdir -p verification
           set -o pipefail
           set +e
-          xcodebuild build-for-testing CODE_SIGNING_ALLOWED=NO -project Liminal.xcodeproj -scheme Liminal \
+          xcodebuild -quiet build-for-testing CODE_SIGNING_ALLOWED=NO -project Liminal.xcodeproj -scheme Liminal \
             -destination 'platform=macOS,arch=arm64' -parallel-testing-enabled NO \
             -derivedDataPath "$RUNNER_TEMP/LiminalDerivedData" 2>&1 | tee verification/build.log
           build=${PIPESTATUS[0]}
           if [ "$build" -ne 0 ]; then exit "$build"; fi
+      - name: Run complete dialogue regression suites
+        shell: bash
+        run: |
+          set -o pipefail
+          set +e
           xcodebuild test-without-building CODE_SIGNING_ALLOWED=NO -project Liminal.xcodeproj -scheme Liminal \
             -destination 'platform=macOS,arch=arm64' -parallel-testing-enabled NO \
             -derivedDataPath "$RUNNER_TEMP/LiminalDerivedData" \

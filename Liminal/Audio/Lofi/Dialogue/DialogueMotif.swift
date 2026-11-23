@@ -2061,7 +2061,10 @@ nonisolated extension DialogueMotif {
         ]
         let cells = DialogueMovePool.arrange(baseCells, fragments: fragments, signature: s, sampleRate: sampleRate,
                                              beatDuration: beatDuration, seed: seed, avoiding: avoidCells)
-        return (cells, DialogueMotifHook(template: template, signature: s, response: r, third: t, items: g), arc)
+        // Repair and diagnostics must use the hook that is actually performed, including its
+        // seeded fill moves, rather than the pre-arrangement grid.
+        let hookItems = cells.first { $0.kind == .chopBeat }?.items ?? g
+        return (cells, DialogueMotifHook(template: template, signature: s, response: r, third: t, items: hookItems), arc)
     }
 }
 
@@ -2372,7 +2375,7 @@ nonisolated enum DialogueMotifPerformer {
             // The hook's own items for this bar first (same step, same piece), so a repaired bar is
             // on-pattern (D125); then recurring pieces on the generic slots, rotating so repairs do
             // not always pick the same cut.
-            let hookItems = (motif.hook?.items ?? []).filter { $0.slot / 16 == ((barInLoop % 2) + 2) % 2 }
+            let hookItems = (motif.hook?.items ?? []).filter { $0.effect != .reversed && $0.slot / 16 == ((barInLoop % 2) + 2) % 2 }
                 .map { (slot: $0.slot % 16, fragment: $0.fragment) }
             let order = Array(candidates[(rotation % max(1, candidates.count))...] + candidates[..<(rotation % max(1, candidates.count))])
             rotation += 1
