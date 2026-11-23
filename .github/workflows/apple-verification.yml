@@ -9,13 +9,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: apple-verification-${{ github.ref }}
-  cancel-in-progress: true
+  group: apple-verification-${{ github.run_id }}
+  cancel-in-progress: false
 
 jobs:
   apple:
     runs-on: macos-26
-    timeout-minutes: 75
+    timeout-minutes: 110
     defaults:
       run:
         shell: bash
@@ -24,130 +24,92 @@ jobs:
       - name: Record Apple toolchain
         run: |
           mkdir -p verification
-          {
-            sw_vers
-            xcodebuild -version
-            xcodebuild -showsdks
-            xcrun simctl list devices available
-          } 2>&1 | tee verification/toolchain.log
-      - name: Build macOS
-        timeout-minutes: 15
+          { sw_vers; xcodebuild -version; xcodebuild -showsdks; } > verification/toolchain.log 2>&1
+          git rev-parse HEAD > verification/revision.txt
+      - name: Build macOS app and test bundle once
+        timeout-minutes: 20
         id: mac_build
         run: |
           set -o pipefail
-          xcodebuild CODE_SIGNING_ALLOWED=NO -project Liminal.xcodeproj -scheme Liminal \
-            -destination 'platform=macOS,arch=arm64' \
+          xcodebuild -quiet build-for-testing CODE_SIGNING_ALLOWED=NO -project Liminal.xcodeproj -scheme Liminal \
+            -destination 'platform=macOS,arch=arm64' -parallel-testing-enabled NO \
             -derivedDataPath "$RUNNER_TEMP/LiminalDerivedData" \
             -resultBundlePath verification/macos-build.xcresult \
-            build 2>&1 | tee verification/macos-build.log
-      - name: Chop feel fixture measurements
-        timeout-minutes: 15
+            2>&1 | tee verification/macos-build.log
+      - name: Complete unit suite with execution coverage
+        timeout-minutes: 65
         if: ${{ !cancelled() && steps.mac_build.outcome == 'success' }}
         run: |
           set -o pipefail
-          xcodebuild test CODE_SIGNING_ALLOWED=NO -project Liminal.xcodeproj -scheme Liminal \
-            -destination 'platform=macOS,arch=arm64' -parallel-testing-enabled NO \
-            -derivedDataPath "$RUNNER_TEMP/LiminalDerivedData" \
-            -resultBundlePath verification/feel-metrics.xcresult \
-            -only-testing:LiminalTests/DialogueFeelMetricsTests \
-            2>&1 | tee verification/feel-metrics.log
-          xcrun xcresulttool export attachments --path verification/feel-metrics.xcresult \
-            --output-path verification/feel-attachments
-          python3 scripts/dialogue-feel-report.py verification/feel-attachments > verification/feel-summary.json
-          cat verification/feel-summary.json
-      - name: Preserve chop feel measurements
-        if: ${{ !cancelled() && steps.mac_build.outcome == 'success' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: chop-feel-${{ github.sha }}
-          path: |
-            verification/feel-attachments/
-            verification/feel-summary.json
-          retention-days: 14
-      - name: Chop feel regression tests
-        timeout-minutes: 15
-        if: ${{ !cancelled() && steps.mac_build.outcome == 'success' }}
-        run: |
-          set -o pipefail
-          set +e
-          # Record compiler/test process timing so a slow suite can be distinguished from a hang.
-          (
-            while sleep 60; do
-              date -u
-              ps -Ao pid,ppid,etime,%cpu,comm | grep -E 'swift|xcodebuild|Liminal' || true
-            done
-          ) > verification/feel-runtime.log 2>&1 &
-          monitor=$!
-          trap 'kill "$monitor" 2>/dev/null || true' EXIT
-          xcodebuild test CODE_SIGNING_ALLOWED=NO -project Liminal.xcodeproj -scheme Liminal \
-            -destination 'platform=macOS,arch=arm64' -parallel-testing-enabled NO \
-            -derivedDataPath "$RUNNER_TEMP/LiminalDerivedData" \
-            -resultBundlePath verification/feel-regression.xcresult \
-            -only-testing:LiminalTests/DialogueChopFeelTests \
-            -only-testing:LiminalTests/DialogueWordCutTests \
-            -only-testing:LiminalTests/DialogueMotifTests \
-            2>&1 | tee verification/feel-regression.log
-          result=${PIPESTATUS[0]}
-          xcrun xcresulttool export attachments --path verification/feel-regression.xcresult \
-            --output-path verification/feel-regression-attachments
-          exit "$result"
-      - name: Preserve chop feel regression evidence
-        if: ${{ !cancelled() && steps.mac_build.outcome == 'success' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: chop-feel-regression-${{ github.sha }}
-          path: |
-            verification/feel-regression.log
-            verification/feel-runtime.log
-            verification/feel-regression-attachments/
-          retention-days: 14
-      - name: Focused dialogue tests
-        timeout-minutes: 25
-        if: ${{ !cancelled() && steps.mac_build.outcome == 'success' }}
-        run: |
-          set -o pipefail
+          python3 - <<'PY' > verification/required-suites.txt
+          from pathlib import Path
+          import runpy
+          parser = runpy.run_path('scripts/verify-swift-test-coverage.py')
+          print('\n'.join(sorted(name for name, tests in parser['declared_tests'](Path('LiminalTests')).items() if tests)))
+          PY
           suites=()
-          for source in LiminalTests/Dialogue*Tests.swift; do
-            suites+=("-only-testing:LiminalTests/$(basename "$source" .swift)")
-          done
-          xcodebuild test CODE_SIGNING_ALLOWED=NO -project Liminal.xcodeproj -scheme Liminal \
-            -destination 'platform=macOS,arch=arm64' \
-            -parallel-testing-enabled NO \
-            -derivedDataPath "$RUNNER_TEMP/LiminalDerivedData" \
-            -resultBundlePath verification/dialogue-tests.xcresult \
-            "${suites[@]}" -only-testing:LiminalTests/DialogueLineLedgerTests \
-            -only-testing:LiminalTests/FootageSalienceTests -only-testing:LiminalTests/FootageWeaverTests \
-            2>&1 | tee verification/dialogue-tests.log
-      - name: Full unit suite
-        timeout-minutes: 30
-        if: ${{ !cancelled() && steps.mac_build.outcome == 'success' }}
-        run: |
-          set -o pipefail
-          xcodebuild test CODE_SIGNING_ALLOWED=NO -project Liminal.xcodeproj -scheme Liminal \
-            -destination 'platform=macOS,arch=arm64' \
-            -parallel-testing-enabled NO \
+          while IFS= read -r suite; do suites+=("$suite"); done < verification/required-suites.txt
+          set +e
+          xcodebuild test-without-building CODE_SIGNING_ALLOWED=NO -project Liminal.xcodeproj -scheme Liminal \
+            -destination 'platform=macOS,arch=arm64' -parallel-testing-enabled NO \
             -derivedDataPath "$RUNNER_TEMP/LiminalDerivedData" \
             -resultBundlePath verification/unit-tests.xcresult \
             -only-testing:LiminalTests 2>&1 | tee verification/unit-tests.log
-      - name: Build visionOS Simulator when SDK is installed
-        if: ${{ !cancelled() }}
+          result=${PIPESTATUS[0]}
+          python3 scripts/verify-swift-test-coverage.py verification/unit-tests.log LiminalTests "${suites[@]}" > verification/test-coverage.json
+          coverage=$?
+          xcrun xcresulttool export attachments --path verification/unit-tests.xcresult --output-path verification/attachments
+          attachments=$?
+          python3 scripts/dialogue-feel-report.py verification/attachments > verification/feel-summary.json
+          metrics=$?
+          if [ "$result" -ne 0 ]; then exit "$result"; fi
+          if [ "$coverage" -ne 0 ]; then exit "$coverage"; fi
+          if [ "$attachments" -ne 0 ]; then exit "$attachments"; fi
+          exit "$metrics"
+      - name: Public fixture combined mix and peak verification
+        timeout-minutes: 20
+        if: ${{ !cancelled() && steps.mac_build.outcome == 'success' }}
+        env:
+          DD: ${{ runner.temp }}/LiminalDerivedData
+          LIMINAL_CAPTURE_CODE_SIGNING_ALLOWED: 'NO'
         run: |
           set -o pipefail
-          if ! xcodebuild -showsdks | grep -q xrsimulator; then
-            echo 'visionOS Simulator build unverified: no xrsimulator SDK installed.' | tee verification/visionos-build.log
-            echo '### visionOS Simulator build unverified: SDK unavailable' >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          xcodebuild CODE_SIGNING_ALLOWED=NO -project Liminal.xcodeproj -scheme Liminal \
-            -destination 'generic/platform=visionOS Simulator' \
-            -derivedDataPath "$RUNNER_TEMP/LiminalVisionDerivedData" \
-            -resultBundlePath verification/visionos-build.xcresult \
-            build 2>&1 | tee verification/visionos-build.log
-      - name: Preserve verification evidence
-        if: ${{ always() }}
+          python3 -m venv "$RUNNER_TEMP/mix-venv"
+          "$RUNNER_TEMP/mix-venv/bin/pip" install numpy scipy matplotlib > verification/mix-install.log 2>&1
+          export PATH="$RUNNER_TEMP/mix-venv/bin:$PATH"
+          echo 'Public synthesized speech and drums; this does not certify authentic speech or private drums.' > verification/mix-scope.txt
+          scripts/mix-report.sh --out "$RUNNER_TEMP/public-mix" --bars 32 --bpm 72 --seed 1042 --no-plots --strict \
+            2>&1 | tee verification/public-mix.log
+      - name: Preserve macOS verification evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: apple-verification-${{ github.sha }}
+          path: |
+            verification/
+            ${{ runner.temp }}/public-mix/
+          retention-days: 14
+          if-no-files-found: error
+  visionos:
+    runs-on: macos-26
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build visionOS Simulator app
+        shell: bash
+        run: |
+          mkdir -p verification
+          set -o pipefail
+          xcodebuild -quiet build CODE_SIGNING_ALLOWED=NO -project Liminal.xcodeproj -scheme Liminal \
+            -destination 'generic/platform=visionOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/LiminalVisionDerivedData" \
+            -resultBundlePath verification/visionos-build.xcresult \
+            2>&1 | tee verification/visionos-build.log
+      - name: Preserve visionOS verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: visionos-verification-${{ github.sha }}
           path: verification/
           retention-days: 14
           if-no-files-found: error
