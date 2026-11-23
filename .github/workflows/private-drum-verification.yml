@@ -14,7 +14,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: private-drums-${{ github.run_id }}
+  group: private-drums-pj4533-liminal
   cancel-in-progress: false
 jobs:
   private:
@@ -39,6 +39,7 @@ jobs:
           brew install ffmpeg
           python3 -m venv "$RUNNER_TEMP/private-venv"
           "$RUNNER_TEMP/private-venv/bin/pip" install cryptography numpy scipy matplotlib
+          df -h "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/private-venv/bin" >> "$GITHUB_PATH"
       - name: Fetch ciphertext (never fetch plaintext)
         env:
@@ -107,6 +108,9 @@ jobs:
       - name: Enforce native, strict, paired and real transcription evidence
         if: ${{ always() && steps.fixtures.outcome == 'success' }}
         run: python3 after/scripts/verify-private-drums.py final --after after --baseline baseline --out "$RUNNER_TEMP/private-verification" --bundle "$RUNNER_TEMP/private-verification/bundle"
+      - name: Collect relevant crash diagnostics into encrypted evidence only
+        if: always()
+        run: python3 after/scripts/private-verification-cleanup.py collect --out "$RUNNER_TEMP/private-verification" --workspace "$GITHUB_WORKSPACE"
       - name: Encrypt detailed audio and diagnostics before upload
         if: always()
         run: |
@@ -132,15 +136,4 @@ jobs:
           retention-days: 7
       - name: Remove runner plaintext, private build resources and key
         if: always()
-        run: |
-          python3 - <<'PY'
-          import os, shutil
-          from pathlib import Path
-          root = Path(os.environ['RUNNER_TEMP'])
-          shutil.rmtree(root / 'private-verification', ignore_errors=True)
-          (root / 'private-evidence.enc').unlink(missing_ok=True)
-          for checkout in ('after', 'baseline'):
-              tree = Path(os.environ['GITHUB_WORKSPACE']) / checkout
-              shutil.rmtree(tree / 'Liminal/SlowBurnDrums', ignore_errors=True)
-              (tree / 'Liminal/Audio/Lofi/SlowBurnBeatGrid.json').unlink(missing_ok=True)
-          PY
+        run: python3 after/scripts/private-verification-cleanup.py clean --out "$RUNNER_TEMP/private-verification" --workspace "$GITHUB_WORKSPACE"

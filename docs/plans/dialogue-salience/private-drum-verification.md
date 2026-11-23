@@ -87,7 +87,7 @@ Only `verify/private-execute/**` pushes trigger this workflow; there is no PR tr
 The review branch stays inert. This push route avoids a dependency on registering
 a new workflow_dispatch file on the default branch. Dispatch remains available
 when GitHub registers the workflow. Do not push the execute ref before review and
-fixture provisioning. Execution is serialized and does not cancel existing jobs.
+fixture provisioning. Execution uses the stable `private-drums-pj4533-liminal` concurrency group and does not cancel running jobs.
 
 After evidence is retrieved, the parent removes the ephemeral Actions secret and
 draft release/asset through the authorized cleanup flow, and records those actions.
@@ -130,13 +130,13 @@ criterion IDs/status and numeric values whose names occur in the trusted report
 code. No raw manifest, transcript, source title, arbitrary error, log, WAV, app or
 capture directory is uploaded. All detailed capture audio/logs/reports and exact
 adapter diffs are encrypted before a separate ciphertext-only artifact upload.
-Failures never enable a plaintext fallback upload. An `always()` cleanup removes
-runner bundle, key, build products and both installed source copies; abrupt runner
+Final gating also requires exactly one recorded successful completion of every adapter, native, media and matrix phase; missing/timeout/nonzero/duplicate completions remain UNMET even when passing report JSON already exists. Failures never enable a plaintext fallback upload. Relevant Liminal/xctest crash reports are collected only into encrypted raw evidence. An `always()` cleanup removes
+runner bundle, key, build products, both installed source copies, sandboxed and unsandboxed `Liminal/OfflineAudio` capture caches, the stale capture configuration and targeted app/test crash reports; abrupt runner
 loss additionally relies on hosted runner destruction. No Actions cache stores
 private files.
 
 Local tests cover byte preservation, RIFF metadata and exclusions, the known name
 repairs, inventory rejection, GCM roundtrip/fresh nonce/tamper/wrong-key/truncation,
-key permissions and archive boundaries, no overwrite, safe artifacts and truthful
-transcription failure. Native Apple execution remains pending: this environment
+key permissions and archive boundaries, no overwrite, safe artifacts, truthful
+transcription failure, post-report command failures/timeouts and targeted crash/cache cleanup (19 tests). Native Apple execution remains pending: this environment
 has no Xcode or Apple audio framework, and no remote run is implied by those tests.

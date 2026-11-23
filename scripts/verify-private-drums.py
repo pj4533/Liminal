@@ -13,6 +13,9 @@ import sys
 
 BASELINE = '47a01fe267a3972241ed6918d031fffe55f26ed2'
 SUITES = ('LofiTests', 'LofiRhythmTests', 'LofiStemChainTests')
+REQUIRED_STEPS = ('baseline-capture-adapter', 'baseline-compiler-adapter',
+                  'baseline-native', 'after-native', 'public-media',
+                  'baseline-matrix', 'after-matrix')
 
 
 def load(name, after):
@@ -66,6 +69,23 @@ def sanitized_criteria(report, allowed_ids, allowed_values):
                          status=row.get('status') if row.get('status') in ('pass', 'fail', 'skipped') else 'UNMET',
                          values=values))
     return rows
+
+
+def phase_status(raw):
+    try:
+        rows = [json.loads(line) for line in (raw / 'steps.jsonl').read_text().splitlines()]
+        valid = all(isinstance(row, dict) and isinstance(row.get('step'), str)
+                    and type(row.get('exit')) is int for row in rows)
+    except (OSError, ValueError):
+        rows, valid = [], False
+    phases = {}
+    for name in REQUIRED_STEPS:
+        exits = [row['exit'] for row in rows if isinstance(row, dict)
+                 and row.get('step') == name and type(row.get('exit')) is int]
+        passed = valid and exits == [0]
+        phases[name] = dict(exits=exits, status='VERIFIED' if passed else 'UNMET')
+    return dict(ledgerValid=valid, phases=phases,
+                passed=valid and all(row['status'] == 'VERIFIED' for row in phases.values()))
 
 
 def main():
@@ -142,7 +162,8 @@ def main():
             except (OSError, ValueError):
                 row['criteria'] = []
         (raw / (label + '-inventory.json')).write_text(json.dumps(inventory, indent=2))
-    summary['passed'] = (all(n['exit'] == 0 and n['resourceIdentity'] and n['coverage']['passed'] for n in summary['native'].values())
+    summary['phaseExecution'] = phase_status(raw)
+    summary['passed'] = (summary['phaseExecution']['passed'] and all(n['exit'] == 0 and n['resourceIdentity'] and n['coverage']['passed'] for n in summary['native'].values())
         and all(m['complete'] and m['rawStrictPassed'] for m in summary['matrices'].values())
         and summary['matrices']['after']['noNewTargetedFailures'] is True)
     summary['status'] = 'VERIFIED' if summary['passed'] else 'UNMET'

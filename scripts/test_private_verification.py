@@ -21,6 +21,7 @@ def module(name):
 
 assets = module('private-verification-assets')
 runner = module('verify-private-drums')
+cleanup = module('private-verification-cleanup')
 
 
 def wav(path, frames=705600, rate=22050, channels=1, bits=16, encoding=1):
@@ -221,12 +222,72 @@ class PrivateAssetTests(unittest.TestCase):
         self.assertNotIn(str(self.root), json.dumps(summary))
         self.assertNotIn('error', json.dumps(summary))
 
+    def test_final_requires_successful_phase_exits_even_with_passing_reports(self):
+        repo = Path(__file__).resolve().parents[1]
+        bundle = self.root / 'bundle'; bundle.mkdir()
+        (bundle / 'provenance.json').write_text(json.dumps(dict(scope='Fresh', original=112,
+            eligible=100, excluded=12, packs=[], beatGridSHA256='a'*64, bytePreserved=True, files=[])))
+        out = self.root / 'run'; raw = out / 'raw'; raw.mkdir(parents=True)
+        for label, revision in [('baseline', runner.BASELINE), ('after', 'candidate')]:
+            (raw / (label + '-native.json')).write_text(json.dumps(dict(exit=0,
+                resourceIdentity=True, coverage=dict(passed=True))))
+            for case in ('ref', 'fast', 'same', 'transcribe'):
+                directory = raw / (label + '-matrix') / case
+                (directory / 'report').mkdir(parents=True)
+                (directory / 'manifest.json').write_text(json.dumps(dict(gitRevision=revision,
+                    dialogueTranscripts=[dict(status='ready', words=10, transcriptUsed=True)])))
+                (directory / 'report/mix-report.json').write_text(json.dumps(dict(criteria=[
+                    dict(id='C-D9', level='fail', status='pass', values=dict(emptyBars=0))])))
+        passing = [dict(step=name, exit=0) for name in runner.REQUIRED_STEPS]
+        variants = [('success', passing, 0),
+                    ('matrix failure', [dict(row, exit=1) if row['step'].endswith('-matrix') else row for row in passing], 1),
+                    ('missing timeout completion', [row for row in passing if row['step'] != 'baseline-matrix'], 1),
+                    ('explicit timeout', [dict(row, exit=124) if row['step'] == 'after-matrix' else row for row in passing], 1),
+                    ('duplicate completion', passing + [dict(step='after-matrix', exit=0)], 1)]
+        for name, rows, expected in variants:
+            with self.subTest(name=name):
+                (raw / 'steps.jsonl').write_text(''.join(json.dumps(row) + '\n' for row in rows))
+                argv = ['verify-private-drums.py', 'final', '--after', str(repo), '--baseline', str(repo),
+                        '--out', str(out), '--bundle', str(bundle)]
+                with patch.object(sys, 'argv', argv), patch.object(runner.subprocess, 'check_output',
+                        side_effect=[runner.BASELINE + '\n', 'candidate\n']), patch('builtins.print'):
+                    self.assertEqual(runner.main(), expected)
+                summary = json.loads((out / 'sanitized/summary.json').read_text())
+                self.assertTrue(summary['matrices']['after']['rawStrictPassed'])
+                self.assertEqual(summary['status'], 'VERIFIED' if expected == 0 else 'UNMET')
+        (raw / 'steps.jsonl').write_text('malformed ledger')
+        self.assertFalse(runner.phase_status(raw)['passed'])
+
+    def test_cleanup_removes_capture_caches_and_targeted_diagnostics_only(self):
+        home = self.root / 'home'; system = self.root / 'system-diagnostics'
+        out = self.root / 'out'; workspace = self.root / 'workspace'
+        for cache in cleanup.capture_caches(home):
+            cache.mkdir(parents=True)
+            (cache / 'orphan-private.wav').write_bytes(b'private')
+        reports = home / 'Library/Logs/DiagnosticReports'; reports.mkdir(parents=True)
+        targeted = reports / 'Liminal-2026.ips'; targeted.write_text('private crash data')
+        unrelated = reports / 'OtherApp-2026.ips'; unrelated.write_text('keep')
+        cleanup.collect(out, home, system)
+        collected = list((out / 'raw/runner-diagnostics').iterdir())
+        self.assertEqual(len(collected), 1)
+        self.assertEqual(collected[0].read_text(), 'private crash data')
+        self.assertEqual(collected[0].stat().st_mode & 0o777, 0o600)
+        with patch.object(cleanup.os, 'getuid', return_value=999999):
+            cleanup.clean(out, workspace, home, system)
+        self.assertFalse(targeted.exists())
+        self.assertTrue(unrelated.exists())
+        self.assertFalse(out.exists())
+        self.assertTrue(all(not path.exists() for path in cleanup.capture_caches(home)))
+
     def test_workflow_only_triggers_approved_execute_push_and_has_safe_artifact_paths(self):
         path = Path(__file__).resolve().parents[1] / '.github/workflows/private-drum-verification.yml'
         text = path.read_text()
         self.assertIn("branches: ['verify/private-execute/**']", text)
         self.assertNotIn("branches: ['verify/dialogue-private-20261123']", text)
         self.assertNotIn('pull_request', text)
+        self.assertIn('group: private-drums-pj4533-liminal', text)
+        self.assertNotIn('group: private-drums-${{ github.run_id }}', text)
+        self.assertIn('private-verification-cleanup.py clean', text)
         self.assertIn("github.ref == 'refs/heads/verify/dialogue-private-20261123'", text)
         self.assertEqual(text.count('uses: actions/upload-artifact@v4'), 2)
         self.assertIn('path: ${{ runner.temp }}/private-verification/sanitized/summary.json', text)
