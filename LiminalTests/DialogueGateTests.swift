@@ -53,7 +53,8 @@ struct DialogueGateTests {
         var byPad: [Int: [DialogueChop]] = [:]
         var checked = 0
         for plan in run.plans {
-            for chop in plan.render() where chop.event.gateEnd == "gate" || chop.event.gateEnd == "valley" {
+            // D130 adds "word": a gate that would close inside a word ends at the next word end.
+            for chop in plan.render() where chop.event.gateEnd == "gate" || chop.event.gateEnd == "valley" || chop.event.gateEnd == "word" {
                 let x = try #require(chop.buffer.floatChannelData?[0])
                 let n = Int(chop.buffer.frameLength)
                 let sr = chop.buffer.format.sampleRate
@@ -66,7 +67,11 @@ struct DialogueGateTests {
                 var tail: Float = 0
                 for i in max(0, n - Int(0.001 * sr))..<n { tail = max(tail, abs(x[i])) }
                 #expect(tail <= 0.05 * peak, "last millisecond at \(20 * log10(tail / peak)) dB")
-                if chop.event.effect == .none { byPad[chop.event.padID, default: []].append(chop) }
+            }
+            // A gated hit and a whole one of the same pad (D130: gates end at word ends, so two gates of
+            // one pad often end at the same word and have the same length).
+            for chop in plan.render() where chop.event.effect == .none && chop.event.piece != 0 {
+                byPad[chop.event.padID, default: []].append(chop)
             }
         }
         #expect(checked > 4)
@@ -77,7 +82,8 @@ struct DialogueGateTests {
             guard lengths.count >= 2, let a = lengths.values.first?.first, let b = lengths.values.dropFirst().first?.first,
                   a.event.gainDB == b.event.gainDB else { continue }
             let pa = try #require(a.buffer.floatChannelData?[0]), pb = try #require(b.buffer.floatChannelData?[0])
-            let common = min(Int(a.buffer.frameLength), Int(b.buffer.frameLength)) - Int(0.009 * a.buffer.format.sampleRate)
+            // Up to the shorter one's release: a gate's (8 ms) or a whole play's fade-out (10 ms).
+            let common = min(Int(a.buffer.frameLength), Int(b.buffer.frameLength)) - Int(0.012 * a.buffer.format.sampleRate)
             var worst: Float = 0
             for i in 0..<max(0, common) { worst = max(worst, abs(pa[i] - pb[i])) }
             #expect(worst < 1e-5, "pad \(a.event.padID): gates differ by \(worst)")

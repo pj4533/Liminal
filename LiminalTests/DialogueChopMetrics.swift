@@ -121,6 +121,20 @@ enum DialogueChopMetrics {
         return m
     }
 
+    /// Consecutive same-piece hits of bars `bars`, as a share of consecutive pairs, leaving out marked
+    /// stutters and pairs that are both the hook's own skeleton hits (D130: the push template plays the
+    /// signature twice by design, and a whole long word leaves no room for a fill between them).
+    static func fillRepeats(_ events: [DialogueEvent], loop: Int, bars: Range<Int>, motif: DialogueMotif) -> Double {
+        let skeleton = Set((motif.hook?.items ?? []).filter(\.skeleton).map { [$0.slot % 32, $0.fragment] })
+        let hits = placed(events, loop: loop).filter { bars.contains($0.s / 16) }
+        guard hits.count > 1 else { return 0 }
+        func onSkeleton(_ h: (s: Int, e: DialogueEvent)) -> Bool { skeleton.contains([h.s % 32, h.e.piece ?? -1]) }
+        let same = zip(hits, hits.dropFirst()).filter { a, b in
+            a.e.piece == b.e.piece && !b.e.stutter && !(onSkeleton(a) && onSkeleton(b))
+        }.count
+        return Double(same) / Double(hits.count - 1)
+    }
+
     /// Jaccard of the (step, piece) hits of bars 3-4 against 5-6 before their last beat, and of bars
     /// 3-4 against bar 7 (the build's first bar replays the groove's call).
     static func recurrence(_ events: [DialogueEvent], loop: Int) -> Double {

@@ -175,24 +175,32 @@ struct DialogueMotifTests {
                 let detail = "\(label): onsets \(m.onsets)"
                 // Intro: the whole line on bar 1's downbeat.
                 #expect(m.introStep == 0, "\(detail), line on step \(m.introStep ?? -1)")
-                // Chop beat: 5 to 7 onsets a bar, short gates, on the 8ths or the drums' steps.
+                // Chop beat: 2 to 7 onsets a bar, short gates, on the 8ths or the drums' steps. D130 replaced
+                // D127's 5 to 7: words play whole, so a stab that cannot finish before the next hit drops
+                // (the fixture's slow speech, about 2.5 words a second, is the low end).
                 let chop = try #require(m.density["chopBeat"])
-                #expect((5.0...7.0).contains(chop), "\(detail)")
-                #expect(m.gateAtMost2 >= 0.7 && m.gateAtMost1 >= 0.25, "\(detail): gates <=2 \(m.gateAtMost2), <=1 \(m.gateAtMost1)")
-                #expect(m.medianSubLineSteps <= 2, "\(detail): sub-line median \(m.medianSubLineSteps) steps")
+                #expect((2.0...7.0).contains(chop), "\(detail)")
+                // D130 replaced "70 percent of gates at most two steps, a quarter at one, a sub-line median of
+                // two steps": a gate that would close inside a word plays to the word's end.
+                #expect(m.gateAtMost2 >= 0.5, "\(detail): gates <=2 \(m.gateAtMost2), <=1 \(m.gateAtMost1)")
+                #expect(m.medianSubLineSteps <= 3, "\(detail): sub-line median \(m.medianSubLineSteps) steps")
                 #expect(m.chopEighths >= 0.8, "\(detail): \(m.chopEighths) on 8ths")
                 // Bars 5-6 replay bars 3-4 but for their last beat.
                 let bars = DialogueHookMetrics.loopHits(loop.events, loop: index)
                 func cell(_ b: Int) -> Set<DialogueHookMetrics.Hit> {
                     Set((bars[b] + bars[b + 1].map { .init(step: $0.step + 16, fragment: $0.fragment) }).filter { $0.step < 28 })
                 }
-                #expect(cell(2) == cell(4), "\(detail): bars 3-4 \(cell(2)) against 5-6 \(cell(4))")
-                // Build: bar 8 busier than bar 7, which is as busy as the chop beat; 16ths into the drop.
-                #expect(m.onsets[7] > m.onsets[6] && Double(m.onsets[6]) >= chop.rounded(.down), "\(detail)")
-                #expect(m.buildTail >= 6, "\(detail): \(m.buildTail) onsets in bar 8's last two beats")
+                // D130 replaced "exactly equal": a hit skipped because it would cut a word can differ between
+                // the two passes (the previous hit differs at the cell's start), as in the variety test.
+                #expect(DialogueHookMetrics.jaccard(cell(2), cell(4)) >= 0.7, "\(detail): bars 3-4 \(cell(2)) against 5-6 \(cell(4))")
+                // Build: at least as busy as the chop beat, with hits into the drop. D130 replaced "bar 8 busier
+                // than bar 7, six onsets in its last two beats": its 1/16 stabs of whole pieces cut words, so
+                // only cuts whole at one step (letters, syllables, short words) or marked rolls stay.
+                #expect(m.onsets[6] + m.onsets[7] >= max(3, 2 * Int(chop.rounded(.down)) - 2), "\(detail)")
                 // Breakdown: a word or two a bar.
                 let breakdown = try #require(m.density["breakdown"])
-                #expect(breakdown <= 2 && breakdown <= 0.4 * chop, "\(detail)")
+                // D130 replaced "at most 0.4 of the chop beat's density" (with 3 to 4 chop-beat onsets a bar).
+                #expect(breakdown <= 2 && breakdown <= 0.7 * chop, "\(detail)")
                 // Outro: the line again, in source order.
                 #expect(m.outroCoverage >= 0.95 && m.outroInOrder, "\(detail): outro covers \(m.outroCoverage), in order \(m.outroInOrder) \(m.outroWalk)")
             }
@@ -252,7 +260,10 @@ struct DialogueMotifTests {
                 let head = DialogueMotif.headHalf(hook.signature, fragments: motif.fragments, halves: motif.halves)
                 let group = Set([hook.signature, head])
                 let own = group.map { counts[$0] ?? 0 }.reduce(0, +)
-                #expect(own >= (counts.filter { !group.contains($0.key) }.values.max() ?? 0), "\(label): counts \(counts)")
+                // D130 replaced "at least as often as any other piece": a signature with no syllable or letter
+                // units no longer has 1/16 halves to count, and a fill next to a signature hit is never the
+                // signature, so the third piece can fill more often. The signature stays within three hits.
+                #expect(own + 3 >= (counts.filter { !group.contains($0.key) }.values.max() ?? 0), "\(label): counts \(counts)")
                 // The signature keeps its home steps: the chop beat's two cells and the build's first bar.
                 let phrase = loop.snapshot.phraseAtOrigin
                 let steps = loop.events.filter { $0.piece == hook.signature }.map { ((($0.block - phrase) * 64 + $0.slot) % 32) }
@@ -454,10 +465,11 @@ struct DialogueMotifTests {
                     #expect(a.frames.upperBound <= b.frames.lowerBound)
                     #expect(b.accentFrame - b.frames.lowerBound <= Int(0.034 * rate), "\(shape): \(b.accentFrame - b.frames.lowerBound) frames before the accent")
                 }
-                // Every fragment is at least 120 ms; cuts never fall inside a vowel nucleus.
+                // Every fragment is at least 120 ms (a syllable or letter 60 ms); cuts never fall inside a vowel nucleus.
                 let vowels = film.fixture.syllables.map { Int(($0.lowerBound + 0.012) * rate)..<Int(($0.upperBound - 0.012) * rate) }
                 for fragment in motif.fragments {
-                    #expect(Double(fragment.frames.count) / rate >= DialogueMotifTuning.minimumPieceSeconds - 1e-6)
+                    let least = fragment.kind == .syllable || fragment.kind == .letter ? DialogueMotifTuning.minimumUnitSeconds : DialogueMotifTuning.minimumPieceSeconds
+                    #expect(Double(fragment.frames.count) / rate >= least - 1e-6)
                     guard fragment.kind != .line else { continue }
                     for edge in [fragment.frames.lowerBound, fragment.frames.upperBound] where edge != line.lowerBound && edge != line.upperBound {
                         #expect(!vowels.contains { $0.contains(edge) }, "\(shape): cut at \(Double(edge) / rate) s inside a vowel")
@@ -475,8 +487,12 @@ struct DialogueMotifTests {
                         #expect(piece.text != nil)
                     }
                 }
-                // At least one piece splits at a syllable into two halves.
-                #expect(!motif.halves.isEmpty, "\(shape): no syllable halves in '\(motif.text ?? "-")'")
+                // D130 replaced "at least one piece splits into two halves": splits are whole units, with a
+                // transcript only the syllables or letters of a salient word, without one halves at a real dip.
+                for unit in motif.halves.values.flatMap({ $0 }) {
+                    let kind = motif.fragments[unit].kind
+                    #expect(motif.usedTranscript ? (kind == .syllable || kind == .letter) : kind == .half, "\(shape): \(kind) unit in '\(motif.text ?? "-")'")
+                }
             }
         }
     }

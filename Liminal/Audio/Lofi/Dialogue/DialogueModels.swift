@@ -86,6 +86,8 @@ nonisolated enum DialogueTuning {
     static let clausePauseSeconds = 0.120
     /// A unit edge this close to a protected span's edge does not count as cutting it.
     static let protectedCutToleranceSeconds = 0.030
+    /// A transcribed line whose edge sits more than this inside a word core is re-added on whole words (D130).
+    static let lineWordEdgeSeconds = 0.030
 
     // MARK: Ranking and bank (plan 4.4, 4.5)
     static let rhythmicFitPool = 6

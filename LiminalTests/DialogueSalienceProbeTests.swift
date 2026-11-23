@@ -92,6 +92,57 @@ struct DialogueSalienceProbeTests {
         return out
     }
 
+    /// The D126 independent onset detector, on the rendered chop: the steepest rise of a 10 ms RMS
+    /// envelope (1 ms hop, in dB) of the 300 Hz to 3.4 kHz band into the first attack of the dry part
+    /// (up to 10 ms after the envelope first comes within 10 dB of the first 300 ms peak), counted only
+    /// where the envelope is within 30 dB of that peak. Milliseconds from the
+    /// event's accent (which includes the feel); nil for a silent or too short chop.
+    static func bandOnsetMs(_ chop: DialogueChop) -> Double? {
+        let e = chop.event
+        guard e.effect != .reversed, let x = chop.buffer.floatChannelData?[0] else { return nil }
+        let sr = chop.buffer.format.sampleRate
+        let n = Int(chop.buffer.frameLength)
+        let dry = min(n, Int(((e.drySeconds ?? (e.effect == .none ? e.duration : Double(n) / sr))) * sr))
+        let limit = min(dry, Int(0.3 * sr))
+        let half = max(1, Int(0.005 * sr)), hop = max(1, Int(0.001 * sr))
+        guard limit > 4 * half else { return nil }
+        // RBJ biquads: a 300 Hz high-pass into a 3.4 kHz low-pass (Q 0.707).
+        func biquad(_ input: [Float], hz: Double, highPass: Bool) -> [Float] {
+            let w = 2 * Double.pi * hz / sr, c = cos(w), alpha = sin(w) / (2 * 0.7071)
+            let b0 = highPass ? (1 + c) / 2 : (1 - c) / 2, b1 = highPass ? -(1 + c) : 1 - c, b2 = b0
+            let a0 = 1 + alpha, a1 = -2 * c, a2 = 1 - alpha
+            var out = [Float](repeating: 0, count: input.count)
+            var x1 = 0.0, x2 = 0.0, y1 = 0.0, y2 = 0.0
+            for i in input.indices {
+                let x0 = Double(input[i])
+                let y0 = (b0 * x0 + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2) / a0
+                out[i] = Float(y0); x2 = x1; x1 = x0; y2 = y1; y1 = y0
+            }
+            return out
+        }
+        let raw = Array(UnsafeBufferPointer(start: x, count: limit + half))
+        let band = biquad(biquad(raw, hz: 300, highPass: true), hz: 3400, highPass: false)
+        var prefix = [Double](repeating: 0, count: band.count + 1)
+        for i in band.indices { prefix[i + 1] = prefix[i] + Double(band[i] * band[i]) }
+        // dB of the 10 ms window centred on frame `c`.
+        func level(_ c: Int) -> Double {
+            let lo = max(0, c - half), hi = min(band.count, c + half)
+            return 10 * log10(max(1e-14, (prefix[hi] - prefix[lo]) / Double(max(1, hi - lo))))
+        }
+        let centres = Array(stride(from: half, to: limit, by: hop))
+        guard let peak = centres.map(level).max(), peak > -100 else { return nil }
+        // The first attack only: up to 10 ms after the envelope first comes within 10 dB of the peak.
+        let reach = centres.first { level($0) >= peak - 10 } ?? limit
+        let end = min(limit - half, reach + 2 * half)
+        var best: (t: Int, rise: Double)?
+        for t in stride(from: 2 * half, to: max(2 * half + 1, end), by: hop) where level(t + half) >= peak - 30 {
+            let rise = level(t + half) - level(t - half)
+            if best == nil || rise > best!.rise { best = (t, rise) }
+        }
+        guard let best else { return nil }
+        return (e.startTime + Double(best.t) / sr - e.accentTime) * 1000
+    }
+
     struct Word {
         let text: String
         let index: Int
@@ -256,6 +307,8 @@ struct DialogueSalienceProbeTests {
                     let seed = baseSeed &+ UInt64(chunk) &* 7919 &+ (clip.id.utf8.reduce(UInt64(0)) { $0 &* 31 &+ UInt64($1) })
                     let bank = DialogueEngine.bank(analysis, transcript: useTranscript, seed: seed)
                     var memory = DialoguePerformanceMemory()
+                    var loopEvents: [Int: [DialogueEvent]] = [:]
+                    var loopMotif: [Int: DialogueMotif] = [:]
                     for piece in 0..<4 {
                         let take = piece / 2
                         let source = DialogueSource(contentID: clip.id, cueToken: piece + 1, buffer: buffer, sourceStart: offset, rate: 1)
@@ -336,10 +389,13 @@ struct DialogueSalienceProbeTests {
                                 origLower[id] = k == 0 ? lineUnitFrames.lowerBound : motif.fragments[motif.pieces[k - 1]].frames.upperBound
                                 lowerKind[id] = k == 0 ? "lineStart" : "pieceCut"
                                 upperKind[id] = k == motif.pieces.count - 1 ? "lineEnd" : "pieceCut"
-                                if let h = motif.halves[id], h.count == 2 {
-                                    origLower[h[0]] = origLower[id]; lowerKind[h[0]] = lowerKind[id]; upperKind[h[0]] = "halfSplit"
-                                    origLower[h[1]] = motif.fragments[h[0]].frames.upperBound; lowerKind[h[1]] = "halfSplit"
-                                    upperKind[h[1]] = upperKind[id]
+                                // Two to four ordered units (halves, syllables or letters) of a piece.
+                                if let h = motif.halves[id], h.count >= 2 {
+                                    for (j, u) in h.enumerated() {
+                                        origLower[u] = j == 0 ? origLower[id] : motif.fragments[h[j - 1]].frames.upperBound
+                                        lowerKind[u] = j == 0 ? lowerKind[id] : "halfSplit"
+                                        upperKind[u] = j == h.count - 1 ? upperKind[id] : "halfSplit"
+                                    }
                                 }
                             }
                             let lineText = motif.text ?? "-"
@@ -347,6 +403,8 @@ struct DialogueSalienceProbeTests {
                             if !chosen.contains(lineKey) { chosen.append(lineKey) }
                             let chops = DialogueChopRenderer.render(part.plan, bank: motif.bank, source: motif.source, analysis: motif.analysis,
                                                                     prerendered: motif.renders)
+                            loopEvents[motif.loop, default: []] += part.plan.events
+                            loopMotif[motif.loop] = motif
                             for (e, event) in part.plan.events.enumerated() {
                                 guard let id = event.piece, motif.fragments.indices.contains(id), let played = event.sourceFrames else { continue }
                                 let fr = motif.fragments[id]
@@ -401,6 +459,12 @@ struct DialogueSalienceProbeTests {
                                     "peak": Self.r3(peak), "preDB": Self.r3(pre - peak), "postDB": Self.r3(post - peak), "tailDB": Self.r3(tail - peak),
                                     "words": covers(accepted), "rawWords": covers(raw),
                                 ]
+                                // Tightness per play (D126 independent detector), sub-line plays only.
+                                if id != 0, motif.isSubLine(id), let chop = chops.first(where: { $0.event == event }),
+                                   let ms = Self.bandOnsetMs(chop) {
+                                    hit["onsetMs"] = Self.r3(ms)
+                                }
+                                if let parent = fr.parent { hit["parentText"] = motif.fragments[parent].text ?? "" }
                                 let sEdge = startEdge(accepted), eEdge = endEdge(accepted)
                                 if let sEdge { hit["startIn"] = sEdge }
                                 if let eEdge { hit["endIn"] = eEdge }
@@ -440,6 +504,42 @@ struct DialogueSalienceProbeTests {
                                 print("SALIENCE-HIT " + Self.json(hit))
                             }
                         }
+                    }
+                    // Variety per loop (D127, `DialogueChopMetrics`): the chop beat's unmarked same-cut
+                    // pairs and longest run, distinct cuts per 2-bar cell of the chop beat and build,
+                    // onsets per bar and dry occupancy per 8-bar section.
+                    for (loop, events) in loopEvents.sorted(by: { $0.key < $1.key }) {
+                        guard let motif = loopMotif[loop] else { continue }
+                        let drums = DialogueChopMetrics.DrumSteps(kicks: [], snares: [])
+                        let chop = events.filter { $0.cell == .chopBeat }.sorted { $0.startTime < $1.startTime }
+                        let same = zip(chop, chop.dropFirst()).filter { $0.piece == $1.piece && !$1.stutter }.count
+                        var run = chop.isEmpty ? 0 : 1, longest = run
+                        for (a, b) in zip(chop, chop.dropFirst()) { run = a.piece == b.piece ? run + 1 : 1; longest = max(longest, run) }
+                        let chopSection = DialogueChopMetrics.section(events, loop: loop, bars: 2..<6, drums: drums)
+                        let buildSection = DialogueChopMetrics.section(events, loop: loop, bars: 6..<8, drums: drums)
+                        let placed = DialogueChopMetrics.placed(events, loop: loop)
+                        let onsets = (0..<16).map { b in placed.filter { $0.s / 16 == b }.count }
+                        let cells = stride(from: 2, to: 8, by: 2).map { b in
+                            Set(placed.filter { $0.s / 16 == b || $0.s / 16 == b + 1 }.compactMap(\.e.piece)).count
+                        }
+                        let section = 32 * beat
+                        func dry(_ e: DialogueEvent) -> Double { Double(e.sourceFrames?.count ?? 0) / rate }
+                        let occupancy = (0..<2).map { k in
+                            Self.r3(placed.filter { $0.s / 128 == k }.map { dry($0.e) }.reduce(0, +) / section)
+                        }
+                        let offered = motif.pieces.count + motif.halves.values.map(\.count).reduce(0, +)
+                        // Without the hook's own skeleton repeats (`DialogueChopMetrics.fillRepeats`).
+                        let chopPlaced = placed.filter { (2..<6).contains($0.s / 16) }
+                        let fillSame = Int((DialogueChopMetrics.fillRepeats(events, loop: loop, bars: 2..<6, motif: motif)
+                            * Double(max(0, chopPlaced.count - 1))).rounded())
+                        let line: [String: Any] = [
+                            "film": clip.id, "chunk": chunk, "mode": mode, "loop": loop, "line": motif.text ?? "-",
+                            "chopHits": chop.count, "chopSame": same, "chopSameFill": fillSame, "chopPairs": max(0, chop.count - 1), "chopLongestRun": longest,
+                            "chopPer2Bars": Self.r3(chopSection.piecesPer2Bars), "chopLeast2Bars": chopSection.leastPer2Bars,
+                            "buildPer2Bars": Self.r3(buildSection.piecesPer2Bars), "cells2Bars": cells,
+                            "onsetsPerBar": onsets, "occupancy": occupancy, "offered": offered, "pieces": motif.pieces.count,
+                        ]
+                        print("SALIENCE-LOOP " + Self.json(line))
                     }
                 }
                 windowLine["chosen"] = chosen

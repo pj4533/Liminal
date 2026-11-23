@@ -70,13 +70,17 @@ nonisolated extension DialogueMotif {
         let s: Int, r: Int, t: Int, sa: Int, sb: Int, ra: Int, rb: Int
         let others: [Int]
 
-        init(s: Int, r: Int, t: Int, sa: Int, ra: Int, pieces: [Int], halves: [Int: [Int]]) {
+        init(s: Int, r: Int, t: Int, sa: Int, ra: Int, pieces: [Int], halves: [Int: [Int]], fragments: [DialogueMotifFragment]? = nil) {
             self.s = s; self.r = r; self.t = t; self.sa = sa; self.ra = ra
             sb = halves[s]?.first { $0 != sa } ?? s
             rb = halves[r]?.first { $0 != ra } ?? r
             let roles: Set<Int> = [s, r, t, sa, ra]
             var rest = pieces.filter { !roles.contains($0) }
             rest += ([t] + rest).flatMap { halves[$0] ?? [] }
+            // D130: no connective fill (weight 0) while the line has a content cut.
+            if let fragments, rest.contains(where: { fragments[$0].weight > 0 }) || [s, r, t].contains(where: { fragments[$0].weight > 0 }) {
+                rest = rest.filter { fragments[$0].weight > 0 }
+            }
             var seen = Set<Int>([s, r, t, sa, sb, ra, rb])
             others = rest.filter { seen.insert($0).inserted }
         }
@@ -132,7 +136,7 @@ nonisolated extension DialogueMotif {
     /// sixteenths (a word and a syllable) and the cell's last response plays out.
     static func groove(template: [(DialogueMotifTuning.HookRole, Int)], vocabulary v: GrooveVocabulary,
                        drums: DialogueMotifDrums, reorderAllowed: Bool, fragments: [DialogueMotifFragment],
-                       sampleRate: Double, seed: UInt64) -> [DialogueMotifCell.Item] {
+                       sampleRate: Double, seed: UInt64, beatDuration: Double = 0) -> [DialogueMotifCell.Item] {
         typealias Item = DialogueMotifCell.Item
         struct Hit { var fragment: Int; var gate: Int?; var skeleton: Bool; var site: FillSite? }
         var rng = MusicRNG(seed: seed ^ 0xD127_C40B)
@@ -170,10 +174,23 @@ nonisolated extension DialogueMotif {
         // Positions. The pickup on the swung "a" goes into one downbeat of the cell (seeded), when it is free.
         let pushBar = rng.int(0...1)
         let jitter = (0..<32).map { _ in rng.range(0...DialogueMotifTuning.grooveJitter) }
+        // D130: whole words are longer than a sixteenth, so a bar takes only as many onsets as its share
+        // of the section's dry budget holds at the hook's typical cut length (at least the skeleton plus
+        // one), the same in both passes of the cell. Before, the budget cut the second pass short.
+        let typical: Double = {
+            guard beatDuration > 0 else { return 0 }
+            let cuts = Array(Set([v.s, v.r, v.t, v.sa, v.sb, v.ra, v.rb] + v.others))
+            return cuts.map { DialogueMotif.cleanSeconds($0, fragments: fragments, sampleRate: sampleRate) }.reduce(0, +) / Double(max(1, cuts.count))
+        }()
+        let budgetHits = typical > 0
+            ? Int((DialogueMotifTuning.grooveBudgetShare * DialogueMotifTuning.maximumSectionOccupancy * 4 * beatDuration / typical).rounded(.down))
+            : DialogueMotifTuning.grooveHits
         for bar in 0..<2 {
             let lo = bar * 16, hi = lo + 16
             let busiest = d.busiestBeat(bar: bar)
-            let target = DialogueMotifTuning.grooveHits - (d.activity(bar: bar) >= DialogueMotifTuning.busyBarSteps ? 1 : 0)
+            let skeleton = hits.keys.filter { $0 >= lo && $0 < hi }.count
+            let target = min(DialogueMotifTuning.grooveHits - (d.activity(bar: bar) >= DialogueMotifTuning.busyBarSteps ? 1 : 0),
+                             max(skeleton + 1, budgetHits))
             func site(_ k: Int) -> FillSite? {
                 if k % 2 == 1 {
                     if k == hi - 1, bar == pushBar, !d.kick[k] { return .push }
@@ -214,6 +231,16 @@ nonisolated extension DialogueMotif {
             }
         }
 
+        // D130: two skeleton hits of the same cut with nothing between them (the push template's signature
+        // twice) take one fill between them, past the bar's budget, so the same cut never plays twice in a row.
+        let skeletonSteps = hits.keys.sorted()
+        for (a, b) in zip(skeletonSteps, skeletonSteps.dropFirst()) where b - a >= 4 && hits[a]!.fragment == hits[b]!.fragment {
+            let between = ((a + 2)...(b - 2)).filter { $0 % 2 == 0 && fits($0) && !d.kick[$0] }
+            if let k = between.min(by: { abs(2 * $0 - a - b) < abs(2 * $1 - a - b) }) {
+                hits[k] = Hit(fragment: -1, gate: nil, skeleton: false, site: d.ghost[k] ? .ghost : .gap)
+            }
+        }
+
         // Pieces, in time order: the site's preferred cut that differs from the hits on either side.
         let steps = hits.keys.sorted()
         // A site no cut fits (a line that may not be reordered) is dropped; it stays out of every later
@@ -243,10 +270,21 @@ nonisolated extension DialogueMotif {
             }
             return orders == orders.sorted()
         }
+        // D130: each stab takes a cut whose first content word ends before the next hit (a whole word,
+        // a letter or a syllable of a salient word), and a stab that leaves the hit before it no room for
+        // its own cut is dropped, so a hit is not choked or gated inside a word.
+        func fits(_ f: Int, _ steps: Int) -> Bool {
+            fitsRoom(f, steps: steps, fragments: fragments, sampleRate: sampleRate, beatDuration: beatDuration)
+        }
         var rotation: [FillSite: Int] = [:]
         for step in steps where !hits[step]!.skeleton {
             let site = hits[step]!.site!
             let live = steps.filter { !dropped.contains($0) }
+            if let p = live.last(where: { $0 < step }), hits[p]!.fragment >= 0, !fits(hits[p]!.fragment, step - p) {
+                dropped.insert(step)
+                continue
+            }
+            let room = (live.first { $0 > step } ?? (32 + (live.first ?? 0))) - step
             let prev = live.last { $0 < step }.map { hits[$0]!.fragment } ?? -1
             let next = (live.first { $0 > step } ?? live.first { $0 != step }).map { hits[$0]!.fragment } ?? -1
             var list = v.preferred(site, fragments: fragments, sampleRate: sampleRate)
@@ -255,8 +293,8 @@ nonisolated extension DialogueMotif {
             let start = (rotation[site] ?? rng.int(0...max(0, min(1, list.count - 1)))) % max(1, list.count)
             list = Array(list[start...] + list[..<start])
             let pool = list + v.preferred(.gap, fragments: fragments, sampleRate: sampleRate)
-            let pick = pool.first { $0 != prev && $0 != next && orderOK(step, $0) }
-                ?? pool.first { $0 != prev && orderOK(step, $0) }
+            let pick = pool.first { $0 != prev && $0 != next && orderOK(step, $0) && fits($0, room) }
+                ?? pool.first { $0 != prev && orderOK(step, $0) && fits($0, room) }
             guard let pick else { dropped.insert(step); continue }
             rotation[site] = start + 1 + (list.firstIndex(of: pick) ?? 0)
             let gate: Int
@@ -280,7 +318,9 @@ nonisolated extension DialogueMotif {
             if let g = h.gate {
                 gate = min(g, max(1, space))
             } else if step == lastResponse {
-                gate = nil
+                // D130: held to the next cell's first hit (it ends at a word end), so the repeat of the
+                // cell is not skipped behind a response still sounding.
+                gate = beatDuration > 0 ? max(1, 32 + (placed.first ?? 0) - step) : nil
             } else if space <= 2 {
                 gate = max(1, space)
             } else if !held, space >= 3, h.fragment == v.s {

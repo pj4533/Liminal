@@ -21,7 +21,16 @@ nonisolated enum DialogueBankBuilder {
         }
         let rejected = Set(rejections.map(\.unit))
         for i in units.indices { units[i].score.rhythmicFit = rhythmicFit(units[i], rate: rate) }
-        let valid = units.filter { !rejected.contains($0.id) && $0.score.sound >= DialogueTuning.minimumPadSound }
+        // With a transcript, no pad whose edge sits inside a word's core (D130: the fallback's pads
+        // played half words at their edges).
+        let tolerance = Int(DialogueTuning.lineWordEdgeSeconds * rate)
+        let transcribed = units.contains { $0.text != nil }
+        func cutsWord(_ u: SpeechUnit) -> Bool {
+            transcribed && words.contains { w in
+                [u.frames.lowerBound, u.frames.upperBound].contains { $0 > w.frames.lowerBound + tolerance && $0 < w.frames.upperBound - tolerance }
+            }
+        }
+        let valid = units.filter { !rejected.contains($0.id) && $0.score.sound >= DialogueTuning.minimumPadSound && !cutsWord($0) }
         func seconds(_ u: SpeechUnit) -> Double { u.seconds(rate) }
 
         /// Sound first (times the line fit for lines). Rhythmic fit only breaks ties within 10

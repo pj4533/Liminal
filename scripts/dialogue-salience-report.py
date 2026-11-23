@@ -15,6 +15,18 @@ Definitions (keep them fixed for before/after comparisons):
   onsetTrim, lineStart/lineEnd; `dropped` when the word was dropped from the accepted words).
 - salient: a heard word weighing >= 0.7 (DialogueLineInterest.wordWeights); lexicon salient >= 0.85, or an
   all-caps 2-5 letter token (an initialism).
+- split fragments: `half` (the pre-D130 syllable halves of any piece), `syllable` (a syllable of a salient
+  multi-syllable word) and `letter` (a letter of an initialism) are splits by design; their audible
+  partials are counted under their own category, never as accidental. The split checks count, over all
+  split plays: halves of function words (every heard word a function word, or an edge inside one), halves
+  inside one-syllable words (an edge inside a word of one syllable by a text count), and initialism cuts
+  off a letter boundary (any play other than a `letter` with an edge inside an initialism).
+- tightness: `onsetMs` of sub-line plays (the D126 independent detector, the steepest rise of a 10 ms log
+  envelope in 300 Hz to 3.4 kHz of the rendered chop, against the accent).
+- variety: `SALIENCE-LOOP` lines (chop-beat unmarked same-cut pairs, longest run, distinct cuts per 2-bar
+  cell, onsets per bar, dry occupancy per 8 bars).
+- strikingPassedOver: loops (T) whose window ranked a line of interest >= 0.6 while the chosen line is at
+  least 0.15 lower.
 """
 import base64
 import collections
@@ -35,8 +47,12 @@ def parse(text, bad):
 
 def load(path):
     hits, windows, snippets, bad = [], [], {}, []
+    global LOOPS
+    LOOPS = []
     for line in open(path, errors="replace"):
-        if line.startswith("SALIENCE-HIT "):
+        if line.startswith("SALIENCE-LOOP "):
+            LOOPS += [x for x in [parse(line[14:], bad)] if x]
+        elif line.startswith("SALIENCE-HIT "):
             hits += [x for x in [parse(line[13:], bad)] if x]
         elif line.startswith("SALIENCE-WINDOW "):
             windows += [x for x in [parse(line[16:], bad)] if x]
@@ -71,8 +87,8 @@ def classify(x):
     e = x.get("endIn") if "endIn" in x and aud_end(x) else None
     if not s and not e:
         return "clean", []
-    if x["kind"] == "half":
-        return "half", []
+    if x["kind"] in SPLIT_KINDS:
+        return x["kind"], []
     if x["stutter"]:
         return "stutter", []
     mechs = []
@@ -80,6 +96,97 @@ def classify(x):
         if edge:
             mechs.append(f"{side}:{edge['mech']}" + (":dropped" if edge["drop"] else ""))
     return "accidental", mechs
+
+
+SPLIT_KINDS = ("half", "syllable", "letter")
+LOOPS = []
+
+
+def syllables(t):
+    w = "".join(c for c in t.lower() if c.isalpha())
+    if not w:
+        return 0
+    if initialism(t):
+        return len("".join(c for c in t if c.isalpha()))
+    groups = re.findall(r"[aeiouy]+", w)
+    n = len(groups)
+    if w.endswith("e") and not w.endswith(("le", "ee", "ye")) and n > 1:
+        n -= 1
+    return max(1, n)
+
+
+def edge_words(x):
+    return [e["word"] for e in (x.get("startIn"), x.get("endIn")) if e]
+
+
+def split_checks(h):
+    fn_texts = {w["t"] for x in h for w in x["words"] if w.get("fn")}
+    function_halves = one_syllable = initial_off = 0
+    for x in h:
+        edges = edge_words(x)
+        if x["kind"] in SPLIT_KINDS:
+            if x["functionOnly"] or any(e in fn_texts for e in edges):
+                function_halves += 1
+            if any(syllables(e) == 1 and not initialism(e) for e in edges):
+                one_syllable += 1
+        if x["kind"] != "letter" and any(initialism(e) for e in edges):
+            initial_off += 1
+    return {"halvesOfFunctionWords": function_halves, "halvesInsideOneSyllableWords": one_syllable,
+            "initialismCutsOffLetter": initial_off}
+
+
+def pct(v, q):
+    if not v:
+        return None
+    s = sorted(v)
+    return round(s[min(len(s) - 1, int(round((len(s) - 1) * q)))], 1)
+
+
+def tightness(h):
+    v = [x["onsetMs"] for x in h if "onsetMs" in x]
+    return {"n": len(v), "median": pct(v, 0.5), "p5": pct(v, 0.05), "p95": pct(v, 0.95),
+            "over35": sum(1 for q in v if abs(q) > 35)}
+
+
+def variety(mode):
+    rows = [r for r in LOOPS if r["mode"] == mode]
+    if not rows:
+        return None
+    def mean(k, sub=None):
+        vals = [r[k] if sub is None else sub(r) for r in rows]
+        return round(sum(vals) / len(vals), 3)
+    pairs = sum(r["chopPairs"] for r in rows)
+    with_three = [r for r in rows if r["offered"] >= 3]
+    chop_bars = [n for r in rows for n in r["onsetsPerBar"][2:6]]
+    build_bars = [n for r in rows for n in r["onsetsPerBar"][6:8]]
+    return {
+        "loops": len(rows),
+        "chopSamePairs": sum(r["chopSame"] for r in rows), "chopPairs": pairs,
+        "chopSameFillPairs": sum(r.get("chopSameFill", 0) for r in rows),
+        "chopSameShare": round(sum(r["chopSame"] for r in rows) / max(1, pairs), 3),
+        "chopLongestRunMax": max(r["chopLongestRun"] for r in rows), "chopLongestRunMean": mean("chopLongestRun"),
+        "chopPer2BarsMean": mean("chopPer2Bars"), "chopLeast2Bars": min(r["chopLeast2Bars"] for r in rows),
+        "cellsUnder3WhereOffered": sum(1 for r in with_three for c in r["cells2Bars"] if c < 3),
+        "cellsWhereOffered": 3 * len(with_three),
+        "onsetsPerBarChop": round(sum(chop_bars) / max(1, len(chop_bars)), 2),
+        "onsetsPerBarBuild": round(sum(build_bars) / max(1, len(build_bars)), 2),
+        "onsetsPerBarAll": round(sum(n for r in rows for n in r["onsetsPerBar"]) / max(1, 16 * len(rows)), 2),
+        "emptyBars": sum(1 for r in rows for n in r["onsetsPerBar"] if n == 0),
+        "occupancyMean": round(sum(o for r in rows for o in r["occupancy"]) / (2 * len(rows)), 3),
+        "occupancyMax": max(o for r in rows for o in r["occupancy"]),
+    }
+
+
+def striking_passed_over(hits, windows):
+    best = {}
+    for w in windows:
+        best[(w["film"], w["chunk"])] = max([l["interest"] for l in w.get("ranked", [])] or [-1])
+    loops = {}
+    for x in hits:
+        if x["mode"] == "T" and x["kind"] != "pad":
+            loops[(x["film"], x["chunk"], x["loop"])] = x["interest"]
+    n = sum(1 for (f, c, _), i in loops.items() if best.get((f, c), -1) >= 0.6 and i <= best[(f, c)] - 0.15)
+    return {"loops": len(loops), "passedOver": n}
 
 
 def norm(t):
@@ -120,6 +227,9 @@ def metrics(hits, windows):
             "audiblePartial": round((cats["half"] + cats["accidental"] + cats["stutter"]) / n, 3),
             "accidentalMechanisms": dict(mechs.most_common()),
             "halfLetterSplits": sum(1 for x in h if x["kind"] == "half" and (x["ftext"].endswith("-") or x["ftext"].startswith("-"))),
+            "splitChecks": split_checks(h),
+            "tightness": tightness(h),
+            "variety": variety(mode),
             "loops": len(loops),
             "untextedLines": sum(1 for v in loops.values() if v[0] == "-"),
             "lineInterestMedian": round(statistics.median(ints), 3) if ints else None,
@@ -150,6 +260,7 @@ def metrics(hits, windows):
             reasons[" | ".join(sorted(why))] += 1
     out["salientWords"] = {"inWindows": total, "inRankedLine": ranked, "inChosenLine": chosen,
                            "unrankedReasons": dict(reasons.most_common())}
+    out["strikingPassedOver"] = striking_passed_over(hits, windows)
     out["windows"] = len(windows)
     out["transcribed"] = sum(w["transcribed"] for w in windows)
     out["transcribeMs"] = [round(q) for q in statistics.quantiles([w["transcribeMs"] for w in windows if w["transcribed"]], n=10)] \
@@ -222,7 +333,9 @@ def main():
                       f"accidental {m['categories'].get('accidental', 0)} half {m['categories'].get('half', 0)} "
                       f"salientHeard {m['salientHeard']} salientWhole {m['salientWhole']} lineInterestMedian {m['lineInterestMedian']}")
                 print(f"     mechanisms {m['accidentalMechanisms']}")
-        print(f"salient words {summary['salientWords']}")
+                print(f"     splits {m['splitChecks']} tightness {m['tightness']}")
+                print(f"     variety {m['variety']}")
+        print(f"salient words {summary['salientWords']} strikingPassedOver {summary['strikingPassedOver']}")
         print(f"wrote {written} WAVs and index.tsv to {bugs}; summary.json in {out}")
 
 

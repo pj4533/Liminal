@@ -181,11 +181,59 @@ nonisolated enum DialogueMotifTuning {
     static let arcChange = 2
     /// Coverage repair tries these sixteenths of an empty bar, in order.
     static let repairSlots = [8, 4, 12, 6, 10, 14, 2, 1, 3, 5, 7, 9, 11, 13, 15]
+
+    // MARK: Whole words (D130; user direction of 22 November 2026: "less chopping of connective words.
+    // Or partial words. It almost sounds like a bug maybe sometimes.")
+
+    /// A word group holds at most this many words and about this long (a function word rides with its
+    /// content word, so a group is "of LSD" or "the old house", never "It's a").
+    static let groupWordLimit = 4
+    static let groupMaximumSeconds = 0.9
+    /// A boundary between word groups (or an acoustic valley cut) is cut only where the sound really
+    /// dips: this far under the lower neighbouring peak, or a quiet run this long (and `realDipRunDB` under
+    /// it). Co-articulated words with no dip between them stay together.
+    static let realDipDB: Float = 9
+    static let realDipRunSeconds = 0.015
+    static let realDipRunDB: Float = 4
+    /// A boundary between two words is searched this far into each word's core (a dip further in is
+    /// inside the word; with no dip near the boundary the words stay together).
+    static let wordTimingSeconds = 0.025
+    /// A piece that merged past this is cut at its deepest word boundary anyway.
+    static let mergedPieceSeconds = 1.1
+    /// An edge more than this inside a word's voiced core cuts the word (the salience probe's 30 ms, less a margin).
+    static let wordCoreToleranceSeconds = 0.025
+    /// Only a word at least this heavy, with two or more syllables by text and nuclei, splits into
+    /// syllables; an initialism splits into letters when its nuclei match its letters.
+    static let syllableWeight: Float = 0.7
+    static let maximumUnits = 4
+    /// A syllable or letter unit keeps at least this much.
+    static let minimumUnitSeconds = 0.060
+    /// A gate that would close inside a word ends at the next word end (or real dip) within this, else
+    /// at the last one before it.
+    static let gateExtendSeconds = 0.30
+    /// The chop beat's share of a bar's dry budget its groove may fill (the line statement, the tags and
+    /// the build share the rest of the section).
+    static let grooveBudgetShare = 0.85
+    /// A cut fits the room before the next hit within this, less the next hit's typical lead.
+    static let fitToleranceSeconds = 0.020
+    static let nextLeadSeconds = 0.030
+    /// An untexted line's interest when the cue has a transcript (under `plainInterest`): it leads only
+    /// when no transcribed line is left.
+    static let untextedInterest: Float = 0.15
+    /// A clamped start may sit at most this far before the accent (a weak first consonant).
+    static let maximumLeadSeconds = 0.090
 }
 
 /// One playable cut of the motif line.
 nonisolated struct DialogueMotifFragment: Sendable, Equatable {
-    enum Kind: String, Sendable { case line, piece, half }
+    /// `half`: a split of a piece at a real dip (no transcript); `syllable`: a syllable of a salient
+    /// multi-syllable word; `letter`: a letter of an initialism (D130).
+    enum Kind: String, Sendable { case line, piece, half, syllable, letter }
+    /// A transcript word inside the fragment: its voiced core (source frames) and weight.
+    struct Word: Sendable, Equatable {
+        let frames: Range<Int>
+        let weight: Float
+    }
     /// Pad id in the motif bank.
     let id: Int
     let kind: Kind
@@ -208,9 +256,22 @@ nonisolated struct DialogueMotifFragment: Sendable, Equatable {
     /// The first syllable is the beat even when it is up to 12 dB under the next one (a transcribed
     /// piece whose first word starts weakly: "re-MEM-ber" plays from "re", never "-member").
     var weakLead = false
-    /// Source frames inside the fragment where a gate may close cleanly: the valleys between its
-    /// syllables and its word ends (D126).
+    /// Source frames inside the fragment where a gate may close cleanly: its word ends with a
+    /// transcript, its real dips without one (D130; before, any syllable valley, D126).
     var cutPoints: [Int] = []
+    /// The transcript words the fragment overlaps (empty without a transcript).
+    var words: [Word] = []
+    /// The loudest 1 ms level inside the fragment (the acoustic "still sounding" test, D130).
+    var peakLevel: Float = 0
+    /// A split unit: the end of the source frames is the next unit's start, so the unit's own end is a
+    /// syllable or letter boundary by design.
+    var isUnit: Bool { kind == .half || kind == .syllable || kind == .letter }
+
+    /// The word core `frame` lies inside by more than `wordCoreToleranceSeconds`, if any.
+    func word(containing frame: Int, rate: Double, contentOnly: Bool = false) -> Word? {
+        let tolerance = Int(DialogueMotifTuning.wordCoreToleranceSeconds * rate)
+        return words.first { (!contentOnly || $0.weight > 0) && $0.frames.lowerBound + tolerance < frame && frame < $0.frames.upperBound - tolerance }
+    }
 }
 
 /// A line that led a loop.
@@ -231,7 +292,7 @@ nonisolated struct DialogueMotifLineUse: Sendable, Equatable {
 nonisolated struct DialogueMotifCell: Sendable, Equatable {
     struct Item: Sendable, Equatable {
         enum Effect: String, Sendable { case none, echoThrow, filtered, reversed }
-        let fragment: Int
+        var fragment: Int
         let slot: Int
         var after: Int? = nil
         var gainDB: Float = 0
@@ -361,6 +422,8 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
     /// The loop's arc, and the previous loop's (which a fresh line in the same loop must also avoid).
     var arc: DialogueArc? = nil
     var priorArc: DialogueArc? = nil
+    /// The beat the loop was arranged at (D130: a hit takes a cut that fits the steps before the next one).
+    var beatDuration: Double = 0
 
     var line: DialogueMotifFragment { fragments[0] }
     /// The chop beat's and build's feel (D127; the grid's own swing for motifs without an arc).
@@ -469,11 +532,11 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
         let arranged = Self.arrange(fragments: fragments, pieces: pieces, halves: halves, reorderAllowed: reorderAllowed,
                                     seed: loopSeed, lineSeconds: seconds(0), sampleRate: sampleRate,
                                     hookSeed: memory.cycleSeed ?? seed, loop: loop, avoidTemplate: hook?.template,
-                                    drums: drums, avoidArc: arc, carried: true)
+                                    drums: drums, avoidArc: arc, carried: true, beatDuration: beatDuration)
         return DialogueMotif(loop: loop, source: source, analysis: analysis, lineUnit: lineUnit, lineKey: lineKey,
                              fragments: fragments, pieces: pieces, halves: halves, bank: bank, usedTranscript: usedTranscript,
                              reorderAllowed: reorderAllowed, cells: arranged.cells, carried: true, seed: loopSeed, interest: interest,
-                             hook: arranged.hook, renders: renders, arc: arranged.arc, priorArc: arc)
+                             hook: arranged.hook, renders: renders, arc: arranged.arc, priorArc: arc, beatDuration: beatDuration)
     }
 
     /// Chooses the best line (or `line` when given), cuts it into pieces and arranges the loop.
@@ -490,7 +553,8 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
             let refined = DialogueHierarchy.refine(analysis, transcript: transcript)
             units = refined.units
             rejections = refined.rejections
-            words = refined.words
+            // A transcript that transcribed no unit changes nothing (D130's word rules included).
+            words = refined.units.contains { $0.text != nil } ? refined.words : []
         }
         let rate = analysis.sampleRate
         let maximum = min(DialogueMotifTuning.lineSeconds.upperBound, DialogueMotifTuning.lineMaximumBars * 4 * beatDuration)
@@ -548,15 +612,17 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
         guard line.frames.lowerBound >= 0, line.frames.upperBound <= count else { return nil }
         let lineIndices = words.indices.filter { line.frames.contains((words[$0].frames.lowerBound + words[$0].frames.upperBound) / 2) }
         let lineWords = lineIndices.map { words[$0] }
-        var cutter = Cutter(f: f, samples: samples, count: count, rate: rate)
-        guard let cut = cutter.cut(line, words: lineWords) else { return nil }
-        // Fragment weights: the strongest word inside each cut (the hook layer's signature piece).
+        var cutter = DialogueMotifCutter(f: f, samples: samples, count: count, rate: rate)
+        guard let cut = cutter.cut(line, words: lineWords, weights: lineIndices.map { weights.indices.contains($0) ? weights[$0] : 0 }) else { return nil }
+        // Fragment weights: the strongest word inside each cut (the hook layer's signature piece); a
+        // syllable or letter carries its word's weight.
         var fragments = cut.fragments
         if !lineIndices.isEmpty {
             for k in fragments.indices {
                 let frames = fragments[k].frames
-                fragments[k].weight = lineIndices.filter { frames.contains((words[$0].frames.lowerBound + words[$0].frames.upperBound) / 2) }
-                    .map { weights[$0] }.max() ?? 0
+                let inside = lineIndices.filter { frames.contains((words[$0].frames.lowerBound + words[$0].frames.upperBound) / 2) }
+                let overlapping = lineIndices.filter { words[$0].frames.overlaps(frames) }
+                fragments[k].weight = (inside.isEmpty && fragments[k].isUnit ? overlapping : inside).map { weights[$0] }.max() ?? 0
             }
         }
         let lineInterest = interest(of: line, words: words, weights: weights)
@@ -572,7 +638,7 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
         let arranged = arrange(fragments: fragments, pieces: cut.pieces, halves: cut.halves, reorderAllowed: reorderAllowed,
                                seed: loopSeed, lineSeconds: Double(line.frames.count) / rate, sampleRate: rate,
                                hookSeed: memory.cycleSeed ?? seed, loop: loop, anchors: anchors, drums: drums,
-                               keepArc: previous?.arc, avoidArc: prior)
+                               keepArc: previous?.arc, avoidArc: prior, beatDuration: beatDuration)
         // The arranged pieces (and the line) take their accents from their renders; a piece only coverage
         // repair may pick keeps its source accent and renders when played.
         let used = Set(arranged.cells.flatMap { $0.items.map(\.fragment) } + [0])
@@ -584,7 +650,7 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
                              fragments: fragments, pieces: cut.pieces, halves: cut.halves, bank: bank,
                              usedTranscript: lineWords.count >= 2, reorderAllowed: reorderAllowed, cells: arranged.cells,
                              carried: false, seed: loopSeed, interest: lineInterest, hook: arranged.hook, renders: rendered.renders,
-                             arc: arranged.arc, priorArc: prior)
+                             arc: arranged.arc, priorArc: prior, beatDuration: beatDuration)
     }
 
     /// A line's words for the said-once rule: lowercased letters, digits and spaces.
@@ -592,10 +658,12 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
         text.lowercased().filter { $0.isLetter || $0.isNumber || $0 == " " }.split(separator: " ").joined(separator: " ")
     }
 
-    /// A line's interest: from its words when it has text, else `acousticInterest`.
+    /// A line's interest: from its words when it has text; without text `acousticInterest` when the cue
+    /// has no transcript, else `untextedInterest` (D130: an untexted unit led a quarter of the transcribed
+    /// loops over plain transcribed lines, and its pieces were cut with no word boundaries).
     static func interest(of u: SpeechUnit, words: [DialogueWordSpan], weights: [Float]) -> Float {
         guard u.text != nil, let r = u.tokenRange, r.lowerBound >= 0, r.upperBound <= words.count, weights.count == words.count,
-              !r.isEmpty else { return DialogueMotifTuning.acousticInterest }
+              !r.isEmpty else { return words.isEmpty ? DialogueMotifTuning.acousticInterest : DialogueMotifTuning.untextedInterest }
         return DialogueLineInterest.interest(words: words[r], weights: weights[r], text: u.text)
     }
 
@@ -786,8 +854,9 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
 
 // MARK: - Cutting
 
-/// Splits a line into word-group pieces and syllable halves at energy minima (plan 5, motif).
-private nonisolated struct Cutter {
+/// Splits a line into word-group pieces, each with a content word, cut only at real dips, and splits a
+/// salient word into its syllables or an initialism into its letters (plan 5, motif; D130).
+nonisolated struct DialogueMotifCutter {
     let f: DialogueFeatures
     let samples: UnsafePointer<Float>
     let count: Int
@@ -864,50 +933,283 @@ private nonisolated struct Cutter {
         return frames(burst ? DialogueMotifTuning.burstFadeInSeconds : DialogueMotifTuning.fadeInSeconds)
     }
 
-    mutating func cut(_ line: SpeechUnit, words: [DialogueWordSpan]) -> Result? {
+    /// The loudest 1 ms level inside `range`, in dB.
+    func peakDB(_ range: Range<Int>) -> Float {
+        let lo = f.fineIndex(frame: max(0, range.lowerBound)), hi = f.fineIndex(frame: max(range.lowerBound, range.upperBound - 1))
+        return dB(hi >= lo ? (f.fine[lo...hi].max() ?? 0) : level(range.lowerBound))
+    }
+
+    /// The time the 1 ms envelope stays within 3 dB of its level at `frame`, inside `bounds`.
+    func quietRun(_ frame: Int, bounds: Range<Int>) -> Double {
+        let floor = dB(level(frame)) + 3
+        let lo = f.fineIndex(frame: bounds.lowerBound), hi = f.fineIndex(frame: max(bounds.lowerBound, bounds.upperBound - 1))
+        var a = f.fineIndex(frame: frame), b = a
+        while a > lo, dB(f.fine[a - 1]) <= floor { a -= 1 }
+        while b < hi, dB(f.fine[b + 1]) <= floor { b += 1 }
+        return Double((b - a + 1) * f.fineHop) / rate
+    }
+
+    /// A real dip between two sounds (D130): `realDipDB` under the lower neighbouring peak, or a quiet
+    /// run of `realDipRunSeconds` at least `realDipRunDB` under it. A syllable dip inside a
+    /// co-articulated word is neither.
+    static func isRealDip(depth: Float, run: Double) -> Bool {
+        depth >= DialogueMotifTuning.realDipDB
+            || (run >= DialogueMotifTuning.realDipRunSeconds && depth >= DialogueMotifTuning.realDipRunDB)
+    }
+
+    /// A real dip without a transcript. A stricter rule (12 dB for 25 ms, or a 60 ms pause) halved the
+    /// acoustic plan's hits and left bars empty on the cached films (salience probe, 23 November 2026).
+    static func isAcousticGap(depth: Float, run: Double) -> Bool { isRealDip(depth: depth, run: run) }
+
+    /// The zero crossing nearest `frame` within 2 ms, inside `bounds`.
+    func zero(_ frame: Int, bounds: Range<Int>) -> Int {
+        let z = frames(DialogueMotifTuning.zeroCrossingSeconds)
+        var best = frame, distance = Int.max
+        let lo = max(max(1, bounds.lowerBound), frame - z), hi = min(min(count, bounds.upperBound), frame + z)
+        guard hi > lo else { return frame }
+        for i in lo..<hi where (samples[i - 1] <= 0) != (samples[i] <= 0) {
+            if abs(i - frame) < distance { distance = abs(i - frame); best = i }
+        }
+        return best
+    }
+
+    /// The boundary between two neighbouring words: the quietest frame between their cores, searched
+    /// only `wordTimingSeconds` into each word (never past its middle), how deep it dips under the
+    /// quieter word's peak, and whether that is a real dip.
+    func boundary(_ a: DialogueWordSpan, _ b: DialogueWordSpan) -> (frame: Int, depth: Float, real: Bool) {
+        let slack = frames(DialogueMotifTuning.wordTimingSeconds)
+        let midA = (a.frames.lowerBound + a.frames.upperBound) / 2, midB = (b.frames.lowerBound + b.frames.upperBound) / 2
+        let lo = max(midA, min(a.frames.upperBound, b.frames.lowerBound) - slack)
+        let hi = min(midB, max(b.frames.lowerBound, a.frames.upperBound) + slack)
+        guard hi > lo + 1 else { return ((a.frames.upperBound + b.frames.lowerBound) / 2, 0, false) }
+        let q = quietest(lo..<hi)
+        let depth = min(peakDB(a.frames), peakDB(b.frames)) - dB(level(q))
+        let real = Self.isRealDip(depth: depth, run: quietRun(q, bounds: lo..<hi))
+        return (zero(q, bounds: lo..<hi), depth, real)
+    }
+
+    /// Word groups that each carry a content word (D130): a function word rides with the next content
+    /// word, or the previous one when a pause of `groupPauseSeconds` follows it (the largest pause of a
+    /// run of function words decides) or the line ends; a group shorter than `groupJoinSeconds` takes
+    /// its neighbour while it stays within `groupWordLimit` words and `groupMaximumSeconds`. A line of
+    /// function words only groups by length as before.
+    static func wordGroups(_ words: [DialogueWordSpan], weights: [Float], rate: Double) -> [[Int]] {
+        let n = words.count
+        guard n > 0 else { return [] }
+        func pause(_ i: Int) -> Double {
+            i + 1 < n ? Double(words[i + 1].frames.lowerBound - words[i].frames.upperBound) / rate : .infinity
+        }
+        func length(_ g: [Int]) -> Double { Double(words[g.last!].frames.upperBound - words[g.first!].frames.lowerBound) / rate }
+        var head = (0..<n).map { weights.indices.contains($0) && weights[$0] > 0 ? $0 : -1 }
+        var groups: [[Int]] = []
+        if head.allSatisfy({ $0 < 0 }) {
+            groups = [[0]]
+            for i in 1..<n {
+                let g = groups[groups.count - 1]
+                if length(g) < DialogueMotifTuning.groupJoinSeconds, g.count < DialogueMotifTuning.groupMaximumWords,
+                   pause(g.last!) < DialogueMotifTuning.groupPauseSeconds {
+                    groups[groups.count - 1].append(i)
+                } else {
+                    groups.append([i])
+                }
+            }
+            return groups
+        }
+        var i = 0
+        while i < n {
+            guard head[i] < 0 else { i += 1; continue }
+            var j = i
+            while j < n, head[j] < 0 { j += 1 }
+            // Function words i..<j between content words i - 1 and j: the ones before the largest
+            // pause (when it is a real pause) ride back, the rest forward.
+            let split: Int
+            if i == 0 { split = 0 } else if j == n { split = n } else {
+                let widest = ((i - 1)..<j).max { pause($0) < pause($1) }!
+                split = pause(widest) >= DialogueMotifTuning.groupPauseSeconds ? widest + 1 : i
+            }
+            for k in i..<j { head[k] = k < split ? head[i - 1] : j }
+            i = j
+        }
+        for k in 0..<n {
+            if let last = groups.last, head[last.last!] == head[k] { groups[groups.count - 1].append(k) } else { groups.append([k]) }
+        }
+        // A group past the limits keeps its content word with up to `groupWordLimit` words around it
+        // (the word before it first: "of LSD"); the function words left over group by length.
+        func lengthGroups(_ run: [Int]) -> [[Int]] {
+            var out: [[Int]] = []
+            for i in run {
+                if let g = out.last, length(g) < DialogueMotifTuning.groupJoinSeconds, g.count < DialogueMotifTuning.groupMaximumWords,
+                   pause(g.last!) < DialogueMotifTuning.groupPauseSeconds {
+                    out[out.count - 1].append(i)
+                } else {
+                    out.append([i])
+                }
+            }
+            return out
+        }
+        groups = groups.flatMap { g -> [[Int]] in
+            guard g.count > DialogueMotifTuning.groupWordLimit || (g.count > 1 && length(g) > DialogueMotifTuning.groupMaximumSeconds),
+                  let c = g.first(where: { head[$0] == $0 }) else { return [g] }
+            var lo = c, hi = c
+            func fitsWindow(_ a: Int, _ b: Int) -> Bool {
+                b - a + 1 <= DialogueMotifTuning.groupWordLimit && length(Array(a...b)) <= DialogueMotifTuning.groupMaximumSeconds
+            }
+            var grew = true
+            while grew {
+                grew = false
+                if lo > g.first!, pause(lo - 1) < DialogueMotifTuning.groupPauseSeconds, fitsWindow(lo - 1, hi) { lo -= 1; grew = true }
+                if hi < g.last!, pause(hi) < DialogueMotifTuning.groupPauseSeconds, fitsWindow(lo, hi + 1) { hi += 1; grew = true }
+            }
+            let before = g.filter { $0 < lo }, after = g.filter { $0 > hi }
+            return (before.isEmpty ? [] : lengthGroups(before)) + [Array(lo...hi)] + (after.isEmpty ? [] : lengthGroups(after))
+        }
+        // Short groups join a neighbour (the next one first) inside the limits.
+        // A group of function words only may join up to `mergedPieceSeconds` (better a long piece than a
+        // connective one); two content groups up to `groupMaximumSeconds`.
+        func joinable(_ a: [Int], _ b: [Int]) -> Bool {
+            let connective = a.allSatisfy { head[$0] != $0 } || b.allSatisfy { head[$0] != $0 }
+            return a.count + b.count <= DialogueMotifTuning.groupWordLimit + (connective ? 1 : 0)
+                && length(a + b) <= (connective ? DialogueMotifTuning.mergedPieceSeconds : DialogueMotifTuning.groupMaximumSeconds)
+                && pause(a.last!) < DialogueMotifTuning.groupPauseSeconds
+        }
+        var k = 0
+        while k < groups.count {
+            if length(groups[k]) < DialogueMotifTuning.groupJoinSeconds || groups[k].allSatisfy({ head[$0] != $0 }) {
+                if k + 1 < groups.count, joinable(groups[k], groups[k + 1]) {
+                    let next = groups.remove(at: k + 1)
+                    groups[k] += next
+                    continue
+                }
+                if k > 0, joinable(groups[k - 1], groups[k]) {
+                    let this = groups.remove(at: k)
+                    groups[k - 1] += this
+                    k -= 1
+                    continue
+                }
+            }
+            k += 1
+        }
+        return groups
+    }
+
+    /// The vowel groups of a word, counting a silent final "e" out: "psilocybin" 4, "trip" 1, "frogs" 1.
+    static func textSyllables(_ word: String) -> Int { syllableSpans(word).count }
+
+    private static func syllableSpans(_ word: String) -> [Range<Int>] {
+        let letters = Array(word.lowercased().filter(\.isLetter))
+        func vowel(_ c: Character) -> Bool { "aeiouy".contains(c) }
+        var groups: [Range<Int>] = []
+        var k = 0
+        while k < letters.count {
+            if vowel(letters[k]) {
+                var e = k
+                while e < letters.count, vowel(letters[e]) { e += 1 }
+                groups.append(k..<e)
+                k = e
+            } else { k += 1 }
+        }
+        if groups.count > 1, let last = groups.last, last.count == 1, letters[last.lowerBound] == "e",
+           last.upperBound == letters.count, letters.count >= 3, !(letters[letters.count - 2] == "l" && !vowel(letters[letters.count - 3])) {
+            groups.removeLast()
+        }
+        return groups
+    }
+
+    /// A word's text in `count` syllable parts, hyphenated ("psi-", "-lo-", "-cy-", "-bin").
+    static func syllableTexts(_ word: String, count: Int) -> [String] {
+        let letters = Array(word)
+        let index = letters.indices.filter { letters[$0].isLetter }
+        let groups = syllableSpans(word)
+        guard count >= 2, groups.count >= 2, !index.isEmpty else { return [word] }
+        // Letter positions where a syllable starts: before the last consonant between two vowel groups.
+        var starts: [Int] = []
+        for (a, b) in zip(groups, groups.dropFirst()) {
+            let consonants = b.lowerBound - a.upperBound
+            starts.append(consonants <= 1 ? a.upperBound : a.upperBound + 1)
+        }
+        // Keep `count - 1` evenly spread starts.
+        let picked = (1..<count).map { starts[min(starts.count - 1, ($0 * starts.count) / count)] }
+        var parts: [String] = []
+        var from = 0
+        for s in Array(Set(picked)).sorted() + [index.count] where s > from {
+            let lo = index[from], hi = s < index.count ? index[s] : letters.count
+            parts.append(String(letters[lo..<hi]))
+            from = s
+        }
+        guard parts.count >= 2 else { return [word] }
+        return parts.enumerated().map { k, p in (k > 0 ? "-" : "") + p + (k < parts.count - 1 ? "-" : "") }
+    }
+
+    /// The letters of an initialism ("LSD", "UFO.", "U.F.O.", "TV"), else nil.
+    static func initialism(_ raw: String) -> String? {
+        let letters = raw.filter(\.isLetter)
+        guard (2...5).contains(letters.count), letters.allSatisfy(\.isUppercase), letters != "OK",
+              raw.allSatisfy({ $0.isLetter || ".,!?;:'\u{2019}-".contains($0) }) else { return nil }
+        return String(letters)
+    }
+
+    mutating func cut(_ line: SpeechUnit, words: [DialogueWordSpan], weights: [Float]) -> Result? {
         let span = line.frames
         let minimum = frames(DialogueMotifTuning.minimumCutSeconds)
         var cuts: [Int] = []
         var texts: [String?] = []
+        let weights = words.indices.map { weights.indices.contains($0) ? weights[$0] : 0 }
         if words.count >= 2 {
-            // Word groups: a short group takes the next word (three at most) unless a pause separates them.
-            var groups: [[DialogueWordSpan]] = [[words[0]]]
-            for w in words.dropFirst() {
-                let g = groups[groups.count - 1]
-                let length = Double(g.last!.frames.upperBound - g.first!.frames.lowerBound) / rate
-                let pause = Double(w.frames.lowerBound - g.last!.frames.upperBound) / rate
-                if length < DialogueMotifTuning.groupJoinSeconds, g.count < DialogueMotifTuning.groupMaximumWords,
-                   pause < DialogueMotifTuning.groupPauseSeconds {
-                    groups[groups.count - 1].append(w)
-                } else {
-                    groups.append([w])
+            // Word groups that carry a content word, cut only where the sound dips between them (D130).
+            var groups = Self.wordGroups(words, weights: weights, rate: rate)
+            // A one-group line splits at its deepest word boundary (a line needs two pieces).
+            if groups.count == 1, let k = (0..<(words.count - 1)).max(by: { boundary(words[$0], words[$0 + 1]).depth < boundary(words[$1], words[$1 + 1]).depth }) {
+                groups = [Array(0...k), Array((k + 1)..<words.count)]
+            }
+            let bounds = zip(groups, groups.dropFirst()).map { a, b in boundary(words[a.last!], words[b.first!]) }
+            var cutAt = bounds.map(\.real)
+            // A merged piece longer than `mergedPieceSeconds` is cut at its deepest boundary anyway.
+            var changed = true
+            while changed {
+                changed = false
+                var first = 0
+                for k in 0...bounds.count where k == bounds.count || cutAt[k] {
+                    let lo = words[groups[first].first!].frames.lowerBound, hi = words[groups[k].last!].frames.upperBound
+                    let inner = (first..<k).filter { !cutAt[$0] }
+                    if Double(hi - lo) / rate > DialogueMotifTuning.mergedPieceSeconds,
+                       let deepest = inner.max(by: { bounds[$0].depth < bounds[$1].depth }) {
+                        cutAt[deepest] = true
+                        changed = true
+                        break
+                    }
+                    first = k + 1
                 }
             }
-            for (a, b) in zip(groups, groups.dropFirst()) {
-                let lo = a.last!.frames.upperBound, hi = b.first!.frames.lowerBound
-                let guess = hi > lo ? quietest(lo..<hi) : (lo + hi) / 2
-                cuts.append(snap(guess, bounds: (a.first!.frames.lowerBound + 1)..<max(a.first!.frames.lowerBound + 2, b.last!.frames.upperBound - 1)))
+            // At least one cut, so the line has pieces.
+            if !cutAt.contains(true), let deepest = bounds.indices.max(by: { bounds[$0].depth < bounds[$1].depth }) { cutAt[deepest] = true }
+            cuts = bounds.indices.filter { cutAt[$0] }.map { bounds[$0].frame }
+            var current: [String] = []
+            for (k, g) in groups.enumerated() {
+                current += g.map { words[$0].text }
+                if k == groups.count - 1 || cutAt[k] { texts.append(current.joined(separator: " ")); current = [] }
             }
-            texts = groups.map { $0.map(\.text).joined(separator: " ") }
         } else {
-            // Acoustic: the deepest and longest valleys between syllable nuclei, about one cut per 0.4 s.
+            // Acoustic: the deepest and longest real dips between syllable nuclei, about one cut per 0.4 s
+            // (D130: only real dips; before, any valley, which split words in two).
             let seconds = Double(span.count) / rate
             let target = min(DialogueMotifTuning.pieceCount.upperBound,
                              max(DialogueMotifTuning.pieceCount.lowerBound, Int((seconds / DialogueMotifTuning.pieceSeconds).rounded())))
-            let ranked = valleys(span).sorted { ($0.depth + 40 * Float($0.run)) > ($1.depth + 40 * Float($1.run)) }
-            for v in ranked where cuts.count < target - 1 {
-                let c = snap(v.frame, bounds: span)
+            let all = valleys(span).sorted { ($0.depth + 40 * Float($0.run)) > ($1.depth + 40 * Float($1.run)) }
+            let real = all.filter { Self.isAcousticGap(depth: $0.depth, run: $0.run) }
+            for v in (real.isEmpty ? Array(all.prefix(1)) : real) where cuts.count < target - 1 {
+                let c = zero(v.frame, bounds: span)
                 if c - span.lowerBound >= minimum, span.upperBound - c >= minimum, cuts.allSatisfy({ abs($0 - c) >= minimum }) {
                     cuts.append(c)
                 }
             }
-            // A piece that is still long is cut again at its deepest inner valley.
+            // A piece that is still long is cut again at its deepest inner real dip.
             var changed = true
             while changed {
                 changed = false
                 let edges = [span.lowerBound] + cuts.sorted() + [span.upperBound]
                 for (lo, hi) in zip(edges, edges.dropFirst()) where Double(hi - lo) / rate > DialogueMotifTuning.maximumPieceSeconds {
-                    let inner = valleys(lo..<hi).map { (snap($0.frame, bounds: lo..<hi), $0.depth) }
+                    let inner = valleys(lo..<hi).filter { Self.isAcousticGap(depth: $0.depth, run: $0.run) }
+                        .map { (zero($0.frame, bounds: lo..<hi), $0.depth) }
                         .filter { $0.0 - lo >= minimum && hi - $0.0 >= minimum }
                     if let best = inner.max(by: { $0.1 < $1.1 }) { cuts.append(best.0); changed = true; break }
                 }
@@ -937,45 +1239,94 @@ private nonisolated struct Cutter {
                 text: texts.indices.contains(k) ? texts[k] : nil))
             pieces.append(id)
         }
-        // Syllable halves of long pieces: the valley between nuclei closest to the middle, both sides >= 120 ms.
+        // Split units (D130). With a transcript only a salient word of two or more syllables splits, into
+        // its syllables at the valleys between its nuclei, and an initialism into its letters when it has
+        // one nucleus per letter; never a function word, a one-syllable word, or across words. Without
+        // one, a long piece splits in two only at a real dip (a word or syllable gap). Before D130 every
+        // piece of 0.26 s or more was halved at the valley nearest its middle ("tr-" | "-ip", "UF-" | "-O").
         var halves: [Int: [Int]] = [:]
         let least = frames(DialogueMotifTuning.minimumPieceSeconds)
+        let leastUnit = frames(DialogueMotifTuning.minimumUnitSeconds)
         for id in pieces {
             let piece = fragments[id]
             let r = piece.frames
-            guard Double(r.count) / rate >= DialogueMotifTuning.splitPieceSeconds else { continue }
-            let mid = Double(r.lowerBound + r.upperBound) / 2
-            let side = max(least, Int(DialogueMotifTuning.minimumHalfShare * Double(r.count)))
-            let options = valleys(r).filter { $0.frame - r.lowerBound >= side && r.upperBound - $0.frame >= side }
-            func value(_ v: (frame: Int, depth: Float, run: Double)) -> Float {
-                v.depth - 24 * Float(abs(Double(v.frame) - mid) / Double(r.count))
+            var units: [(frames: Range<Int>, text: String?)] = []
+            var kind = DialogueMotifFragment.Kind.half
+            if !words.isEmpty {
+                var best: (weight: Float, units: [(frames: Range<Int>, text: String?)], kind: DialogueMotifFragment.Kind)?
+                for k in words.indices where weights[k] >= DialogueMotifTuning.syllableWeight
+                    && r.contains((words[k].frames.lowerBound + words[k].frames.upperBound) / 2) {
+                    let w = words[k]
+                    guard !DialogueLineInterest.functionWords.contains(DialogueLineInterest.normalize(w.text)) else { continue }
+                    let core = max(w.frames.lowerBound, r.lowerBound)..<min(w.frames.upperBound, r.upperBound)
+                    let inner = valleys(core)
+                    let n = nuclei(core).count
+                    var cutFrames: [Int] = []
+                    var parts: [String] = []
+                    let unitKind: DialogueMotifFragment.Kind
+                    if let letters = Self.initialism(w.text) {
+                        guard n == letters.count, inner.count == n - 1 else { continue }
+                        cutFrames = inner.map(\.frame)
+                        parts = letters.map(String.init)
+                        unitKind = .letter
+                    } else {
+                        let syllables = Self.textSyllables(w.text)
+                        let units = min(syllables, n, DialogueMotifTuning.maximumUnits)
+                        guard syllables >= 2, units >= 2, inner.count >= units - 1 else { continue }
+                        cutFrames = inner.sorted { $0.depth > $1.depth }.prefix(units - 1).map(\.frame)
+                        parts = Self.syllableTexts(w.text, count: units)
+                        unitKind = .syllable
+                    }
+                    let bounds = [core.lowerBound] + cutFrames.sorted().map { zero($0, bounds: core) } + [core.upperBound]
+                    guard zip(bounds, bounds.dropFirst()).allSatisfy({ $1 - $0 >= leastUnit }) else { continue }
+                    let ranges = zip(bounds, bounds.dropFirst()).map { $0..<$1 }
+                    let candidate = ranges.enumerated().map { (frames: $1, text: parts.count == ranges.count ? Optional(parts[$0]) : nil) }
+                    // The heaviest such word of the piece; the later one on ties (the sentence stress).
+                    if best == nil || weights[k] >= best!.weight { best = (weights[k], candidate, unitKind) }
+                }
+                if let best { units = best.units; kind = best.kind }
+            } else if Double(r.count) / rate >= DialogueMotifTuning.splitPieceSeconds {
+                let mid = Double(r.lowerBound + r.upperBound) / 2
+                let side = max(least, Int(DialogueMotifTuning.minimumHalfShare * Double(r.count)))
+                let options = valleys(r).filter { $0.frame - r.lowerBound >= side && r.upperBound - $0.frame >= side
+                    && Self.isAcousticGap(depth: $0.depth, run: $0.run) }
+                func value(_ v: (frame: Int, depth: Float, run: Double)) -> Float {
+                    v.depth - 24 * Float(abs(Double(v.frame) - mid) / Double(r.count))
+                }
+                if let best = options.max(by: { value($0) < value($1) }) {
+                    let c = zero(best.frame, bounds: (r.lowerBound + least)..<(r.upperBound - least))
+                    units = [(r.lowerBound..<c, nil), (c..<r.upperBound, nil)]
+                }
             }
-            guard let best = options.max(by: { value($0) < value($1) }) else { continue }
-            let c = snap(best.frame, bounds: (r.lowerBound + least)..<(r.upperBound - least))
-            let (ta, tb) = Self.split(piece.text, at: Double(c - r.lowerBound) / Double(r.count),
-                                      words: words.filter { r.contains(($0.frames.lowerBound + $0.frames.upperBound) / 2) }, cut: c)
-            let a = DialogueMotifFragment(id: fragments.count, kind: .half, order: piece.order, parent: id,
-                                          frames: r.lowerBound..<c, accentFrame: accent(r.lowerBound..<c),
-                                          fadeIn: piece.fadeIn, fadeOut: min(fadeOut, (c - r.lowerBound) / 4), text: ta)
-            fragments.append(a)
-            let b = DialogueMotifFragment(id: fragments.count, kind: .half, order: piece.order, parent: id,
-                                          frames: c..<r.upperBound, accentFrame: accent(c..<r.upperBound),
-                                          fadeIn: fadeIn(at: c), fadeOut: piece.fadeOut, text: tb)
-            fragments.append(b)
-            halves[id] = [a.id, b.id]
+            guard units.count >= 2 else { continue }
+            var ids: [Int] = []
+            for (j, u) in units.enumerated() {
+                let first = u.frames.lowerBound == r.lowerBound, last = u.frames.upperBound == r.upperBound
+                let unit = DialogueMotifFragment(
+                    id: fragments.count, kind: kind, order: piece.order, parent: id, frames: u.frames, accentFrame: accent(u.frames),
+                    fadeIn: first ? piece.fadeIn : fadeIn(at: u.frames.lowerBound),
+                    fadeOut: last && j == units.count - 1 ? piece.fadeOut : min(fadeOut, u.frames.count / 4), text: u.text)
+                fragments.append(unit)
+                ids.append(unit.id)
+            }
+            halves[id] = ids
         }
-        return Result(fragments: trimmed(fragments, words: words), pieces: pieces, halves: halves)
+        return Result(fragments: trimmed(fragments, words: words, weights: weights), pieces: pieces, halves: halves)
     }
 
     /// Every fragment starts at its waveform onset and lands its attack on the step (D126): the
     /// valley-started pads played breath, room tone and the consonant up to 130 ms before the step,
-    /// and a weak first syllable put the heard attack up to 175 ms after it (D125 captures).
-    func trimmed(_ fragments: [DialogueMotifFragment], words: [DialogueWordSpan]) -> [DialogueMotifFragment] {
+    /// and a weak first syllable put the heard attack up to 175 ms after it (D125 captures). D130: a
+    /// transcribed fragment never starts inside a word; a start that would is clamped to the word's
+    /// start, the detected attack staying the accent unless that leaves more than `maximumLeadSeconds`
+    /// before it, when the word's first syllable is the beat instead.
+    func trimmed(_ fragments: [DialogueMotifFragment], words: [DialogueWordSpan], weights: [Float]) -> [DialogueMotifFragment] {
         guard let line = fragments.first else { return fragments }
         let context = frames(0.2)
         let envelope = DialogueOnsetEnvelope(samples: samples, count: count, rate: rate,
                                              span: max(0, line.frames.lowerBound - context)..<min(count, line.frames.upperBound))
         let least = frames(DialogueMotifTuning.minimumPieceSeconds)
+        let slack = frames(DialogueMotifTuning.wordStartSlackSeconds)
         let wordEnds = words.map(\.frames.upperBound)
         return fragments.map { fr in
             var out = fr
@@ -984,7 +1335,6 @@ private nonisolated struct Cutter {
             // A transcribed piece never starts inside a word: a weak first syllable is then the beat (the
             // sound starts on the step) instead of being trimmed off. Whole weak lead words ("to the"
             // before "time") may still go.
-            let slack = frames(DialogueMotifTuning.wordStartSlackSeconds)
             if fr.kind != .line, words.contains(where: { $0.frames.lowerBound >= fr.frames.lowerBound - slack
                     && attack.startFrame > max($0.frames.lowerBound, fr.frames.lowerBound) + slack
                     && attack.startFrame < $0.frames.upperBound - slack }) {
@@ -993,20 +1343,44 @@ private nonisolated struct Cutter {
                 out.weakLead = true
             }
             if fr.frames.upperBound - attack.startFrame >= least {
+                var start = attack.startFrame
+                var beat = attack.beatFrame
+                var fade = attack.fadeIn
+                // D130: the start never sits more than the slack inside a word (the onset trim took the
+                // "P" of "Pure cane" and the "con" of "consciousness"). A unit's own start is its syllable edge.
+                let core = frames(DialogueMotifTuning.wordCoreToleranceSeconds)
+                if fr.kind != .line, !fr.isUnit || fr.kind == .half,
+                   let w = words.first(where: { $0.frames.overlaps(fr.frames) && $0.frames.lowerBound + core < start
+                       && start < $0.frames.upperBound - core }) {
+                    let clamped = zero(max(fr.frames.lowerBound, w.frames.lowerBound), bounds: fr.frames)
+                    if Double(beat - clamped) / rate > DialogueMotifTuning.maximumLeadSeconds {
+                        beat = min(max(clamped, accent(clamped..<fr.frames.upperBound)), fr.frames.upperBound - 1)
+                        out.weakLead = true
+                    }
+                    start = clamped
+                    fade = fadeIn(at: clamped)
+                }
                 // A weak lead word trimmed off a piece ("to the" before "time") leaves its text too.
-                let dropped = words.filter { (fr.frames.lowerBound..<attack.startFrame).contains(($0.frames.lowerBound + $0.frames.upperBound) / 2) }.count
+                let dropped = words.filter { (fr.frames.lowerBound..<start).contains(($0.frames.lowerBound + $0.frames.upperBound) / 2) }.count
                 if fr.kind != .line, dropped > 0, let text = fr.text {
                     let tokens = text.split(separator: " ")
                     if tokens.count > dropped { out.text = tokens.dropFirst(dropped).joined(separator: " ") }
                 }
-                out.frames = attack.startFrame..<fr.frames.upperBound
-                out.accentFrame = attack.beatFrame
-                out.fadeIn = attack.fadeIn
-                out.hardOnset = attack.hard
+                out.frames = start..<fr.frames.upperBound
+                out.accentFrame = max(start, beat)
+                out.fadeIn = fade
+                out.hardOnset = start == attack.startFrame && attack.hard
             }
+            let lo = f.fineIndex(frame: out.frames.lowerBound), hi = f.fineIndex(frame: max(out.frames.lowerBound, out.frames.upperBound - 1))
+            out.peakLevel = hi >= lo ? (f.fine[lo...hi].max() ?? 0) : 0
+            out.words = words.indices.filter { words[$0].frames.overlaps(out.frames) }
+                .map { DialogueMotifFragment.Word(frames: words[$0].frames, weight: weights.indices.contains($0) ? weights[$0] : 0) }
             let inner = out.accentFrame..<out.frames.upperBound
-            out.cutPoints = Array(Set(valleys(out.frames).map(\.frame).filter { inner.contains($0) }
-                + wordEnds.filter { inner.contains($0) && $0 < out.frames.upperBound - frames(0.01) })).sorted()
+            // Where a gate may close: word ends with a transcript, real dips without one (D130).
+            let ends = words.isEmpty
+                ? valleys(out.frames).filter { Self.isAcousticGap(depth: $0.depth, run: $0.run) }.map(\.frame)
+                : wordEnds
+            out.cutPoints = Array(Set(ends.filter { inner.contains($0) && $0 < out.frames.upperBound - frames(0.01) })).sorted()
             return out
         }
     }
@@ -1018,30 +1392,67 @@ private nonisolated struct Cutter {
             return inside.isEmpty ? nil : inside.map(\.text).joined(separator: " ")
         }
     }
-
-    /// Text of two halves: whole words on each side, a word cut inside split by letters ("invest-", "-igate").
-    static func split(_ text: String?, at share: Double, words: [DialogueWordSpan], cut: Int) -> (String?, String?) {
-        guard let text else { return (nil, nil) }
-        let parts = text.split(separator: " ").map(String.init)
-        // With word timings, each half takes the words whose middles fall on its side of the cut
-        // ("is" | "completed." was split by letter share before, D126).
-        if words.count == parts.count, words.count > 1 {
-            let k = words.filter { ($0.frames.lowerBound + $0.frames.upperBound) / 2 < cut }.count
-            if k > 0, k < parts.count { return (parts[..<k].joined(separator: " "), parts[k...].joined(separator: " ")) }
-        }
-        guard parts.count > 1 else {
-            let letters = Array(text)
-            let k = min(letters.count - 1, max(1, Int((Double(letters.count) * share).rounded())))
-            return (String(letters[..<k]) + "-", "-" + String(letters[k...]))
-        }
-        let k = min(parts.count - 1, max(1, Int((Double(parts.count) * share).rounded())))
-        return (parts[..<k].joined(separator: " "), parts[k...].joined(separator: " "))
-    }
 }
 
 // MARK: - Arrangement
 
 nonisolated extension DialogueMotif {
+    /// The source frame a hit of fragment `id` reaches after `seconds` of play.
+    func frame(_ id: Int, after seconds: Double) -> Int {
+        fragments[id].frames.lowerBound + Int((seconds * sampleRate).rounded())
+    }
+
+    /// Whether ending fragment `id` at source `frame` cuts a word (D130): with a transcript, the frame
+    /// lies more than `wordCoreToleranceSeconds` inside a word's voiced core (any word, or only content
+    /// words with `contentOnly`); without one, the sound is still within 20 dB of the fragment's peak
+    /// and no cut point (a real dip) is near.
+    func cutsWord(_ id: Int, at frame: Int, contentOnly: Bool = false) -> Bool {
+        let fr = fragments[id]
+        guard frame > fr.frames.lowerBound, frame < fr.frames.upperBound else { return false }
+        if !fr.words.isEmpty { return fr.word(containing: frame, rate: sampleRate, contentOnly: contentOnly) != nil }
+        guard let f = analysis.features, !f.fine.isEmpty else { return false }
+        let tolerance = Int(DialogueMotifTuning.wordCoreToleranceSeconds * sampleRate)
+        if fr.cutPoints.contains(where: { abs($0 - frame) <= tolerance }) { return false }
+        return f.fine[f.fineIndex(frame: frame)] > 0.1 * fr.peakLevel
+    }
+
+    /// The last clean end of a hit of fragment `id` that started at `start` (accent `accent`), at or
+    /// before `time`: a cut point (word end or real dip) after its first content word and at least
+    /// `minimumGateSeconds` after the accent. Nil when none exists (D130: a hit that would choke the
+    /// one before it inside a word ends that one at its last word end instead, or is skipped).
+    func cleanEnd(_ id: Int, start: Double, accent: Double, before time: Double) -> Double? {
+        let fr = fragments[id]
+        guard !fr.isUnit else { return nil }
+        var floor = accent + DialogueMotifTuning.minimumGateSeconds
+        if let content = fr.words.first(where: { $0.weight > 0 && $0.frames.upperBound > fr.accentFrame }) {
+            floor = max(floor, start + Double(content.frames.upperBound - fr.frames.lowerBound) / sampleRate - DialogueMotifTuning.wordCoreToleranceSeconds)
+        }
+        return fr.cutPoints.map { start + Double($0 - fr.frames.lowerBound) / sampleRate }.filter { $0 <= time && $0 >= floor }.max()
+    }
+
+    /// Seconds from a fragment's accent to its first clean end (D130): its first content word played
+    /// whole, then the next word end (or real dip) at or after it, else its natural end. A syllable or
+    /// letter plays to its own end.
+    static func cleanSeconds(_ id: Int, fragments: [DialogueMotifFragment], sampleRate: Double) -> Double {
+        let fr = fragments[id]
+        var floor = fr.accentFrame + Int(DialogueMotifTuning.minimumGateSeconds * sampleRate)
+        if let content = fr.words.first(where: { $0.weight > 0 && $0.frames.upperBound > fr.accentFrame }) {
+            floor = max(floor, min(content.frames.upperBound, fr.frames.upperBound))
+        }
+        let tolerance = Int(DialogueMotifTuning.wordCoreToleranceSeconds * sampleRate)
+        let end = fr.isUnit ? fr.frames.upperBound : (fr.cutPoints.filter { $0 >= floor - tolerance }.min() ?? fr.frames.upperBound)
+        return Double(max(0, min(end, fr.frames.upperBound) - fr.accentFrame)) / sampleRate
+    }
+
+    /// A cut fits `steps` sixteenths when its clean end comes before the next hit (within
+    /// `fitToleranceSeconds`); every cut fits when the beat is unknown (0).
+    static func fitsRoom(_ id: Int, steps: Int, fragments: [DialogueMotifFragment], sampleRate: Double, beatDuration: Double) -> Bool {
+        guard beatDuration > 0 else { return true }
+        // The next hit starts its consonant a little before its step (and the choke lead before that).
+        return cleanSeconds(id, fragments: fragments, sampleRate: sampleRate) + DialogueMotifTuning.nextLeadSeconds
+            <= Double(steps) * beatDuration / 4 + DialogueMotifTuning.fitToleranceSeconds
+    }
+
     /// The hook's role pieces (D125): the signature is the piece with the strongest word (the later
     /// one on ties; the first piece without text), the response the next-strongest when it carries a real word, else the
     /// line's ending; the third is the first other piece. A re-cut keeps the pieces that overlap the
@@ -1118,10 +1529,12 @@ nonisolated extension DialogueMotif {
         return (s, r, t)
     }
 
-    /// The half of a piece its stutters repeat: the first half when the cut splits a word ("Sall-")
-    /// or nothing carries text, else the half with the stronger word ("LSD." rather than "of").
+    /// The unit of a piece its stutters repeat: the first syllable or letter of a split word ("psi-",
+    /// "L"); of two halves the first when the cut splits a word ("Sall-") or nothing carries text, else
+    /// the half with the stronger word ("LSD." rather than "of").
     static func headHalf(_ piece: Int, fragments: [DialogueMotifFragment], halves: [Int: [Int]]) -> Int {
-        guard let h = halves[piece], h.count == 2 else { return piece }
+        guard let h = halves[piece], h.count >= 2 else { return piece }
+        if fragments[h[0]].kind != .half || h.count > 2 { return h[0] }
         let a = fragments[h[0]], b = fragments[h[1]]
         if a.text?.hasSuffix("-") == true || b.weight <= a.weight { return h[0] }
         return h[1]
@@ -1168,9 +1581,14 @@ nonisolated extension DialogueMotif {
                         seed: UInt64, lineSeconds: Double, sampleRate: Double, hookSeed: UInt64, loop: Int,
                         anchors: [Range<Int>] = [], avoidTemplate: Int? = nil, drums: DialogueMotifDrums = .boomBap,
                         keepArc: DialogueArc? = nil, avoidArc: DialogueArc? = nil,
-                        carried: Bool = false) -> (cells: [DialogueMotifCell], hook: DialogueMotifHook, arc: DialogueArc) {
+                        carried: Bool = false, beatDuration: Double = 0) -> (cells: [DialogueMotifCell], hook: DialogueMotifHook, arc: DialogueArc) {
         var rng = MusicRNG(seed: seed ^ 0x4D07_1F00)
         func seconds(_ id: Int) -> Double { Double(fragments[id].frames.count) / sampleRate }
+        /// D130: a cut fits `steps` sixteenths when it reaches a clean end (its first content word whole)
+        /// before the next hit; without a known beat every cut fits.
+        func fits(_ f: Int, _ steps: Int) -> Bool {
+            fitsRoom(f, steps: steps, fragments: fragments, sampleRate: sampleRate, beatDuration: beatDuration)
+        }
         let roles = hookRoles(fragments: fragments, pieces: pieces, halves: halves, reorderAllowed: reorderAllowed,
                               sampleRate: sampleRate, anchors: anchors)
         let (s, r, t) = roles
@@ -1179,7 +1597,11 @@ nonisolated extension DialogueMotif {
         // The split piece: the longest piece that has halves; without halves, the shortest pair of
         // neighbouring pieces stands in (a word group heard as two words with a pause between).
         let split = halves.keys.sorted { (seconds($0), -$0) > (seconds($1), -$1) }.first
-        let pair = zip(pieces, pieces.dropFirst()).min { seconds($0.0) + seconds($0.1) < seconds($1.0) + seconds($1.1) }
+        // D130: the walks through the line's pieces (the stand-in pair, the build's ladder, the breakdown's
+        // first word) take its content pieces when it has two or more, not its connective ones.
+        let content = pieces.filter { fragments[$0].weight > 0 }
+        let walk = content.count >= 2 ? content : pieces
+        let pair = zip(walk, walk.dropFirst()).min { seconds($0.0) + seconds($0.1) < seconds($1.0) + seconds($1.1) }
         let (splitA, splitB) = split.flatMap { halves[$0] }.map { ($0[0], $0[1]) } ?? pair.map { ($0.0, $0.1) } ?? (s, r)
         typealias Item = DialogueMotifCell.Item
         func at(_ f: Int, _ slot: Int, _ e: Item.Effect = .none, gain: Float = 0, gate: Int? = nil) -> Item {
@@ -1206,10 +1628,60 @@ nonisolated extension DialogueMotif {
         // rhythm too, or 16 bars repeat exactly (C-D1; the `same` matrix case read 0.04 difference).
         if template == avoidTemplate { template = (template + 1) % DialogueMotifTuning.hookTemplates.count }
         let arc = chooseArc(seed: seed, groove: template, keep: keepArc, avoid: avoidArc, carried: carried)
-        let vocabulary = GrooveVocabulary(s: s, r: r, t: t, sa: sa, ra: ra, pieces: pieces, halves: halves)
+        let vocabulary = GrooveVocabulary(s: s, r: r, t: t, sa: sa, ra: ra, pieces: pieces, halves: halves, fragments: fragments)
         // The skeleton holds for the template's loops; the fill around it is drawn from this loop's seed (D127).
         let g = groove(template: DialogueMotifTuning.hookTemplates[template], vocabulary: vocabulary, drums: drums,
-                       reorderAllowed: reorderAllowed, fragments: fragments, sampleRate: sampleRate, seed: seed)
+                       reorderAllowed: reorderAllowed, fragments: fragments, sampleRate: sampleRate, seed: seed,
+                       beatDuration: beatDuration)
+        // Cuts a hit that does not fit its room may take instead (content words first); a line that may
+        // not be reordered only drops such a hit (D130).
+        let roomAlternatives = reorderAllowed
+            ? ([sa, ra, vocabulary.sb, vocabulary.rb, t, s, r] + vocabulary.others + pieces).filter { fragments[$0].weight > 0 }
+                + ([sa, ra, vocabulary.sb, vocabulary.rb, t] + vocabulary.others + pieces).filter { fragments[$0].weight == 0 }
+            : []
+        /// Fixed hits on close steps (the turn, the build, the outro tag): each takes a cut that fits the
+        /// steps before the next hit, else drops. A stutter repeats its head's cut and goes with it.
+        func fitted(_ items: [Item], end: Int, rolls: Bool = true, keep: Set<Int> = []) -> [Item] {
+            var out: [Item] = []
+            var replaced: [Int: Int?] = [:]
+            // A kept hit (the turn's backbeat response) that does not fit drops the hits after it until it does.
+            var items = items
+            for slot in keep.sorted() {
+                guard let k = items.firstIndex(where: { $0.slot == slot }) else { continue }
+                while k + 1 < items.count, !fits(items[k].fragment, (items[k + 1].slot) - slot) { items.remove(at: k + 1) }
+            }
+            for (k, item) in items.enumerated() {
+                guard item.follow == nil, item.after == nil, item.effect != .reversed else { out.append(item); continue }
+                if keep.contains(item.slot) { replaced[item.fragment] = item.fragment; out.append(item); continue }
+                var it = item
+                if item.stutter {
+                    if let r = replaced[item.fragment] {
+                        guard let r else { continue }
+                        it.fragment = r
+                    }
+                    out.append(it)
+                    continue
+                }
+                let next = items[(k + 1)...].first { $0.follow == nil && $0.after == nil && $0.slot > item.slot }?.slot ?? end
+                let room = max(1, next - item.slot)
+                let previous = out.last?.fragment
+                if fits(item.fragment, room), item.fragment != previous || rolls {
+                    replaced[item.fragment] = item.fragment
+                    // A repeat of the hit before it is a roll (the build's and turn's), marked as one.
+                    if item.fragment == previous { it.stutter = true }
+                    out.append(it)
+                    continue
+                }
+                if let alt = roomAlternatives.first(where: { $0 != previous && fits($0, room) }) {
+                    replaced[item.fragment] = alt
+                    it.fragment = alt
+                    out.append(it)
+                } else {
+                    replaced[item.fragment] = .some(nil)
+                }
+            }
+            return out
+        }
         let barA = g.filter { $0.slot < 16 }
         let last = pieces.last ?? r
         // The return's short piece carries a real word when the line has a short one (it stays short:
@@ -1225,7 +1697,8 @@ nonisolated extension DialogueMotif {
         case 1: tag = [near(s, 24, gate: 2), near(s, 28, gate: 2)]
         default: tag = [near(r, 28, .filtered)]
         }
-        let intro = [Item(fragment: 0, slot: 0)] + tag
+        // The tag ends before the chop beat's downbeat hit (D130).
+        let intro = [Item(fragment: 0, slot: 0)] + fitted(tag, end: 32, rolls: false)
 
         // Chop beat (bars 3-6): the groove twice; the second time its last beat turns.
         let turn: [Item]
@@ -1235,14 +1708,20 @@ nonisolated extension DialogueMotif {
         case 1: turn = [at(r, 28, .echoThrow, gate: 2)]
         default: turn = [at(r, 28, gate: 2), at(vocabulary.sb != r ? vocabulary.sb : sa, 30, gate: 2)]
         }
-        let second = g.filter { $0.slot < 28 } + turn
+        let second = g.filter { $0.slot < 28 } + fitted(turn, end: 32, keep: [28])
 
         // Build (bars 7-8): bar 7 is the groove's call with one more stab, bar 8 doubles it into the drop.
         var seven = barA
         if let free = stride(from: 0, to: 16, by: 2).first(where: { k in !seven.contains { abs($0.slot - k) <= 1 } }) {
-            // A cut the hits around it do not play (D127).
-            seven.append(at(freshCut([vocabulary.sb, sa, t, ra] + vocabulary.others, at: free, among: seven), free, gate: 1))
-            seven.sort { $0.slot < $1.slot }
+            // A cut the hits around it do not play (D127), that fits before the next hit while the hit
+            // before it still fits (D130).
+            let before = seven.last { $0.slot < free }
+            let room = (seven.first { $0.slot > free }?.slot ?? 16) - free
+            let choices = ([vocabulary.sb, sa, t, ra] + vocabulary.others).filter { beatDuration <= 0 || fits($0, room) }
+            if !choices.isEmpty, before.map({ fits($0.fragment, free - $0.slot) }) ?? true {
+                seven.append(at(freshCut(choices, at: free, among: seven), free, gate: 1))
+                seven.sort { $0.slot < $1.slot }
+            }
         }
         let eight: [Item]
         switch arc.build {
@@ -1252,7 +1731,7 @@ nonisolated extension DialogueMotif {
                 + (25...29).map { stutter(at(sa, $0, gate: 1)) } + [at(r, 30, gate: 1)]
         case 1:
             // Ladder: the line's first words, one more each beat, in source order (the beat-2 restart is the ladder's stutter).
-            let w = (0..<3).map { pieces[min($0, pieces.count - 1)] }
+            let w = (0..<3).map { walk[min($0, walk.count - 1)] }
             eight = [at(w[0], 16, gate: 2), stutter(at(w[0], 20, gate: 1)), at(w[1], 22, gate: 2),
                      at(w[0], 24, gate: 1), at(w[1], 25, gate: 1), at(w[2], 26, gate: 2),
                      at(w[0], 28, gate: 1), at(w[1], 29, gate: 1), at(w[2], 30, gate: 1)]
@@ -1262,11 +1741,11 @@ nonisolated extension DialogueMotif {
         }
         // Every variant's last stab ends a sixteenth before the drop, so the breakdown's first word can
         // start its consonant just before bar 9's downbeat (the next cue's plan cannot choke it).
-        let build = seven + eight
+        let build = seven + fitted(eight, end: 32)
 
         // Breakdown (bars 9-12, one cell): a word or two a bar, held, with echo throws; the split
         // syllable with a pause in bar 11; a reversed pickup into bar 13.
-        let first = pieces.first ?? s
+        let first = walk.first ?? s
         var breakdown: [Item]
         switch arc.breakdown {
         case 0: breakdown = [near(s, 0, .echoThrow), near(r, 24, .echoThrow), near(splitA, 40), near(splitB, 44, .echoThrow), near(t, 52)]
@@ -1281,7 +1760,9 @@ nonisolated extension DialogueMotif {
         case 0:
             // The line walked on the 8ths, the signature stuttered before it plays out.
             for (k, p) in pieces.enumerated() {
-                if p == s {
+                // D130: the 1/16 stutter only with a cut that is whole at one step (a letter, a syllable or
+                // a short word); else the signature is walked whole like the rest.
+                if p == s, fits(sa, 1) {
                     outro.append(k == 0 ? Item(fragment: sa, slot: 16, fixed: true, gate: 1) : chain(sa, from: 16, gate: 1))
                     outro.append(follow(sa))
                     outro.append(follow(p, 1, gate: nil))
@@ -1300,7 +1781,7 @@ nonisolated extension DialogueMotif {
                       chain(last, from: 36, gate: 2)]
         }
         // The tag's answer holds an 8th, so the next loop's line can start on its downbeat.
-        outro += [at(sa, 56, gate: 1), at(sa, 57, gate: 1), at(sa, 58, gate: 1), at(r, 60, gate: 2)]
+        outro += fitted([at(sa, 56, gate: 1), at(sa, 57, gate: 1), at(sa, 58, gate: 1), at(r, 60, gate: 2)], end: 64, rolls: false)
 
         let cells: [DialogueMotifCell] = [
             DialogueMotifCell(kind: .intro, bar: 0, bars: 2, variant: arc.intro, items: intro),
@@ -1348,8 +1829,28 @@ nonisolated enum DialogueMotifPerformer {
         guard target < natural else { return (natural, "natural") }
         let fr = motif.fragments[fragment]
         let least = start + motif.accentOffset(fragment) + DialogueMotifTuning.minimumGateSeconds
-        let valleys = fr.cutPoints.map { start + Double($0 - fr.frames.lowerBound) / motif.sampleRate }
-            .filter { $0 <= target && $0 >= target - DialogueMotifTuning.valleySnapSeconds && $0 >= least }
+        let points = fr.cutPoints.map { start + Double($0 - fr.frames.lowerBound) / motif.sampleRate }
+        // D130: a gate that would close inside a word (or mid-sound with no cut point) plays on to the
+        // next word end or real dip within `gateExtendSeconds` (the piece's end counts), else stops at
+        // the last one before it, never before the fragment's first content word is whole. Only when
+        // neither exists does the D126 gate cut. Before, gates of 0.2 s cut "LSD" and "marijuana" mid-word.
+        if motif.cutsWord(fragment, at: motif.frame(fragment, after: target - start)) {
+            var floor = least
+            if !fr.isUnit, let content = fr.words.first(where: { $0.weight > 0 && $0.frames.upperBound > fr.accentFrame }) {
+                floor = max(floor, start + Double(min(content.frames.upperBound, fr.frames.upperBound) - fr.frames.lowerBound) / motif.sampleRate
+                    - DialogueMotifTuning.wordCoreToleranceSeconds)
+            }
+            if let after = (points + [natural]).filter({ $0 >= max(target, floor) && $0 <= target + DialogueMotifTuning.gateExtendSeconds }).min() {
+                return (after, after >= natural - 1e-9 ? "natural" : "word")
+            }
+            if let before = points.filter({ $0 < target && $0 >= floor }).max() { return (before, "valley") }
+            // A word longer than the reach plays to its end: a whole word over a gate (the D126 gate
+            // only cuts where no word is cut).
+            if let after = (points + [natural]).filter({ $0 >= max(target, floor) }).min() {
+                return (after, after >= natural - 1e-9 ? "natural" : "word")
+            }
+        }
+        let valleys = points.filter { $0 <= target && $0 >= target - DialogueMotifTuning.valleySnapSeconds && $0 >= least }
         if let v = valleys.max() { return (v, "valley") }
         return (min(natural, max(target, least)), "gate")
     }
@@ -1401,7 +1902,8 @@ nonisolated enum DialogueMotifPerformer {
                 // The section's dry budget; the line statement, the turnaround's landing and the phrase-end
                 // stutter (its repeats choke each other, so they cost little) always play.
                 // The build's stutters and any follow-on repeat (they choke each other, so they cost little) always play.
-                let stutterFill = (cell.kind == .stutter && item.slot >= 16) || cell.kind == .build || item.follow != nil
+                // D130: the build's whole-word hits count (before, its 1/16 stabs were too short to matter).
+                let stutterFill = (cell.kind == .stutter && item.slot >= 16) || item.stutter || item.follow != nil
                 let budgeted = item.fragment != 0 && !item.landing && !stutterFill
                 if budgeted, item.gate == nil, drySeconds() + length > budget { continue }
                 let shift = firstInCell && placed.isEmpty ? DialogueMotifTuning.lateSlotShift : DialogueMotifTuning.slotShift
@@ -1426,6 +1928,10 @@ nonisolated enum DialogueMotifPerformer {
                     // Never an off-sixteenth: a hit moves by 8ths (D126 part 2, "always on beat").
                     candidates = Array(stride(from: base, through: base + shift, by: 2)).filter { $0 < cellEnd }
                 }
+                // D130: a hit skipped before it (a choke inside a word) must not leave the same cut twice in a
+                // row in the chop beat or build unless it is a marked roll (D127).
+                if (cell.kind == .chopBeat || cell.kind == .build), !item.stutter, !item.skeleton, item.follow == nil,
+                   let last = placed.last, last.fragment == item.fragment, last.cell == cell.kind { continue }
                 var done = false
                 // The loop's feel moves the chop beat's and build's offbeat stabs (D127); quarter steps stay on the grid.
                 let feels = (cell.kind == .chopBeat || cell.kind == .build) && item.fragment != 0 && item.effect != .reversed
@@ -1448,6 +1954,30 @@ nonisolated enum DialogueMotifPerformer {
                         // One dry voice: the earlier piece is choked (never the line), else the slot moves on.
                         guard let last = placed.last, last.fragment != 0, last.effect != .reversed,
                               start - DialogueTuning.chokeLeadSeconds - last.start >= DialogueMotifTuning.minimumPieceSeconds else { continue }
+                        // D130: never inside a word of the earlier piece; an unfixed hit moves on by 8ths, a
+                        // fixed one drops. A deliberate stutter may (its repeats choke each other).
+                        let chokeAt = start - DialogueTuning.chokeLeadSeconds
+                        let deliberate = item.stutter || item.follow != nil
+                        if chokeAt < last.end, motif.cutsWord(last.fragment, at: motif.frame(last.fragment, after: chokeAt - last.start)) {
+                            // The earlier piece ends at its last word end before the hit instead, if it has one; a
+                            // deliberate repeat chokes it where it is only when it has none.
+                            let clean = motif.cleanEnd(last.fragment, start: last.start, accent: last.accent, before: chokeAt)
+                            if clean == nil, !deliberate { continue }
+                        }
+                        if chokeAt < last.end, motif.cutsWord(last.fragment, at: motif.frame(last.fragment, after: chokeAt - last.start)),
+                           let clean = motif.cleanEnd(last.fragment, start: last.start, accent: last.accent, before: chokeAt) {
+                            placed[placed.count - 1].end = clean
+                            placed[placed.count - 1].gateEnd = "word"
+                            if start >= clean + DialogueTuning.dryGapSeconds {
+                                placed.append(Placed(fragment: item.fragment, cell: cell.kind, sixteenth: s, accent: accent, start: start, end: end,
+                                                     gainDB: item.gainDB, effect: item.effect, landing: item.landing, gate: item.gate,
+                                                     gateEnd: gated.kind, stutter: item.stutter, feel: feel))
+                                prevEnd = end
+                                if item.fragment == 0 { statements += 1 }
+                                done = true
+                                break
+                            }
+                        }
                         // A choke only shortens: a start inside the dry gap after the earlier piece's end
                         // must not stretch that piece past its pad (D124 seed-19 finding).
                         placed[placed.count - 1].end = min(placed[placed.count - 1].end, start - DialogueTuning.chokeLeadSeconds)
@@ -1511,8 +2041,9 @@ nonisolated enum DialogueMotifPerformer {
                        hard: Double, floor: Double, upper: Double) -> [Placed] {
         var placed = events.sorted { $0.start < $1.start }
         let loopBeat = DialogueMotif.loopBeat(motif.loop, snapshot: snapshot)
-        let candidates = (motif.pieces + motif.halves.keys.sorted().flatMap { motif.halves[$0]! })
-            .sorted { (motif.seconds($0), $0) < (motif.seconds($1), $1) }
+        // D130: a whole content piece (the shortest first), then the line's other pieces; never a split unit.
+        let content = motif.pieces.filter { motif.fragments[$0].weight > 0 }
+        let candidates = (content.isEmpty ? motif.pieces : content).sorted { (motif.seconds($0), $0) < (motif.seconds($1), $1) }
         var bar = owned.lowerBound
         var rotation = 0
         while bar < owned.upperBound {
@@ -1549,19 +2080,33 @@ nonisolated enum DialogueMotifPerformer {
                 let previous = placed.lastIndex { $0.start < start }
                 let next = placed.firstIndex { $0.start >= start }
                 var chokePrevious = false
+                var shortenPrevious: Double?
                 if let p = previous, placed[p].end + DialogueTuning.dryGapSeconds > start {
                     guard placed[p].fragment != 0, placed[p].effect != .reversed,
                           start - DialogueTuning.chokeLeadSeconds - placed[p].start >= DialogueMotifTuning.minimumPieceSeconds else { continue }
-                    chokePrevious = true
+                    // Never inside a word of the earlier piece (D130): it ends at its last word end before, or the slot is skipped.
+                    let chokeAt = start - DialogueTuning.chokeLeadSeconds
+                    if chokeAt < placed[p].end,
+                       motif.cutsWord(placed[p].fragment, at: motif.frame(placed[p].fragment, after: chokeAt - placed[p].start)) {
+                        guard let clean = motif.cleanEnd(placed[p].fragment, start: placed[p].start, accent: placed[p].accent, before: chokeAt)
+                        else { continue }
+                        shortenPrevious = clean
+                    }
+                    chokePrevious = shortenPrevious == nil
                 }
                 var chokedSelf = false
                 if let q = next, end + DialogueTuning.dryGapSeconds > placed[q].start {
                     let cut = placed[q].start - DialogueTuning.chokeLeadSeconds
-                    guard cut - start >= DialogueMotifTuning.minimumPieceSeconds else { continue }
+                    guard cut - start >= DialogueMotifTuning.minimumPieceSeconds,
+                          !motif.cutsWord(f, at: motif.frame(f, after: cut - start)) else { continue }
                     end = cut
                     chokedSelf = true
                 }
                 guard end <= upper else { continue }
+                if let clean = shortenPrevious, let p = previous {
+                    placed[p].end = clean
+                    placed[p].gateEnd = "word"
+                }
                 if chokePrevious, let p = previous {
                     placed[p].end = min(placed[p].end, start - DialogueTuning.chokeLeadSeconds)
                     placed[p].choked = true

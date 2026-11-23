@@ -67,11 +67,48 @@ nonisolated enum DialogueHierarchy {
                 rejected.insert(units[i].id)
             }
         }
-        // Word groups: clauses inside transcribed phrases whose edges pass acoustic refinement.
         var builder = Builder(f: f, samples: nil, count: f.frameCount, speech: analysis.speech)
         builder.units = units
         builder.rejections = rejections
-        let phrases = units.filter { $0.level == .phrase && $0.text != nil && !rejected.contains($0.id) }
+        // Line edges on word boundaries (D130). A transcribed line-level unit whose edge sits inside a
+        // word's core is added again on whole words (the words it holds, edges refined around them as
+        // word groups are), and a `protectedCut` unit is added again covering the protected span it cut
+        // ("the UFO phenomena,", "that marijuana will"), instead of being lost. Before, 65 of 159 salient
+        // words on the cached films sat only in rejected units, and line edges cut words.
+        let tolerance = f.frames(seconds: DialogueTuning.lineWordEdgeSeconds)
+        func inside(_ x: Int) -> Int? {
+            words.indices.first { words[$0].frames.lowerBound + tolerance < x && x < words[$0].frames.upperBound - tolerance }
+        }
+        let reasons = Dictionary(rejections.map { ($0.unit, $0.reason) }, uniquingKeysWith: { a, _ in a })
+        for unit in units where [.utterance, .phrase, .wordGroup].contains(unit.level) && unit.text != nil {
+            guard var tokens = unit.tokenRange, !tokens.isEmpty, tokens.upperBound <= words.count else { continue }
+            let reason = reasons[unit.id]
+            let protectedCut = reason == .protectedCut
+            guard reason == nil || protectedCut || reason == .uncertainBoundaries else { continue }
+            let startIn = inside(unit.frames.lowerBound), endIn = inside(unit.frames.upperBound)
+            guard protectedCut || startIn != nil || endIn != nil else { continue }
+            if protectedCut {
+                for span in spans where span.overlaps(unit.frames) && cutsInside(span, unit.frames, f: f) {
+                    let covered = words.indices.filter { words[$0].frames.overlaps(span) }
+                    if let a = covered.first, let b = covered.last { tokens = min(a, tokens.lowerBound)..<max(b + 1, tokens.upperBound) }
+                }
+            }
+            var added = builder.addAligned(unit.level, parent: unit.parentID, words: words, tokens: tokens, spans: spans)
+            // Too long or too short with the cut words: without them (pulled back to the word boundary).
+            if let id = added, let r = builder.rejection(id), r == .tooLong || r == .tooShort {
+                var shrunk = tokens
+                if let k = startIn, k == shrunk.lowerBound, shrunk.count > 1 { shrunk = (k + 1)..<shrunk.upperBound }
+                if let k = endIn, k == shrunk.upperBound - 1, shrunk.count > 1 { shrunk = shrunk.lowerBound..<k }
+                if shrunk != tokens { added = builder.addAligned(unit.level, parent: unit.parentID, words: words, tokens: shrunk, spans: spans) }
+            }
+            // The word-aligned unit replaces the one that cut a word when it can be played.
+            if let id = added, builder.rejection(id) == nil, reason == nil {
+                builder.rejections.append(DialogueRejection(unit: unit.id, reason: .protectedCut))
+            }
+        }
+        rejected = Set(builder.rejections.map(\.unit))
+        // Word groups: clauses inside transcribed phrases whose edges pass acoustic refinement.
+        let phrases = builder.units.filter { $0.level == .phrase && $0.text != nil && !rejected.contains($0.id) }
         for phrase in phrases {
             guard let tokens = phrase.tokenRange else { continue }
             let clauses = DialogueReorderGuard.clauses(Array(words[tokens]), analysis: analysis)
@@ -502,6 +539,35 @@ nonisolated enum DialogueHierarchy {
                     start: Edge(frame: start, fade: fade, depth: DialogueTuning.boundaryHighDepthDB, burst: false),
                     end: Edge(frame: end, fade: fade, depth: DialogueTuning.boundaryHighDepthDB, burst: false),
                     inherited: inherited)
+        }
+
+        /// A unit of `level` on the whole words `tokens` (D130): its edges refined around the first word's
+        /// start and the last word's end, never past the neighbouring words. Nil when nothing is left.
+        @discardableResult
+        mutating func addAligned(_ level: SpeechUnit.Level, parent: Int?, words: [DialogueWordSpan], tokens: Range<Int>,
+                                 spans: [Range<Int>]) -> Int? {
+            guard !tokens.isEmpty, tokens.lowerBound >= 0, tokens.upperBound <= words.count else { return nil }
+            let first = words[tokens.lowerBound].frames.lowerBound, last = words[tokens.upperBound - 1].frames.upperBound
+            let lower = tokens.lowerBound > 0 ? min(first, words[tokens.lowerBound - 1].frames.upperBound) : 0
+            let upper = tokens.upperBound < words.count ? max(last + 1, words[tokens.upperBound].frames.lowerBound) : count
+            let core = f.hop(frame: first)..<max(f.hop(frame: first) + 1, f.hop(frame: last))
+            let peak = peakDB(core)
+            let start = refineStart(core: first, lower: lower, upper: last, peak: peak)
+            let end = refineEnd(core: last, lower: max(start.frame + 1, last - 1), upper: upper, peak: peak)
+            guard end.frame > start.frame + 1 else { return nil }
+            let id = add(level, parent: parent, core: core, start: start, end: end, inherited: nil)
+            var unit = units[id]
+            unit.text = words[tokens].map(\.text).joined(separator: " ")
+            unit.tokenRange = tokens
+            let confidences = words[tokens].compactMap(\.confidence)
+            unit.recognitionConfidence = confidences.isEmpty ? nil : confidences.reduce(0, +) / Float(confidences.count)
+            let frames = unit.frames
+            let overlapping = spans.filter { $0.overlaps(frames) }
+            unit.protectedSpans += overlapping.map { max($0.lowerBound, frames.lowerBound)..<min($0.upperBound, frames.upperBound) }
+            units[id] = unit
+            let cuts = overlapping.contains { DialogueHierarchy.cutsInside($0, frames, f: f) }
+            if cuts, rejection(id) == nil { rejections.append(DialogueRejection(unit: id, reason: .protectedCut)) }
+            return id
         }
 
         mutating func addWordGroup(parent: SpeechUnit, words: [DialogueWordSpan], tokens: Range<Int>, spans: [Range<Int>]) {
