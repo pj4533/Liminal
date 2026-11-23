@@ -36,19 +36,28 @@ nonisolated final class DialogueSalienceIndex: Sendable {
         return DialogueSalienceIndex(url: directory?.appendingPathComponent("DialogueSalience.json"))
     }()
 
-    static let active: DialogueSalienceIndex = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil
-        && !DebugLaunchOptions.isAutomated ? .shared : DialogueSalienceIndex()
+    static let active: DialogueSalienceIndex = {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["XCTestConfigurationFilePath"] == nil else { return DialogueSalienceIndex() }
+        guard DebugLaunchOptions.isAutomated else { return .shared }
+        #if DEBUG
+        if let path = environment["LIMINAL_VERIFICATION_SALIENCE_SEED"], path.hasPrefix("/") {
+            return DialogueSalienceIndex(seedURL: URL(fileURLWithPath: path))
+        }
+        #endif
+        return DialogueSalienceIndex()
+    }()
 
     private let url: URL?
     private let entries: Mutex<[String: Entry]>
     private let pendingSave = Mutex(false)
     private static let saveQueue = DispatchQueue(label: "com.saygoodnight.Liminal.dialogueSalience", qos: .utility)
 
-    /// Nil URL isolates tests and automated runs from the user's index.
-    init(url: URL? = nil) {
+    /// A seed is read once. Nil persistence URL keeps subsequent learning in memory.
+    init(url: URL? = nil, seedURL: URL? = nil) {
         self.url = url
         var loaded: [String: Entry] = [:]
-        if let url, let data = try? Data(contentsOf: url),
+        if let input = seedURL ?? url, let data = try? Data(contentsOf: input),
            let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data),
            snapshot.lexiconVersion == DialogueLineInterest.lexiconVersion {
             loaded = snapshot.entries
@@ -114,6 +123,10 @@ nonisolated final class DialogueSalienceIndex: Sendable {
     /// Also provides a deterministic persistence barrier for tests; ordinary records coalesce below.
     func save() throws {
         guard let url else { return }
+        try save(to: url)
+    }
+
+    func save(to url: URL) throws {
         let snapshot = entries.withLock { Snapshot(lexiconVersion: DialogueLineInterest.lexiconVersion, entries: $0) }
         let data = try JSONEncoder().encode(snapshot)
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)

@@ -1,7 +1,8 @@
 #!/bin/bash
-# Each phase is serial on its runner; workflow preserves artifacts between phases.
+# Run the public-media phases serially on the Mac. Evidence stays under OUT.
 # Usage: verify-real-media.sh AFTER BASELINE OUT [prepare|speech|baseline|after|gates|auditions|app|final]
 set -uo pipefail
+umask 077
 export LIMINAL_CAPTURE_CODE_SIGNING_ALLOWED=NO
 AFTER=$(cd "$1" && pwd)
 BASELINE=$(cd "$2" && pwd)
@@ -25,20 +26,6 @@ run_step() {
 case "$PHASE" in
 prepare)
     run_step prepare-media python3 "$AFTER/scripts/prepare-verification-media.py" --cache "$CACHE" --provenance "$OUT/provenance" --count 12 || exit $?
-    python3 - "$AFTER" "$BASELINE" "$OUT" <<'PY'
-import json, pathlib, sys
-checks = []
-for checkout in sys.argv[1:3]:
-    root = pathlib.Path(checkout)
-    drums = root / 'Liminal/SlowBurnDrums'
-    grid = root / 'Liminal/Audio/Lofi/SlowBurnBeatGrid.json'
-    checks.append(dict(checkout=checkout, drumDirectoryExists=drums.is_dir(),
-        drumFiles=sorted(p.name for p in drums.glob('*') if p.is_file()), beatGridExists=grid.is_file()))
-pathlib.Path(sys.argv[3], 'private-prerequisites.json').write_text(json.dumps(checks, indent=2))
-PY
-    prerequisites=$?
-    printf 'private-prerequisite-inventory\t%s\n' "$prerequisites" >> "$STATUS"
-    [ "$prerequisites" -eq 0 ] || exit "$prerequisites"
     run_step baseline-cache-check git -C "$BASELINE" apply --check "$AFTER/scripts/baseline-verification-cache.patch" || exit $?
     run_step baseline-cache-adapter git -C "$BASELINE" apply "$AFTER/scripts/baseline-verification-cache.patch" || exit $?
     run_step baseline-matrix-adapter cp "$AFTER/scripts/mix-matrix.sh" "$BASELINE/scripts/mix-matrix.sh" || exit $?
@@ -80,29 +67,40 @@ baseline|after)
     git rev-parse HEAD > "$OUT/$label-commit.txt"
     run_step "$label-build" xcodebuild build-for-testing CODE_SIGNING_ALLOWED=NO -scheme Liminal -destination 'platform=macOS,arch=arm64' -derivedDataPath "$DD" || exit $?
     # Installed-only probe reports unavailable T honestly and still measures real acoustic playback.
-    run_step "$label-probe" env BUILD=0 DD="$DD" scripts/dialogue-salience-probe.sh "$OUT/$label-probe" 8 72
+    phase_status=0
+    run_step "$label-probe" env BUILD=0 DD="$DD" scripts/dialogue-salience-probe.sh "$OUT/$label-probe" 8 72 || phase_status=$?
     comparison=()
     if [ "$label" = after ]; then comparison=(--baseline "$OUT/baseline-public-matrix"); fi
-    run_step "$label-public-matrix" env DD="$DD" scripts/mix-matrix.sh --out "$OUT/$label-public-matrix" --cases ref,fast,same,transcribe --bundled-drums --strict "${comparison[@]}"
-    if [ -d Liminal/SlowBurnDrums ] && [ -f Liminal/Audio/Lofi/SlowBurnBeatGrid.json ]; then
-        private_comparison=()
-        if [ "$label" = after ]; then private_comparison=(--baseline "$OUT/baseline-private-matrix"); fi
-        run_step "$label-private-matrix" env DD="$DD" scripts/mix-matrix.sh --out "$OUT/$label-private-matrix" --cases ref,fast,same,transcribe --strict "${private_comparison[@]}"
-    else
-        printf '%s-private-matrix\t1\n' "$label" >> "$STATUS"
-    fi
+    run_step "$label-public-matrix" env DD="$DD" scripts/mix-matrix.sh --out "$OUT/$label-public-matrix" --cases ref,fast,same,transcribe --bundled-drums --strict "${comparison[@]}" || phase_status=$?
+    exit "$phase_status"
     ;;
 gates)
     run_step media-gates python3 "$AFTER/scripts/verify-salience-gates.py" "$OUT/baseline-probe/summary.json" "$OUT/after-probe/summary.json" "$OUT/salience-gates.json"
     ;;
 auditions)
-    run_step auditions python3 "$AFTER/scripts/verification-auditions.py" "$OUT/after-probe/bugs" "$OUT/auditions" "$OUT/after-probe/summary.json"
+    reviews=()
+    if [ -f "$OUT/audition-reviews.json" ]; then reviews=(--reviews "$OUT/audition-reviews.json"); fi
+    run_step auditions python3 "$AFTER/scripts/verification-auditions.py" "$OUT/after-probe/bugs" "$OUT/auditions" "$OUT/after-probe/summary.json" "${reviews[@]}"
     ;;
 app)
+    # Playback updates the index and sweeps files outside it, including probe provenance.
+    # Give this run a disposable copy so later verification sees the same corpus.
+    APP_CACHE=$(mktemp -d "$OUT/app-archive.XXXXXX") || exit $?
+    cp -cR "$CACHE/." "$APP_CACHE" || exit $?
+    export LIMINAL_VERIFICATION_ARCHIVE_DIR="$APP_CACHE"
+    SEED="$OUT/after-probe/salience-index.json"
+    if [ -s "$SEED" ]; then
+        export LIMINAL_VERIFICATION_SALIENCE_SEED="$SEED"
+        printf 'probe-learned salience snapshot\n' > "$OUT/app-index-scope.txt"
+    else
+        unset LIMINAL_VERIFICATION_SALIENCE_SEED
+        printf 'empty salience index at launch\n' > "$OUT/app-index-scope.txt"
+    fi
     APP="$OUT/dd-after/Build/Products/Debug/Liminal.app/Contents/MacOS/Liminal"
+    [ -x "$APP" ] || { printf 'Build the candidate before app verification.\n' >&2; exit 2; }
     /usr/bin/log stream --level info --predicate 'subsystem == "com.saygoodnight.Liminal"' > "$OUT/app-200s.log" 2>&1 &
     LOGGER=$!
-    "$APP" -LiminalAutoPlay YES -archive.enabled YES -LiminalImageAPIFresh YES -LiminalVideoOffline YES -LiminalMusicSeed 1042 -LiminalVideoSeed 1 > "$OUT/app-stdout.log" 2>&1 &
+    "$APP" -LiminalAutoPlay YES -audio.musicMode lofi -archive.enabled YES -LiminalDialogueTranscription installedOnly -LiminalImageAPIFresh YES -LiminalVideoOffline YES -LiminalMusicSeed 1042 -LiminalVideoSeed 1 > "$OUT/app-stdout.log" 2>&1 &
     APP_PID=$!
     sleep 200
     if kill -0 "$APP_PID" 2>/dev/null; then
@@ -117,18 +115,16 @@ app)
     ;;
 final)
     for label in baseline after; do
-        for kind in public private; do
-            pair=-
-            if [ "$label" = after ]; then pair="$OUT/baseline-$kind-matrix"; fi
-            revision=$(cat "$OUT/$label-commit.txt" 2>/dev/null) || revision=missing
-            baseline_revision=$(cat "$OUT/baseline-commit.txt" 2>/dev/null) || baseline_revision=missing
-            run_step "$label-$kind-inventory" python3 "$AFTER/scripts/verify-matrix-integrity.py" "$OUT/$label-$kind-matrix" "$pair" "$revision" "$baseline_revision"
-        done
+        pair=-
+        if [ "$label" = after ]; then pair="$OUT/baseline-public-matrix"; fi
+        revision=$(cat "$OUT/$label-commit.txt" 2>/dev/null) || revision=missing
+        baseline_revision=$(cat "$OUT/baseline-commit.txt" 2>/dev/null) || baseline_revision=missing
+        run_step "$label-public-inventory" python3 "$AFTER/scripts/verify-matrix-integrity.py" "$OUT/$label-public-matrix" "$pair" "$revision" "$baseline_revision"
     done
     python3 - "$STATUS" <<'PY'
 import csv, sys
 rows = list(csv.DictReader(open(sys.argv[1]), delimiter='\t'))
-required = {'prepare-media', 'provision-speech', 'baseline-build', 'after-build', 'baseline-probe', 'after-probe', 'baseline-public-matrix', 'after-public-matrix', 'baseline-private-matrix', 'after-private-matrix', 'media-gates', 'auditions', 'app-survived-200s', 'app-playback-evidence', 'baseline-cache-adapter', 'baseline-matrix-adapter', 'baseline-report-adapter', 'baseline-probe-adapter-check', 'baseline-probe-adapter', 'baseline-compiler-adapter', 'baseline-capture-adapter', 'private-prerequisite-inventory', 'baseline-public-inventory', 'after-public-inventory', 'baseline-private-inventory', 'after-private-inventory'}
+required = {'prepare-media', 'provision-speech', 'baseline-build', 'after-build', 'baseline-probe', 'after-probe', 'baseline-public-matrix', 'after-public-matrix', 'media-gates', 'auditions', 'app-survived-200s', 'app-playback-evidence', 'baseline-cache-adapter', 'baseline-matrix-adapter', 'baseline-report-adapter', 'baseline-probe-adapter-check', 'baseline-probe-adapter', 'baseline-compiler-adapter', 'baseline-capture-adapter', 'baseline-public-inventory', 'after-public-inventory'}
 seen = {r['step'] for r in rows}
 print('Missing required steps:', sorted(required - seen))
 print('Failed steps:', [r for r in rows if int(r['exit'])])

@@ -24,7 +24,7 @@ class IntegrityTests(unittest.TestCase):
     def corpus(self):
         films = [dict(id=str(i), file=str(i)+'.mp4', duration=600, sha256='hash', url='source') for i in range(12)]
         rows = [dict(film=f['id'], chunk=c, offset=c*30, decode='success', decodedFrames=1440000,
-                     sampleRate=48000, speechWindows=1, renderOutcomes={m: dict(planned=3, rendered=3, audible=3) for m in ('T','A')}, model='apple', transcriptOutcome='result', transcribed=True, transcriptWords=10, transcriptLocale='en-US', transcriptModelVersion='apple-v1')
+                     sampleRate=48000, windows=59, speechWindows=1, renderOutcomes={m: dict(planned=3, rendered=3, audible=3) for m in ('T','A')}, model='apple', transcriptOutcome='result', transcribed=True, transcriptWords=10, transcriptLocale='en-US', transcriptModelVersion='apple-v1')
                 for f in films for c in range(8)]
         return dict(corpus=dict(films=films, chunks=8, bpm=72, seed=1, modes=['T', 'A']),
                     windowOutcomes=rows, attempts=[dict(film=w['film'], chunk=w['chunk'], decode='attempted') for w in rows])
@@ -35,6 +35,18 @@ class IntegrityTests(unittest.TestCase):
         after['windowOutcomes'][-1] = after['windowOutcomes'][0]
         self.assertFalse(gates.evaluate(before, after)['pairedCorpusComplete']['passed'])
         self.assertFalse(gates.evaluate(before, after)['transcriptEvidence']['passed'])
+
+    def test_matching_films_and_offsets_need_matching_eligible_windows(self):
+        before, after = self.corpus(), self.corpus()
+        after['windowOutcomes'][0]['speechWindows'] = 0
+        self.assertFalse(gates.evaluate(before, after)['pairedCorpusComplete']['passed'])
+        before['windowOutcomes'][0]['speechWindows'] = 0
+        self.assertTrue(gates.evaluate(before, after)['pairedCorpusComplete']['passed'])
+        after['windowOutcomes'][0]['windows'] = 0
+        self.assertFalse(gates.evaluate(before, after)['pairedCorpusComplete']['passed'])
+        after['windowOutcomes'][0]['windows'] = 59
+        del after['windowOutcomes'][0]['speechWindows']
+        self.assertFalse(gates.evaluate(before, after)['pairedCorpusComplete']['passed'])
 
     def test_missing_render_in_one_window_cannot_hide_in_corpus_totals(self):
         before, after = self.corpus(), self.corpus()
@@ -133,9 +145,8 @@ class IntegrityTests(unittest.TestCase):
             self.assertFalse(matrix.inventory(root, revision='candidate')['complete'])
 
     def test_app_survival_alone_is_no_playback_evidence(self):
-        self.assertFalse(app.evidence('process survived 200s')['hook'])
-        evidence = app.evidence('Lo-Fi dialogue hook\n📼 piece #2 sound=true\nsalient-pick id=f')
-        self.assertTrue(evidence['hook'] and evidence['footage'] and evidence['salientPick'])
+        evidence = app.evidence('process survived 200s\nLo-Fi dialogue hook\n📼 piece #2 sound=true\nsalient-pick id=f')
+        self.assertFalse(any(evidence[key] for key in ('hook', 'footage', 'salientPick')))
 
 class SwiftRunnerIntegrityTests(unittest.TestCase):
     def test_zero_or_omitted_method_cannot_qualify_suite(self):

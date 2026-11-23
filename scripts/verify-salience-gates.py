@@ -16,7 +16,12 @@ def evaluate(before, after):
         rows = report.get('windowOutcomes', [])
         identities = [(w.get('film'), w.get('chunk')) for w in rows]
         attempts = {(w.get('film'), w.get('chunk')) for w in report.get('attempts', []) if w.get('decode') == 'attempted'}
-        successful = all(w.get('decode') == 'success' and w.get('decodedFrames', 0) >= 29 * w.get('sampleRate', 48000) for w in rows)
+        successful = all(
+            w.get('decode') == 'success' and w.get('sampleRate') == 48000
+            and w.get('decodedFrames', 0) >= 29 * 48000
+            and type(w.get('windows')) is int and w['windows'] > 0
+            and type(w.get('speechWindows')) is int and 0 <= w['speechWindows'] <= w['windows']
+            for w in rows)
         complete = len(films) == 12 and len({f['id'] for f in films}) == 12 and all(f.get('sha256') not in (None, 'missing', '') and f.get('url') not in (None, 'missing', '') for f in films) and corpus.get('chunks') == 8 and corpus.get('bpm') == 72 and corpus.get('seed') == 1 and set(corpus.get('modes', [])) == {'T', 'A'} and len(identities) == len(expected) and set(identities) == expected and attempts == expected and successful
         speech = [w for w in rows if w.get('speechWindows', 0) > 0]
         render_complete = all(all(w.get('renderOutcomes', {}).get(mode, {}).get('planned', 0) > 0 and
@@ -25,9 +30,12 @@ def evaluate(before, after):
         transcript = bool(speech) and all(w.get('model') == 'apple' and w.get('transcriptModelVersion') not in (None, '', 'missing') and w.get('transcriptLocale') not in (None, '', 'missing') and w.get('transcriptWords', 0) > 0 and w.get('transcriptOutcome') == 'result' and w.get('transcribed') is True for w in speech)
         return dict(complete=complete, transcript=transcript, rendered=render_complete, expected=len(expected), successful=len(rows), speechEligible=len(speech), nonspeech=len(rows)-len(speech))
     be, ae = corpus_evidence(before), corpus_evidence(after)
+    def window_identities(report):
+        return [(w.get('film'), w.get('chunk'), w.get('offset'), w.get('decodedFrames'), w.get('playbackOutcome'),
+                 (w.get('speechWindows') or 0) > 0, w.get('transcriptLocale'), w.get('transcriptModelVersion'))
+                for w in report.get('windowOutcomes', [])]
     gate('pairedCorpusComplete', be['complete'] and ae['complete'] and bc == ac and
-         [(w.get('film'), w.get('chunk'), w.get('offset'), w.get('transcriptLocale'), w.get('transcriptModelVersion')) for w in before.get('windowOutcomes', [])] ==
-         [(w.get('film'), w.get('chunk'), w.get('offset'), w.get('transcriptLocale'), w.get('transcriptModelVersion')) for w in after.get('windowOutcomes', [])], [be, ae])
+         window_identities(before) == window_identities(after), [be, ae])
     gate('windowRenderCoverage', be['complete'] and ae['complete'] and be['rendered'] and ae['rendered'], [be, ae])
     gate('transcriptEvidence', be['complete'] and ae['complete'] and be['transcript'] and ae['transcript'], [be, ae])
     for mode, ceiling in [('T', .05), ('A', .20)]:

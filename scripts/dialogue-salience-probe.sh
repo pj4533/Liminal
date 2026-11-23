@@ -29,6 +29,14 @@ cd "$ROOT"
 if [[ ${BUILD:-1} != 0 ]]; then
   xcodebuild build-for-testing -scheme Liminal -destination 'platform=macOS' -derivedDataPath "$DD" > "$OUT/build.log" 2>&1
 fi
+python3 - "$OUT/render-identity.json" <<'PY_IDENTITY'
+import hashlib, json, subprocess, sys
+from pathlib import Path
+def git(*args):
+    return subprocess.check_output(['git', *args])
+Path(sys.argv[1]).write_text(json.dumps(dict(revision=git('rev-parse', 'HEAD').decode().strip(),
+    trackedDiffSHA256=hashlib.sha256(git('diff', '--binary', 'HEAD')).hexdigest()), indent=2))
+PY_IDENTITY
 xcodebuild test-without-building -scheme Liminal -destination 'platform=macOS' -derivedDataPath "$DD" \
   -parallel-testing-enabled NO -only-testing:LiminalTests/DialogueSalienceProbeTests > "$OUT/probe.log" 2>&1
 python3 scripts/dialogue-salience-report.py "$OUT/probe.log" "$OUT"

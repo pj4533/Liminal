@@ -335,7 +335,7 @@ def metrics(hits, windows):
         if sum(w["transcribed"] for w in windows) > 10 else None
     out["corpus"] = CORPUS[-1] if len(CORPUS) == 1 else {}
     out["attempts"] = ATTEMPTS
-    out["windowOutcomes"] = [{k: w.get(k) for k in ("film", "chunk", "offset", "decode", "decodedFrames", "sampleRate", "renderOutcomes", "speechWindows", "model", "transcriptOutcome", "transcriptWords", "transcriptLocale", "transcriptModelVersion", "transcribed")} for w in windows]
+    out["windowOutcomes"] = [{k: w.get(k) for k in ("film", "chunk", "offset", "decode", "decodedFrames", "sampleRate", "playbackOutcome", "nativeRMSdB", "reason", "windows", "renderOutcomes", "speechWindows", "model", "transcriptOutcome", "transcriptWords", "transcriptLocale", "transcriptModelVersion", "transcribed")} for w in windows]
     return out
 
 

@@ -1,4 +1,5 @@
 import AVFoundation
+import CryptoKit
 import Foundation
 import Testing
 @testable import Liminal
@@ -51,6 +52,35 @@ struct DialogueSalienceProbeTests {
         return String(decoding: data, as: UTF8.self)
     }
 
+    /// A rejected playback window can still contain a complete native decode. Read its actual PCM
+    /// on the track timeline and classify it at source level, without turning it into a played cut.
+    static func quietWindow(url: URL, offset: Double, sampleRate: Double) async throws -> [String: Any] {
+        let asset = AVURLAsset(url: url)
+        let tracks = try await asset.loadTracks(withMediaType: .audio)
+        guard let track = tracks.first else { throw ArchiveAudioDecoder.Failure.noAudioTrack }
+        let raw = try ArchiveAudioDecoder.read(asset: asset, track: track, start: offset,
+                                               length: windowSeconds, sampleRate: sampleRate)
+        let rms = ArchiveAudioMath.rmsdB(raw)
+        guard raw.count >= Int((windowSeconds - 1) * sampleRate),
+              rms.isFinite, rms <= ArchiveAudioMath.silentdB else {
+            throw ArchiveAudioDecoder.Failure.readFailed("silent playback disagrees with timeline: \(raw.count) frames, \(rms) dB")
+        }
+        guard let mono = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1),
+              let buffer = AVAudioPCMBuffer(pcmFormat: mono, frameCapacity: AVAudioFrameCount(raw.count)),
+              let channel = buffer.floatChannelData?[0] else { throw ArchiveAudioDecoder.Failure.noBuffer }
+        buffer.frameLength = AVAudioFrameCount(raw.count)
+        raw.withUnsafeBufferPointer { channel.update(from: $0.baseAddress!, count: $0.count) }
+        let speech = LofiSpeechFocus.classify(buffer, seconds: windowSeconds)
+        guard !speech.isEmpty else { throw ArchiveAudioDecoder.Failure.readFailed("missing silent-window classification") }
+        let counts = ["planned": 0, "rendered": 0, "audible": 0]
+        return ["decode": "success", "playbackOutcome": "rejectedSilent", "nativeRMSdB": Double(rms),
+                "decodedFrames": raw.count, "sampleRate": sampleRate, "windows": speech.count,
+                "speechWindows": speech.filter { $0.speech > max(0.3, $0.singing, $0.music) }.count,
+                "transcribed": false, "transcriptOutcome": "playbackRejected", "transcriptWords": 0,
+                "transcriptLocale": "missing", "transcriptModelVersion": "missing",
+                "renderOutcomes": ["T": counts, "A": counts]]
+    }
+
     /// Max RMS (dB, 10 ms windows, hop 5 ms) of channel 0 in `range`.
     static func peakDB(_ samples: UnsafePointer<Float>, count: Int, range: Range<Int>, rate: Double) -> Double {
         let w = max(1, Int(0.010 * rate)), hop = max(1, w / 2)
@@ -68,26 +98,33 @@ struct DialogueSalienceProbeTests {
         return 10 * log10(Double(max(best, 1e-12)))
     }
 
-    static func wav(_ buffer: AVAudioPCMBuffer, frames: Range<Int>? = nil) -> Data? {
+    static func wav(_ buffer: AVAudioPCMBuffer, frames: Range<Int>? = nil, stereo: Bool = false) -> Data? {
         let range = frames ?? 0..<Int(buffer.frameLength)
         let lo = max(0, range.lowerBound), hi = min(Int(buffer.frameLength), range.upperBound)
         guard hi > lo, let data = buffer.floatChannelData else { return nil }
         let channels = Int(buffer.format.channelCount)
         let n = hi - lo
-        var pcm = Data(capacity: n * 2)
+        let outputChannels = stereo ? channels : 1
+        var pcm = Data(capacity: n * outputChannels * 2)
         for i in lo..<hi {
-            var v: Float = 0
-            for c in 0..<channels { v += data[c][i] }
-            v /= Float(channels)
-            let s = Int16(max(-1, min(1, v)) * 32767)
-            withUnsafeBytes(of: s.littleEndian) { pcm.append(contentsOf: $0) }
+            func append(_ value: Float) {
+                let sample = Int16(max(-1, min(1, value)) * 32767)
+                withUnsafeBytes(of: sample.littleEndian) { pcm.append(contentsOf: $0) }
+            }
+            if stereo {
+                for c in 0..<channels { append(data[c][i]) }
+            } else {
+                var sum: Float = 0
+                for c in 0..<channels { sum += data[c][i] }
+                append(sum / Float(channels))
+            }
         }
         var out = Data()
         func u32(_ x: UInt32) { withUnsafeBytes(of: x.littleEndian) { out.append(contentsOf: $0) } }
         func u16(_ x: UInt16) { withUnsafeBytes(of: x.littleEndian) { out.append(contentsOf: $0) } }
         let rate = UInt32(buffer.format.sampleRate)
         out.append(contentsOf: Array("RIFF".utf8)); u32(UInt32(36 + pcm.count)); out.append(contentsOf: Array("WAVE".utf8))
-        out.append(contentsOf: Array("fmt ".utf8)); u32(16); u16(1); u16(1); u32(rate); u32(rate * 2); u16(2); u16(16)
+        out.append(contentsOf: Array("fmt ".utf8)); u32(16); u16(1); u16(UInt16(outputChannels)); u32(rate); u32(rate * UInt32(2 * outputChannels)); u16(UInt16(2 * outputChannels)); u16(16)
         out.append(contentsOf: Array("data".utf8)); u32(UInt32(pcm.count)); out.append(pcm)
         return out
     }
@@ -254,10 +291,30 @@ struct DialogueSalienceProbeTests {
             for (chunk, offset) in offsets.enumerated() {
                 print("SALIENCE-ATTEMPT " + Self.json(["film": clip.id, "chunk": chunk, "offset": Self.r3(offset), "decode": "attempted"]))
                 let url = directory.appending(path: clip.fileName)
-                guard let buffer = try? await ArchiveAudioDecoder.decode(url: url, sourceStart: offset, sourceLength: Self.windowSeconds,
-                                                                         rate: 1, format: format),
-                      let samples = buffer.floatChannelData?[0] else {
-                    print("SALIENCE-ATTEMPT " + Self.json(["film": clip.id, "chunk": chunk, "offset": Self.r3(offset), "decode": "failed"]))
+                let buffer: AVAudioPCMBuffer
+                do {
+                    buffer = try await ArchiveAudioDecoder.decode(url: url, sourceStart: offset,
+                                                                  sourceLength: Self.windowSeconds, rate: 1, format: format)
+                } catch {
+                    var row: [String: Any] = ["film": clip.id, "chunk": chunk, "offset": Self.r3(offset),
+                                              "decode": "failed", "reason": String(reflecting: error)]
+                    if case ArchiveAudioDecoder.Failure.silent = error {
+                        do {
+                            let measurement = try await Self.quietWindow(url: url, offset: offset, sampleRate: format.sampleRate)
+                            row.merge(measurement) { _, measured in measured }
+                            row["model"] = provider == nil ? "unavailable" : "apple"
+                            print("SALIENCE-WINDOW " + Self.json(row))
+                            continue
+                        } catch {
+                            row["measurementError"] = String(reflecting: error)
+                        }
+                    }
+                    print("SALIENCE-ATTEMPT " + Self.json(row))
+                    continue
+                }
+                guard let samples = buffer.floatChannelData?[0] else {
+                    print("SALIENCE-ATTEMPT " + Self.json(["film": clip.id, "chunk": chunk, "offset": Self.r3(offset),
+                                                           "decode": "failed", "reason": "no float channel"]))
                     continue
                 }
                 let rate = buffer.format.sampleRate
@@ -466,10 +523,22 @@ struct DialogueSalienceProbeTests {
                             let chops = DialogueChopRenderer.render(part.plan, bank: motif.bank, source: motif.source, analysis: motif.analysis,
                                                                     prerendered: motif.renders)
                             recordRenders(mode: mode, events: part.plan.events, chops: chops)
+                            func semanticClass(_ parent: Int) -> String {
+                                let fragment = motif.fragments[parent]
+                                let text = DialogueLineInterest.normalize(fragment.text ?? "")
+                                let drugs = ["psilocybin", "mescaline", "marijuana", "peyote", "ergot", "amphetamine",
+                                    "cocaine", "heroin", "opium", "morphine", "cannabis", "ketamine", "ayahuasca",
+                                    "benzedrine", "methedrine", "codeine", "nicotine"]
+                                if drugs.contains(text) { return "drug" }
+                                if let words = refinement?.words, let index = words.firstIndex(where: {
+                                    DialogueLineInterest.normalize($0.text) == text && $0.frames.overlaps(fragment.frames)
+                                }), DialogueReorderGuard.tag(words)[index].isName { return "properName" }
+                                return "unclassified"
+                            }
                             // Preserve short actual performed figures, with event timing and FX intact.
-                            // Two distinct examples per class give four auditions when the real corpus offers them.
+                            // Allow a three-plus-one selection if the corpus offers only one instance of a class.
                             if !auditionLines.contains(mode + clip.id + (mode == "T" ? lineText : String(chunk))) {
-                                for kind in (mode == "T" ? ["letter", "syllable"] : ["acoustic"]) where auditionCounts[kind, default: 0] < (mode == "T" ? 2 : 4) {
+                                for kind in (mode == "T" ? ["letter", "syllable"] : ["acoustic"]) where auditionCounts[kind, default: 0] < (mode == "T" ? 3 : 4) {
                                     let unitHits = chops.filter { chop in
                                         guard let id = chop.event.piece, motif.fragments.indices.contains(id) else { return false }
                                         return kind == "acoustic" || motif.fragments[id].kind.rawValue == kind
@@ -478,18 +547,37 @@ struct DialogueSalienceProbeTests {
                                         guard kind != "acoustic", let id = unitHits[i].event.piece,
                                               let parent = motif.fragments[id].parent,
                                               let expected = motif.halves[parent], expected.count >= 2,
-                                              i + expected.count <= unitHits.count else { return false }
+                                              i + expected.count <= unitHits.count, part.plan.usedTranscript,
+                                              kind != "syllable" || semanticClass(parent) != "unclassified" else { return false }
                                         let ordered = Array(unitHits[i..<(i + expected.count)])
                                         guard ordered.compactMap({ $0.event.piece }) == expected else { return false }
                                         let steps = ordered.map { $0.event.block * 64 + $0.event.slot }
                                         let strides = zip(steps, steps.dropFirst()).map { $1 - $0 }
                                         guard Set(strides) == [1] || Set(strides) == [2] else { return false }
                                         let landing = (steps.last! / 4 + 1) * 4
-                                        return chops.contains { $0.event.piece == parent && $0.event.block * 64 + $0.event.slot == landing }
+                                        let stepsInFigure = chops.filter { chop in
+                                            let step = chop.event.block * 64 + chop.event.slot
+                                            return steps[0]...landing ~= step
+                                        }.sorted { $0.event.startTime < $1.event.startTime }
+                                        guard stepsInFigure.compactMap({ $0.event.piece }) == expected + [parent],
+                                              let whole = stepsInFigure.last, whole.event.block * 64 + whole.event.slot == landing,
+                                              let played = whole.event.sourceFrames,
+                                              stepsInFigure.allSatisfy({ $0.event.effect != .reversed && $0.buffer.frameLength > 0 }),
+                                              let word = raw.first(where: {
+                                                  DialogueLineInterest.normalize($0.text) == DialogueLineInterest.normalize(motif.fragments[parent].text ?? "")
+                                                  && $0.frames.overlaps(motif.fragments[parent].frames)
+                                              }), let core = accepted.first(where: { $0.index == word.index }),
+                                              played.lowerBound <= core.frames.lowerBound, played.upperBound >= core.frames.upperBound
+                                        else { return false }
+                                        return stepsInFigure.allSatisfy { chop in
+                                            guard let x = chop.buffer.floatChannelData?[0] else { return false }
+                                            let n = Int(chop.buffer.frameLength)
+                                            return Self.peakDB(x, count: n, range: 0..<n, rate: rate) > -100
+                                        }
                                     }
                                     let first = figure.map { unitHits[$0] } ?? (kind == "acoustic" ? unitHits.first : nil)
                                     if unitHits.count >= 2, let first {
-                                        let start = first.event.startTime - 0.3
+                                        let start = max(0, first.event.startTime - 0.3)
                                         let seconds = 6.0
                                         let parent = first.event.piece.flatMap { motif.fragments[$0].parent }
                                         let expected = parent.flatMap { motif.halves[$0] } ?? []
@@ -502,35 +590,57 @@ struct DialogueSalienceProbeTests {
                                             return (expected.contains(id) || id == parent) && step >= firstStep && step <= landingStep
                                         }.sorted { $0.event.startTime < $1.event.startTime }
                                         guard kind == "acoustic" || relevant.allSatisfy({ $0.event.startTime >= start && $0.event.startTime + Double($0.buffer.frameLength) / rate <= start + seconds }) else { continue }
-                                        let n = Int(seconds * rate)
-                                        if let audio = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(n)),
-                                           let output = audio.floatChannelData {
-                                            audio.frameLength = AVAudioFrameCount(n)
-                                            for c in 0..<Int(format.channelCount) { output[c].update(repeating: 0, count: n) }
-                                            for chop in chops {
-                                                guard let input = chop.buffer.floatChannelData else { continue }
-                                                let at = Int(((chop.event.startTime - start) * rate).rounded())
-                                                let lo = max(0, -at), hi = min(Int(chop.buffer.frameLength), n - at)
-                                                if hi > lo {
-                                                    for c in 0..<Int(format.channelCount) {
-                                                        for i in lo..<hi { output[c][at + i] += input[min(c, Int(chop.buffer.format.channelCount) - 1)][i] }
-                                                    }
-                                                }
-                                            }
-                                            auditionCounts[kind, default: 0] += 1
-                                            let name = "audition-\(kind)-\(auditionCounts[kind]!)-\(clip.id)"
-                                            emitSnippet(name + ".wav", Self.wav(audio))
-                                            emitSnippet(name + "-context.wav", Self.wav(buffer, frames: motif.line.frames))
-                                            print("SALIENCE-AUDITION " + Self.json(["name": name, "film": clip.id, "chunk": chunk,
-                                                "line": lineText, "mode": mode, "kind": kind, "transportStart": start, "seconds": seconds,
-                                                "parentText": parent.map { motif.fragments[$0].text ?? "" } ?? "",
-                                                "parent": parent ?? -1, "spellUnits": expected, "complete": kind != "acoustic",
-                                                "semanticClass": parent.map { ["psilocybin", "mescaline", "marijuana", "peyote", "ergot", "lysergic", "amphetamine", "cocaine", "heroin"].contains(DialogueLineInterest.normalize(motif.fragments[$0].text ?? "")) ? "drug" : "unclassified" } ?? "unclassified",
-                                                "render": "performed-effects", "mixEvidence": "unavailable: isolated dialogue only",
-                                                "events": relevant.map { ["id": $0.event.piece ?? -1, "step": $0.event.block * 64 + $0.event.slot,
-                                                    "start": $0.event.startTime, "end": $0.event.startTime + Double($0.buffer.frameLength) / rate] }]))
-                                            auditionLines.insert(mode + clip.id + (mode == "T" ? lineText : String(chunk)))
+                                        let all = planned.render()
+                                        let audio = try DialogueAuditionRender.stem(chops: all, format: format, start: start, seconds: seconds)
+                                        let number = auditionCounts[kind, default: 0] + 1
+                                        let name = "audition-\(kind)-\(number)-\(clip.id)"
+                                        var row: [String: Any] = ["name": name, "film": clip.id, "chunk": chunk,
+                                            "line": lineText, "mode": mode, "kind": kind, "transportStart": start, "seconds": seconds,
+                                            "parentText": parent.map { motif.fragments[$0].text ?? "" } ?? "",
+                                            "parent": parent ?? -1, "spellUnits": expected, "complete": kind != "acoustic",
+                                            "semanticClass": parent.map(semanticClass) ?? "unclassified", "bpm": bpm,
+                                            "seed": String(seed), "cueStart": due, "piece": piece, "loop": motif.loop,
+                                            "windowOffset": offset, "sampleRate": rate, "bankID": String(part.plan.bankID),
+                                            "contextFrames": [motif.line.frames.lowerBound, motif.line.frames.upperBound],
+                                            "transcriptModel": transcript?.modelVersion ?? "missing",
+                                            "transcriptLocale": transcript?.locale ?? "missing", "usedTranscript": part.plan.usedTranscript]
+                                        row["events"] = relevant.map { chop -> [String: Any] in
+                                            let event = chop.event
+                                            return ["id": event.piece ?? -1, "step": event.block * 64 + event.slot,
+                                                    "start": event.startTime, "end": event.startTime + Double(chop.buffer.frameLength) / rate,
+                                                    "sourceFrames": event.sourceFrames.map { [$0.lowerBound, $0.upperBound] } ?? [],
+                                                    "effect": event.effect.name]
                                         }
+                                        var wavHashes: [String: String] = [:]
+                                        func emitAudio(_ role: String, suffix: String, data: Data?) {
+                                            guard let data else { return }
+                                            wavHashes[role] = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+                                            emitSnippet(name + suffix + ".wav", data)
+                                        }
+                                        if kind != "acoustic", let parent {
+                                            let fragment = motif.fragments[parent]
+                                            let word = try #require(accepted.first { w in
+                                                DialogueLineInterest.normalize(w.text) == DialogueLineInterest.normalize(fragment.text ?? "")
+                                                && w.frames.overlaps(fragment.frames)
+                                            })
+                                            row["wordCoreFrames"] = [word.frames.lowerBound, word.frames.upperBound]
+                                            let dry = planned.parts.flatMap { p in
+                                                DialogueChopRenderer.render(DialogueAuditionRender.dryPlan(p.plan), bank: p.motif.bank,
+                                                    source: p.motif.source, analysis: p.motif.analysis, prerendered: p.motif.renders)
+                                            }
+                                            let dryStem = try DialogueAuditionRender.stem(chops: dry, format: format, start: start, seconds: seconds)
+                                            let mix = try await DialogueAuditionRender.mix(source: source, chops: all, seed: seed,
+                                                bpm: bpm, due: due, start: start, seconds: seconds)
+                                            emitAudio("dry", suffix: "-dry", data: Self.wav(dryStem, stereo: true))
+                                            emitAudio("mix", suffix: "-mix", data: Self.wav(mix, stereo: true))
+                                            row["mixRender"] = "LofiMasterBus/public-test-fixture-v1"
+                                        }
+                                        emitAudio("performed", suffix: "", data: Self.wav(audio))
+                                        emitAudio("context", suffix: "-context", data: Self.wav(buffer, frames: motif.line.frames))
+                                        row["wavSHA256"] = wavHashes
+                                        print("SALIENCE-AUDITION " + Self.json(row))
+                                        auditionCounts[kind] = number
+                                        auditionLines.insert(mode + clip.id + (mode == "T" ? lineText : String(chunk)))
                                     }
                                 }
                             }
@@ -689,6 +799,10 @@ struct DialogueSalienceProbeTests {
             }
         }
         Self.simulateFootage(clips: clips, index: footageIndex)
+        if let directory = config.snippetDirectory {
+            let seed = URL(fileURLWithPath: directory).deletingLastPathComponent().appending(path: "salience-index.json")
+            try footageIndex.save(to: seed)
+        }
         print("SALIENCE-DONE snippets=\(snippets)")
     }
     /// Paired production-policy requests. Fresh-index sampling measures the targeting policy before

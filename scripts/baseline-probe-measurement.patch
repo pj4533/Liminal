@@ -1,6 +1,42 @@
 --- a/LiminalTests/DialogueSalienceProbeTests.swift
 +++ b/LiminalTests/DialogueSalienceProbeTests.swift
-@@ -174,6 +174,14 @@
+@@ -51,6 +51,35 @@
+         return String(decoding: data, as: UTF8.self)
+     }
+
++    /// A rejected playback window can still contain a complete native decode. Read its actual PCM
++    /// on the track timeline and classify it at source level, without turning it into a played cut.
++    static func quietWindow(url: URL, offset: Double, sampleRate: Double) async throws -> [String: Any] {
++        let asset = AVURLAsset(url: url)
++        let tracks = try await asset.loadTracks(withMediaType: .audio)
++        guard let track = tracks.first else { throw ArchiveAudioDecoder.Failure.noAudioTrack }
++        let raw = try ArchiveAudioDecoder.read(asset: asset, track: track, start: offset,
++                                               length: windowSeconds, sampleRate: sampleRate)
++        let rms = ArchiveAudioMath.rmsdB(raw)
++        guard raw.count >= Int((windowSeconds - 1) * sampleRate),
++              rms.isFinite, rms <= ArchiveAudioMath.silentdB else {
++            throw ArchiveAudioDecoder.Failure.readFailed("silent playback disagrees with timeline: \(raw.count) frames, \(rms) dB")
++        }
++        guard let mono = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1),
++              let buffer = AVAudioPCMBuffer(pcmFormat: mono, frameCapacity: AVAudioFrameCount(raw.count)),
++              let channel = buffer.floatChannelData?[0] else { throw ArchiveAudioDecoder.Failure.noBuffer }
++        buffer.frameLength = AVAudioFrameCount(raw.count)
++        raw.withUnsafeBufferPointer { channel.update(from: $0.baseAddress!, count: $0.count) }
++        let speech = LofiSpeechFocus.classify(buffer, seconds: windowSeconds)
++        guard !speech.isEmpty else { throw ArchiveAudioDecoder.Failure.readFailed("missing silent-window classification") }
++        let counts = ["planned": 0, "rendered": 0, "audible": 0]
++        return ["decode": "success", "playbackOutcome": "rejectedSilent", "nativeRMSdB": Double(rms),
++                "decodedFrames": raw.count, "sampleRate": sampleRate, "windows": speech.count,
++                "speechWindows": speech.filter { $0.speech > max(0.3, $0.singing, $0.music) }.count,
++                "transcribed": false, "transcriptOutcome": "playbackRejected", "transcriptWords": 0,
++                "transcriptLocale": "missing", "transcriptModelVersion": "missing",
++                "renderOutcomes": ["T": counts, "A": counts]]
++    }
++
+     /// Max RMS (dB, 10 ms windows, hop 5 ms) of channel 0 in `range`.
+     static func peakDB(_ samples: UnsafePointer<Float>, count: Int, range: Range<Int>, rate: Double) -> Double {
+         let w = max(1, Int(0.010 * rate)), hop = max(1, w / 2)
+@@ -174,6 +203,14 @@
             await DialogueSpeechAssets.status(mode: .installedOnly, environment: environment) == .ready {
              provider = AppleSpeechTranscriptProvider.live()
          }
@@ -15,7 +51,7 @@
          print("SALIENCE-TRANSCRIBER \(provider == nil ? "none" : "apple") films=\(clips.count)")
          var snippetDir: URL?
          if let d = config.snippetDirectory {
-@@ -214,16 +222,25 @@
+@@ -214,16 +251,45 @@
 
          for clip in clips {
              let usable = clip.duration - Self.windowSeconds - 1
@@ -33,17 +69,39 @@
              for (chunk, offset) in offsets.enumerated() {
 +                print("SALIENCE-ATTEMPT " + Self.json(["film": clip.id, "chunk": chunk, "offset": Self.r3(offset), "decode": "attempted"]))
                  let url = directory.appending(path: clip.fileName)
-                 guard let buffer = try? await ArchiveAudioDecoder.decode(url: url, sourceStart: offset, sourceLength: Self.windowSeconds,
-                                                                          rate: 1, format: format),
+-                guard let buffer = try? await ArchiveAudioDecoder.decode(url: url, sourceStart: offset, sourceLength: Self.windowSeconds,
+-                                                                         rate: 1, format: format),
 -                      let samples = buffer.floatChannelData?[0] else { continue }
-+                      let samples = buffer.floatChannelData?[0] else {
-+                    print("SALIENCE-ATTEMPT " + Self.json(["film": clip.id, "chunk": chunk, "offset": Self.r3(offset), "decode": "failed"]))
++                let buffer: AVAudioPCMBuffer
++                do {
++                    buffer = try await ArchiveAudioDecoder.decode(url: url, sourceStart: offset,
++                                                                  sourceLength: Self.windowSeconds, rate: 1, format: format)
++                } catch {
++                    var row: [String: Any] = ["film": clip.id, "chunk": chunk, "offset": Self.r3(offset),
++                                              "decode": "failed", "reason": String(reflecting: error)]
++                    if case ArchiveAudioDecoder.Failure.silent = error {
++                        do {
++                            let measurement = try await Self.quietWindow(url: url, offset: offset, sampleRate: format.sampleRate)
++                            row.merge(measurement) { _, measured in measured }
++                            row["model"] = provider == nil ? "unavailable" : "apple"
++                            print("SALIENCE-WINDOW " + Self.json(row))
++                            continue
++                        } catch {
++                            row["measurementError"] = String(reflecting: error)
++                        }
++                    }
++                    print("SALIENCE-ATTEMPT " + Self.json(row))
++                    continue
++                }
++                guard let samples = buffer.floatChannelData?[0] else {
++                    print("SALIENCE-ATTEMPT " + Self.json(["film": clip.id, "chunk": chunk, "offset": Self.r3(offset),
++                                                           "decode": "failed", "reason": "no float channel"]))
 +                    continue
 +                }
                  let rate = buffer.format.sampleRate
                  let frameCount = Int(buffer.frameLength)
                  let speech = LofiSpeechFocus.classify(buffer, seconds: Self.windowSeconds)
-@@ -258,6 +275,8 @@
+@@ -258,6 +324,8 @@
                  }
                  var windowLine: [String: Any] = [
                      "film": clip.id, "title": String(clip.title.prefix(60)), "chunk": chunk, "offset": Self.r3(offset),
@@ -52,7 +110,7 @@
                      "duration": Self.r3(clip.duration), "transcribed": transcript != nil, "transcribeMs": Self.r3(transcribeMs),
                      "speechWindows": speech.filter { $0.speech > max(0.3, $0.singing, $0.music) }.count, "windows": speech.count,
                      "raw": raw.map { ["t": $0.text, "s": film($0.frames.lowerBound), "e": film($0.frames.upperBound),
-@@ -301,6 +320,21 @@
+@@ -301,6 +369,21 @@
                  var perWindow = 0, controlsThisWindow = 0
                  var mechanisms = Set<String>()
 
@@ -74,7 +132,7 @@
                  for mode in modes {
                      let useTranscript = mode == "T" ? transcript : nil
                      if mode == "T", transcript == nil { continue }
-@@ -330,10 +364,12 @@
+@@ -330,10 +413,12 @@
                                                                seed: seed &+ UInt64(piece), cueToken: piece + 1, revision: 0)
                              print("SALIENCE-NOPLAN \(clip.id) chunk=\(chunk) mode=\(mode) piece=\(piece) fallbackEvents=\(plan.events.count)")
                              guard let playedBank else { continue }
@@ -88,7 +146,7 @@
                                  func covers(_ list: [Word]) -> [[String: Any]] {
                                      list.filter { $0.frames.upperBound > played.lowerBound && $0.frames.lowerBound < played.upperBound }.map { w in
                                          let ov = min(w.frames.upperBound, played.upperBound) - max(w.frames.lowerBound, played.lowerBound)
-@@ -351,12 +387,12 @@
+@@ -351,12 +436,12 @@
                                  let heard = words.filter { ($0["cov"] as? Double ?? 0) >= 0.3 }
                                  var hit: [String: Any] = [
                                      "film": clip.id, "chunk": chunk, "mode": mode, "piece": piece, "loop": -1, "ev": e, "line": "-", "interest": -1,
@@ -103,7 +161,7 @@
                                      "functionOnly": !heard.isEmpty && heard.allSatisfy { ($0["fn"] as? Bool) == true },
                                  ]
                                  if let w = inside(played.lowerBound) {
-@@ -368,6 +404,12 @@
+@@ -368,6 +453,12 @@
                                                      "mech": event.chokeAt != nil && pad.frames.upperBound >= w.frames.upperBound - tol ? "padChoke" : "padEdge",
                                                      "drop": ""] as [String: Any]
                                  }
@@ -116,7 +174,7 @@
                                  print("SALIENCE-HIT " + Self.json(hit))
                              }
                              continue
-@@ -403,6 +445,7 @@
+@@ -403,6 +494,7 @@
                              if !chosen.contains(lineKey) { chosen.append(lineKey) }
                              let chops = DialogueChopRenderer.render(part.plan, bank: motif.bank, source: motif.source, analysis: motif.analysis,
                                                                      prerendered: motif.renders)
@@ -124,7 +182,7 @@
                              loopEvents[motif.loop, default: []] += part.plan.events
                              loopMotif[motif.loop] = motif
                              for (e, event) in part.plan.events.enumerated() {
-@@ -459,11 +502,21 @@
+@@ -459,11 +551,21 @@
                                      "peak": Self.r3(peak), "preDB": Self.r3(pre - peak), "postDB": Self.r3(post - peak), "tailDB": Self.r3(tail - peak),
                                      "words": covers(accepted), "rawWords": covers(raw),
                                  ]
@@ -151,7 +209,7 @@
                                  if let parent = fr.parent { hit["parentText"] = motif.fragments[parent].text ?? "" }
                                  let sEdge = startEdge(accepted), eEdge = endEdge(accepted)
                                  if let sEdge { hit["startIn"] = sEdge }
-@@ -543,6 +596,7 @@
+@@ -543,6 +645,7 @@
                      }
                  }
                  windowLine["chosen"] = chosen

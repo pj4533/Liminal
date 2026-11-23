@@ -115,10 +115,21 @@ They cannot be made green by coincidentally observing 159 fresh occurrences.
 Auditions qualify only from logged actual rendered figures: complete ordered units from one
 parent, a uniform one/two-step grid, next-beat whole landing, and complete containment in the
 exported window. Three or four qualifying examples must include a real initialism and a
-recognized drug/proper-name syllable figure. Drug classification uses an explicit documented
-word list in the probe; unclassified/proper-name examples remain missing until authenticated.
-Acoustic examples are separate extras. Effects/context evidence is retained; full mix,
-dry-only and human listening evidence is explicitly unavailable until captured/reviewed.
+recognized drug/proper-name syllable figure. The probe matches substance names against an explicit list and proper names against the
+sentence's named-entity tags. It checks the source word core against the rendered landing,
+retains the source line and rerenders the same events dry with piece effects bypassed.
+The stereo musical example runs the archive bed, chops, ducking, effects, all music stems
+and master on the probe clock. Its drum source is the public mix-test performance fixture.
+Acoustic examples stay in the extras inventory.
+
+The auditions phase writes performed, context, dry and mixed AAC files plus source times,
+derivative identity, render revision and hashes in `auditions/provenance.json`. A human
+reviewer listens to each selected context, dry and mixed file and records what they heard,
+including recognizability, unit order and the whole-word landing against the music.
+For each example, add an entry keyed by its name to `OUT/audition-reviews.json` with
+`sha256` mapping `context`, `dry` and `mix` to the reviewed M4A hashes, a written
+`outcome` and a Boolean `accepted`. Rerun the auditions phase to check the reviews
+against those exact exports. Missing or rejected listening keeps acceptance open.
 
 Media cache sidecars authenticate chosen metadata filename/URL/hash and source metadata hash;
 legacy or mismatching cache entries are refetched. ffprobe facts are metadata only. Actual

@@ -654,7 +654,7 @@ struct LofiMixRenderTests {
                         commonFormat: .pcmFormatFloat32, interleaved: false)
     }
 
-    private func drumFixture(clock: LofiClock) -> LofiDrumLibrary.Break {
+    func drumFixture(clock: LofiClock) -> LofiDrumLibrary.Break {
         let frames = clock.frameCount * 4
         var left = [Float](repeating: 0, count: frames)
         var right = left
