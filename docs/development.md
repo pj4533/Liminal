@@ -28,7 +28,8 @@ For bass, chords or mix work add the suites that pin the bass line and voice, th
   -only-testing:LiminalTests/LofiStemChainTests -only-testing:LiminalTests/LofiBassLineTests \
   -only-testing:LiminalTests/LofiBassVoiceTests -only-testing:LiminalTests/LofiPadTests \
   -only-testing:LiminalTests/LofiMixRenderTests -only-testing:LiminalTests/LofiLiveBusTests \
-  -only-testing:LiminalTests/LofiCaptureHooksTests
+  -only-testing:LiminalTests/LofiCaptureHooksTests -only-testing:LiminalTests/LofiRenderTuningTests \
+  -only-testing:LiminalTests/LofiBassCueTests
 ```
 
 `LofiStemChainTests.preparationStaysInsideItsBudget` holds a Debug phrase render under 1.5 s. Per-sample loops on the render path are `while` loops: in a Debug build a `for` loop over a range goes through the generic iterator and Swift's runtime metadata on every step, which cost the merged bass and pad render about a quarter of its time (D118).

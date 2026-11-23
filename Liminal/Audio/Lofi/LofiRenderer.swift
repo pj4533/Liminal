@@ -95,6 +95,8 @@ nonisolated enum LofiRenderer {
         else { throw RenderError.buffer }
         let left = UnsafeMutableBufferPointer(start: bassChannels[0], count: n)
         let right = UnsafeMutableBufferPointer(start: bassChannels[1], count: n)
+        // The bass's cue partials (D129), mono, added inside the bass chain.
+        var bassCue = tuning.bassCue == nil ? [] : [Float](repeating: 0, count: n)
 
         let tailBeats = max(8.0, 9.0 / clock.beatDuration)
         let tailCount = clock.frame(at: tailBeats)
@@ -116,7 +118,15 @@ nonisolated enum LofiRenderer {
         for (index, note) in score.notes.enumerated() where note.velocity > 0 {
             try Task.checkCancellation()
             switch note.part {
-            case .bass: addBass(note, score: score, clock: clock, samples: samples, left: left, right: right)
+            case .bass:
+                if let cue = tuning.bassCue {
+                    bassCue.withUnsafeMutableBufferPointer { out in
+                        addBass(note, score: score, clock: clock, samples: samples, left: left, right: right,
+                                cue: cue, cueOut: out)
+                    }
+                } else {
+                    addBass(note, score: score, clock: clock, samples: samples, left: left, right: right)
+                }
             case .strum:
                 // The strummed hook (D128) renders beside the melody in the accent buffer: the lead's
                 // filters and gain curve and the phrase's lead gain, but never the gain measurement or
@@ -170,7 +180,7 @@ nonisolated enum LofiRenderer {
         }
         let sendGain = min(1.6, sqrtf(dryLeadGain / 1.23))
         // The mids are matched to and ducked under the melody alone, so the hook never moves their level.
-        let mids = finishTexture(&textureVoices, lead: lead, leadGain: dryLeadGain, score: score, clock: clock)
+        var mids = finishTexture(&textureVoices, lead: lead, leadGain: dryLeadGain, score: score, clock: clock)
         if let strumDry {
             vDSP_vadd(lead.left, 1, strumDry.left, 1, &lead.left, 1, vDSP_Length(frames))
             vDSP_vadd(lead.right, 1, strumDry.right, 1, &lead.right, 1, vDSP_Length(frames))
@@ -310,14 +320,7 @@ nonisolated enum LofiRenderer {
         } else {
             try run(0..<frames)
         }
-        // Space: filtered once over phrase plus tail, so the carried tail is never filtered again,
-        // then ducked under the dry lead. The duck applies to this phrase's frames (own and carried).
-        addBassThrow(score: score, clock: clock, frames: frames, spaceLeft: &spaceL, spaceRight: &spaceR)
-        let spaceStats = LofiStemChains.applySpace(left: &spaceL, right: &spaceR, sampleRate: sampleRate)
-        let duck = Self.spaceDuck(lead: lead, gain: dryLeadGain, frames: n, sampleRate: sampleRate,
-                                  onsets: Self.leadOnsets(score, clock: clock))
         guard let bassL = left.baseAddress, let bassR = right.baseAddress else { throw RenderError.buffer }
-
         // Stems of the phrase: edge envelope, hiss after the mids chain, duck on the space.
         var envelope = [Float](repeating: 1, count: n)
         for i in 0..<min(edge, n) {
@@ -325,6 +328,37 @@ nonisolated enum LofiRenderer {
             envelope[i] = min(envelope[i], e)
             envelope[n - 1 - i] = min(envelope[n - 1 - i], e)
         }
+        // The bass is finished before the space, so its cue band can key the cue duck (D129).
+        var bassStats = bassCue.withUnsafeBufferPointer { cue in
+            finishBass(left: left, right: right, frames: n, sampleRate: sampleRate, envelope: envelope,
+                       drums: drums, drumOffset: drumOffset,
+                       anchoredKicks: score.bassAnchors.map { drumOffset + clock.frame(at: $0.kickBeat) },
+                       kickDuck: &kickDuck, settings: tuning.bass, cue: cue.isEmpty ? nil : cue.baseAddress)
+        }
+        bassCue = []
+        // The cue duck (D129) on the texture and on the return's output, before the bass throws join it, so
+        // the bass's own echoes keep their cue. Both buffers start from silence; the texture is cut at the
+        // phrase edge, so its reduction fades in and out there.
+        if let cueDuck = tuning.cueDuck {
+            let reduction = cueDuck.reduction(bass: UnsafePointer(bassL), count: n, frames: frames, sampleRate: sampleRate)
+            if cueDuck.wet {
+                cueDuck.apply(reduction, to: &spaceL, sampleRate: sampleRate, taper: false)
+                cueDuck.apply(reduction, to: &spaceR, sampleRate: sampleRate, taper: false)
+            }
+            if cueDuck.texture {
+                cueDuck.apply(reduction, to: &mids.left, sampleRate: sampleRate, taper: true)
+                cueDuck.apply(reduction, to: &mids.right, sampleRate: sampleRate, taper: true)
+            }
+            let stats = LofiCueDuck.stats(Array(reduction.prefix(n)))
+            bassStats.extra["cueDuckMeanDb"] = stats.meanDB
+            bassStats.extra["cueDuckMaxDb"] = stats.maxDB
+        }
+        // Space: filtered once over phrase plus tail, so the carried tail is never filtered again,
+        // then ducked under the dry lead. The duck applies to this phrase's frames (own and carried).
+        addBassThrow(score: score, clock: clock, frames: frames, spaceLeft: &spaceL, spaceRight: &spaceR)
+        let spaceStats = LofiStemChains.applySpace(left: &spaceL, right: &spaceR, sampleRate: sampleRate)
+        let duck = Self.spaceDuck(lead: lead, gain: dryLeadGain, frames: n, sampleRate: sampleRate,
+                                  onsets: Self.leadOnsets(score, clock: clock))
         var hissTrack = Self.automationTrack(automation.map(\.dust), frames: n, clock: clock)
         var rng = MusicRNG(seed: seed).fork(12)
         var hiss: Float = 0
@@ -382,10 +416,6 @@ nonisolated enum LofiRenderer {
         vDSP_vsmul(tailL, 1, &spaceTrim, &tailL, 1, vDSP_Length(tailCount))
         vDSP_vsmul(tailR, 1, &spaceTrim, &tailR, 1, vDSP_Length(tailCount))
         balance.observe(tailL, tailR)
-        var bassStats = finishBass(left: left, right: right, frames: n, sampleRate: sampleRate, envelope: envelope,
-                                   drums: drums, drumOffset: drumOffset,
-                                   anchoredKicks: score.bassAnchors.map { drumOffset + clock.frame(at: $0.kickBeat) },
-                                   kickDuck: &kickDuck, settings: tuning.bass)
         // The program's loudness-match trim (D114) follows the balance, which only turns phrases down:
         // a plucked program held under the 400 ms and peak ceilings can still come up to the grand.
         let programTrim = powf(10, score.preset.levelDB / 20)

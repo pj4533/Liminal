@@ -30,10 +30,13 @@ nonisolated extension LofiStemChains {
         static let standard = Bass()
     }
 
-    /// Bass of one phrase, mono in place (the caller copies it to both channels).
+    /// Bass of one phrase, mono in place (the caller copies it to both channels). `cue`, when given, is the
+    /// phrase's clean cue partials (`LofiBassVoice.Cue`, D129, `count` frames): added after the parallel
+    /// harmonics and the compressor's makeup, before the EQ and trim, so it is neither saturated (no
+    /// intermodulation with the sub) nor able to move the compressor and with it the sub's level.
     @discardableResult
     static func applyBass(_ mono: UnsafeMutablePointer<Float>, count: Int, sampleRate: Double,
-                          settings: Bass = .standard) -> Stats {
+                          settings: Bass = .standard, cue: UnsafePointer<Float>? = nil) -> Stats {
         var stats = Stats()
         guard count > 0 else { return stats }
         (stats.inPeakDb, stats.inRmsDb) = level(mono, mono, count)
@@ -79,6 +82,7 @@ nonisolated extension LofiStemChains {
             stats.grMaxDb = reduction.maxDB
             stats.extra["makeupDb"] = gainToDB(makeup)
         }
+        if let cue { vDSP_vadd(mono, 1, cue, 1, mono, 1, vDSP_Length(count)) }
         var eq = LofiFilterChain(settings.filters, sampleRate: sampleRate)
         eq.process(mono, count: count)
         if settings.dynamicsEnabled, settings.outputTrimDB != 0 {

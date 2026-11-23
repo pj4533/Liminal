@@ -9,13 +9,29 @@ import Foundation
 /// - `tune.bassSatBand=LO-HI`: the bass chain's parallel harmonic band, a 2-pole high-pass at LO and the
 ///   4-pole low-pass pair at HI (default `200-450`). Both inside 100-2000 Hz, LO < HI.
 /// - `tune.bassSatMix=F`: the blend of that band (default `0.15`), 0 to 0.6.
+/// - `tune.bassCueDb=DB|off`: the bass's clean cue partials (`LofiBassVoice.Cue`, D129), the first partial
+///   at or above the band's low edge `DB` under the fundamental (-40 to 0); `off` renders no cue layer.
+/// - `tune.bassCueBand=LO-HI`: the cue's low edge and 4-pole roll-off (100-2000 Hz).
+/// - `tune.bassCueSlopeDb=DB`: level step per partial (0 to 12).
+/// - `tune.bassCueOnsetMs=MS`: the cue's raised-cosine rise from the strike (0 to 500 ms).
+/// - `tune.bassCueSynthDb=DB`: extra level of the cue on the `synth` tone (-24 to 12).
+///   The four shape keys change the cue only while it is on.
+/// - `tune.cueDuck=SOURCES:LO-HI:DB|off`: the cue duck (`LofiCueDuck`, D129) on `texture`, `wet` or
+///   `texture+wet`, band LO-HI (100-2000 Hz), at most DB (0 to 12); `off` renders no duck.
 nonisolated struct LofiRenderTuning: Sendable, Equatable {
     var bass: LofiStemChains.Bass = .standard
+    var bassCue: LofiBassVoice.Cue? = Self.defaultBassCue
+    var cueDuck: LofiCueDuck? = Self.defaultCueDuck
+
+    /// The app's cue layer and cue duck (`nil`: none).
+    static let defaultBassCue: LofiBassVoice.Cue? = nil
+    static let defaultCueDuck: LofiCueDuck? = nil
 
     static let standard = LofiRenderTuning()
     static let prefix = "tune."
     /// Every key this build understands; any other `tune.*` hook fails the capture.
-    static let keys = ["tune.bassSatBand", "tune.bassSatMix"]
+    static let keys = ["tune.bassSatBand", "tune.bassSatMix", "tune.bassCueDb", "tune.bassCueBand",
+                       "tune.bassCueSlopeDb", "tune.bassCueOnsetMs", "tune.bassCueSynthDb", "tune.cueDuck"]
 
     enum ParseError: Error, Equatable, CustomStringConvertible {
         case unknownKey(String)
@@ -41,6 +57,9 @@ nonisolated struct LofiRenderTuning: Sendable, Equatable {
     /// Parses the `tune.*` entries of a capture's hook options; other hooks are ignored.
     static func parse(_ options: [String: String]) throws -> LofiRenderTuning {
         var tuning = LofiRenderTuning.standard
+        // The cue's shape keys edit `cue`; `tune.bassCueDb` decides whether it plays.
+        var cue = tuning.bassCue ?? .standard
+        var cueOn = tuning.bassCue != nil
         for (key, raw) in options.sorted(by: { $0.key < $1.key }) where key.hasPrefix(prefix) {
             let value = raw.trimmingCharacters(in: .whitespaces)
             switch key {
@@ -49,11 +68,48 @@ nonisolated struct LofiRenderTuning: Sendable, Equatable {
                 tuning.bass.saturationBand = LofiStemChains.Bass.saturationBand(lowHz: lo, highHz: hi)
             case "tune.bassSatMix":
                 tuning.bass.saturationMix = try number(key, value, range: 0...0.6)
+            case "tune.bassCueDb":
+                if value.lowercased() == "off" {
+                    cueOn = false
+                } else {
+                    cue.levelDB = Double(try number(key, value, range: -40...0))
+                    cueOn = true
+                }
+            case "tune.bassCueBand":
+                (cue.lowHz, cue.highHz) = try band(key, value, range: 100...2_000)
+            case "tune.bassCueSlopeDb":
+                cue.slopeDB = Double(try number(key, value, range: 0...12))
+            case "tune.bassCueOnsetMs":
+                cue.onset = Double(try number(key, value, range: 0...500)) / 1_000
+            case "tune.bassCueSynthDb":
+                cue.synthOffsetDB = Double(try number(key, value, range: -24...12))
+            case "tune.cueDuck":
+                tuning.cueDuck = try cueDuck(key, value)
             default:
                 throw ParseError.unknownKey(key)
             }
         }
+        tuning.bassCue = cueOn ? cue : nil
         return tuning
+    }
+
+    /// `SOURCES:LO-HI:DB` (sources `texture`, `wet` or both joined by `+`) or `off`.
+    private static func cueDuck(_ key: String, _ value: String) throws -> LofiCueDuck? {
+        if value.lowercased() == "off" { return nil }
+        let fields = value.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
+        guard fields.count == 3 else {
+            throw ParseError.invalid(key: key, value: value, reason: "expected SOURCES:LO-HI:DB or off")
+        }
+        let sources = Set(fields[0].lowercased().split(separator: "+").map(String.init))
+        guard !sources.isEmpty, sources.isSubset(of: ["texture", "wet"]) else {
+            throw ParseError.invalid(key: key, value: value, reason: "sources are texture, wet or texture+wet")
+        }
+        var duck = LofiCueDuck.standard
+        duck.texture = sources.contains("texture")
+        duck.wet = sources.contains("wet")
+        (duck.lowHz, duck.highHz) = try band(key, fields[1], range: 100...2_000)
+        duck.maxDB = try number(key, fields[2], range: 0...12)
+        return duck
     }
 
     /// `manifest.diagnostics.renderTuning`: every resolved value and whether it is the standard tuning.
@@ -65,9 +121,18 @@ nonisolated struct LofiRenderTuning: Sendable, Equatable {
             }
         }
         let band = bass.saturationBand.compactMap(hz)
+        let cue: Any = bassCue.map { c -> [String: Any] in
+            ["levelDb": c.levelDB, "band": [c.lowHz, c.highHz], "slopeDb": c.slopeDB, "onsetMs": c.onset * 1_000,
+             "synthDb": c.synthOffsetDB]
+        } ?? "off"
+        let duck: Any = cueDuck.map { d -> [String: Any] in
+            ["sources": (d.texture ? ["texture"] : []) + (d.wet ? ["wet"] : []), "band": [d.lowHz, d.highHz],
+             "maxDb": Double(d.maxDB), "attackMs": d.attack * 1_000, "releaseMs": d.release * 1_000]
+        } ?? "off"
         return ["isStandard": isStandard,
                 "bassSatBand": [band.first ?? 0, band.last ?? 0],
-                "bassSatMix": Double(bass.saturationMix)]
+                "bassSatMix": Double(bass.saturationMix),
+                "bassCue": cue, "cueDuck": duck]
     }
 
     private static func number(_ key: String, _ value: String, range: ClosedRange<Float>) throws -> Float {

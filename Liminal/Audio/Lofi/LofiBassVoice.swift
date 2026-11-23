@@ -286,10 +286,13 @@ nonisolated enum LofiBassVoice: Int, CaseIterable, Sendable {
     /// note the short release it needs before a struck or anchored successor. `strikeShift` places the
     /// strike layer that many frames from the note start (negative: earlier), so on an anchored note the
     /// slap lands on the kick's broadband attack while the sub's rise stays on the kick's low rise.
+    /// `cue` and `cueOut`, when both are given, also render the note's clean cue partials (`Cue`, D129) into
+    /// the separate mono `cueOut` buffer (same frames as `left`), which the bass chain adds after its
+    /// parallel harmonics and compressor.
     static func add(_ note: LofiScore.Note, voice: LofiBassVoice, clock: LofiClock,
                     left: UnsafeMutableBufferPointer<Float>, right: UnsafeMutableBufferPointer<Float>,
                     samples: LofiBassSamples = .bundled, sweep: ClosedRange<Double>? = nil, beforeStrike: Bool = false,
-                    strikeShift: Int = 0) {
+                    strikeShift: Int = 0, cue: Cue? = nil, cueOut: UnsafeMutableBufferPointer<Float>? = nil) {
         guard voice != .classic else {
             addClassic(note, clock: clock, left: left, right: right)
             return
@@ -297,18 +300,21 @@ nonisolated enum LofiBassVoice: Int, CaseIterable, Sendable {
         let start = clock.frame(at: note.beat)
         guard start >= 0, start < left.count else { return }
         let parts = renderParts(note, voice: voice, clock: clock, limit: left.count - start, samples: samples,
-                                sweep: sweep, layers: .all, beforeStrike: beforeStrike)
-        func mix(_ x: [Float], at position: Int) {
+                                sweep: sweep, layers: .all, beforeStrike: beforeStrike,
+                                cue: cueOut == nil ? nil : cue, cueOnset: note.strike > 0 ? strikeShift : 0)
+        func mix(_ x: [Float], at position: Int, into out: UnsafeMutableBufferPointer<Float>) {
             let skip = max(0, -position), at = max(0, position)
-            let n = min(x.count - skip, left.count - at)
+            let n = min(x.count - skip, out.count - at)
             guard n > 0 else { return }
             x.withUnsafeBufferPointer { m in
-                vDSP_vadd(left.baseAddress! + at, 1, m.baseAddress! + skip, 1, left.baseAddress! + at, 1, vDSP_Length(n))
-                vDSP_vadd(right.baseAddress! + at, 1, m.baseAddress! + skip, 1, right.baseAddress! + at, 1, vDSP_Length(n))
+                vDSP_vadd(out.baseAddress! + at, 1, m.baseAddress! + skip, 1, out.baseAddress! + at, 1, vDSP_Length(n))
             }
         }
-        mix(parts.tone, at: start)
-        mix(parts.strike, at: start + strikeShift)
+        for out in [left, right] {
+            mix(parts.tone, at: start, into: out)
+            mix(parts.strike, at: start + strikeShift, into: out)
+        }
+        if let cueOut, !parts.cue.isEmpty { mix(parts.cue, at: start, into: cueOut) }
     }
 
     enum Layers: Sendable { case all, sub, body, strike }
@@ -332,18 +338,19 @@ nonisolated enum LofiBassVoice: Int, CaseIterable, Sendable {
     /// or not asked for), both starting on the note's first frame.
     private static func renderParts(_ note: LofiScore.Note, voice: LofiBassVoice, clock: LofiClock, limit: Int,
                                     samples: LofiBassSamples, sweep: ClosedRange<Double>?, layers: Layers,
-                                    beforeStrike: Bool) -> (tone: [Float], strike: [Float]) {
-        guard voice != .classic else { return ([], []) }
+                                    beforeStrike: Bool, cue: Cue? = nil,
+                                    cueOnset: Int = 0) -> (tone: [Float], strike: [Float], cue: [Float]) {
+        guard voice != .classic else { return ([], [], []) }
         let shape = shape(note.stroke)
         let rate = clock.sampleRate
         let span = max(1, clock.frame(at: note.length))
         let tail = max(1, Int(rate * voice.release(note.stroke, beforeStrike: beforeStrike)))
         let count = min(limit, span + tail)
-        guard count > 0 else { return ([], []) }
+        guard count > 0 else { return ([], [], []) }
         let strike = Double(max(0, min(1, note.strike)))
         let envelope = envelope(shape: shape, span: span, tail: tail, count: count, rate: rate, accent: accent * strike)
         let sub = renderSub(note, envelope: envelope, rate: rate)
-        if layers == .sub { return (sub, []) }
+        if layers == .sub { return (sub, [], []) }
         var subPeak: Float = 0
         vDSP_maxmgv(sub, 1, &subPeak, vDSP_Length(count))
         var tone = layers == .all ? sub : [Float](repeating: 0, count: count)
@@ -359,7 +366,8 @@ nonisolated enum LofiBassVoice: Int, CaseIterable, Sendable {
             layer = strikeLayer(note, voice: voice, count: count, rate: rate, samples: samples,
                                 peak: Float(strike) * subPeak * powf(10, strikeLevelDB(voice) / 20))
         }
-        return (tone, layer)
+        let cuePartials = cue.map { cuePartials(note, voice: voice, envelope: envelope, rate: rate, onset: cueOnset, cue: $0) } ?? []
+        return (tone, layer, cuePartials)
     }
 
     /// Raised-cosine rise, the stroke's per-second decay times the strike accent, raised-cosine release
@@ -490,6 +498,70 @@ nonisolated enum LofiBassVoice: Int, CaseIterable, Sendable {
         var level = subGain * note.velocity
         vDSP_vsmul(out, 1, &level, &out, 1, vDSP_Length(out.count))
         vDSP_vmul(out, 1, envelope, 1, &out, 1, vDSP_Length(out.count))
+        return out
+    }
+
+    // MARK: Cue partials (D129)
+
+    /// Clean pitch-tracking cue partials (bass translation, D129): the note's own harmonics from `lowHz` up,
+    /// in phase with the sub, so a speaker that reproduces nothing under 150-250 Hz still hears the bass
+    /// line as its harmonic series instead of a separate voice. The first partial at or above `lowHz` sits
+    /// `levelDB` under the fundamental, each next one `slopeDB` lower, weighted by the complement of the
+    /// 160 Hz crossover and a 4-pole roll-off at `highHz`; the `synth` tone (which already continues its
+    /// series to the 12th partial) takes `synthOffsetDB` more. The layer follows the note's envelope and
+    /// velocity but is zero at the strike (or the note start) and rises over `onset` seconds (raised cosine),
+    /// so the strike stays the brightest moment and the slap still lines up with the kick.
+    struct Cue: Sendable, Equatable {
+        var levelDB: Double = -15
+        var lowHz: Double = 180
+        var highHz: Double = 300
+        var slopeDB: Double = 4
+        var onset: Double = 0.090
+        var synthOffsetDB: Double = -4
+        static let standard = Cue()
+    }
+
+    /// The cue layer of one note (`Cue`), starting on the note's first frame. `onset` is the ramp's start in
+    /// frames from the note start (the strike's shift on a struck note, else 0).
+    private static func cuePartials(_ note: LofiScore.Note, voice: LofiBassVoice, envelope: [Float], rate: Double,
+                                    onset: Int, cue: Cue) -> [Float] {
+        let count = envelope.count
+        let f0 = frequency(note.midi)
+        let first = max(2, Int((cue.lowHz / f0).rounded(.up)))
+        let level = cue.levelDB + (voice == .synth ? cue.synthOffsetDB : 0)
+        var amplitudes: [Double] = []
+        var k = first
+        while f0 * Double(k) < min(0.45 * rate, 4 * cue.highHz) {
+            let f = f0 * Double(k)
+            let weight = (1 - subWeight(f)) / sqrt(1 + pow(f / cue.highHz, 8))
+            amplitudes.append(pow(10, (level - cue.slopeDB * Double(k - first)) / 20) * weight)
+            k += 1
+        }
+        guard !amplitudes.isEmpty, count > 0 else { return [] }
+        var out = partials(phase(note, count: count, rate: rate), first: first, amplitudes: amplitudes, f0: f0, rate: rate)
+        var gain = subGain * note.velocity
+        vDSP_vsmul(out, 1, &gain, &out, 1, vDSP_Length(count))
+        vDSP_vmul(out, 1, envelope, 1, &out, 1, vDSP_Length(count))
+        // Onset: zero up to the strike, then 0.5 - 0.5 cos(pi u) over `onset` seconds.
+        let rampFrames = max(1, Int((cue.onset * rate).rounded()))
+        let start = max(0, onset)
+        let silent = min(count, start)
+        if silent > 0 { out.withUnsafeMutableBufferPointer { vDSP_vclr($0.baseAddress!, 1, vDSP_Length(silent)) } }
+        // Frames before the ramp's end (a negative onset starts the ramp before the note).
+        let rampEnd = min(count, onset + rampFrames)
+        if rampEnd > start {
+            let length = rampEnd - start
+            var u0 = Float(Double.pi * Double(start - onset) / Double(rampFrames)), du = Float(Double.pi / Double(rampFrames))
+            var ramp = [Float](repeating: 0, count: length)
+            vDSP_vramp(&u0, &du, &ramp, 1, vDSP_Length(length))
+            var m = Int32(length)
+            vvcosf(&ramp, ramp, &m)
+            var a: Float = -0.5, b: Float = 0.5
+            vDSP_vsmsa(ramp, 1, &a, &b, &ramp, 1, vDSP_Length(length))
+            out.withUnsafeMutableBufferPointer { o in
+                vDSP_vmul(o.baseAddress! + start, 1, ramp, 1, o.baseAddress! + start, 1, vDSP_Length(length))
+            }
+        }
         return out
     }
 
