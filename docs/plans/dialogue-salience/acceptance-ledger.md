@@ -178,6 +178,161 @@ Latest media45221406217 passed stage3 31tests/2suites (72s), but baseline95/96 w
 
 Private source availability is corrected above:100-file preparation verified, not native/mix success.45227791928 summary overallUNMET; native execution cancelled. Ephemeral key/URL secrets and draft release/asset deleted; local private materials remain protected outside git. Original19 curated audio/cache and159-occurrence identity unavailable; fresh results never certify them. App survival and partial exports do not satisfy clean playback, authentic3–4 auditions, dry+mix or human review. See local handoff for durable artifacts, exact source revisions, remaining commands and every acceptance class.
 
+
+## Local Mac evidence, 23 November 2026
+
+The first local unit run used handoff revision `6c55071`, Xcode 27.2 (27B52)
+and macOS 27.2.1 (26B131) on arm64. The macOS build-for-testing succeeded.
+Xcode discovered 632 methods in 84 suites. It recorded 626 passes, one failure
+and five skips. The skipped methods need the installed private drums or the
+opt-in strum probe. The failing pad-tail case measured 6.206758 dB at seed 2077,
+phrase 6, against the 6 dB limit. D128 recorded the same failure before the
+dialogue change. The new long-word pocket fixture ran and passed.
+
+The local task 2 comparison passed all 18 gates against the recovered
+instrumented `06c1095` attachments. Both scopes recorded 108 loops and
+72 consecutive cross-line pairs. The paired real-media timing and mix gates
+remain separate acceptance criteria.
+
+The prepared public cache has 12 checksum-verified Archive derivatives.
+Native AVFoundation verification read at least 29 seconds of PCM for all 96
+windows. The Leary chunk 7 native timeline contained 1,440,000 frames at
+−65.780334 dB. The existing −60 dB playback floor rejected it, and the
+speech classifier marked zero of 59 intervals as speech. The paired probes
+record the decoded below-floor outcome and zero playback explicitly.
+
+The physical Mac had the en-US SpeechTranscriber model ready. The production
+provider recognized 111 timestamped words in the 30-second Leary chunk 5 at
+2623.563809 seconds. The provider identified the model as
+`SpeechTranscriber, Version 27.2.1 (Build 26B131)`. Full paired T/A coverage
+and authentic playback gates are pending.
+
+Recovered the historical 95-window log, the complete 159-occurrence
+inventory and the played/context audio for all 19 original listening cases.
+One damaged context has an intact alternate from the same historical case.
+The original derivative hashes and model version are missing from those
+logs, and the fresh corpus includes a different film set. Recovery enables
+per-case comparison. The historical gate still requires provenance and
+candidate matches.
+
+The local private bundle and both installations contain all 100 original
+sample bytes and the handoff grid hash. The mounted archive was unavailable.
+Locally retained source WAVs provided volumes 1, 2 and 4, and the verified
+installed corpus provided volume 3 by byte identity. The original volume 3
+filename spellings are unavailable. Both native captures and resource
+checks use the same verified input bytes.
+
+The latest production-equivalent candidate, `6e03b2a`, built for the visionOS
+Simulator and macOS test host. Both private native runs completed all 52
+requested test methods and their built WAV/grid hash comparisons passed.
+`installedTakesHaveSaneLandmarks` and
+`installedTakesLandInsideTheDrumBusTargets` failed in both revisions.
+All 16 assertion details matched. The native gate remains unmet, with
+paired evidence that these failures predate the dialogue changes.
+
+Supplemental private test runs enabled the opt-in strum probe and covered
+the all-takes hook test. Those three methods passed on both revisions.
+The pad result matched the historical baseline to the reported precision
+(6.206758016153984 dB). Across the bundled and supplemental runs, all 632
+declared methods executed. The three matched historical failures are the
+only failures in that combined inventory.
+
+The local candidate removes the temporary hosted verification workflows and
+private transport helpers. The Git audit found no private drum WAV, grid
+or transport archive in the task refs. The two obsolete private Actions
+runs and their artifacts were deleted after retaining the sanitized summary
+on the Mac. The requested main push, signed Vision Pro update and task branch
+cleanup follow acceptance.
+
+### Paired public probes and playback
+
+The exact adapted baseline and candidate `6e03b2a` each completed 96
+windows. Native SpeechTranscriber supplied a result for all 91
+speech-eligible windows on both revisions. An app cache sweep removed the
+in-cache derivative sidecars. The retained pre-probe manifest and
+post-probe SHA-256 checks of all 12 source files and Archive records
+established the paired file identities. The raw logs retain the missing
+sidecar fields. The local harness now keeps those identities in its
+separate provenance directory.
+
+The authenticated diagnostic comparison passed 53 of 71 checks. Both
+revisions had 14 speech-window/mode outcomes without a planned render.
+The candidate measured 109 transcript-mode and 47 acoustic attacks
+outside 35 ms, versus 266 and 104 on the baseline. The transcript-mode
+median shifted from −0.1 to 3.5 ms. Acoustic accidental partials were .27,
+and exact whole-content re-hearing was 20/50. The measurement code now
+bounds its read on short PCM buffers. The prior counts remain diagnostic
+pending a rerun with that fix. Independent remeasurement of two long
+rendered cuts confirmed a −57.849 ms and a +129.327 ms outlier. In those
+cases the scheduler placed the production attack within 0.006 ms of its
+target while the independent detector picked another rise.
+
+The fresh-index experiment reached .806 salient share against .412
+baseline, below twice the baseline. Evolving playback reached .190
+against .148 baseline. Its extracted index contains 180 eligible lines.
+Even one distinct line per salient request caps a 500-request experiment
+at .36 without additional learned lines, below the .60 target.
+
+The first app run survived 200 seconds and logged 10 hooks, nine
+sound-bearing pieces and seven matched salient picks. Peekaboo confirmed
+that the visible image and queue advanced. Four footage pieces dropped
+because the AVFoundation reader could not start the VP9 video track in
+the public *The World of LSD* derivative. Both targeted and random
+starts were affected. The reader code matches the historical baseline.
+A separate app-only H.264 derivative reproduced all four first frames
+with identical audio packets and PCM and preserved video frame
+timestamps. Its playback test remains separate from the paired
+untranscoded probe and matrix source.
+
+The second app run used that H.264 test cache and candidate `fc6de2d`.
+It passed 200 seconds with nine hooks, eight sound-bearing pieces and
+seven matched salient picks. The playback validator found zero faults.
+Two inspected Peekaboo screenshots showed an active playback state,
+changing visuals and an advancing curated image queue.
+
+The probe exported three transcript-backed syllable figures with source,
+dry, performed and stereo mix audio. The whole-word landing of an actual
+LSD letter figure omitted one sample of its voiced core, so that figure
+failed exact export containment. The candidate includes a small protected
+onset fix and a regression for that sample. A focused authentic replay
+passed on candidate `fc6de2d`. All 34 focused tests executed and passed,
+and the task-2 fixture comparison again passed all 18 gates. The focused
+authentic exports qualify four figures for review: LSD, Firebird, opium
+and Leary. The exporter checked their complete source ranges, ordered
+units, grid placement, source hashes, audio hashes and whole-word landings.
+Human listening remains pending.
+
+### Local paired mix and historical comparison
+
+All 16 required captures completed across the public and private corpus
+pairs. The after matrices recorded candidate `fc6de2d` and both transcribe
+cases used native recognized words in the plan. Strict fail-level counts
+were as follows.
+
+| Corpus | Case | Baseline | Candidate |
+|---|---|---:|---:|
+| Bundled | ref | 3 | 4 |
+| Bundled | fast | 2 | 2 |
+| Bundled | same | 3 | 4 |
+| Bundled | transcribe | 3 | 4 |
+| Private | ref | 1 | 2 |
+| Private | fast | 2 | 3 |
+| Private | same | 2 | 2 |
+| Private | transcribe | 2 | 3 |
+
+The paired C-B8, C-B9 and C-D1–D9 comparison found zero new fail-level
+failures in either corpus. The comparator accepts the documented paired
+C-D4 motif skip and C-D7 warning-only skip and rejects missing or unknown
+evidence. The raw strict results still fail. Both transcribe cases retain
+the baseline C-D9 failure and the candidate adds C-B6 failures outside
+the specified paired targets.
+
+Exact replay matching against the recovered historical log found 48 of
+95 window identities, 85 of 159 word occurrences and two of 19 candidate
+played/context pairs. The other original cases retain their recovered
+baseline audio. The fresh candidate scored 130 ranked and 94 chosen of
+148 fresh occurrences. Those counts use the paired fresh corpus.
+
 ## Separate user-gated loose ends: no action in this task
 
 Vision Pro remains on `7ccedce`; never uninstall, and no new device install without the user's request.

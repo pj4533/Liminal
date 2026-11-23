@@ -125,6 +125,8 @@ class PrivateAssetTests(unittest.TestCase):
         (bundle / 'provenance.json').write_text(json.dumps(dict(scope='Fresh', original=112,
             eligible=100, excluded=12, packs=[], beatGridSHA256='a'*64, bytePreserved=True, files=[])))
         out = self.root / 'run'; raw = out / 'raw'; raw.mkdir(parents=True)
+        criteria = [dict(id=criterion, level=level, status='pass')
+                    for criterion, level in module('verify-matrix-integrity').TARGETED_LEVELS.items()]
         for label, revision in [('baseline', runner.BASELINE), ('after', 'candidate')]:
             (raw / (label + '-native.json')).write_text(json.dumps(dict(exit=0,
                 resourceIdentity=True, coverage=dict(passed=True))))
@@ -133,8 +135,7 @@ class PrivateAssetTests(unittest.TestCase):
                 (directory / 'report').mkdir(parents=True)
                 (directory / 'manifest.json').write_text(json.dumps(dict(gitRevision=revision,
                     dialogueTranscripts=[dict(status='ready', words=10, transcriptUsed=True)])))
-                (directory / 'report/mix-report.json').write_text(json.dumps(dict(criteria=[
-                    dict(id='C-D9', level='fail', status='pass', values=dict(emptyBars=0))])))
+                (directory / 'report/mix-report.json').write_text(json.dumps(dict(criteria=criteria)))
         passing = [dict(step=name, exit=0) for name in runner.REQUIRED_STEPS]
         variants = [('success', passing, 0),
                     ('matrix failure', [dict(row, exit=1) if row['step'].endswith('-matrix') else row for row in passing], 1),

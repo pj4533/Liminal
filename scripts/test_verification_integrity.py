@@ -144,6 +144,33 @@ class IntegrityTests(unittest.TestCase):
             (root/'transcribe/manifest.json').write_text(json.dumps(dict(dialogueTranscripts=[dict(status='ready', words=0, transcriptUsed=False)])))
             self.assertFalse(matrix.inventory(root, revision='candidate')['complete'])
 
+    def test_matrix_targeted_regressions_require_measured_or_exact_shared_evidence(self):
+        before = {criterion: dict(id=criterion, level=level, status='pass')
+                  for criterion, level in matrix.TARGETED_LEVELS.items()}
+        before['C-B8']['status'] = 'fail'
+        for criterion, reason in matrix.SHARED_SKIP_REASONS.items():
+            before[criterion].update(status='skipped', reason=reason)
+        candidate = {criterion: row.copy() for criterion, row in before.items()}
+        candidate['C-D3']['status'] = 'warn'
+        self.assertTrue(matrix.no_new_targeted_failures(list(before.values()), list(candidate.values())))
+
+        variants = [
+            ('new fail', 'C-D9', dict(status='fail')),
+            ('arbitrary shared skip reason', 'C-D4', dict(reason='no dialogue')),
+            ('one-sided applicability', 'C-D4', dict(status='pass')),
+            ('unknown warning skip', 'C-D3', dict(status='skipped', reason='no data')),
+            ('misrepresented level', 'C-B8', dict(level='warn')),
+            ('missing row', 'C-D9', None),
+        ]
+        for label, criterion, change in variants:
+            with self.subTest(label=label):
+                rows = candidate.copy()
+                if change is None:
+                    del rows[criterion]
+                else:
+                    rows[criterion] = dict(rows[criterion], **change)
+                self.assertFalse(matrix.no_new_targeted_failures(list(before.values()), list(rows.values())))
+
     def test_app_survival_alone_is_no_playback_evidence(self):
         evidence = app.evidence('process survived 200s\nLo-Fi dialogue hook\n📼 piece #2 sound=true\nsalient-pick id=f')
         self.assertFalse(any(evidence[key] for key in ('hook', 'footage', 'salientPick')))

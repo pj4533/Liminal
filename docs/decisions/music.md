@@ -684,7 +684,15 @@ zero-over-35 target. The task-2 paired timing requirement is additional. No tigh
 were intentionally relaxed here. Earlier deliberate stage-1 density-test replacements and their
 reasons remain listed above; current regression failures must be fixed and rerun.
 
-No authentic private AJ Hall pack/grid was available in the inspected checkouts/artifact inventory.
-Bundled captures are separately labelled and cannot qualify private-matrix acceptance. An authentic
-public World of LSD file decoded to 2907.901 s, proving only that route, not the twelve-film/model/mix
-pipeline. No new sound has been confirmed by user listening, and no device install is authorized.
+The physical Mac continuation verified all 100 private WAVs against the
+regenerated grid and ran the paired native tests. Both revisions reproduced
+the same landmark and drum-bus failures. The matched 96-window public probes
+produced native transcripts for every speech-eligible window. Remaining timing,
+footage selection, listening and device criteria are tracked in the
+[acceptance ledger](../plans/dialogue-salience/acceptance-ledger.md).
+
+In the real *The World of LSD* probe, a complete LSD letter figure landed on
+a cut whose zero crossing was one sample into the voiced core. The onset clamp
+now selects an earlier crossing within the fragment, with an exact core-start
+fallback and the existing fade. This preserves all samples required by the
+whole-word landing.

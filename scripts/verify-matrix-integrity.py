@@ -6,8 +6,48 @@ import sys
 
 REQUIRED = ('ref', 'fast', 'same', 'transcribe')
 
+TARGETED_LEVELS = {
+    'C-B8': 'fail', 'C-B9': 'fail',
+    'C-D1': 'fail', 'C-D2': 'fail', 'C-D3': 'warn',
+    'C-D4': 'fail', 'C-D5': 'fail', 'C-D6': 'fail',
+    'C-D7': 'warn', 'C-D8': 'warn', 'C-D9': 'fail',
+}
+SHARED_SKIP_REASONS = {
+    'C-D4': ('rests: not applicable in motif mode: the user direction of 19 November 2026 '
+             'puts a piece in every bar (C-D9 gates it)'),
+    'C-D7': 'hookSamePadFraction: no echo-family block (no repeated hook statement) in this capture',
+}
+
+
+def no_new_targeted_failures(baseline, candidate):
+    before = {row['id']: row for row in baseline if row['id'] in TARGETED_LEVELS}
+    after = {row['id']: row for row in candidate if row['id'] in TARGETED_LEVELS}
+    for criteria, targeted in ((baseline, before), (candidate, after)):
+        if targeted.keys() != TARGETED_LEVELS.keys():
+            return False
+        if sum(row['id'] in TARGETED_LEVELS for row in criteria) != len(targeted):
+            return False
+    for criterion, level in TARGETED_LEVELS.items():
+        previous, current = before[criterion], after[criterion]
+        if previous.get('level') != level or current.get('level') != level:
+            return False
+        statuses = previous.get('status'), current.get('status')
+        if 'skipped' in statuses:
+            reason = SHARED_SKIP_REASONS.get(criterion)
+            if (statuses != ('skipped', 'skipped') or reason is None
+                    or previous.get('reason') != reason or current.get('reason') != reason):
+                return False
+            continue
+        if level == 'warn':
+            if not all(status in ('pass', 'warn') for status in statuses):
+                return False
+        elif statuses not in (('pass', 'pass'), ('fail', 'pass'), ('fail', 'fail')):
+            return False
+    return True
+
 
 def inventory(root, baseline=None, revision=None, baseline_revision=None):
+    baseline_complete = baseline and inventory(baseline, revision=baseline_revision)['complete']
     cases = {}
     for case in REQUIRED:
         directory = root / case
@@ -22,10 +62,7 @@ def inventory(root, baseline=None, revision=None, baseline_revision=None):
             paired = None
             if baseline:
                 previous = json.loads((baseline / case / 'report/mix-report.json').read_text())
-                before = {r['id']: r for r in previous['criteria']}
-                targeted = [r for r in criteria if r['id'] in ('C-B8', 'C-B9') or r['id'].startswith('C-D')]
-                paired = complete and inventory(baseline, revision=baseline_revision)['complete'] and bool(targeted) and all(r['id'] in before and r.get('status') != 'skipped' and
-                    (r.get('status') != 'fail' or before[r['id']].get('status') == 'fail') for r in targeted)
+                paired = complete and baseline_complete and no_new_targeted_failures(previous['criteria'], criteria)
             cases[case] = dict(complete=complete, gitRevision=manifest.get('gitRevision'), expectedRevision=revision, transcriptionReady=ready, rawStrictPassed=strict, noNewTargetedFailures=paired)
         except (OSError, ValueError, KeyError) as error:
             cases[case] = dict(complete=False, error=str(error), rawStrictPassed=False, noNewTargetedFailures=None)
