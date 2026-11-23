@@ -4,6 +4,30 @@ import Testing
 @testable import Liminal
 
 struct DialogueChopFeelTests {
+    @Test func wholeWordFillSelectionTriesAUsablePocketBeforeGivingUp() {
+        let lengths = [2500, 900, 800, 500]
+        let fragments = lengths.enumerated().map { id, length in
+            DialogueMotifFragment(id: id, kind: id == 0 ? .line : .piece, order: id, parent: nil,
+                frames: 0..<length, accentFrame: 0, fadeIn: 0, fadeOut: 0, text: nil, weight: 0.8)
+        }
+        let vocabulary = DialogueMotif.GrooveVocabulary(s: 1, r: 2, t: 3, sa: 1, ra: 2,
+            pieces: [1, 2, 3], halves: [:], fragments: fragments)
+        // The attractive slots after step 12 fall inside the long answer. The short third
+        // word has an audible, complete pocket before the late call at step 6.
+        for seed: UInt64 in 1...20 {
+            let items = DialogueMotif.groove(template: DialogueMotifTuning.hookTemplates[3], vocabulary: vocabulary,
+                drums: .boomBap, reorderAllowed: true, fragments: fragments, sampleRate: 1000,
+                seed: seed, beatDuration: 0.8)
+            let fill = items.filter { !$0.skeleton && $0.slot < 6 }
+            #expect(!fill.isEmpty, "seed \(seed): legal whole-word pocket was abandoned")
+            for item in fill {
+                #expect(item.fragment == 3)
+                #expect(DialogueMotif.fitsRoom(item.fragment, steps: 6 - item.slot, fragments: fragments,
+                    sampleRate: 1000, beatDuration: 0.8))
+            }
+        }
+    }
+
     @Test(arguments: [false, true]) func attackPreservationLiftsTheRetainedSyllableWithoutTrimmingOrMovingAudio(_ highCrestTaper: Bool) {
         let rate = 48_000.0
         var original: [Float] = (0..<24_000).map { i in

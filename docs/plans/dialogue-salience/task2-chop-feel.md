@@ -151,3 +151,32 @@ Raw fixture evidence at `56fc6f5` also shows the same hook pickup playing in onl
 following call disappearing in that pass. Pickup clearance now checks output-time intervals on
 both sides, includes the preceding cell, and requires space in both repetitions. It cannot trade
 a hook word for an optional reverse; sparse breakdown replacements still trade exactly one word.
+
+## Retained-opening and headroom evidence, 23 November
+
+Run `45203560241` at `df2dc896b5e58b4a4ca6446f33bfb1229e65d130` passed all 11 tests
+in the complete ChopFeel and Tightness suites, with independent execution coverage 11/11.
+At 62/72/84 BPM the independent rendered-attack p95 was 4.0/9.5/10.3 ms, with zero pieces
+more than 35 ms early and zero measured non-weak attacks beyond 12 ms. The identical native
+and linked-rate inventories each contained 104 pads, with zero attacks beyond 35 ms.
+
+The remaining early attacks were retained quiet syllables followed by a louder syllable that
+linked playback brought inside the detector's 300 ms peak window. The correction lifts existing
+opening audio by at most 9 dB, eases out over 55 ms and never moves or deletes samples. It is
+bounded, not a guarantee that every arbitrarily weak opening can be made the strongest attack.
+A second shoulder could previously lower a high transient near the taper's end; the correction
+now accepts only a positive amplitude change. A parameterized high-crest test exercises both
+polarities throughout the taper and checks sign, gain, length, clipping and unchanged body.
+
+The same run compared 56 distinct full renders with the correction enabled/disabled. Six changed:
+RMS increases were 0.025–0.562 dB and K-weighted energy increases 0.040–1.169 dB. Four peaks were
+unchanged; two rose from 0.6837 to 0.8126 and 0.7348 to 0.8145. All corrected peaks were below
+0.857, samples were finite, and audio after 200 ms was bit-identical. Raw paired values are in
+`opening-correction-headroom.txt`. This corpus is synthesized speech-like audio; these results
+do not establish authentic-speech intelligibility, integrated-mix acceptance or listening approval.
+
+Broad regression and the 18 before/after feel metrics remain separate gates. The preceding
+`ea61e5f` run removed backbeat and breakdown-opening failures but retained two sparse arrangements
+(transcript-72, seeds 5 and 8, loop 1: 27 onsets over 16 bars) and three chop-beat metric failures.
+Its pre-correction onset failures are superseded by the focused evidence above; newer broad
+results must still establish all arrangement and metric gates. No threshold was relaxed.

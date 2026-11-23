@@ -261,6 +261,21 @@ nonisolated extension DialogueMotif {
                 let open = (lo..<hi).compactMap { k -> (Int, FillSite, Double)? in
                     guard let s = site(k), fits(k) else { return nil }
                     if k % 2 == 1, oddCount() >= DialogueMotifTuning.grooveOffEighths { return nil }
+                    // Rank usable pockets, not just empty steps. Previously a high-scoring site
+                    // inside the preceding word won, then disappeared in cut assignment; no
+                    // lower-scoring pocket was tried, leaving long lines with only the skeleton.
+                    let order = hits.keys.sorted()
+                    let before = order.last { $0 < k } ?? order.last
+                    let after = order.first { $0 > k } ?? order.first
+                    if let before, let hit = hits[before], hit.fragment >= 0,
+                       !DialogueMotif.fitsRoom(hit.fragment, steps: k - (before < k ? before : before - 32),
+                            fragments: fragments, sampleRate: sampleRate, beatDuration: beatDuration) { return nil }
+                    let room = after.map { ($0 > k ? $0 : $0 + 32) - k } ?? 32
+                    let neighbours = [before, after].compactMap { $0.flatMap { hits[$0]?.fragment } }
+                    let pool = v.preferred(s, fragments: fragments, sampleRate: sampleRate)
+                        + v.preferred(.gap, fragments: fragments, sampleRate: sampleRate)
+                    guard pool.contains(where: { !neighbours.contains($0) && DialogueMotif.fitsRoom($0,
+                        steps: room, fragments: fragments, sampleRate: sampleRate, beatDuration: beatDuration) }) else { return nil }
                     return (k, s, score(k, s))
                 }
                 guard let best = open.max(by: { ($0.2, -$0.0) < ($1.2, -$1.0) }), best.2 > -1 else { break }

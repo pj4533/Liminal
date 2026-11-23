@@ -1951,7 +1951,7 @@ nonisolated extension DialogueMotif {
             let before = seven.last { $0.slot < free }
             let room = (seven.first { $0.slot > free }?.slot ?? 16) - free
             let choices = ([vocabulary.sb, sa, t, ra] + vocabulary.others)
-                .filter { (beatDuration <= 0 || fits($0, room)) && (!anyContent || fragments[$0].weight > 0) }
+                .filter { !spellUnit($0) && (beatDuration <= 0 || fits($0, room)) && (!anyContent || fragments[$0].weight > 0) }
             if !choices.isEmpty, before.map({ fits($0.fragment, free - $0.slot) }) ?? true {
                 seven.append(at(freshCut(choices, at: free, among: seven), free, gate: 1))
                 seven.sort { $0.slot < $1.slot }
@@ -1989,8 +1989,13 @@ nonisolated extension DialogueMotif {
             // signature) in beats 3 and 4; without one, the two alternate whole with rests between.
             let spellR = spellFigure(r, from: 24, end: 31, fragments: fragments, halves: halves, sampleRate: sampleRate, beatDuration: beatDuration)
                 ?? spellFigure(s, from: 24, end: 31, fragments: fragments, halves: halves, sampleRate: sampleRate, beatDuration: beatDuration)
+                ?? spellFigure(r, from: 20, end: 31, fragments: fragments, halves: halves, sampleRate: sampleRate, beatDuration: beatDuration)
+                ?? spellFigure(s, from: 20, end: 31, fragments: fragments, halves: halves, sampleRate: sampleRate, beatDuration: beatDuration)
             if let spell = spellR {
-                eight = [at(s, 16, gate: 2), at(r, 20, gate: 2)] + spell
+                // A slower whole-word landing needs an earlier lead-in. Reserve that complete
+                // figure instead of falling through to a row of close steps no word can fit.
+                let prefix = [at(s, 16, gate: 2), at(r, 20, gate: 2)].filter { $0.slot < (spell.first?.slot ?? 24) }
+                eight = prefix + spell
             } else if fragments[sa].kind == .half || fragments[ra].kind == .half {
                 eight = [at(s, 16, gate: 2), at(r, 20, gate: 2)] + (24...30).map { at($0 % 2 == 0 ? sa : ra, $0, gate: 1) }
             } else {
