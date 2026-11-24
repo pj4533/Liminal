@@ -790,7 +790,7 @@ static inline float2 footageUV(float2 uvA, float2 texCoord, VideoLayerParams L, 
     float driftAmt = (look == VIDEO_PHANTOM || look == VIDEO_WINDOW || look == VIDEO_PALETTE) ? 0.05 : 0.012;
     float2 drift = float2(sin(fmod(t * 0.031, 6.2831853) + seedA),
                           cos(fmod(t * 0.023, 6.2831853) + seedA * 1.7)) * driftAmt;
-    // Cover fit of the footage's aspect on the 3:2 frame, then the look's size.
+    // Cover fit of the footage's aspect on the display frame, then the look's size.
     float2 k = L.aspect < 1.0 ? float2(1.0, L.aspect) : float2(1.0 / L.aspect, 1.0);
     float2 vuv = 0.5 + (fuv - 0.5 - drift) * k / max(L.scale, 0.1);
     if (kFX && int(L.key + 0.5) == FK_KALEIDO) {
@@ -833,7 +833,7 @@ static inline FootageTap tapFootage(float2 uvA, float2 texCoord, float field, te
     o.vuv = vuv;
     // Ragged, flow-ordered mask edges (the transition field is 0.5 outside a transition).
     o.rag = 0.12 * (field - 0.5) + 0.03 * sin(fuv.x * 9.0 + fuv.y * 7.0 + seedA + fmod(t * 0.2, 6.2831853));
-    o.d = (fuv - 0.5 - drift) * float2(1.5, 1.0);
+    o.d = (fuv - 0.5 - drift) * float2(16.0 / 9.0, 1.0);
     return o;
 }
 

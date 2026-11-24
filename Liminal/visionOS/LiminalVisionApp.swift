@@ -22,20 +22,23 @@ struct LiminalVisionApp: App {
     @StateObject private var settings = SettingsService.shared
     @State private var isImmersed = false
     @State private var controlsVisible = true
+    @State private var immersivePictureReady = false
 
     @State private var immersionStyle: ImmersionStyle = .full
 
     var body: some Scene {
         WindowGroup(id: Self.controlsWindowID) {
             ControlsView(audioEngine: audioEngine, visualEngine: visualEngine,
-                         isImmersed: $isImmersed, controlsVisible: $controlsVisible)
+                         isImmersed: $isImmersed, controlsVisible: $controlsVisible,
+                         immersivePictureReady: immersivePictureReady)
         }
         // Use automatic (default) window style - system handles glass and chrome
         .defaultSize(width: DebugLaunchOptions.controlsWidth ?? 1240, height: 960)
 
         ImmersiveSpace(id: Self.immersiveSpaceID) {
             ImmersiveDomeView(visualEngine: visualEngine, settings: settings, music: audioEngine,
-                              isImmersed: $isImmersed, controlsVisible: $controlsVisible)
+                              isImmersed: $isImmersed, controlsVisible: $controlsVisible,
+                              immersivePictureReady: $immersivePictureReady)
         }
         .immersionStyle(selection: $immersionStyle, in: .full)
     }

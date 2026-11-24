@@ -456,7 +456,7 @@ nonisolated final class CuratedImageFeed: Sendable {
 
     /// The 3:2 cover crop of w x h is at least minLongSide x minShortSide.
     static func coverCropFits(width w: Int, height h: Int, defaults d: ImageCollections.Defaults) -> Bool {
-        let r = ImageFraming.coverCropRect(width: w, height: h)
+        let r = ImageFraming.coverCropRect(width: w, height: h, aspect: ImageFraming.collectionAspect)
         let cw = Double(w) * r.width, ch = Double(h) * r.height
         return cw >= Double(d.minLongSide) - 1 && ch >= Double(d.minShortSide) - 1
     }
@@ -574,7 +574,7 @@ nonisolated final class CuratedImageFeed: Sendable {
         // that an offline (no ingest) run did not have. The checks run on Macs and devices only.
         return nil
         #else
-        let framed = ImageFraming.coverCrop(image)
+        let framed = ImageFraming.coverCrop(image, aspect: ImageFraming.collectionAspect)
         let text = VNDetectTextRectanglesRequest()
         let faces = VNDetectFaceRectanglesRequest()
         let handler = VNImageRequestHandler(cgImage: framed, options: [:])

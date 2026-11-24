@@ -13,10 +13,9 @@
 //    - visionOS dome: mesh UV v = 1 at the top (USD convention); both the mono UnlitMaterial and
 //      the stereo ShaderGraph material sample drawable row 0 at v = 1 (see StereoMaterialBuilder).
 //
-//  ASPECT: every surface shows the image at `displayAspect` (3:2). Sources are centre-cropped
-//  ("cover") to that aspect once, before upload; the visionOS square 2048² render target then
-//  stores the 3:2 image anisotropically and the 112.5° x 75° dome (3:2 in view angle) stretches it
-//  back, so the image is never distorted and no source pixel resolution is thrown away.
+//  ASPECT: sources are centre-cropped to the 16:9 display aspect before upload. The square
+//  visionOS render target stores that picture anisotropically; the shell and movie restore
+//  its proportions. The collection pipeline retains its original 3:2 selection window.
 //  This file has no app dependencies (also compiled into tools/VibranceHarness).
 //
 
@@ -24,9 +23,10 @@ import CoreGraphics
 
 nonisolated enum ImageFraming {
 
-    /// Width / height of the displayed image on every platform: the macOS visual area and the
-    /// visionOS dome (horizontalArc / verticalArc = 112.5° / 75°).
-    static let displayAspect: CGFloat = 1.5
+    static let displayAspectWidth = 16
+    static let displayAspectHeight = 9
+    static let displayAspect = CGFloat(displayAspectWidth) / CGFloat(displayAspectHeight)
+    static let collectionAspect: CGFloat = 3.0 / 2.0
 
     /// Normalized (0-1, top-left origin) crop rect that centre-crops an image of `width` x `height`
     /// to `aspect` ("cover"). Identity when the image already matches within 0.5%.

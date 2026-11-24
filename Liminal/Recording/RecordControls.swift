@@ -10,6 +10,8 @@ import SwiftUI
 
 struct RecordControls: View {
     @ObservedObject var audio: GenerativeEngine
+    var pictureAvailable = true
+    var pictureUnavailableMessage = ""
     @ObservedObject private var recorder = RecordingController.shared
 
     var body: some View {
@@ -22,7 +24,8 @@ struct RecordControls: View {
                     .foregroundStyle(recorder.isRecording ? Color.red : Color.primary)
             }
             .controlSize(.large)
-            .disabled(recorder.phase == .finishing || (!recorder.isRecording && !audio.isPlaybackReady))
+            .disabled(recorder.phase == .preparing || recorder.phase == .finishing
+                      || (!recorder.isRecording && (!audio.isPlaybackReady || !pictureAvailable)))
             .accessibilityIdentifier("record")
 
             status
@@ -33,6 +36,7 @@ struct RecordControls: View {
 
     private var title: String {
         switch recorder.phase {
+        case .preparing: return "Preparing…"
         case .recording: return "Stop Recording"
         case .finishing: return "Saving…"
         default: return "Record"
@@ -41,6 +45,8 @@ struct RecordControls: View {
 
     @ViewBuilder private var status: some View {
         switch recorder.phase {
+        case .preparing:
+            EmptyView()
         case .recording(let since):
             TimelineView(.periodic(from: since, by: 1)) { context in
                 let elapsed = Int(context.date.timeIntervalSince(since))
@@ -54,7 +60,7 @@ struct RecordControls: View {
         case .failed(let message):
             Text("Recording failed: \(message)").foregroundStyle(.yellow)
         case .idle:
-            Text("Records the picture and the music, then saves the movie to Photos.")
+            Text(pictureAvailable ? "Records a 16:9 movie with music and saves it to Photos." : pictureUnavailableMessage)
         }
     }
 }

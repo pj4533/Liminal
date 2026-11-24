@@ -760,7 +760,7 @@ struct VideoCompositeTests {
         #expect(u.videoLook == 3)
         #expect(u.videoSeed == 0.4)
         #expect(u.videoWarp == 0.6)
-        #expect(abs(u.videoAspect - (4.0 / 3.0) / 1.5) < 1e-6)
+        #expect(abs(u.videoAspect - 0.75) < 1e-6)  // 4:3 footage in the 16:9 frame
         #expect(u.videoTintR == 0.9 && u.videoShadeB == 0.02)
         #expect(u.videoMixB == 0)
         #expect(u.videoDrive == 0 && u.videoDriveAmt == 0 && u.videoKey == 0 && u.videoKeyAmt == 0)
@@ -781,7 +781,7 @@ struct VideoCompositeTests {
         #expect(u.videoMix > 0 && u.videoMixB > 0)
         #expect(u.videoLook == 3 && u.videoLookB == 1)
         #expect(u.videoSeedB == 0.8 && u.videoWarpB == 0.4)
-        #expect(abs(u.videoAspectB - 1.0 / 1.5) < 1e-6)
+        #expect(abs(u.videoAspectB - 0.5625) < 1e-6)  // square footage in the 16:9 frame
         #expect(u.videoScaleB == VideoComposite.scale(.phantom))
         // Only layer B (the outgoing piece on slot 0 has gone): layer A stays 0.
         s.a = nil

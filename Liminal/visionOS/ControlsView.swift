@@ -22,6 +22,7 @@ struct ControlsView: View {
 
     @Binding var isImmersed: Bool
     @Binding var controlsVisible: Bool
+    var immersivePictureReady: Bool
     @State private var immersiveRequestPending = false
 
     /// Minimum column width that keeps every label on one line at visionOS type sizes.
@@ -60,7 +61,6 @@ struct ControlsView: View {
             .padding(32)
         }
         .onAppear {
-            RecordingController.shared.scheduleDebugRecording(audio: audioEngine)
             controlsVisible = true
             audioEngine.options = settings.lofiOptions
             applyDebugLaunchOptions()
@@ -111,7 +111,10 @@ struct ControlsView: View {
                            isPreparing: audioEngine.isRunning && !audioEngine.isPlaybackReady,
                            poolCount: visualEngine.poolCount,
                            queuedCount: visualEngine.queuedCount)
-            RecordControls(audio: audioEngine)
+            RecordControls(audio: audioEngine, pictureAvailable: immersivePictureReady,
+                           pictureUnavailableMessage: isImmersed
+                               ? "The immersive picture is getting ready."
+                               : "Enter Liminal to record a 16:9 movie.")
             if let status = visualEngine.statusMessage {
                 Label(status, systemImage: "info.circle")
                     .font(.callout)

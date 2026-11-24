@@ -11,7 +11,7 @@
 #   --drop renders a drop (docs/plans/drop-transitions.md): A breaks up over the fill, B is cut in at the
 #   downbeat; scored with tx-check.py score --drop (use --fps 60 so the cut frame is exact).
 # Writes
-#   DIR/frames/f0000-L.png ... + sequence.json   the transition (left eye, 768x512, 30 fps)
+#   DIR/frames/f0000-L.png ... + sequence.json   the transition (left eye, 768x432, 30 fps)
 #   DIR/ref-a/, DIR/ref-b/                       image A / image B alone, effects off, same timeline
 #   DIR/clip.mp4, DIR/clip.gif                   real-time clips (ffmpeg)
 #   DIR/filmstrip.png                            18 labelled frames from -0.3 s to 1 s after the end
@@ -52,7 +52,7 @@ done
 [[ -n "$A" && -n "$B" && -n "$OUT" ]] || { sed -n '2,17p' "$0" >&2; exit 2; }
 mkdir -p "$OUT"
 
-seq_args=(--sequence --prev-image "$A" --image "$B" --left-only --png-size 768x512 --seq-fps "$FPS"
+seq_args=(--sequence --prev-image "$A" --image "$B" --left-only --png-size 768x432 --seq-fps "$FPS"
           --tx-style "$STYLE" --tx-seed "$SEED" "${pass[@]}")
 "$SCRIPT_DIR/shader-bench.sh" "${seq_args[@]}" --out "$OUT/frames" > /dev/null
 if (( SCORE )); then

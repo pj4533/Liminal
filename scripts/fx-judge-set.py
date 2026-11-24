@@ -5,7 +5,7 @@
         [--fixtures a.jpg,b.jpg,...] [--times 47,160,...] [--ages 3,8,...]
         [--intensities 0.25,0.5,1.0] [--seed 7] [--prefix frame]
 
-JUDGE_DIR gets only <prefix>-001.png ... (768x512, shuffled; nothing in a name or in the directory
+JUDGE_DIR gets only <prefix>-001.png ... (768x432, shuffled; nothing in a name or in the directory
 tells the subject, the intensity or the time). KEY_DIR (keep it away from the judges) gets:
   key.json      frame -> fixture, subject (the fixture's "subject" text in truth.json), intensity, time, image age,
                 rotation (0, or 180 for the orientation decoys: --flip-fraction of the frames are
@@ -148,7 +148,7 @@ def main():
         sc_path = os.path.join(work, "scenarios.json")
         json.dump(scenarios, open(sc_path, "w"))
         cmd = [os.path.join(HERE, "shader-bench.sh"), *shader, "--image", img, "--scenarios", sc_path,
-               "--render-only", "--left-only", "--png-size", "768x512", "--out", work,
+               "--render-only", "--left-only", "--png-size", "768x432", "--out", work,
                "--json", os.path.join(work, "uniforms.json")]
         print(f"{stem}: {len(scenarios)} frames", file=sys.stderr)
         r = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)

@@ -5,6 +5,16 @@ import Testing
 /// The recorder's timing (docs/recording.md "Timing", D47): video slots and audio placement on one
 /// movie clock, at any render rate, with no drift and no shift from lost audio.
 struct RecordingTimingTests {
+    @Test func movieDimensionsKeepAnExactWideAspectAtOddDrawableSizes() throws {
+        let native = try #require(RecordingController.fittedPictureSize(width: 2048, height: 1152))
+        #expect(native.width == 2048 && native.height == 1152)
+        let odd = try #require(RecordingController.fittedPictureSize(width: 1825, height: 1027))
+        #expect(odd.width == 1824 && odd.height == 1026)
+        let short = try #require(RecordingController.fittedPictureSize(width: 1920, height: 1000))
+        #expect(short.width == 1760 && short.height == 990)
+        #expect(RecordingController.fittedPictureSize(width: 0, height: 1080) == nil)
+    }
+
     /// Deterministic jitter in [-amount, amount].
     private struct Jitter {
         var state: UInt64

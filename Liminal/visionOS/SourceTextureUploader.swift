@@ -33,7 +33,7 @@ nonisolated final class SourceTextureUploader: @unchecked Sendable {
     }
 
     /// A new `size`² bgra8Unorm (sRGB-encoded bytes, sampled raw like before) shared texture holding
-    /// `cgImage` stretched to the square (the image is pre-cropped to 3:2; the dome stretches it
+    /// `cgImage` stretched to the square (the image is framed for display; the dome stretches it
     /// back). Safe to call from any thread.
     func makeTexture(from cgImage: CGImage, label: String) -> MTLTexture? {
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(

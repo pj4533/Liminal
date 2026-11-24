@@ -8,7 +8,7 @@
 //
 //  Steps:
 //    1. Sample the depth at every vertex's (u, mirrored v). The depth map is generated from the
-//       already cover-cropped 3:2 image, so it spans the image exactly (no further crop).
+//       already cover-cropped display image, so it spans the image exactly (no further crop).
 //    2. Normalise per image over the image rows: p2...p98 -> 0...1, minus the median, so about half
 //       the scene sits in front of the base radius and half behind; clamp to -0.5...0.5.
 //    3. Taper to zero across the mirrored bands.

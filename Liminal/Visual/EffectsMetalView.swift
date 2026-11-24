@@ -270,8 +270,7 @@ final class EffectsMetalView: MTKView {
             return
         }
 
-        // Convert NSImage to CGImage, centre-cropped to the 3:2 display aspect
-        // (the view itself is kept at 3:2 by VisualDisplayView; docs/decisions/orientation.md).
+        // Crop the source to the same display aspect as VisualDisplayView.
         // MTKTextureLoader's default origin is top-left: texture row 0 = image top.
         guard let rawImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
             LMLog.visual.error("❌ Failed to get CGImage from NSImage")

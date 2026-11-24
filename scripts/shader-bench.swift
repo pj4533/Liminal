@@ -18,7 +18,7 @@
 //     source @ tex 0, 1x1 r8 saliency (0.5) @ tex 2, previous @ tex 3 (source when not
 //     transitioning), left feedback @ tex 4, right feedback @ tex 6 (each eye's previous output,
 //     3 drawables per eye rotating like a DrawableQueue), depth @ tex 5, linear/clamp sampler.
-//   - Source upload as updateSourceTexture: ImageFraming.coverCrop to 3:2, sRGB CGContext, BGRA,
+//   - Source upload as updateSourceTexture: ImageFraming.coverCrop to 16:9, sRGB CGContext, BGRA,
 //     unflipped, stretched to 2048². Depth as updateDepthTexture: r8 at its native size.
 //   - Uniforms: EffectsUniformsComputer.compute(time:, transitionProgress:, hasSaliencyMap: false,
 //     vibrance: ImageColorStats.factors(framed image)); ghostTapCount from the real GhostTapManager
@@ -105,7 +105,7 @@
 //   --intensity X      Effect-intensity setting 0...1 passed to compute() (docs/plans/effects-balance.md)
 //   --image-age S      seconds since the current image's crossfade began, passed to compute()
 //   --render-only      no GPU timing: write the PNGs (--out) and a JSON with each scenario's uniforms
-//   --png-size WxH     scale the PNGs (e.g. 768x512 = the 3:2 picture as displayed; default 2048x2048)
+//   --png-size WxH     scale the PNGs (e.g. 768x432 = the 16:9 picture as displayed; default 2048x2048)
 //   --left-only        write only the left eye
 //   --sequence        render an image transition as a frame sequence (no GPU timing; needs --out and
 //                      --prev-image). --prev-image is image A (shown first), --image is image B.

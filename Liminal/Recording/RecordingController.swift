@@ -2,7 +2,7 @@
 //  RecordingController.swift
 //  Liminal
 //
-//  The Record control (docs/recording.md): starts FrameRecorder at the renderer's picture size,
+//  The Record control (docs/recording.md): starts FrameRecorder at a 16:9 picture size,
 //  taps the engine's main mixer (the final mix, after the master chain) and, when stopped, keeps the
 //  movie in Documents/Recordings and adds it to the Photos library (add-only permission).
 //
@@ -19,31 +19,38 @@ import OSLog
 final class RecordingController: ObservableObject {
     static let shared = RecordingController()
 
-    enum Phase: Equatable { case idle, recording(since: Date), finishing, saved(String), failed(String) }
+    enum Phase: Equatable { case idle, preparing, recording(since: Date), finishing, saved(String), failed(String) }
 
     @Published private(set) var phase: Phase = .idle
     private weak var tappedMixer: AVAudioNode?
     /// Debug recordings (-LiminalRecordAt) keep the file and skip Photos.
     private var skipPhotos = false
     private var debugScheduled = false
-    private var starting = false
+    private var stopAfterPreparation = false
     /// The engine being recorded (for the Lo-Fi grid in the finished log).
     private weak var recordingAudio: GenerativeEngine?
 
     var isRecording: Bool { if case .recording = phase { return true }; return false }
 
-    /// Recording picture size: the macOS drawable at its current size, or the visionOS shell
-    /// texture scaled back to the picture's 3:2 (2048 x 1366). DEBUG `-LiminalRecordSize WxH` overrides it
-    /// (the simulator's software encoder cannot keep 60 fps at full size).
+    /// The movie keeps its dimensions when the Mac window is resized during recording.
     static var pictureSize: (width: Int, height: Int) {
-        if let size = DebugLaunchOptions.recordSize { return size }
+        if let size = DebugLaunchOptions.recordSize,
+           let fitted = fittedPictureSize(width: size.width, height: size.height) { return fitted }
         #if os(visionOS)
-        return (2048, 1366)
+        return (2048, 1152)
         #else
         let size = EffectsMetalView.lastDrawableSize
-        if size.width >= 2, size.height >= 2 { return (Int(size.width), Int(size.height)) }
-        return (1920, 1280)
+        return fittedPictureSize(width: Int(size.width), height: Int(size.height)) ?? (1920, 1080)
         #endif
+    }
+
+    /// Largest exact 16:9 size inside the bounds, with both dimensions even for the encoder.
+    nonisolated static func fittedPictureSize(width: Int, height: Int) -> (width: Int, height: Int)? {
+        let widthStep = 2 * ImageFraming.displayAspectWidth
+        let heightStep = 2 * ImageFraming.displayAspectHeight
+        let scale = min(width / widthStep, height / heightStep)
+        guard scale > 0 else { return nil }
+        return (scale * widthStep, scale * heightStep)
     }
 
     static var recordingsFolder: URL {
@@ -54,17 +61,18 @@ final class RecordingController: ObservableObject {
     func toggle(audio: GenerativeEngine) {
         switch phase {
         case .recording: stop()
-        case .finishing: break
+        case .preparing, .finishing: break
         default: start(audio: audio)
         }
     }
 
     func start(audio: GenerativeEngine) {
-        guard !isRecording, phase != .finishing, !starting else { return }
+        guard !isRecording, phase != .finishing, phase != .preparing else { return }
         guard let device = MTLCreateSystemDefaultDevice() else {
             LMLog.visual.error("🔴 Recording could not start: no Metal device"); return
         }
-        starting = true
+        phase = .preparing
+        stopAfterPreparation = false
         let askPhotos = !skipPhotos
         Task { @MainActor [weak self, weak audio] in
             // Ask for add-only Photos access before the recording, never during it: a first-run prompt
@@ -72,7 +80,11 @@ final class RecordingController: ObservableObject {
             if askPhotos, PHPhotoLibrary.authorizationStatus(for: .addOnly) == .notDetermined {
                 _ = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
             }
-            guard let self, let audio else { self?.starting = false; return }
+            guard let self else { return }
+            guard let audio, !stopAfterPreparation else {
+                phase = .idle
+                return
+            }
             begin(audio: audio, device: device)
         }
     }
@@ -108,11 +120,11 @@ final class RecordingController: ObservableObject {
             }
             await MainActor.run {
                 let controller = RecordingController.shared
-                controller.starting = false
                 switch result {
                 case .success:
                     controller.tappedMixer = mixer
                     controller.phase = .recording(since: Date())
+                    if controller.stopAfterPreparation { controller.stop() }
                 case .failure(let error):
                     LMLog.visual.error("🔴 Recording could not start: \(error.localizedDescription, privacy: .public)")
                     controller.phase = .failed(error.localizedDescription)
@@ -159,13 +171,15 @@ final class RecordingController: ObservableObject {
     }
 
     /// DEBUG: -LiminalRecordAt start,seconds. Called when the controls appear.
-    func scheduleDebugRecording(audio: GenerativeEngine) {
+    func scheduleDebugRecording(audio: GenerativeEngine, pictureAvailable: @escaping @MainActor () -> Bool = { true }) {
         guard let plan = DebugLaunchOptions.recordAt, !debugScheduled else { return }
         debugScheduled = true
         Task { @MainActor [weak self, weak audio] in
-            while let audio, !audio.isPlaybackReady { try? await Task.sleep(for: .milliseconds(100)) }
+            while let audio, !audio.isPlaybackReady, pictureAvailable() {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
             try? await Task.sleep(for: .seconds(plan.start))
-            guard let self, let audio else { return }
+            guard let self, let audio, audio.isPlaybackReady, pictureAvailable() else { return }
             skipPhotos = !DebugLaunchOptions.recordToPhotos
             start(audio: audio)
             LMLog.general.info("🧪 DEBUG FLAG applied: LiminalRecordAt (recording \(plan.seconds, format: .fixed(precision: 0)) s)")
@@ -174,8 +188,11 @@ final class RecordingController: ObservableObject {
         }
     }
 
-    /// Playback stopped: finish the file rather than leave it open.
-    func playbackStopped() { if isRecording { stop() } }
+    /// Finish the file when playback stops or the immersive renderer disappears.
+    func playbackStopped() {
+        if phase == .preparing { stopAfterPreparation = true }
+        if isRecording { stop() }
+    }
 
     private static func saveToPhotos(_ url: URL, stats: FrameRecorder.Stats) async -> Phase {
         let minutes = Int(stats.seconds) / 60, seconds = Int(stats.seconds) % 60

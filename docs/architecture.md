@@ -8,7 +8,7 @@
 Audio                               Visual
 -----                               ------
 GenerativeEngine (facade)           CuratedImageFeed -> CuratedImagePool (disk) -> ImageQueue
- ArchiveConductor (own queue)        -> 3:2 centre crop (ImageFraming)
+ ArchiveConductor (own queue)        -> 16:9 centre crop (ImageFraming)
  LofiPlayback: drum transport,      EffectsUniformsComputer (single source of truth)
  phrase queue, clock                  -> EffectsMetalView (macOS, MTKView)
  LofiMasterBus (finisher)             -> OffscreenEffectsRenderer (visionOS, mono 2048 ->

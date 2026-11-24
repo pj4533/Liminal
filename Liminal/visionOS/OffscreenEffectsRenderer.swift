@@ -412,9 +412,12 @@ final class OffscreenEffectsRenderer {
             }
 
             // Render using passthrough shader directly into the drawable (no effects, just samples texture)
-            let renderPassDescriptor = makeDrawablePassDescriptor(for: outputView(for: drawable.texture))
-
-            guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else { return false }
+            let target = outputView(for: drawable.texture)
+            let renderPassDescriptor = makeDrawablePassDescriptor(for: target)
+            guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else {
+                inFlightSemaphore.signal()
+                return false
+            }
 
             encoder.setRenderPipelineState(passthroughPipelineState)  // Use passthrough shader!
 
@@ -439,6 +442,7 @@ final class OffscreenEffectsRenderer {
 
             encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
             encoder.endEncoding()
+            captureRecordingFrame(target, commandBuffer: commandBuffer, presentationTime: presentationTime)
 
             // Async completion handler - signals semaphore when GPU finishes
             commandBuffer.addCompletedHandler { [weak self] buffer in
@@ -538,12 +542,7 @@ final class OffscreenEffectsRenderer {
             }
         }
 
-        // Recording: the frame just drawn, scaled back to 3:2, in the same command buffer
-        // (docs/recording.md), placed by the display time the render loop expects for it.
-        if FrameRecorder.shared.isRecording {
-            let presented = presentationTime ?? ArchiveFootageService.uptime() + LofiImageReveal.presentationLatency
-            FrameRecorder.shared.capture(target, commandBuffer: commandBuffer, presentationTime: presented)
-        }
+        captureRecordingFrame(target, commandBuffer: commandBuffer, presentationTime: presentationTime)
 
         commandBuffer.commit()
         // NO waitUntilCompleted() - GPU works asynchronously while CPU prepares next frame
@@ -810,6 +809,13 @@ final class OffscreenEffectsRenderer {
         commandBuffer.commit()
         drawable.present()
         return true
+    }
+
+    /// Copy the finished frame into the 16:9 movie using the same display time and command buffer.
+    private func captureRecordingFrame(_ target: MTLTexture, commandBuffer: MTLCommandBuffer, presentationTime: Double?) {
+        guard FrameRecorder.shared.isRecording else { return }
+        let presented = presentationTime ?? ArchiveFootageService.uptime() + LofiImageReveal.presentationLatency
+        FrameRecorder.shared.capture(target, commandBuffer: commandBuffer, presentationTime: presented)
     }
 
     /// The footage variant when footage shows this frame (texture and mix), else nil (plain pipeline).

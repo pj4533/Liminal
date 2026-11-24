@@ -14,7 +14,7 @@
 #   --reuse DIR renders the footage-off and effect-free twins once into DIR/off and DIR/ref (same image,
 #   timeline and options) and links them, so a batch over many modes renders them once per image.
 # Writes
-#   DIR/clip.mp4                 real-time clip (768x512, left eye)
+#   DIR/clip.mp4                 real-time clip (768x432, left eye)
 #   DIR/filmstrip.png            12 labelled frames across the clip
 #   DIR/check.json               readability, footage visibility, temporal smoothness (ffx-check.py)
 #   DIR/frames, DIR/off, DIR/ref frame dumps: footage on (+ stage dumps), footage off, effects off.
@@ -61,7 +61,7 @@ done
 [[ -n "$IMG" && -n "$CLIP" && -n "$OUT" ]] || { sed -n '2,20p' "$0" >&2; exit 2; }
 mkdir -p "$OUT"
 
-base=(--image "$IMG" --footage-seq --left-only --png-size 768x512 --seq-fps "$FPS" "${common[@]}")
+base=(--image "$IMG" --footage-seq --left-only --png-size 768x432 --seq-fps "$FPS" "${common[@]}")
 "$SCRIPT_DIR/shader-bench.sh" "${base[@]}" --footage "$CLIP" --video-look "$LOOK" --footage-dump "${on[@]}" \
   --out "$OUT/frames" > /dev/null
 if (( SCORE )); then

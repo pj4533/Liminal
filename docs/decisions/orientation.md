@@ -8,10 +8,11 @@
   (bogus `translateBy/scaleBy(y:-1)`), and the dome mesh used `v = 1 - vFrac` (inverted UVs). Both are
   gone. The mono UnlitMaterial and the stereo ShaderGraph material were measured to sample
   identically, before and after the fix (O3).
-- Aspect: every surface shows the image at **3:2** (`ImageFraming.displayAspect`). Sources are
-  centre-cropped ("cover") to 3:2 once. The 2048x2048 render target is kept and stores the 3:2 frame
-  anisotropically. The dome is now **112.5° x 75°** (was 110°), which is exactly 3:2 in view angle,
-  so the image shows undistorted. macOS letterboxes to 3:2 (O5-O7).
+- The display and recording frame is **16:9**. Both renderers centre-crop the stored picture for
+  display, and the visionOS square render target is mapped back to that aspect. The shell keeps its
+  112.5° horizontal span per tile, so its seams and rear gap stay in place. The hero's vertical angle
+  is 63.28125°, and the mirrored bands still reach ±60°. Collection selection and stored images
+  retain their original framing. See [Recording](../recording.md) for the export sizes.
 - Verified upright and consistent with a test card on all five paths: simulator mono,
   simulator stereo (flat depth and ML depth), effects off and on, and macOS effects off and on.
   Also checked with a real image and with the offline harness (O9).
@@ -106,7 +107,7 @@ Format: decision, why, alternatives, numbers.
   instead (see `mac-noeffects.png`: 1004 px window, black side bars, round circle).
 
 ## O8 DEBUG flags (Liminal/Utils/DebugLaunchOptions.swift; compiled out of Release)
-- `-LiminalTestPattern YES`: `TestPatternGenerator` makes a 1536x1024 (3:2) card. It replaces the source
+- `-LiminalTestPattern YES`: `TestPatternGenerator` makes a 1536×864 (16:9) card. It replaces the source
   picture. Contents:
   - a big up arrow and "TOP" at the top, "BOTTOM" at the bottom
   - corners TL red, TR green, BL blue, BR yellow, labelled

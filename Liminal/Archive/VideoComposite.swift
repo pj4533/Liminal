@@ -318,8 +318,7 @@ nonisolated enum VideoComposite {
         EffectLook.tri(min(max(intensity, 0), 1), ceilings(look))
     }
 
-    /// ImageFraming.displayAspect (main-actor isolated there): the 3:2 frame on both platforms.
-    static let frameAspect: Float = 1.5
+    static let frameAspect = Float(ImageFraming.displayAspect)
 
     /// Footage size relative to the frame (1 = cover fit).
     static func scale(_ look: VideoLook) -> Float {

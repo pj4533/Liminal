@@ -84,7 +84,7 @@ struct CGImageTransitionState {
 
 // MARK: - Off-main image preparation (docs/decisions/performance.md, image-change hitch)
 
-/// A new image made ready for the render loop off the main actor: framed (3:2 cover crop), its
+/// A new image made ready for the render loop off the main actor: framed for display, its
 /// vibrance factors cached, and its 2048² source texture built. The render loop only swaps
 /// references and starts the transition when this arrives (a few frames after the image does).
 nonisolated struct PreparedImage: @unchecked Sendable {
@@ -124,6 +124,7 @@ struct ImmersiveDomeView: View {
     let music: GenerativeEngine
     @Binding var isImmersed: Bool
     @Binding var controlsVisible: Bool
+    @Binding var immersivePictureReady: Bool
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
 
@@ -187,6 +188,8 @@ struct ImmersiveDomeView: View {
                 await setupEffectsRendererWithBreathingMesh()
             }
             .onDisappear {
+                immersivePictureReady = false
+                RecordingController.shared.playbackStopped()
                 renderTask?.cancel()
                 ArchiveFootageService.shared.stop()
                 headPose?.stop()
@@ -454,6 +457,7 @@ struct ImmersiveDomeView: View {
         renderTask = Task { @MainActor in
             var frameCount = 0
             var submittedFrames = 0
+            var showedPicture = false
 
             // Performance tracking
             var lastFrameTime: Date?
@@ -568,7 +572,7 @@ struct ImmersiveDomeView: View {
                 // A result for an older generation (superseded while preparing) is dropped.
                 if let prepared = preparedSlot.take(), prepared.generation == preparingGeneration,
                    prepared.generation != transitionState.lastGeneration {
-                    // Centre-cropped to the dome's 3:2 once; colour AND depth use the framed image.
+                    // Colour and depth share the same framed image.
                     let framedImage = prepared.framed
                     let generation = prepared.generation
                     if let texture = prepared.texture { effectsRenderer?.registerPreparedTexture(texture, for: framedImage) }
@@ -763,7 +767,15 @@ struct ImmersiveDomeView: View {
                 } else {
                     submitted = false
                 }
-                if submitted { submittedFrames += 1 }
+                if submitted {
+                    submittedFrames += 1
+                    if !showedPicture {
+                        showedPicture = true
+                        immersivePictureReady = true
+                        let readiness = $immersivePictureReady
+                        RecordingController.shared.scheduleDebugRecording(audio: music) { readiness.wrappedValue }
+                    }
+                }
                 let renderTime = Date().timeIntervalSince(renderStartTime) * 1000
                 totalRenderTime += renderTime
                 maxRenderTime = max(maxRenderTime, renderTime)

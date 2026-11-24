@@ -13,7 +13,7 @@ time, 30 feedback frames) once per fixture with a scenario list. Per time it ren
   ko_<effect>  full with that one effect off        (marginal damage with everything else on)
   solo_<effect> ref plus that one effect            (damage of the effect alone)
   geo / color  only the three UV warps / only the colour stages
-Frames are the left eye at 768x512 (the 3:2 picture as displayed).
+Frames are the left eye at 768x432 (the 16:9 picture as displayed).
 Fixture names are relative to $FX_FIXTURES (default tools/ShaderBench/fixtures); absolute paths work too.
 
 Metrics, all on luma (so hue rotation alone costs nothing) against `ref` of the same time:
@@ -82,7 +82,7 @@ def run_bench(image, scenarios, out_dir):
     with open(sc_path, "w") as f:
         json.dump(scenarios, f)
     cmd = [os.path.join(HERE, "shader-bench.sh"), "--image", image, "--scenarios", sc_path, "--render-only",
-           "--left-only", "--png-size", "768x512", "--out", out_dir, "--json", os.path.join(out_dir, "uniforms.json")]
+           "--left-only", "--png-size", "768x432", "--out", out_dir, "--json", os.path.join(out_dir, "uniforms.json")]
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL)
 
 

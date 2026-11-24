@@ -14,27 +14,28 @@ import AppKit
 // MARK: - Window Aspect Ratio Constraint
 
 /// Enforces window resizing so the visual area keeps the image aspect ratio
-/// (width = height * visualAspect + controlPanelWidth). Pictures are shown 3:2.
-final class SquareVisualWindowDelegate: NSObject, NSWindowDelegate {
+/// (width = height * visualAspect + controlPanelWidth).
+final class VisualWindowDelegate: NSObject, NSWindowDelegate {
     /// Panel + 1 divider; 0 when -LiminalHideControls YES shows the picture alone (content-only recordings).
     static let controlPanelWidth: CGFloat = DebugLaunchOptions.hideControls ? 0 : ContentView.panelWidth + 1
-    static let visualAspect: CGFloat = ImageFraming.displayAspect  // 3:2, the pictures' display crop
+    static let visualAspect = ImageFraming.displayAspect
 
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
-        // Calculate title bar height for this window
         let titleBarHeight = sender.frame.height - sender.contentRect(forFrameRect: sender.frame).height
-        let contentHeight = frameSize.height - titleBarHeight
-        // Enforce: visual width = visual height * aspect
-        // Total content width = visual width + control panel width
+        let proposedHeight = frameSize.height - titleBarHeight
+        let screenHeight = sender.screen.map {
+            (($0.visibleFrame.width - Self.controlPanelWidth) / Self.visualAspect).rounded(.down)
+        } ?? proposedHeight
+        let contentHeight = min(proposedHeight, screenHeight)
         let newWidth = (contentHeight * Self.visualAspect).rounded() + Self.controlPanelWidth
-        return NSSize(width: newWidth, height: frameSize.height)
+        return NSSize(width: newWidth, height: contentHeight + titleBarHeight)
     }
 }
 
 struct WindowAccessor: NSViewRepresentable {
     // CRITICAL: Store delegate in Coordinator so it stays alive
     class Coordinator {
-        let delegate = SquareVisualWindowDelegate()
+        let delegate = VisualWindowDelegate()
     }
 
     func makeCoordinator() -> Coordinator {
@@ -50,17 +51,15 @@ struct WindowAccessor: NSViewRepresentable {
             // Set our delegate (stored in coordinator so it won't be deallocated)
             window.delegate = context.coordinator.delegate
 
-            // Set initial frame to enforce the 3:2 visual area
-            let contentHeight = window.contentRect(forFrameRect: window.frame).height
-            let newWidth = (contentHeight * SquareVisualWindowDelegate.visualAspect).rounded()
-                + SquareVisualWindowDelegate.controlPanelWidth
-            let newFrame = NSRect(
-                x: window.frame.origin.x,
-                y: window.frame.origin.y,
-                width: newWidth,
-                height: window.frame.height
-            )
-            window.setFrame(newFrame, display: true, animate: false)
+            // Match the restored window to the picture aspect.
+            let newSize = context.coordinator.delegate.windowWillResize(window, to: window.frame.size)
+            var frame = window.frame
+            frame.origin.y = frame.maxY - newSize.height
+            frame.size = newSize
+            if let bounds = window.screen?.visibleFrame {
+                frame.origin.x = max(bounds.minX, min(frame.origin.x, bounds.maxX - frame.width))
+            }
+            window.setFrame(window.constrainFrameRect(frame, to: window.screen), display: true, animate: false)
         }
         return view
     }
@@ -95,7 +94,7 @@ struct ContentView: View {
                     .frame(width: Self.panelWidth)
             }
         }
-        .frame(minWidth: 400 + SquareVisualWindowDelegate.controlPanelWidth, minHeight: 560)
+        .frame(minWidth: 400 + VisualWindowDelegate.controlPanelWidth, minHeight: 520)
         .background(WindowAccessor())
         .onAppear {
             // Apply saved settings to audio engine on launch
@@ -409,8 +408,7 @@ struct VisualDisplayView: View {
                         cutUniforms: params.cut,
                         ghostBurstSerial: params.modulation.ghostBurstSerial
                     )
-                    // Keep the image at its 3:2 display aspect even if the window is not exactly
-                    // 3:2 (min sizes, full screen): letterbox on black instead of stretching.
+                    // Fit the picture inside the available space, including in full screen.
                     .aspectRatio(ImageFraming.displayAspect, contentMode: .fit)
                     .frame(width: geometry.size.width, height: geometry.size.height)
 

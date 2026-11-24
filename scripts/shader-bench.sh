@@ -10,7 +10,7 @@
 #   scripts/shader-bench.sh --compare DIR_A DIR_B                    # PSNR / max-abs-diff
 #   scripts/shader-bench.sh --gen-depth IMAGE OUT.png                # regenerate a depth fixture
 #   scripts/shader-bench.sh --image IMG --render-only --out DIR [--set k=v,...] [--scenarios F.json]
-#                           [--png-size 768x512] [--left-only]       # frames only, no timing
+#                           [--png-size 768x432] [--left-only]       # frames only, no timing
 #   scripts/shader-bench.sh --image IMG --footage-seq --footage CLIP.mp4 --video-look window --out DIR
 #                           [--seq-len 8] [--footage-b CLIP2.mp4 --footage-xfade 3,4] ...   # moving footage
 #                           (scripts/ffx-clip.sh wraps this; docs/plans/footage-fx.md)

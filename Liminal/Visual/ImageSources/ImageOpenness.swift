@@ -53,7 +53,7 @@ nonisolated enum ImageOpenness {
 
     /// Scores the 3:2 cover crop of `image`.
     static func score(_ image: CGImage) -> OpennessScore {
-        score(window: ImageFraming.coverCrop(image))
+        score(window: ImageFraming.coverCrop(image, aspect: ImageFraming.collectionAspect))
     }
 
     /// Scores `image` as given (already the window that will be shown).
@@ -147,7 +147,7 @@ nonisolated enum ImageOpenness {
 
     // MARK: - Window search
 
-    /// Aspect range kept as is; the renderers' cover crop handles it.
+    /// Aspect range stored whole; the renderers frame these pictures for display.
     static let keepAspect: ClosedRange<Double> = 1.3...1.8
 
     /// Normalised 3:2 window (top-left origin) to cut from an image outside `keepAspect`: the most
@@ -155,12 +155,13 @@ nonisolated enum ImageOpenness {
     static func bestWindow(_ image: CGImage) -> CGRect? {
         let aspect = Double(image.width) / Double(max(1, image.height))
         guard !keepAspect.contains(aspect) else { return nil }
-        let centre = ImageFraming.coverCropRect(width: image.width, height: image.height)
+        let collectionAspect = ImageFraming.collectionAspect
+        let centre = ImageFraming.coverCropRect(width: image.width, height: image.height, aspect: collectionAspect)
         var best: (CGRect, Double)?
         for i in 0..<5 {
             let t = CGFloat(i) / 4
             var r = centre
-            if aspect > ImageFraming.displayAspect {
+            if aspect > collectionAspect {
                 r.origin.x = (1 - r.width) * t
             } else {
                 r.origin.y = (1 - r.height) * t

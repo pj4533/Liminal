@@ -16,8 +16,9 @@ struct SpatialShellLayoutTests {
         #expect(ShellLayout.indexCount == 112 * 96 * 6)
     }
 
-    @Test func heroMatchesOldDomeMapping() {
-        // Old dome: u linear in azimuth over 112.5°, v linear in elevation over 75°, v = 0 at the bottom.
+    @Test func heroUsesWideFramingAndKeepsItsHorizontalExtent() {
+        let vertical: Float = 112.5 * 9 / 16
+        #expect(abs(ShellLayout.heroVerticalDeg - vertical) < 1e-3)
         for c in [0, 28, 56, 112] {
             let col = ShellLayout.column(c)
             #expect(abs(col.u - Float(c) / 112) < 1e-6)
@@ -28,7 +29,7 @@ struct SpatialShellLayoutTests {
             #expect(abs(row.v - Float(j) / 72) < 1e-6)
             #expect(row.sampleV == row.v)
             #expect(row.band == 0)
-            #expect(abs(deg(row.elevation) - (-37.5 + row.v * 75)) < 1e-3)
+            #expect(abs(deg(row.elevation) - (row.v - 0.5) * vertical) < 1e-3)
         }
     }
 
@@ -42,8 +43,9 @@ struct SpatialShellLayoutTests {
         let above = ShellLayout.row(ShellLayout.bandRows + ShellLayout.heroRows + 1)
         #expect(above.v > 1 && above.sampleV < 1)
         #expect(abs((above.v - 1) - (1 - above.sampleV)) < 1e-6)
-        #expect(abs(top.sampleV - 0.7) < 1e-5)
-        #expect(abs(bottom.sampleV - 0.3) < 1e-5)
+        let mirroredSpan = (60 - ShellLayout.heroVerticalDeg / 2) / ShellLayout.heroVerticalDeg
+        #expect(abs(top.sampleV - (1 - mirroredSpan)) < 1e-5)
+        #expect(abs(bottom.sampleV - mirroredSpan) < 1e-5)
     }
 
     @Test func seamsAreContinuous() {

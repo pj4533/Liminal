@@ -3,7 +3,7 @@
 //  Liminal
 //
 //  DEBUG-only orientation + colour test card (-LiminalTestPattern YES).
-//  3:2 like the displayed pictures. Reading it on screen:
+//  16:9 like the displayed pictures. Reading it on screen:
 //    - big upward arrow + "TOP" at the top; "BOTTOM" at the bottom
 //    - corners: top-left RED, top-right GREEN, bottom-left BLUE, bottom-right YELLOW
 //    - "L" / "R" labels near the left/right edges (mirroring check)
@@ -23,7 +23,7 @@ import Foundation
 enum TestPatternGenerator {
 
     static let width = 1536
-    static let height = 1024
+    static let height = 864
 
     /// Cached so every caller gets the same CGImage (stable identity → uploaded once).
     static let image: CGImage = make()

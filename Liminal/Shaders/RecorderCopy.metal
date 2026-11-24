@@ -3,9 +3,9 @@
 //  Liminal
 //
 //  The recorder's copy of each rendered frame into the video pixel buffer (FrameRecorder): one
-//  full-screen triangle, bilinear. It scales the visionOS 2048² shell texture back to the picture's
-//  3:2, and copies the macOS drawable 1:1. Values pass through unchanged (both sources hold
-//  sRGB-encoded values in a bgra8Unorm texture).
+//  full-screen triangle, bilinear. It restores the visionOS square shell texture to 16:9
+//  and scales the 16:9 macOS drawable to the movie's encoder dimensions. Both sources hold
+//  sRGB-encoded values in a bgra8Unorm texture.
 //
 
 #include <metal_stdlib>

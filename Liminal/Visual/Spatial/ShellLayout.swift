@@ -8,7 +8,7 @@
 //
 //  The shell is a cylinder around the viewer made of three tiles that all show the SAME effected
 //  2048² texture:
-//    - hero: 112.5° x 75° straight ahead, the image undistorted (same framing as the old dome);
+//    - hero: a 16:9 angular frame, 112.5° wide, straight ahead;
 //    - right / left: the hero mirrored in u and turned ±112.5°, so the picture continues across the
 //      seams at ±56.25° like a kaleidoscope. Their outer halves fade to black toward the 22.5° gap
 //      directly behind the viewer.
@@ -30,19 +30,16 @@ nonisolated enum ShellLayout {
 
     /// Base (zero-relief) cylinder radius in metres.
     static let baseRadius: Float = 2.5
-    /// Vertical angle of the image, degrees.
-    static let heroVerticalDeg: Float = 75
-    /// Horizontal angle of the image (3:2 like ImageFraming.displayAspect), degrees.
-    static let heroHorizontalDeg: Float = heroVerticalDeg * Float(ImageFraming.displayAspect)  // 112.5
+    /// Keep the horizontal extent and tile seams while matching the picture's aspect.
+    static let heroHorizontalDeg: Float = 112.5
+    static let heroVerticalDeg = heroHorizontalDeg / Float(ImageFraming.displayAspect)
 
     /// Grid segments across one tile, and down the image and each band.
     static let columns = 112
     static let heroRows = 72
     static let bandRows = 12
-    /// Elevation the bands add above and below the image, degrees. Same angular rate as the image
-    /// (75° per unit v), so the mirror continues at the same scale: the band shows the 30% of the
-    /// image nearest the edge and reaches ±60° elevation.
-    static let bandDeg: Float = 22.5
+    /// Continue at the hero's angular scale and preserve the ±60° outer edges.
+    static let bandDeg = 60 - heroVerticalDeg / 2
     /// Band coordinate (0 at the image edge, 1 at the outer edge) where the vertical fade starts.
     static let bandFadeStart: Float = 0.2
 
@@ -95,7 +92,7 @@ nonisolated enum ShellLayout {
 
     /// Row r (0 = bottom edge of the lower band).
     static func row(_ r: Int) -> Row {
-        let bandV = bandDeg / heroVerticalDeg  // 0.3
+        let bandV = bandDeg / heroVerticalDeg
         let v: Float
         let band: Float
         if r < bandRows {
