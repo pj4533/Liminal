@@ -4,9 +4,9 @@ Liminal shows public-domain and openly licensed pictures from library, museum an
 
 1. **Providers** (`Liminal/Visual/ImageSources/Providers/`) search the enabled sources of `image-collections.json`, one picture at a time, politely paced (`ImageHTTP`).
 2. **Gates** keep a picture only when its record passes `ImageRights`, its size passes the 2000 x 1333 crop gate, and `ImageOpenness`, the document, text and face checks and the duplicate checks (`ImageIdentity`, fingerprint) pass.
-3. **Pool**: `CuratedImagePool` stores the 3:2 JPEG and its credit sidecar in `CuratedImageStore/`, with a ledger of every candidate and a 3 GB budget that evicts the least recently shown picture.
+3. **Pool**. `CuratedImagePool` stores the framed JPEG and its credit sidecar in `CuratedImageStore/`. It keeps near-landscape pictures whole and uses a 3:2 crop for other shapes. Its 3 GB budget evicts the least recently shown picture.
 4. **Display rotation** (`ImageRotation`, `CuratedImageFeed`) picks the next stored picture from disk. It never shows a repeat while a never-shown picture exists (D48).
-5. **`ImageQueue`** reserves the pick ahead of time, and the Lo-Fi transport reveals it on the drum boundary.
+5. **`ImageQueue`** reserves the pick ahead of time. The Lo-Fi transport reveals it on the drum boundary, and both platforms centre-crop the stored picture to 16:9 for display. [Collection and display framing](../image-sources/pipeline.md#9-32-framing)
 
 The network only adds to the pool. When the pool is empty or not ready, the bundled standby pictures show instead. The sections below are the decisions behind each step, with their dates and measurements. Format: decision, why, alternatives. The text of the source plan is `docs/plans/image-api-mode.md`.
 
@@ -124,6 +124,8 @@ The user asked for "as many as you can so the total is much more varied", with t
 - **Verified.** Image suites pass with new parser tests for both providers and the `partof` URL. A live macOS run limited to the new providers and six new sources stored 23 pictures (Tichnor postcards, AIC landscapes, aurora, DOCUMERICA neon, Skylab and Gemini Earth, Tonalist paintings). A 200 s live run limited to the ten LoC sources stored 18 pictures from nine of them (Margolies 5, photochrom 2, Prokudin-Gorskii 2, FSA/OWI B&W 2, popular graphic arts 2, Matson, Japanese prints, Gottscho fireworks, Highsmith space and fairs; all at 2088-2799 px after the trim) and rejected two (a Margolies sign with no room for the film, a 1695 px Detroit scan),. The full unit suite passed except the two private drum-take checks that depend on the locally installed Slow Burn loops (unrelated). macOS, visionOS Simulator and visionOS device Release builds succeed.
 
 ## D46 (2026-11-21): Recording from the renderer, saved to Photos
+
+This entry records the original 3:2 implementation. The current recorder exports 16:9 on both platforms. [Current movie sizes and verification](../recording.md)
 
 The user asked for an in-app record control that saves to Photos, works on Vision Pro, has "absolutely no dropped frames" and the best audio possible. A ScreenCaptureKit window recording tried first for a preview clip was jumpy and was dropped.
 

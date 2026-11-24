@@ -6,6 +6,8 @@
 > 2000 x 1333, NASA originals over 12 MB rejected (`~large` is 1920 px), the Smithsonian key read from the
 > environment only, and the "picture shown" ledger write moved off the main actor. The file keeps its name
 > because code comments cite its section numbers.
+>
+> The 3:2 selection and screening rules below still apply at ingest. Playback centre-crops the stored picture to 16:9. [Current framing](../image-sources/pipeline.md#9-32-framing)
 
 Pictures are curated public-domain and openly licensed imagery fetched from library, museum and space-agency
 APIs: roadside neon, 1970s Kodachrome, Apollo-era Earth views, photochroms, fungi, woodblock landscapes. They are

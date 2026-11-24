@@ -1,6 +1,6 @@
 # Dual Pipeline Architecture Review
 
-> **Historical (2026-01-15 review, rewritten for the current app).** Its conclusion (keep two platform-specific render pipelines, share shader and uniforms) still stands, but the render path has since changed: visionOS now renders both eyes in one MRT pass directly into the drawables, with no intermediate texture or blit. The current description is `PLATFORM_ARCHITECTURE.md`; render-path performance decisions are in `decisions/performance.md`.
+> **Historical (2026-01-15 review).** The two platform-specific render pipelines still share their shader and uniforms. The visionOS default now renders one effects texture directly into a RealityKit drawable for the depth-displaced shell. The older per-eye MRT path remains available for Debug comparisons. [Current platform architecture](PLATFORM_ARCHITECTURE.md) · [Performance decisions](decisions/performance.md)
 
 **Date**: 2026-01-15
 **Status**: Reviewed and approved
@@ -34,7 +34,7 @@ CuratedImageFeed -> CuratedImagePool (disk) -> ImageQueue -> AtomicImageBuffer -
 - `ImageQueue` supplies the next picture on the drum grid, and `AtomicImageBuffer` hands the current one to the render loop.
 - macOS draws it through `EffectsMetalView` (MTKView); visionOS through `ImmersiveDomeView` and `OffscreenEffectsRenderer` into RealityKit drawables.
 
-Both platforms crop every picture with the same 3:2 `ImageFraming`, so the pipelines differ only in how the shader output reaches the screen.
+Both platforms use the same 16:9 display crop from `ImageFraming`. The pipelines differ in how the shader output reaches the screen.
 
 ---
 

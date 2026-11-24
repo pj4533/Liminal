@@ -2,11 +2,11 @@
 
 [← Docs index](README.md)
 
-The **Record** button sits under Play/Stop in the Playback section, on macOS and in the visionOS control window. It records what Liminal renders and what it plays, then saves the movie to the Photos library so it is easy to share. It is not a screen recording: no window, controls, cursor or passthrough appear in the movie.
+The **Record** button sits under Play/Stop in the Playback section on macOS and in the visionOS control window. It captures the rendered 16:9 picture and final stereo mix, then saves the movie to Photos for sharing.
 
 ## Using it
 
-1. Press **Play**. On Vision Pro, also enter Liminal's immersive view. Record becomes available when the picture renderer is ready.
+1. Press **Play**. On Vision Pro, select **Enter Liminal** and wait for the first immersive picture. Record becomes available when the renderer has submitted a frame and playback audio is ready.
 2. Press **Record**. The status line under the button counts up ("Recording 1:23").
 3. Press **Stop Recording**, stop playback, or leave the immersive view on Vision Pro. The button shows "Saving…" while the file is closed, then the status says "1:23 saved to Photos".
 
@@ -22,6 +22,8 @@ The first time, the system asks for permission to **add** to the photo library (
 | Audio | The final mix after the master chain, **lossless 24-bit LPCM**, stereo, at the engine's rate (48 kHz) | same |
 | Container | QuickTime `.mov`, named `Liminal yyyy-MM-dd at HH.mm.ss.mov` | same |
 
+On macOS, a 1920×1080 fallback is available if the drawable size is unknown. Existing movies keep their saved resolution.
+
 **visionOS and the immersive space.** An app cannot record the composited headset view (passthrough, the room, your head movement); only the system's *Record My View* in Control Center can, and it records at the system's resolution. Liminal records its own rendered picture instead, the same image that is projected on the dome, at full quality. To capture the headset view as you experienced it, use Control Center → Record My View alongside (or instead of) the Record button.
 
 ## How it works
@@ -34,10 +36,10 @@ The first time, the system asks for permission to **add** to the photo library (
     - *Frames.* Each frame carries its presentation time: macOS the draw time plus the measured present latency (`dropLead` minus its half-frame early bias); visionOS the display time the render loop expects for the frame, sampled with its drop state (`LofiImageReveal.presentationLatency`: the 28 ms display lead minus its half-frame early bias, 22 ms), passed to `renderAndPresent(presentationTime:)`. `FrameSlotter` puts each frame in the slot nearest that time: two frames for one slot keep the nearer (above 60 Hz about a quarter of the frames are surplus), a slot without a frame repeats the previous one (up to 10 s), a late frame is dropped. For a source within 10% of 60 Hz (by a mean frame step clamped so one stall or hiccup cannot pull an 80-90 fps mean into that window) a small hysteresis stops a phase on a slot boundary from alternating drop and repeat; it can hold a frame up to 0.75 slot (12.5 ms) off. Faster sources are always within half a slot (8.3 ms).
     - *Audio.* The tap writes each buffer with its `AVAudioTime` host and sample time (`AudioRing.Mark`). `AudioTimeline` places a buffer at the track position of the time it is heard (host time plus the tapped node's `outputPresentationLatency`, read once at start and again after a route recovery): a buffer that continues the previous one goes straight after it, sample for sample; lost samples (a dropped buffer, a ring overrun) become exactly that much silence; a break in the sample clock (an engine restart) is placed again by its host time; audio heard before T0 is skipped and a late first buffer is preceded by silence. It also follows the audio device's clock against the host clock (`driftSeconds`), and video times are corrected by it, so the movie's clock is the audio's.
     - *Pre-roll.* The ring is drained every 20 ms from the start, also before the first frame arrives (the last 2 s are kept), so it never fills while the movie waits for video.
-  - **No drops from the recorder.** The real-time hardware HEVC encoder keeps up at 60 Hz; frames that arrive while the encoder is busy wait in a queue of up to 2 s (120 frames) instead of being dropped. On stop the queue is flushed before the track is finished.
+  - **Encoder queue.** Frames that arrive while the encoder is busy wait in a queue of up to 2 s (120 frames). If it fills, the recorder counts the dropped frames in its log. On stop the queue is flushed before the track is finished.
   - **Audio.** `GenerativeEngine.recordTap`, a unity `Mixer` after the master chain and the graph's final node, carries the recorder's tap (it asks for 1024 frames; the device delivers its IO buffer, 4800 frames at the 100 ms visionOS buffer and in the simulator). `AVAudioEngine.mainMixerNode` is never touched: AudioKit does not use it, and accessing it makes AVAudioEngine try to connect one while running, which throws. The Lo-Fi master calibration keeps its own tap on `master.output`. The tap block only copies floats and one time stamp into `AudioRing`, a single-producer single-consumer ring of interleaved stereo (10 s, atomics, no locks, no allocation); a buffer that does not fit, or arrives at another sample rate, is dropped whole with its stamp. `writerQueue` turns the placements into `CMSampleBuffer`s on the LPCM track.
   - **Stats.** `Recording finished: N frames (… s at 60 fps) from M rendered at … fps, … surplus, … repeated, max slot error … ms, … dropped, … capture failures, first frame after … s; audio … s, … silence frames, … skipped before start, … discontinuities, … overruns, … rate mismatches, drift … ms, latency … ms` is logged when a movie is closed, then `Recording clock: Lo-Fi take downbeat at movie … s, beat … s, T0 uptime …, drift … ms` (the audible grid on the movie clock, for `scripts/av-sync-check.py`). Any audio buffer that is not contiguous logs `Recording audio: buffer at track …`.
-- **`RecordingController`** (main actor): asks for add-only Photos access **before** a first recording (a prompt during a recording held up its first frame on the device), builds the writer, encoder session and copy pipeline **off the main actor** (on macOS the main thread draws the frames, and this setup took about 0.4 s), installs the tap, publishes the phase for the button, finishes on Stop or when playback stops, refreshes the audio latency after a route recovery (`routeRecovered`), and saves to Photos with `PHPhotoLibrary.requestAuthorization(for: .addOnly)` and `PHAssetCreationRequest.creationRequestForAssetFromVideo(atFileURL:)`.
+- **`RecordingController`** (main actor): asks for add-only Photos access **before** a first recording (a prompt during a recording held up its first frame on the device), builds the writer, encoder session and copy pipeline **off the main actor** (on macOS the main thread draws the frames, and this setup took about 0.4 s), installs the tap, publishes the phase for the button, finishes on Stop, playback stop or immersive exit, refreshes the audio latency after a route recovery (`routeRecovered`), and saves to Photos with `PHPhotoLibrary.requestAuthorization(for: .addOnly)` and `PHAssetCreationRequest.creationRequestForAssetFromVideo(atFileURL:)`.
 - **`RecordControls`**: the button and status line in both control panels.
 
 **Permissions.** `Info.plist` has `NSPhotoLibraryAddUsageDescription`. The macOS sandbox gets the Photos entitlement from the build setting `ENABLE_RESOURCE_ACCESS_PHOTO_LIBRARY = YES` (`com.apple.security.personal-information.photos-library`). No other permission is needed: the recorder reads the app's own frames and audio, not the screen or microphone.
@@ -84,7 +86,7 @@ After the fix (same check, `--log` with the run's log):
 
 ## Testing
 
-`-LiminalRecordAt <start>,<seconds>` starts a recording `<start>` seconds after playback is ready and stops it `<seconds>` later, keeping the file without the Photos step (no permission prompt during automation). Add `,photos` to include the Photos step. It is an automation flag, so use `-LiminalImageAPIFresh YES` or `-LiminalImageAPIOffline YES` with it. Example:
+`-LiminalRecordAt <start>,<seconds>` starts a recording `<start>` seconds after playback is ready and stops it `<seconds>` later. On visionOS the timer arms after the first immersive frame. The movie stays in the app container by default. Add `,photos` to exercise Photos saving. Use `-LiminalImageAPIFresh YES` or `-LiminalImageAPIOffline YES` for automated runs.
 
 ```sh
 open Liminal.app --args -LiminalAutoPlay YES -archive.enabled YES -LiminalImageAPIFresh YES -LiminalRecordAt 5,60
@@ -92,12 +94,21 @@ open Liminal.app --args -LiminalAutoPlay YES -archive.enabled YES -LiminalImageA
 
 Read the `Recording finished:` log line for frame and drop counts. In the visionOS Simulator the file is in the app's data container under `Documents/Recordings`.
 
-**Simulator timing checks.** The simulator's software HEVC encoder writes about 35 fps even at 384x256, so a full-size simulator movie drops frames in the encoder queue. `-LiminalRecordSize WxH` and `-LiminalRecordCodec h264` (DEBUG) record smaller and with H.264, which keeps up at 768x512. `-LiminalRecordTrace YES` logs every tap buffer's host time, sample time and track position, and any exact-zero run inside it (`REC mark ...`):
+**Simulator timing checks.** Use the Debug `-LiminalRecordCodec h264` override. The simulator's software HEVC encoder falls behind at full resolution. `-LiminalRecordSize WxH` chooses the largest even 16:9 size that fits the bounds. Use 768×432 or 1024×576 for sustained timing checks. `-LiminalRecordTrace YES` logs each tap buffer's host time, sample time, track position and any exact-zero run inside it (`REC mark ...`).
 
 ```sh
 xcrun simctl launch <udid> com.saygoodnight.Liminal -LiminalAutoPlay YES -LiminalOpenDome YES \
-  -LiminalMusicSeed 7 -LiminalTestImage <dir of jpgs> -LiminalRecordAt 8,90 -LiminalRecordSize 768x512 -LiminalRecordCodec h264
+  -LiminalMusicSeed 7 -LiminalTestImage <dir of jpgs> -LiminalRecordAt 8,90 -LiminalRecordSize 768x432 -LiminalRecordCodec h264
 ```
+
+### Widescreen release verification (2026-11-23)
+
+| Run | Movie |
+|---|---|
+| macOS, normal effects | 2144×1206 HEVC, 684 frames at 60 fps. Both tracks ran 11.400 s with zero recorder drops or audio discontinuities. |
+| Vision Pro simulator, normal effects, save to Photos | 2048×1152 H.264, 222 frames at 60 fps. Both tracks ran 3.700 s with zero recorder drops or audio discontinuities. |
+
+The simulator also saved an active recording on immersive exit and exercised capture with effects disabled. A longer full-size simulator run under compiler load dropped frames. Liminal 1.0 (3) was installed on the paired Vision Pro. The headset was locked, so the on-device movie check remains open.
 
 ### Checking a recording
 

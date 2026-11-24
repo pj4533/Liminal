@@ -50,3 +50,9 @@ Updated in `scripts/sim-tap.sh` (header), `scripts/perf-run.sh` (fallback taps) 
 - Both platforms build.
 - visionOS sim: Play toggles to Stop and the status reads "Playing"; Enter Liminal opens the immersive space and the button turns into Exit Liminal; Exit Liminal works. Clear Curated Pictures opens the confirmation, which was dismissed without deleting anything.
 - macOS: the panel scrolls, the Storage & Settings sheet opens, and all text wraps with no truncation.
+
+## Widescreen playback and recording (2026-11-23)
+
+On macOS the 16:9 canvas fits beside the 320 pt scrollable panel. `VisualWindowDelegate` handles the window size and the layout requires at least 520 pt of height, so controls stay accessible as the canvas shrinks.
+
+On Vision Pro, Record becomes available once Liminal has submitted the first immersive frame and playback audio is ready. Exit Liminal finishes an active recording. [Recording guide](../recording.md)

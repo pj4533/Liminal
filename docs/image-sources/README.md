@@ -43,7 +43,7 @@ flowchart TD
     subgraph Display["Display (disk only)"]
         H --> I[CuratedImagePool]
         I --> J[ImageRotation.nextDisplay:<br/>new pictures first, openness, source alternation,<br/>monochrome cap, reservations]
-        J --> K[ImageQueue: buffer, Lo-Fi reserve,<br/>3:2 crop, saliency, depth, footage]
+        J --> K[ImageQueue: buffer, Lo-Fi reserve,<br/>16:9 display crop, saliency, depth, footage]
         K --> L[Screen + credit line<br/>markShown -> ledger]
     end
     C -. rejected .-> R[Ledger: rejected with reason,<br/>never retried]

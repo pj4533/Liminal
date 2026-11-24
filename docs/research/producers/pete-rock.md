@@ -14,7 +14,7 @@
 
 - **Keep native cadence a real candidate.** Compare it with a linked-rate version when a shorter or darker gesture fits, and keep the original when speech character matters more ([handoff](../dialogue-chopping/handoff.md), "Pete Rock"). The same section corrects terminology: rate conversion couples duration and pitch, pitch-preserving time stretch is a separate operation, and pitch shifting alone a third.
 - **Long phrases stay first-class** (1 to 2 bars, 2 to 6 s), per [craft §1.3](../dialogue-chopping/craft.md#13-pete-rock-the-joy-confirmed-nuanced).
-- **The shipped chops play at native rate only** (user direction, [plan](../../plans/mpc-chopping.md); see [D125](../../decisions/music.md#d125-the-motif-becomes-a-hook-one-2-bar-cell-on-fixed-steps-varied-only-at-the-phrase-ends-2026-11-21), which declines the pitched sibling).
+- **Line-specific speed.** D125 used native playback rate. D130 lets the sampler fit the speaker's cadence to the tempo with one linked speed-and-pitch adjustment across the line, bounded to ±2.5 semitones. [D130](../../decisions/music.md#d130-continuation-salience-learned-footage-and-chop-feel-2026-11-23)
 
 ## Sources
 

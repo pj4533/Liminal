@@ -13,7 +13,7 @@ Several requested subjects returned little reliable first-hand material: Knxwled
 ### 1.1 DJ Premier, "The Question Remains" (CONFIRMED, with detail)
 The RBMA transcript confirms the restart, pitch-down and pad flip-flop account, and does not mention the MPC60, so the anecdote must not be tied to a machine. Evidence and quotes: [DJ Premier](../producers/dj-premier.md).
 
-Rule: bank = one anchor stab (native) plus one sibling that differs by a single pitch/rate step (suggest -2 to -4 semitones linked rate, range 0.79-0.89x), placed on a different pad, and alternated ("flip-flop") rather than layered. Alternate by a fixed pattern for at least 2 repeats before changing. (Not lifted into the product: the user direction is native rate only; see D125 in `docs/decisions/music.md`.)
+Rule: bank = one anchor stab (native) plus one sibling that differs by a single pitch/rate step (suggest -2 to -4 semitones linked rate, range 0.79-0.89x), placed on a different pad, and alternated ("flip-flop") rather than layered. Alternate by a fixed pattern for at least 2 repeats before changing. Liminal's D125 hook kept native playback. D130 uses one rate per line so the whole phrase moves together. [Current dialogue decision](../../decisions/music.md#d130-continuation-salience-learned-footage-and-chop-feel-2026-11-23)
 
 ### 1.2 Premier pitch/tempo figures (NEW, secondary, lower weight)
 A ModeAudio article's figures for "Mass Appeal" (118 to 96 BPM, about 4 semitones down) and "N.Y. State of Mind" (about 16 BPM slower) are the author's analysis, not Premier testimony ([DJ Premier](../producers/dj-premier.md)).

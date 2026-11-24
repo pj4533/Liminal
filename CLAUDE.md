@@ -7,7 +7,7 @@ Guidance for Claude Code in this repository. It extends [AGENTS.md](AGENTS.md), 
 Liminal is a native SwiftUI audiovisual app for **macOS 26+ and visionOS**. It has no iOS target and no web backend. It:
 
 - plays **Lo-Fi beats**: sampled instruments, a warm bass, a held pad, optional private drum takes, and archive dialogue chopped on the beat;
-- shows curated public-domain and openly licensed 3:2 pictures from library, museum and NASA APIs, stored in a pool on disk that keeps rotating offline;
+- shows curated public-domain and openly licensed pictures from library, museum and NASA APIs in a 16:9 frame, with an on-disk pool that keeps rotating offline;
 - renders the pictures through one staged Metal effects shader (MTKView on macOS; RealityKit drawables on a depth-displaced wraparound shell on visionOS);
 - weaves Internet Archive footage and its treated soundtrack into the scene.
 
@@ -79,7 +79,7 @@ Any DEBUG launch with an automation flag (`-LiminalAutoPlay`, `-LiminalOpenDome`
 - Dialogue analysis never delays the film bed or the music. Plans carry the cue token and revision (`ArchiveVoice.perform` ignores stale tokens and lower revisions). The acoustic fallback is always retained when transcription is unavailable.
 
 **Rendering.**
-- Image row 0 is the top. Use the same 3:2 cover crop (`ImageFraming`) on both platforms, and register saliency and depth with the same normalized crop as the colour image.
+- Image row 0 is the top. Use the same 16:9 display crop (`ImageFraming`) on both platforms. Register saliency and depth with the same normalized crop as the colour image. Use 3:2 collection framing for ingest gates.
 - `EffectsUniforms` (Swift) must match the Metal struct exactly. `EffectsUniformsComputer` is the single source of truth for both renderers.
 - Per-frame shader constants are passed with `setFragmentBytes` so each in-flight command buffer has its own copy. Do not go back to one shared `MTLBuffer` that the CPU overwrites.
 - Build depth textures fresh rather than overwriting one that a frame in flight may still use.
@@ -91,7 +91,7 @@ Any DEBUG launch with an automation flag (`-LiminalAutoPlay`, `-LiminalOpenDome`
 - Keep pictures only when their record passes `ImageRights` (PD, CC0, no known restrictions, CC BY / BY-SA) and keep each picture's credit.
 - Keep network, decode and ledger writes off the main actor.
 
-**Recording.** Every movie frame and audio buffer is placed by its own presentation or heard time on one movie clock (`FrameSlotter`, `AudioTimeline`, D47). Never place by "next slot" or "next sample" alone, never stamp audio by sample count across a gap, and keep the recorder's tap free of locks and allocation. Check movies with `scripts/av-sync-check.py`.
+**Recording.** The movie is 16:9 on both platforms. Vision Pro captures at 2048×1152 and finishes an active recording on immersive exit. Every movie frame and audio buffer is placed by its own presentation or heard time on one movie clock (`FrameSlotter`, `AudioTimeline`, D47). Never place by "next slot" or "next sample" alone, never stamp audio by sample count across a gap, and keep the recorder's tap free of locks and allocation. Check movies with `scripts/av-sync-check.py`.
 
 **Archive.** Retain each source's credit (`docs/experience.md` film table). Thirteen pinned films plus two rotating discoveries share a 4 GB cache (raised from 3 GB for the interest pins, A32). Do not add size caps or budgets that change what can play (user decision, 2026-11-19, A31); if more storage is needed, raise the storage. Launch cleanup only removes files the index does not list and stale temp files.
 

@@ -26,10 +26,13 @@
 
 Set the tempo in the Music section and optionally pin a scale. Tempo and scale changes apply at a 16-bar boundary. The app bundles twenty-one sampled acoustic programs (pianos, plucked strings and guitars) and composes new phrases and bass lines each session. Enable **Archive footage** and leave **Footage audio** at its 50% default to hear the tuned mix. The original film plays in the background while fragments of the same voice land on the beat. The film and main image change together on eight-bar boundaries.
 
-On a first run, play online to fill the curated picture pool and the film cache; no key or account is needed. The film cache holds ten pinned titles and two rotating discoveries. Saved pictures and cached footage and its sampled speech can play offline on Mac and Vision Pro. [Pinned films and sources](experience.md#pinned-films-and-rotating-discoveries)
+On a first run, play online to fill the curated picture pool and the film cache. The film cache holds thirteen pinned titles and two rotating discoveries. Saved pictures, cached films and their sampled speech can play offline on Mac and Vision Pro. [Pinned films and sources](experience.md#pinned-films-and-rotating-discoveries)
 
 For a private build with your own Slow Burn recordings (Vol. 1–4), follow the [optional drum setup](experience.md#lo-fi) before building.
 
+## Record a 16:9 movie
+
+Press **Play**, then **Record** in the Playback section. On Vision Pro, select **Enter Liminal** and wait for the immersive picture to appear. **Stop Recording** saves the movie to Photos. Stopping playback or leaving the immersive view also finishes the recording. [Recording and Photos permissions](recording.md)
 
 ## Build from the command line
 

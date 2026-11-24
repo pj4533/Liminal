@@ -52,7 +52,7 @@ Most failures are "the API only shows a 1024 px preview". Before giving up on a 
 
 ### Judge the vibe on contact sheets
 
-Lay out the first 18-30 size-passing results per query as thumbnails, **centre-cropped to 3:2** the way `ImageFraming` crops. Judge each one against the brief and the gates. For example, with PIL (run on downloaded files with `python3 -I` from a separate directory):
+Lay out the first 18–30 size-passing results per query as thumbnails, centre-cropped to the 3:2 `ImageFraming.collectionAspect` used by the collection gates. Judge each one against the brief and the gates. You can make the contact sheet with PIL (run on downloaded files with `python3 -I` from a separate directory):
 
 ```python
 from PIL import Image
@@ -190,7 +190,7 @@ The pipeline calls only free public APIs, so a verification run may use the netw
    - `API image rejected: … reason=…`. Tally the reasons. Many `title rejected` lines mean the reject words are too broad. Many `too small` lines mean the route is not the high-resolution one. Many `no room for the film`, `not open enough`, `text covers` or `monochrome` lines mean the source is off-brief.
    - `API image shown: … license=… url=…`, then open a few of the URLs.
    - No `backing off` loops. If there are some, look at the error (429, 5xx, `blocked`) and add a host gap or a fallback.
-3. **Look at the screen.** Build, terminate the old process, relaunch, and capture with `/opt/homebrew/bin/peekaboo`. Check the 3:2 framing, that the film shows through, and the credit under **Now showing** in Images & Storage.
+3. **Look at the screen.** Build, terminate the old process, relaunch, and capture with `/opt/homebrew/bin/peekaboo`. Check the 16:9 playback framing, that the film shows through, and the credit under **Now showing** in Images & Storage.
    For a bounded, comparable measure add `-LiminalImageAPIPreview 40 -LiminalImageAPISeed 1 -LiminalVideoOff YES`: ingest stops after 40 candidates, and `scripts/image-yield.py <log> --urls` prints requests, hits, rejections by stage and reason, stored and shown per query, with each stored item's URL for review (D130). Several source ids of different providers can share one launch; the script splits them.
 4. **Run the whole rotation** without `-LiminalImageProvider` to see the new source in the mix, at its weight (and, for a priority source, the share with `image-yield.py`).
 5. **Offline reuse.** Run again with `-LiminalImageAPIOffline YES` added: the verify pool is reused and nothing is fetched.

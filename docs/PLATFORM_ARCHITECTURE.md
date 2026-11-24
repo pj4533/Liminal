@@ -7,7 +7,7 @@ This document explains the architectural differences between Liminal's macOS and
 | Aspect | macOS | visionOS | Why Different |
 |--------|-------|----------|---------------|
 | **Rendering API** | MTKView (direct Metal) | Offscreen Metal → DrawableQueue → RealityKit | MTKView unavailable on visionOS; RealityKit is native |
-| **Display Surface** | Window framebuffer (3:2, letterboxed) | Wrap-around depth-relief shell (three tiles, 337.5°×120°; centre 112.5°×75° is the undistorted 3:2 image) | visionOS is spatial/immersive |
+| **Display Surface** | 16:9 drawable beside a scrolling control panel | Wraparound depth-relief shell. The three tiles span 337.5° horizontally and reach ±60° vertically. The centre 112.5°×63.28125° shows the undistorted 16:9 picture. | visionOS is spatial and immersive |
 | **Frame Rate** | 60fps display link | 90fps RealityKit timeline | Platform requirements differ |
 | **Image Blending** | GPU shader (fragment blend) | GPU shader (fragment blend) | Same approach, platform-optimal delivery |
 | **State Management** | @Published properties | AtomicImageBuffer (lock-free) | 90fps starves MainActor |
@@ -30,7 +30,7 @@ This document explains the architectural differences between Liminal's macOS and
 Metal (offscreen) → DrawableQueue → TextureResource → RealityKit Entity
 ```
 
-The `OffscreenEffectsRenderer` renders both eyes in one MRT pass straight into the 2048×2048 drawables of two `TextureResource.DrawableQueue`s (no intermediate texture or blit), which RealityKit shows on the shell. Dome and Spatial Diorama no longer exist: one immersive space has the effects and real 3D geometry (the ML depth map displaces the shell's vertices, so both eyes see true stereo and head-motion parallax). Left and right eyes get the same mono effects texture; see `decisions/spatial.md`.
+The `OffscreenEffectsRenderer` writes one 2048×2048 effects texture directly into a RealityKit `TextureResource.DrawableQueue` drawable. RealityKit projects the same texture onto the displaced shell for each eye. The ML depth map changes the shell's geometry, giving binocular relief and head-motion parallax. [Spatial decisions](decisions/spatial.md)
 
 ### Problem 2: MainActor Starvation
 
@@ -101,7 +101,7 @@ Metal renders to the drawable's texture, calls `drawable.present()`, and Reality
 | **Uniform structure** | `EffectsUniforms.swift` | Shader parameter data |
 | **Audio system** | `Audio/*` | Lo-Fi engine (sampled instruments, drum takes, archive dialogue chops), `MusicState` read by both renderers |
 | **Audio-visual coupling** | `Visual/MusicReactor.swift`, `Visual/MusicModulation.swift` | Music -> clamped uniform nudges |
-| **Image pipeline** | `Visual/ImageSources/CuratedImageFeed.swift`, `CuratedImagePool.swift`, `Visual/ImageQueue.swift`, `Visual/ImageStore.swift`, `Visual/ImageFraming.swift` | Curated pictures fetched from public APIs, pooled on disk, queued, 3:2 crop |
+| **Image pipeline** | `Visual/ImageSources/CuratedImageFeed.swift`, `CuratedImagePool.swift`, `Visual/ImageQueue.swift`, `Visual/ImageStore.swift`, `Visual/ImageFraming.swift` | Curated pictures fetched from public APIs, screened with 3:2 collection framing, pooled on disk and centre-cropped to 16:9 for playback |
 | **Settings** | `Services/SettingsService.swift` | UserDefaults persistence (incl. `visual.syncToMusic`) |
 | **Control UI pieces** | `ControlComponents.swift`, `ClearImagesSection.swift` | Sections, value sliders, pickers, toggles used by both UIs |
 | **Platform abstraction** | `PlatformImage.swift` | NSImage/UIImage typealias |
@@ -119,7 +119,7 @@ The actual visual effects are 100% identical on both platforms. The same Metal s
 | File | Purpose |
 |------|---------|
 | `LiminalApp.swift` | App entry point with WindowGroup |
-| `ContentView.swift` | Main UI: scrolling 320 pt control panel plus the 3:2 visual area; "Storage & Settings" sheet |
+| `ContentView.swift` | Scrolling 320 pt control panel alongside an aspect-fit 16:9 canvas, with a Storage & Settings sheet |
 | `Visual/EffectsMetalView.swift` | MTKView-based Metal rendering |
 | `Visual/TimerDrivenCrossfade.swift` | Crossfade progress tracker for the GPU shader |
 
@@ -232,7 +232,7 @@ holding sRGB bytes; nothing is linearised), and both platforms store those value
   (docs/decisions/vibrance.md, V1).
 
 Feedback trails: macOS copies its drawable into a feedback texture; visionOS binds each eye's
-previous output view (texture 4, right eye texture 6 in the MRT pass), no copy (V2).
+previous output view (texture 4, or right-eye texture 6 in the Debug stereo pass), no copy (V2).
 
 The final shader stage is VIBRANCE (luminance-preserving chroma gain, gamut-safe); its amount comes
 from `EffectsUniformsComputer.computeVibrance` times a per-image factor (`ImageColorStats`).
@@ -263,8 +263,7 @@ The architecture maximizes code sharing (audio, shaders, uniforms, image pipelin
 
 ## visionOS render path (post performance work)
 
-- Both eyes render in a single MRT pass directly into the two RealityKit `DrawableQueue` drawables
-  (2048x2048 each); there is no intermediate output texture or blit, and the distortion field is computed once.
+- The standard path writes directly into one 2048×2048 RealityKit drawable. The Debug-only `-LiminalShellTextureStereo` A/B path uses one MRT pass to write two drawables.
 - Relief and breathing are computed on the CPU (vDSP, about 0.5-0.64 ms per frame in Debug) (no per-frame compute command buffer).
 - Drawable queues no longer request `.shaderWrite`; uploaded source textures use `optimizeContentsForGPUAccess`.
 - GPU timing: `Utils/GPUTimingStats.swift`; DEBUG launch flags: `Utils/DebugLaunchOptions.swift`;
@@ -275,9 +274,15 @@ The architecture maximizes code sharing (audio, shaders, uniforms, image pipelin
 One convention on both platforms: texture row 0 / texCoord.y = 0 is the image top. The visionOS upload
 draws into the CGBitmapContext unflipped. The effects pass maps rows 1:1 into the drawable. Dome UVs
 use v = 1 at the top, and the mono UnlitMaterial and stereo ShaderGraph material both sample row
-`(1 - v) * H`. Every source is centre-cropped to 3:2 (`ImageFraming`). The square 2048² target stores
-the 3:2 frame and the 112.5°×75° dome shows it undistorted. macOS letterboxes its view to 3:2. Details,
-measurements and the DEBUG test-card flags: `docs/decisions/orientation.md`.
+`(1 - v) * H`. Both renderers centre-crop the stored image to 16:9 with `ImageFraming`, using the same
+display crop for colour, saliency and depth. The square 2048² target stores that widescreen frame and
+the 112.5°×63.28125° hero patch shows it undistorted. macOS aspect-fits the frame beside the controls.
+[Orientation and test cards](decisions/orientation.md)
+
+Recording uses the rendered 16:9 frame on both platforms. macOS fits the largest even 16:9 frame
+within the drawable at the start of recording. visionOS maps the square effects texture to 2048×1152.
+The controller enables Record after the first immersive frame and saves an active recording on exit.
+[Recording](recording.md)
 
 ## Audio-visual coupling (both platforms)
 

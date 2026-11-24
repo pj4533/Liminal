@@ -2,6 +2,8 @@
 
 Plan: [docs/plans/spatial.md](../plans/spatial.md). Entries are added as the work proceeds.
 
+S1–S18 record the original 3:2 shell work. [Current widescreen geometry](#s19-widescreen-hero-and-immersive-recording-2026-11-23)
+
 ## S1. One immersive mode replaces Dome and Spatial Diorama
 
 The diorama used `ImagePresentationComponent` / `Spatial3DImage.generate()`. The system renders
@@ -222,3 +224,9 @@ content; wider images were not tried.
 walk 0.3 m to see parallax; set Depth 0, 0.6, 1.0 and judge comfort; exit with the Digital Crown and
 confirm the button reads "Enter Liminal"; watch a few image changes for pops. The checklist above
 lists the rest.
+
+## S19. Widescreen hero and immersive recording (2026-11-23)
+
+The hero patch now shows the 16:9 composition. Its vertical span is 63.28125°. Three 112.5° tiles still cover 337.5° horizontally, leaving the 22.5° rear gap. Mirrored continuation reaches ±60° vertically. The standard path keeps the single 2048² texture and depth-displaced geometry.
+
+Record becomes available once the immersive renderer has submitted a frame and audio is ready. Exiting the space finishes an active 2048×1152 recording while playback can continue. [Recording verification](../recording.md#widescreen-release-verification-2026-11-23)

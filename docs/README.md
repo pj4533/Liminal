@@ -5,10 +5,11 @@
 | Guide | Contents |
 | --- | --- |
 | [Getting started](getting-started.md) | Requirements, builds and tests |
-| [Recording](recording.md) | The Record button: picture and mix captured from the renderer, HEVC plus 24-bit LPCM, saved to Photos; measurements and the test flag |
+| [Recording](recording.md) | 16:9 HEVC movies with 24-bit stereo audio on Mac and Vision Pro, Photos permissions, and verification |
 | [Experience and controls](experience.md) | Lo-Fi music, visuals, the thirteen pinned films, rotating discoveries, source credits and playback settings |
 | [Research index](research/README.md) | All research by topic: producers and what Liminal took from each, Lo-Fi production, dialogue chopping, instruments, bass and pads, mix and distortion, visuals and image APIs, simulator tooling |
 | [Mix verification](mix-verification.md) | How to capture per-bus stems and measure loudness, true peak, masking, low end, intelligibility and chop cadence, and how to read the report |
+| [Dialogue release verification](plans/dialogue-salience/acceptance-ledger.md#local-release-verification-on-the-mac) | Local checks for word boundaries, hook timing, learned footage selection and mix balance |
 | [MPC chopping plan](plans/mpc-chopping.md) | Work packages, acceptance criteria and deferred items |
 | [MPC chopping measurements](plans/mpc-chopping-measurements.md) | Baseline and final matrix results, criteria changes and listening checks |
 | [Lo-Fi instrument recordings](lofi-samples.md) | Sources for the twenty-one piano, plucked string and guitar programs |

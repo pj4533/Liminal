@@ -1,5 +1,7 @@
 # Local Codex handoff: finish Liminal dialogue work
 
+> Historical handoff. [Local release verification and remaining listening checks](dialogue-salience/acceptance-ledger.md#local-release-verification-on-the-mac)
+
 23 November 2026. **Work remains unfinished. Run locally; do not start paid services or more remote Actions jobs.** PJ asked to stop remote work and hand off sooner. All our remote jobs were confirmed stopped; the final runs below were cancelled at the user's budget request, not classified as test failures. No merge, main push, device install or deployment has been performed. This document supersedes the operational state in the morning [handoff](HANDOFF-2026-11-23.md); keep that document for the original requirements.
 
 ## Get all work without touching the laptop's dirty checkout

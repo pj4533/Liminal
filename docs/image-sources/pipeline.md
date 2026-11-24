@@ -190,7 +190,9 @@ The picture was decoded at 3413 px. After the trim it is scaled to the usual dec
 `ImageOpenness.bestWindow`:
 
 - A picture with an aspect between **1.3 and 1.8** is stored whole. The renderers' cover crop (`ImageFraming`) does the rest, the same crop on both platforms.
-- Any other picture is cut to a 3:2 window: five offsets along the long axis, from one end to the other. Each window is scored for openness (section 10), and the most open one wins, with a 0.02 bias towards the centre to break ties. The stored file is then already 3:2, so saliency and depth stay registered with the colour image.
+- Any other picture is cut to a 3:2 window. The app scores five offsets along the long axis for openness (section 10), with a 0.02 bias towards the centre to break ties, and stores the winning crop.
+
+The 3:2 collection aspect governs these ingest checks and storage choices. When a stored picture is displayed, both renderers use the same 16:9 centre crop for colour, saliency and depth. Display cropping leaves the stored JPEG intact.
 
 ## 10. The gates: size, openness, document, monochrome, text, faces
 
@@ -290,7 +292,7 @@ When the picture actually reaches the screen, `markShown` records it in the hist
 
 ## 14. How pictures reach the screen, and Lo-Fi timing
 
-`ImageQueue` connects the feed to the rest of the visual pipeline: buffer, 3:2 crop, saliency, depth, footage, effects and renderers. `EffectsUniforms`, the shaders and the 2048 visionOS render size are not touched.
+`ImageQueue` connects the feed to the presentation pipeline. It buffers the stored image for a 16:9 display crop, saliency, depth, footage and effects. The visionOS effects texture still uses a 2048×2048 drawable.
 
 - **Start** (`ImageQueue.start`). This calls `startFeed`, which starts ingest and a display loop. Every second, the loop tops the queue up to `pendingTarget` (2) pictures from `feed.nextDisplay`, using the disk only. It also publishes the status message, the status line and the picture count to the UI.
 - **First frame.** `loadInitialImage` shows the rotation's pick (`feed.anyPicture` calls `nextDisplay`): a never-shown picture when there is one, else one of the least recently shown, never a random one (D48). If the pool is empty, the first reveal shows the bundled standby art.

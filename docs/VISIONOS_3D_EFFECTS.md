@@ -1,6 +1,6 @@
 # Liminal visionOS 3D/AR Effects Brainstorm
 
-> **Historical (January 2026 brainstorm).** The Spatial Diorama / `Spatial3DImage` direction was dropped: the system renders it, so no effects can be applied. Dome and diorama are now one depth-relief shell with every effect (see `docs/decisions/spatial.md`).
+> **Historical (January 2026 brainstorm).** The current immersive space uses one depth-relief shell with effects and a 16:9 hero patch. [Current shell geometry](decisions/spatial.md#s19-widescreen-hero-and-immersive-recording-2026-11-23)
 
 *Brainstormed: January 2026*
 

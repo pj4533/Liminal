@@ -12,7 +12,7 @@
   display, and the visionOS square render target is mapped back to that aspect. The shell keeps its
   112.5° horizontal span per tile, so its seams and rear gap stay in place. The hero's vertical angle
   is 63.28125°, and the mirrored bands still reach ±60°. Collection selection and stored images
-  retain their original framing. See [Recording](../recording.md) for the export sizes.
+  retain their original framing. [Widescreen decision](#o10-widescreen-display-and-recording-2026-11-23)
 - Verified upright and consistent with a test card on all five paths: simulator mono,
   simulator stereo (flat depth and ML depth), effects off and on, and macOS effects off and on.
   Also checked with a real image and with the offline harness (O9).
@@ -20,6 +20,8 @@
   `-LiminalForceMonoMaterial YES`, `-LiminalNoEffects YES` (O8).
 
 Format: decision, why, alternatives, numbers.
+
+O5–O9 document the November 14 framing and test results. O10 records the current aspect and shell geometry.
 
 ## O1 Upload: no flip (visionOS renderer + harness)
 - Decision: `OffscreenEffectsRenderer.updateSourceTexture`, `updatePreviousTexture` and
@@ -138,3 +140,9 @@ Format: decision, why, alternatives, numbers.
   upside down. This confirms O1 and O3 were a cancelling pair.
 - Earlier vibrance harness PNGs (docs/plans/vibrance-measurements.md) were upside down. Their colour
   metrics are orientation-independent, so the numbers still hold.
+
+## O10 Widescreen display and recording (2026-11-23)
+
+Both platforms use a 16:9 display crop so the live composition carries into the shareable movie. The collection aspect stays 3:2 for screening and ingest. Colour, saliency and depth use the same display crop and keep the top-row convention.
+
+The visionOS texture remains 2048². The hero patch keeps its 112.5° horizontal tile span and uses a 63.28125° vertical angle. Larger mirrored bands maintain coverage to ±60°. Capture maps the effects texture to 2048×1152. On macOS both the canvas and the movie use 16:9, with the movie dimensions fixed at Record start. [Export sizes and verification](../recording.md)

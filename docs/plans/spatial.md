@@ -2,6 +2,8 @@
 
 > Status (2026-11-15): phases 0 to 5 implemented on feature/spatial. Device checks remain; see the
 > device checklist in docs/decisions/spatial.md.
+>
+> The release later moved the hero patch to 16:9. [Current shell and recording geometry](../decisions/spatial.md#s19-widescreen-hero-and-immersive-recording-2026-11-23)
 
 Branch `feature/spatial`. Decisions with reasons: [docs/decisions/spatial.md](../decisions/spatial.md).
 

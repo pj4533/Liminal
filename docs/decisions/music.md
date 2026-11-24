@@ -631,7 +631,9 @@ The film cache gained two films (LivingSt1958, SoundAndTheS) during the work; th
 
 **Not done or not met in stage 1.** A-mode accidental partials stay at 0.341: without a transcript a real dip between syllable nuclei is often a stop closure inside a word, and a stricter rule (12 dB for 25 ms, or a 60 ms pause) halved the acoustic plan's hits and left 26 bars empty, so it was taken out. Function-only hits are 0.083 (the rest are hook roles of weight 0 and untexted pieces; the hook roles are stage 2's). The chop beat's same-cut pairs rose because a whole long signature (0.6-0.9 s) leaves no room for a fill between the push template's two signature hits; leaving those skeleton repeats out, 43 remain. The tightness median moved 2.8 ms towards zero and the over-35 ms count fell, but it is not "none". The mix matrix was captured before the change (`matrix-base`: fail-level ref C-B8, C-B9; fast C-B2, C-B8; same C-B9; transcribe C-B9; C-D1 to C-D9 pass in all four) and not yet after; that check is stage 4's. Nothing was heard by ear or on a device. The curated cases now read: "LSD." and "marijuana" whole in every play at their film seconds, "UFO" as U-F-O letters or whole, "grebe", "is", "Yes, they" and "The kids" whole; "Pure cane" and "the Air Force" lines were not chosen in this run, so those cases do not reproduce.
 
-### D130 continuation: salience, learned footage and chop feel (2026-11-23; acceptance open)
+### D130 continuation: salience, learned footage and chop feel (2026-11-23)
+
+The dialogue release reached `main` after local verification on the Mac. The release ledger records the automated results, historical misses and listening checks that still need human review. [Local release verification](../plans/dialogue-salience/acceptance-ledger.md#local-release-verification-on-the-mac)
 
 This is the **dialogue** D130; image interest packs have a separate D130 in `images.md`.
 The original request above remains the reason for content-first cuts and lower density. Task 2 adds

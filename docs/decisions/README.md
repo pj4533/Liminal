@@ -8,7 +8,7 @@ Each workstream has a decision log with the reasons (what, why, alternatives, nu
 | [images.md](images.md) | Curated pictures: public-domain and openly licensed pictures from library, museum and NASA APIs, a rights rule, a paced client, an on-disk pool that never repeats a picture while a new one is available, duplicate fingerprints, credits (D36-D48) |
 | [music.md](music.md) | Lo-Fi is the only music engine: sampled instruments, MPC-style dialogue chopping (D108-D113), acoustic instruments (D114), a riddim bass on the kicks, a held pad and a warm bass tone that rotates among three each 16 bars (D115-D120), then less drive into the master soft clip with measured distortion gates and encode headroom (D121), and minimal strummed guitar and harp hooks played off the drums (D128) |
 | [vibrance.md](vibrance.md) | Color-loss fix: correct visionOS sRGB encoding, real feedback on visionOS, chroma-preserving blends, final vibrance stage, per-image factor |
-| [orientation.md](orientation.md) | One image orientation convention (row 0 = top), removed two cancelling flips, 3:2 crop, 112.5 x 75 degree dome, test-card debug flags |
+| [orientation.md](orientation.md) | Top-first image rows, test-card Debug flags, 16:9 display and recording, and the 112.5°×63.28125° Vision Pro hero patch (O10) |
 | [av-coupling.md](av-coupling.md) | Music drives clamped visual uniforms and ghost bursts; "Sync visuals to music" toggle (C1-C14, I1-I12) |
 | [ui.md](ui.md) | Control UI redesign on both platforms: shared components, sections for Playback, Music, Visuals, Archive Footage and Images & Storage, 1240x960 visionOS window, no truncation, sim tap coordinates |
 | [effects-balance.md](effects-balance.md) | Effects made images unrecognisable: measured per-effect damage, slow clarity cycle, fresh-image hold, strain budget (water first, radial masked off the centre), "Effect intensity" setting (E1-E22; implemented: EffectLook, slider on both platforms; round-1 tuning E23-E26: more colour, rainbow cap; round 2 E27-E30: zoom eases out in wild stretches, more fringing and trails, calmer hue blend at full; final E31-E32: default 0.5 passes blind judging with 100 % recognised and 98.3 % orientation, verified in the visionOS 27.2 Simulator) |
@@ -43,7 +43,7 @@ Each workstream has a decision log with the reasons (what, why, alternatives, nu
 
 ### Orientation
 - Verified upright on all paths with a test card, but only in the Simulator and on macOS; confirm on a device.
-- The dome arc changed from 110 to 112.5 degrees so that 3:2 is undistorted (O6); sources are centre-cropped to 3:2, so image edges are cut.
+- Both platforms use the same 16:9 display crop. The Vision Pro shell keeps 112.5° per tile and uses 63.28125° vertically for the widescreen hero (O10).
 
 ### AV coupling
 - I10: the note-glow attack is 90 ms (plan: 60 ms) to stay under the 5% flicker-band limit. All other amounts are the plan's starting values; tune with `-LiminalSyncStrength`.
