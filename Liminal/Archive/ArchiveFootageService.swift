@@ -350,6 +350,9 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
                 }
             }
             self.startDialogue(token: token, piece: piece, cue: cue, clip: clip, url: url, bed: buffer, due: due, sink: sink)
+            // Prepare the speech envelope with the cue, before its start deadline. A buffer trimmed
+            // during catch-up needs its own envelope so its activity stays on the playback clock.
+            let preparedActivity = ArchiveAudioMath.activity(buffer)
             let deadline = start + cue.fadeOutAt
             while true {
                 let time = Self.uptime()
@@ -366,7 +369,7 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
             }
             let late = Self.uptime() - due
             guard let ready = ArchiveAudioMath.catchUp(buffer, late: late) else { return }
-            let activity = ArchiveAudioMath.activity(ready)
+            let activity = ready === buffer ? preparedActivity : ArchiveAudioMath.activity(ready)
             posted = self.shared.withLock { s -> Bool in
                 guard s.pendingAudio?.token == token else { return false }
                 s.pendingAudio = nil

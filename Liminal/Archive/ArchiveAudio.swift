@@ -180,18 +180,24 @@ nonisolated enum ArchiveAudioMath {
         var lower: Float = 0
         var upper: Float = 0
         let frames = Int(buffer.frameLength)
-        return stride(from: 0, to: frames, by: block).map { start in
+        var values: [Float] = []
+        var start = 0
+        while start < frames {
             let end = min(start + block, frames)
             var energy: Float = 0
-            for i in start..<end {
+            var i = start
+            while i < end {
                 lower += slow * (mono[i] - lower)
                 upper += fast * (mono[i] - upper)
                 let speech = upper - lower
                 energy += speech * speech
+                i += 1
             }
             let rms = sqrtf(energy / Float(end - start))
-            return min(1, max(0, (rms - 0.007) * 30))
+            values.append(min(1, max(0, (rms - 0.007) * 30)))
+            start = end
         }
+        return values
     }
 }
 
