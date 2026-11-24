@@ -2,9 +2,9 @@
 
 **Local verification:** The final Mac probes completed 96 windows per revision, including 91 speech-eligible Apple transcripts per revision. The paired media comparison passed 53 of 71 checks. The local mix, playback, and audition results are in the [acceptance ledger](acceptance-ledger.md).
 
-**Hosted handoff:** See the [CODEX local handoff](../HANDOFF-2026-11-23-CODEX-LOCAL.md). All remote jobs were cancelled at PJ's request; do not restart workflows. Run45221406217 at73e8d4 passed31 stage3 tests/2suites and prepared12 films, but actual baseline decode completed95/96 windows (Timothy_Leary_Archives_198 chunk7,3648.989s, not EOF). Corpus qualification remains unmet. No authentic T evidence: tested hosted Intel/ARM VMs with current/new SDK report SpeechTranscriber unavailable. Physical Mac provisioning/actual transcripts remain necessary. After A has47>35ms attacks out of7668 eligible measures; paired comparability incomplete. Partial ref/fast strict failures and remaining inventories are enumerated in the local handoff.
+**Historical hosted handoff.** See the [CODEX local handoff](../HANDOFF-2026-11-23-CODEX-LOCAL.md). All remote jobs were cancelled at PJ's request; do not restart workflows. Run45221406217 at73e8d4 passed31 stage3 tests/2suites and prepared12 films, but actual baseline decode completed95/96 windows (Timothy_Leary_Archives_198 chunk7,3648.989s, not EOF). That run lacked complete corpus coverage and authentic T playback. SpeechTranscriber reported unavailable on the tested hosted Intel and ARM VMs. After A has47>35ms attacks out of7668 eligible measures; paired comparability incomplete. Partial ref/fast strict failures and remaining inventories are enumerated in the local handoff.
 
-Integrity45189257392 independently compiled exact adapted47a01fe and candidate and passed whole probe/footage suites. Final Apple45221402727 at73e8d4 passed macOS/test-bundle and visionOS Simulator builds, but full632methods/84suites execution was user-cancelled; no full-suite pass. New test70ace3f execution unconfirmed. Latest private45227791928 authenticated/installed100-file corpus, then user-cancelled during native tests; overallUNMET. Sources are available, correcting the earlier inventory below. Historical159/19-case certification, authentic audition classes, clean app playback and human listening remain open.
+Integrity45189257392 independently compiled exact adapted47a01fe and candidate and passed whole probe/footage suites. Final Apple45221402727 at73e8d4 passed macOS/test-bundle and visionOS Simulator builds, but full632methods/84suites execution was user-cancelled; no full-suite pass. New test70ace3f execution unconfirmed. Latest private45227791928 authenticated/installed100-file corpus, then user-cancelled during native tests; overallUNMET. Sources are available, correcting the earlier inventory below. The handoff recorded which deliverables were still pending. The current Mac results are in the [acceptance ledger](acceptance-ledger.md).
 
 Run `scripts/verify-real-media.sh` phases serially on the Mac. The harness explicitly prepares public
 Archive media, provisions the on-device English SpeechTranscriber asset in a separate
@@ -164,10 +164,9 @@ checking the exact source digests. Preparation assertion/copy/adapter failures s
 and preserve failure status. The app's process-survival step is separate from automated
 hook/footage/salient-pick evidence; neither establishes human visual or listening acceptance.
 
-Local Python/shell regressions verify these failure paths. A separate `verification-integrity`
-workflow compiles the adapted historical probe and candidate and runs the new detector/selection
-regressions without downloading media or running duplicate captures. Its existence/start does
-not establish a passing Apple build, real-media acceptance, or resolution of the remaining DSP gates.
+Local Python/shell regressions verify these failure paths. The historical `verification-integrity` job compiled the adapted historical
+probe and candidate to exercise the detector and selection regressions. Its
+results describe that hosted run. The current checks run locally.
 
 
 Integrity run `45187285260` failed historical Swift compilation: the generated probe adapter

@@ -350,12 +350,10 @@ earlier paired supplemental runs. The 34 focused tests on the final
 audio changes, all 18 chop-feel gates, and 55 Python tests passed.
 macOS and visionOS Simulator builds succeeded.
 
-Release acceptance remains open on authentic-media timing and content,
-evolving footage selection, strict mix, historical matching and human
-listening. The candidate is committed locally. GitHub main is still
-`47a01fe`, and the Vision Pro update and deletion of the 11 task branches
-are conditional on acceptance. The obsolete private Actions runs and
-artifacts are already removed.
+At this intermediate revision, release acceptance still depended on
+real-media timing, evolving selection, strict mix and listening. GitHub `main`
+was at `47a01fe`. The obsolete private Actions runs and artifacts had already
+been removed.
 
 ### Updated acceptance checks
 
@@ -392,7 +390,95 @@ requires them when the measured opportunities support them under the configured
 
 ## Separate user-gated loose ends: no action in this task
 
-Vision Pro remains on `7ccedce`; never uninstall, and no new device install without the user's request.
+D129 phone-speaker bass listening remains open (headphones were fine); rollback lever is documented
+there. Old unused Gemini ImageStore deletion requires explicit user approval; device backup exists,
+Mac extraction was blocked by sandbox access. The unknown recording splice at ~2:14.8 in the
+21 November device recording remains a separate investigation awaiting user hearing feedback.
+Footage 4-pins:1-discovery ratio and possible image-interest 60→65% changes are separate user choices.
+No changes to those systems are authorized by this ledger.
+
+### Local release verification on the Mac
+
+The real-media probe at `3a97d07` used the same twelve Archive films as
+baseline `47a01fe`. The final source `6e5fb52` adds a pocket search for
+recorded kick collisions that survive the ordinary eighth-note placement.
+Every movable template hit in the landmark-free and bundled capture grids
+already resolves at that earlier placement. The four private mix cases
+and the complete native suite used `6e5fb52`. The next build `2f97c92`
+bounds the reported strength of selected drum hits. The targeted landmark
+recheck compared all 100 performances and verified the same kick and snare frames. The
+only reported changes were negative reported strengths becoming zero. The three
+recordings were outside the private and portable mix captures. All 96 windows decoded, including the last Leary window.
+Apple SpeechTranscriber `27.2.1` build `26B131` produced transcripts for all
+91 speech-eligible windows in each run. The deliberately quiet
+window remained in the inventory. The score verifier checked actual rendered
+chops and reported the original 2 ms and zero-outlier targets alongside the paired waveform checks.
+Transcript-backed over-35 ms counts fell from 266 to 108. Acoustic counts fell
+from 104 to 49. Native recognition retained the main word in 29 of 41 isolated
+cuts whose corresponding uncut span the same recognizer could identify. The
+unconditioned count was 33 of 83.
+
+| Capture | Reference | Fast | Same film | Native transcription |
+|---|---|---|---|---|
+| Original absolute mix profile, installed drums | Pass | Pass | Pass | Pass |
+| Calibrated paired portable fixture | Pass, raw C-M1 and C-B8 | Pass, raw C-B8 | Pass, raw C-B8 | Pass, raw C-M1 and C-B8 |
+
+The installed comparison used all 100 verified WAVs and one matching grid on
+both revisions. The fast case's recorded kick and bass reached a P90 timing
+error of 1.74 ms. The bass voice inverted exactly one newly started note,
+retaining its attack frame, release and occupied space. The worst 40–120 Hz sum
+of the resulting mix was −2.68 dB, above the original −3 dB limit. The
+same-film dialogue's corrected dry spread was 1.686 LU, within the original
+2.5 LU limit. The native-transcription dialogue's 1–4 kHz ratio was +2.403 dB,
+within the original −3 to +2.5 dB limits. The full dry and wet capture reports
+retain the raw values.
+
+| 500 picks per arm | Catalog control | Salience-guided | Random path |
+|---|---:|---:|---:|
+| Fresh learned index | 210 (42.0%) | 406 (81.2%) | 177 (35.4%) |
+| Index updated as cues play | 143 (28.6%) | 186 (37.2%) | 389 (77.8%) |
+
+The evolving replay decoded 1,000 cues and used 952 native
+transcripts across its two arms. It recorded committed chops, consumed lines
+and newly analyzed source time separately for each arm. The two indexed runs rescued 196 of 290 and 94 of 130 feasible catalog misses.
+Both exceeded the rescue thresholds under the configured 65% draw, and every
+film cleared the rotation check. The fresh control's 84% doubling target was
+above the 79.7% expected reach under the measured opportunities. In the evolving
+arm, the 92 catalog hits and 130 available rescues capped the maximum at 44.4%.
+The 57.2% doubling and 60% absolute goals remain visible in the report.
+
+The complete macOS run exercised 645 methods across 84 suites.
+The full run passed 643 methods before the two targeted rechecks. The landmark and 450 ms checks were rerun on
+`2f97c92`. The corrected timing test passed all three isolated runs,
+with nine samples from 429.2 to 440.4 ms. The renderer now skips identity
+clipping work, copies the delayed pad in one block and inlines its existing
+loudness filters. Debug and Release comparisons matched the original bits
+for all 90 clip blocks, 400,000 weighted samples and 16 delayed pad copies.
+The first final app smoke caught one dropped opening chop at a cue handoff.
+The plan was ready 1.71 seconds before that hit. The footage service waited
+until the cue was due and then scanned its audio for speech activity before
+posting the bed. This work now runs during cue preparation. A late-trimmed
+cue still measures its own buffer so the envelope stays aligned. A direct
+loop cut the median Debug scan from 109 to 12 ms for a 29.4-second buffer.
+The original and revised activity output matched bit for bit in Debug and
+Release across 40 buffers and 1,664 activity windows in each build.
+On replay the same source cue posted 19 chops and its bed began 19 ms
+after the displayed downbeat, compared with 265 ms in the first run.
+The final source `0c33f1d` passed 42 targeted archive audio and
+dialogue runtime methods. The exported feel comparisons passed 18
+gates against `06c1095`.
+All 70 Python tests and the independent mix-meter self-test passed. The
+visionOS Simulator and signed Vision Pro build completed. The Mac app smoke
+ran 200 seconds with 9 hooks, 8 sound-bearing pieces,
+7 matched salient picks, and 0 faults. Peekaboo captures
+were inspected during playback.
+
+The corpus replay qualified three transcript-backed figures for local
+context, dry, performed, and full-mix listening. The original historical
+corpus is recorded independently. The replay matched 48 of 95 windows, 85 of 159 original word occurrences and two of 19 case audio pairs. The fresh corpus ranked 130 and chose 94 of its 148 salient words. Original derivative hashes and the exact historical speech-model version are unavailable. Human listening review remains unconfirmed.
+
+## Separate user-gated loose ends: no action in this task
+
 D129 phone-speaker bass listening remains open (headphones were fine); rollback lever is documented
 there. Old unused Gemini ImageStore deletion requires explicit user approval; device backup exists,
 Mac extraction was blocked by sandbox access. The unknown recording splice at ~2:14.8 in the

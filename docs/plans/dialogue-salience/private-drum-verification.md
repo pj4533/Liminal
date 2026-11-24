@@ -2,10 +2,11 @@
 
 Keep the source packs, prepared bundle, builds, raw reports, and capture audio
 on the Mac outside public Git. Continue from the [local handoff](../HANDOFF-2026-11-23-CODEX-LOCAL.md).
-The local continuation completed both native runs and the paired matrix with
-all 100 built sample hashes verified. Both revisions reproduced the same
-native failures. The strict mix gate remains unmet, and the specified paired
-criteria found zero new fail-level failures. See the [acceptance ledger](acceptance-ledger.md).
+The initial local pair reproduced the historical landmark and drum-bus
+failures. The repaired candidate at `3a97d07` passed the original strict
+installed-drum criteria in all four captures and had no new targeted failures.
+Both revisions used the same 100 source recordings. The final build and native
+checks are recorded in the [acceptance ledger](acceptance-ledger.md).
 
 Use the four original Slow Burn packs for fresh baseline and candidate verification.
 The regenerated D122 corpus has a separate identity from the historical installed

@@ -725,3 +725,51 @@ It leaves half the available peak headroom, preserves the shared gain when
 the stab is gated, and runs before the linked attack correction and any
 authored event trim. The mix report measures comparable dry pad consistency
 and retains the overall wet spread, SNR and intelligibility checks.
+
+One anchored note in the fast installed-drum capture still opposed the
+kick after timing was corrected. Their first 40 ms lost 6.96 dB and their
+full 120 ms lost 3.25 dB in 40–120 Hz. `LofiBassKickPhase` compares a short
+prediction of the individual note, including the bass chain's filter phase,
+with the finished kick. It selects opposite polarity only when the onset
+and body both strongly oppose the kick and the predicted sum loses more than
+2.5 dB. The whole note, cue partials and throw share that polarity. The next
+note keeps its own phase. The capture used this correction on exactly one
+hit and passed the original worst-sum limit at −2.68 dB. Measured attack
+alignment stayed at 1.74 ms at the 90th percentile.
+
+The loudest same-film cluster contained the first 457 ms of an 887 ms pad.
+Its held opening measured 2.50 LU above the full pad. Long pads now account
+for the first 400 ms when selecting the same gain for all gates. At most one
+additional decibel comes off the whole pad within the established ±1.5 dB
+correction. The original dry-spread check fell from 3.035 to 2.427 LU. A
+shared 0.35 dB output trim preserves the dry-to-wet balance and brought
+the installed native-transcription case from +2.653 to +2.303 dB SNR.
+
+All four installed-drum captures passed their original absolute criteria.
+The portable fixture passed its matched checks against the same recordings,
+settings and backing fixture as its baseline. The raw portable loudness and
+SNR are retained in the results. [Local release verification](../plans/dialogue-salience/acceptance-ledger.md#local-release-verification-on-the-mac)
+
+The full installed-kit suite exposed two late-template patterns whose
+fixed hits stayed on kicks when both neighboring eighth-note shifts were
+blocked. A second placement pass can move only those remaining hits. It
+looks within one beat, reserves the existing skeleton, checks both adjacent
+word lengths and keeps the repeated call's subdivision where it fits.
+The two measured shares fell from 54.5% and 40% to 33.3% and 30%, within
+the original 35% limit. The other four tested takes retained their hits.
+The landmark-free and bundled verification patterns resolve every movable
+kick with the original eighth-note choices.
+
+One fully checked recording exposed a kick whose held floor exceeded the
+instantaneous band peak. Its raw classification still identified the hit
+and the published strength came out negative. That value could ask the bass
+ducker for full depth on a quiet, unanchored hit. The detector now bounds
+published strength after selecting the hit, preserving its timing, class
+and confidence. The affected take was outside the paired mix captures.
+
+The dialogue preparation budget was also reproduced in isolation. The
+renderer now copies the delay-adjusted pad in one block, skips work where
+the clipping curve is an identity and inlines the same K-weighting equations.
+All nine final timing samples were within the original 450 ms budget. Direct
+Debug and Release output comparisons agreed bit-for-bit for the changed
+operations.
