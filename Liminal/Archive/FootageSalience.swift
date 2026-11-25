@@ -36,15 +36,19 @@ nonisolated enum FootageSalience {
         let pool = r.fill != nil && !different.isEmpty ? different : clips
         let sufficient = pool.filter { $0.duration >= (r.length + 2) * rate + preroll + 1 }
         let candidates = sufficient.isEmpty ? pool : sufficient
-        let audioClips = r.sound ? candidates.filter(\.hasAudio) : []
-        let eligible = audioClips.isEmpty ? candidates : audioClips
-        let boost: [String: Float] = indexed && r.sound ? Dictionary(uniqueKeysWithValues: eligible.map {
-            ($0.id, 1 + min(1, Float(index.unplayed(contentID: $0.id, ledger: ledger).count) / 6))
+        let boost: [String: Float] = r.sound ? Dictionary(uniqueKeysWithValues: candidates.filter(\.hasAudio).map {
+            let unused = indexed ? index.unplayed(contentID: $0.id, ledger: ledger).count : 0
+            return ($0.id, 1.5 + min(1.5, Float(unused) / 6))
         }) : [:]
-        guard let clip = weaver.chooseClipForPlayback(eligible, boost: boost, rng: &rng) else { return nil }
+        guard let clip = weaver.chooseClipForPlayback(candidates, boost: boost, rng: &rng) else { return nil }
         let plan = segment(for: clip)
-        var readStart = ArchiveCatalog.segmentStart(duration: clip.duration, length: plan.sourceLength,
-                                                    avoid: clip.shownStarts.map { $0 - preroll }, rng: &rng)
+        let playableLength = min(plan.sourceLength, preroll + (plan.length + 1) * rate)
+        let separation = max(20, plan.length * rate)
+        let starts = ArchiveCatalog.protectedStarts(in: preroll...(preroll + max(0, clip.duration - playableLength)),
+                                                    shown: clip.shownStarts, separation: separation)
+        var readStart = ArchiveCatalog.segmentStart(duration: clip.duration, length: playableLength,
+                                                    avoid: starts.map { $0 - preroll }, separation: separation,
+                                                    preferInterior: false, rng: &rng)
         var targeted = false
         var salientLine: DialogueSalienceIndex.Line?
         var segStart = readStart + preroll
@@ -54,11 +58,11 @@ nonisolated enum FootageSalience {
         let preliminary = r.piece(clipID: clip.id, segmentStart: segStart, length: plan.length)
         if indexed, r.sound, clip.hasAudio, let cue = ArchiveAudioCuePlan(piece: preliminary, clipDuration: clip.duration),
            let pick = FootageSalience.pick(lines: index.entry(contentID: clip.id).lines, contentID: clip.id,
-                                           ledger: ledger, shownStarts: clip.shownStarts, duration: clip.duration,
-                                           sourceLength: plan.sourceLength, preroll: preroll, rate: rate,
+                                           ledger: ledger, shownStarts: starts, duration: clip.duration,
+                                           sourceLength: playableLength, preroll: preroll, rate: rate,
                                            soundDelay: r.fill == nil ? FootageWeaver.soundDelay : 0,
                                            dialogueLength: ArchiveDialogueSource.containedSeconds(cue), sound: true,
-                                           rng: &salienceRNG, measureOpportunity: measureOpportunity) {
+                                           rng: &salienceRNG, measureOpportunity: measureOpportunity, separation: separation) {
             let candidate = r.piece(clipID: clip.id, segmentStart: pick.segmentStart, length: plan.length)
             if let actual = ArchiveAudioCuePlan(piece: candidate, clipDuration: clip.duration),
                pick.line.start >= actual.sourceStart + 3,
@@ -99,7 +103,7 @@ nonisolated enum FootageSalience {
     static func pick(lines: [DialogueSalienceIndex.Line], contentID: String, ledger: DialogueLineLedger,
                      shownStarts: [Double], duration: Double, sourceLength: Double, preroll: Double,
                      rate: Double, soundDelay: Double, dialogueLength: Double, sound: Bool,
-                     rng: inout MusicRNG, measureOpportunity: Bool = false) -> Pick? {
+                     rng: inout MusicRNG, measureOpportunity: Bool = false, separation: Double = 20) -> Pick? {
         guard sound, rate > 0, dialogueLength > 0, duration >= sourceLength else { return nil }
         let overrideDraw = rng.chance(0.65)
         guard overrideDraw || measureOpportunity else { return nil }
@@ -107,7 +111,7 @@ nonisolated enum FootageSalience {
         // A line must fit in its entirety, after its 3...10 film-second lead-in. Check again after
         // clamping: near either edge a valid raw start can become an unusable cue.
         let candidates = lines.filter {
-            $0.interest >= 0.6 && $0.end > $0.start && $0.end - $0.start + 3 <= dialogueLength
+            $0.interest >= DialogueMotifTuning.plainInterest && $0.end > $0.start && $0.end - $0.start + 3 <= dialogueLength
                 && ledger.lastPlay(contentID: contentID, seconds: $0.seconds) == nil
         }.sorted { ($0.interest, -$0.start) > ($1.interest, -$1.start) }
         let sortedStarts = shownStarts.sorted()
@@ -118,13 +122,13 @@ nonisolated enum FootageSalience {
             let latest = min(line.start - delay - 3, duration - sourceLength + preroll)
             let earliest = max(preroll, line.start - delay - 10, line.end - delay - dialogueLength)
             guard earliest <= latest else { continue }
-            let ranges = ArchiveCatalog.freshRanges(in: earliest...latest, shown: sortedStarts, separation: 20)
+            let ranges = ArchiveCatalog.freshRanges(in: earliest...latest, shown: sortedStarts, separation: separation)
             let start: Double
             if ranges.isEmpty {
                 // freshRanges returns positive lengths. A single exact legal endpoint also fits.
-                let edges = [earliest, latest] + shownStarts.flatMap { [$0 - 20, $0 + 20] }
+                let edges = [earliest, latest] + shownStarts.flatMap { [$0 - separation, $0 + separation] }
                 guard let edge = edges.first(where: { value in
-                    (earliest...latest).contains(value) && shownStarts.allSatisfy { abs($0 - value) >= 20 }
+                    (earliest...latest).contains(value) && shownStarts.allSatisfy { abs($0 - value) >= separation }
                 }) else { continue }
                 start = edge
             } else {
@@ -133,9 +137,8 @@ nonisolated enum FootageSalience {
                 start = interval.upperBound - rng.range(0...(interval.upperBound - interval.lowerBound))
             }
             feasible.append(Pick(overrideDraw: overrideDraw, segmentStart: start, line: line))
-            if feasible.count == 5 { break }
         }
         guard !feasible.isEmpty else { return nil }
-        return feasible[rng.weighted(feasible.map { $0.line.interest })]
+        return feasible[rng.weighted(feasible.map { 0.15 + $0.line.interest * $0.line.interest })]
     }
 }

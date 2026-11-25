@@ -533,7 +533,7 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
                                seed: seed, beatDuration: beatDuration, recycle: true, drums: drums) {
             return recycled
         }
-        if let previous = memory.motif { return previous.carried(to: loop, seed: seed, memory: memory, drums: drums) }
+        if let previous = memory.motif, !previous.carried { return previous.carried(to: loop, seed: seed, memory: memory, drums: drums) }
         return nil
     }
 
@@ -612,11 +612,13 @@ nonisolated struct DialogueMotif: @unchecked Sendable {
             let open = ranked.filter { !blockedThisSession($0.unit) }
             let pick: SpeechUnit?
             if recycle {
-                // Every line here has been played: go back to the one played longest ago.
-                pick = open.min { a, b in
-                    (memory.ledger.lastPlay(contentID: analysis.contentID, seconds: filmSeconds(a.unit))?.last ?? 0)
-                        < (memory.ledger.lastPlay(contentID: analysis.contentID, seconds: filmSeconds(b.unit))?.last ?? 0)
-                }?.unit
+                // Leave recently played lines in the crate even when the current cue is exhausted.
+                let restedBefore = Date().addingTimeInterval(-30 * 60).timeIntervalSince1970
+                pick = open.compactMap { candidate -> (unit: SpeechUnit, last: Double)? in
+                    guard let play = memory.ledger.lastPlay(contentID: analysis.contentID, seconds: filmSeconds(candidate.unit)),
+                          play.last <= restedBefore else { return nil }
+                    return (candidate.unit, play.last)
+                }.min { $0.last < $1.last }?.unit
             } else {
                 // Words this session already led with from this film: the same sentence said again, or
                 // a phrase inside one ("this is mother." after "Sally, this is mother."), waits too.

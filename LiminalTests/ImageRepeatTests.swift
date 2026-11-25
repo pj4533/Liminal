@@ -206,7 +206,7 @@ struct ImageRepeatPoolTests {
         #expect(again.duplicate(of: fp)?.id == meta.id)
     }
 
-    @Test func evictionForgetsAliasesAndFingerprints() throws {
+    @Test func evictionRemembersDisplayedImageIdentityAcrossLaunches() throws {
         let root = ImageAPIFixtures.tempRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let pool = CuratedImagePool(root: root)
@@ -219,7 +219,10 @@ struct ImageRepeatPoolTests {
         pool.markShown(first.id)
         let evicted = try pool.add(jpeg: patternJPEG(8), metadata: ImageAPIFixtures.metadata(), budget: size + size / 2)
         #expect(evicted == [first.id])
-        #expect(!pool.knownIdentities.contains("~nasa:AS08-14-2383"))
+        #expect(pool.knownIdentities.contains("~nasa:AS08-14-2383"))
+        let reloaded = CuratedImagePool(root: root)
+        reloaded.loadIfNeeded()
+        #expect(reloaded.knownIdentities.contains("~nasa:AS08-14-2383"))
         #expect(pool.duplicate(of: fp) == nil)
         #expect(pool.ledger.fingerprints[first.id] == nil)
     }

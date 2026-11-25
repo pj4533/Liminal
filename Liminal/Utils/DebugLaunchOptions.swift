@@ -249,8 +249,7 @@ nonisolated enum DebugLaunchOptions {
     /// fetching works and leaves the real pool alone. Removed again by the next normal launch. With
     /// -LiminalImageAPIOffline the verify folder of the previous fresh run is kept and reused.
     static let imageAPIFresh: Bool = defaults.bool(forKey: "LiminalImageAPIFresh")
-    /// -LiminalImageAPIPreview <n>: a bounded provenance preview (D130). Ingest ignores the never-shown
-    /// pause, stops after n candidates (stored + rejected), logs a summary per source and
+    /// -LiminalImageAPIPreview <n>: a bounded provenance preview (D130). Ingest stops after n candidates (stored + rejected), logs a summary per source and
     /// "preview done". Honoured only with -LiminalImageAPIFresh YES, so it never fills the user's pool.
     static let imageAPIPreview: Int? = imageAPIFresh ? imageAPIPreviewRequested : nil
     static let imageAPIPreviewRequested: Int? = defaults.string(forKey: "LiminalImageAPIPreview")

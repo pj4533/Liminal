@@ -172,7 +172,7 @@ nonisolated struct FootageWeaver {
     /// The recipes of the last `recentCount` pieces, newest last (down-weighted in the choice).
     private(set) var recent: [FootageRecipe] = []
     private var holdSince: Double?
-    private static let pinnedPiecesPerDiscovery = 4
+    private static let pinnedPiecesPerDiscovery = 2
     private var pinnedRun = 0
     private var pinnedRunBeforePrepare = 0
     /// A `.prepare` was issued and not yet answered.
@@ -335,15 +335,22 @@ nonisolated struct FootageWeaver {
         return options[rng.weighted(weights)]
     }
 
-    /// Four curated excerpts for every discovery when both are available.
+    /// Give discoveries a regular turn without letting the pin quota repeat a recent film.
     func chooseClipForPlayback(_ clips: [ArchiveClip], boost: [String: Float] = [:], rng: inout MusicRNG) -> ArchiveClip? {
         Self.chooseClip(eligibleClips(clips), avoiding: Set(pieces.map(\.clipID)), boost: boost, rng: &rng)
     }
 
     func eligibleClips(_ clips: [ArchiveClip]) -> [ArchiveClip] {
-        let curated = clips.filter { ArchiveSeedList.pinnedIDs.contains($0.id) }
-        let discoveries = clips.filter(ArchiveCachePolicy.isFreshDiscovery)
-        if curated.isEmpty { return discoveries.isEmpty ? clips : discoveries }
+        let onScreen = Set(pieces.map(\.clipID))
+        let offScreen = clips.filter { !onScreen.contains($0.id) }
+        let pool = offScreen.isEmpty ? clips : offScreen
+        let recent = pool.filter { $0.lastUsed != nil }.sorted { $0.recency > $1.recency }
+        // Scale the cooldown to the population so small and offline pools still work.
+        let rest = Set(recent.prefix(min(3, max(0, (pool.count - 1) / 2))).map(\.id))
+        let ready = pool.filter { !rest.contains($0.id) }
+        let curated = ready.filter { ArchiveSeedList.pinnedIDs.contains($0.id) }
+        let discoveries = ready.filter(ArchiveCachePolicy.isFreshDiscovery)
+        if curated.isEmpty { return discoveries.isEmpty ? ready : discoveries }
         return pinnedRun >= Self.pinnedPiecesPerDiscovery && !discoveries.isEmpty ? discoveries : curated
     }
 
@@ -355,7 +362,7 @@ nonisolated struct FootageWeaver {
         guard !pool.isEmpty else { return nil }
         let order = pool.sorted { $0.recency < $1.recency }
         // Weights 1/(rank+1): the oldest is likeliest, the newest still possible.
-        let weights = order.indices.map { (1 / Float($0 + 1)) * max(1, min(2, boost[order[$0].id] ?? 1)) }
+        let weights = order.indices.map { (1 / Float($0 + 1)) * max(1, min(3, boost[order[$0].id] ?? 1)) }
         return order[rng.weighted(weights)]
     }
 }

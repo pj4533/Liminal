@@ -6,7 +6,7 @@ This page follows one picture from an institution's API to the screen and back i
 
 The pipeline has two halves that never wait on each other:
 
-- **Ingest** (`CuratedImageFeed`, background task) fetches one picture at a time and stores it in the pool on disk. It runs only while fewer than `unseenAhead` (36) never-shown pictures are waiting.
+- **Ingest** (`CuratedImageFeed`, background task) fetches one picture at a time and stores it in the pool on disk. Search runs during ordinary playback independently of how many unseen pictures are waiting.
 - **Display** (`CuratedImageFeed.nextDisplay`, called by `ImageQueue`) picks the next stored picture. It reads only from disk.
 
 Contents:
@@ -66,7 +66,6 @@ The ingest loop (`CuratedImageFeed.ingestLoop`) runs on a detached background-pr
 | Condition | What happens |
 |---|---|
 | `-LiminalImageAPIOffline YES` | Ingest stops: `ingest off (-LiminalImageAPIOffline)` |
-| At least `unseenAhead` (36) never-shown pictures in the pool | Sleep 5 s and check again (not during a `-LiminalImageAPIPreview` run) |
 | `-LiminalImageAPIPreview <n>` and n candidates attempted, or every source dry | Log one summary line per source and `preview done`; ingest stops |
 | Less than `minFreeBytes` (1 GB) free on the volume | Sleep 60 s: `ingest paused: N bytes free` |
 | No usable source | Sleep 10 s |
@@ -74,7 +73,7 @@ The ingest loop (`CuratedImageFeed.ingestLoop`) runs on a detached background-pr
 
 Before the first step, `CuratedImagePool.backfillFingerprints` fingerprints any pool picture stored before D48 and removes the later copy of a picture found twice (section 12). It also runs under `-LiminalImageAPIOffline`.
 
-So the network only ever adds to the pool on disk, at most one download every 4 seconds plus the per-host gaps, and the pool stops growing once 36 unseen pictures are waiting. Measured 2026-11-21 on macOS: about one stored picture every 6 s while it fills, against one shown every 28 s in Lo-Fi, so new pictures arrive four to five times faster than they are shown. 36 waiting pictures cover about 17 minutes of Lo-Fi without network (D48).
+Ingest stays paced by the four-second interval, per-host gaps and provider backoff. The 3 GB disk budget still evicts the least recently shown pictures first. The pool remembers catalogue identities and aliases for displayed pictures it evicts, including after a restart. Previously unseen eligible pictures get display priority.
 
 ## 2. Which candidate is next: pins, search pages and the ledger
 

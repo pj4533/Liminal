@@ -785,11 +785,9 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
         }
         let safe = id.replacingOccurrences(of: "/", with: "_")
         let tmp = await store.tmpDirectory.appendingPathComponent("\(safe).mp4")
-        let excerpt = tmp.deletingPathExtension().appendingPathExtension("excerpt.mp4")
         let fm = FileManager.default
         defer {
             try? fm.removeItem(at: tmp)
-            try? fm.removeItem(at: excerpt)
         }
         LMLog.visual.info("📼 download id=\(id, privacy: .public) file=\(file.name, privacy: .public) \(String(format: "%.1f", Double(file.bytes ?? 0) / 1e6), privacy: .public) MB")
         do { try await client.download(id: id, file: file.name, to: tmp) } catch let e as ArchiveClientError where e.isContentFailure {
@@ -798,22 +796,10 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
         }
         let sourceBytes = ((try? fm.attributesOfItem(atPath: tmp.path)[.size]) as? NSNumber)?.int64Value
             ?? file.bytes ?? 0
-        var staged = tmp
         let v: ArchiveClipValidator.Result
-        let pinnedBytes = await store.clips.filter { ArchiveSeedList.pinnedIDs.contains($0.id) }
-            .reduce(Int64(0)) { $0 + $1.bytes }
-        let keepFull = pinned != nil && sourceBytes <= ArchiveCachePolicy.capBytes - pinnedBytes
         do {
-            if !keepFull, sourceBytes > 120_000_000,
-               (try? await ArchiveClipValidator.exportExcerpt(from: tmp, to: excerpt, sourceBytes: sourceBytes,
-                                                               seed: picker.rng.next())) == true,
-               let validated = try? await ArchiveClipValidator.validate(excerpt) {
-                staged = excerpt
-                v = validated
-            } else {
-                try Task.checkCancellation()
-                v = try await ArchiveClipValidator.validate(tmp)
-            }
+            try Task.checkCancellation()
+            v = try await ArchiveClipValidator.validate(tmp)
         } catch is CancellationError {
             throw CancellationError()
         } catch {
@@ -824,7 +810,7 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
         }
         try Task.checkCancellation()
         let year = meta.metadata?.year.flatMap { Int($0.value.prefix(4)) } ?? entry.doc?.yearValue ?? entry.seed?.year
-        let attrs = try fm.attributesOfItem(atPath: staged.path)
+        let attrs = try fm.attributesOfItem(atPath: tmp.path)
         let bytes = (attrs[.size] as? NSNumber)?.int64Value ?? sourceBytes
         let clip = ArchiveClip(id: id, title: meta.metadata?.title?.value ?? title, year: year, fileName: "\(safe).mp4",
                                bytes: bytes,
@@ -837,7 +823,7 @@ nonisolated final class ArchiveFootageService: @unchecked Sendable {
         let protected = shared.withLock { Set($0.pieces.map(\.clipID)) }
         let evicted: [String]
         do {
-            evicted = try await store.add(clip, from: staged, protected: protected)
+            evicted = try await store.add(clip, from: tmp, protected: protected)
         } catch ArchiveClipStore.AddFailure.insufficientCacheSpace {
             picker.skipped.insert(id)
             LMLog.visual.info("📼 not enough cache space for \(id, privacy: .public)")

@@ -41,9 +41,9 @@ nonisolated struct ArchiveClip: Codable, Sendable, Equatable, Identifiable {
 
 /// Pure eviction rules (unit-tested).
 nonisolated enum ArchiveCachePolicy {
-    /// Thirteen pins (about 3.0 GB) plus two discoveries (A31: raise storage, never cap what plays; A32).
+    /// Shared byte budget for the pins and the rotating discoveries.
     static let capBytes: Int64 = 4_000_000_000
-    static let discoverySlots = 2
+    static let discoverySlots = 6
     static let discoveryPlayLimit = 2
     static var poolTarget: Int { ArchiveSeedList.pinned.count + discoverySlots }
     static let minReady = 3
@@ -93,12 +93,20 @@ nonisolated enum ArchiveCachePolicy {
 }
 
 actor ArchiveClipStore {
+    struct RetiredEdition: Codable {
+        let bytes: Int64
+        let duration: Double
+        let lastUsed: Date?
+        let starts: [Double]
+    }
+
     struct Index: Codable {
         var clips: [ArchiveClip] = []
         /// Items that failed for content reasons (HTTP 4xx, no video track, excluded words): never retried.
         var bad: [String] = []
         var filePolicyVersion: Int? = 2
         var recentDiscoveries: [String]?
+        var retiredEditions: [String: RetiredEdition]?
     }
 
     let directory: URL
@@ -204,7 +212,13 @@ actor ArchiveClipStore {
         try FileManager.default.moveItem(at: file, to: dest)
         let victims = [replacement].compactMap { $0 } + evict
         for id in victims { remove(id, rememberDiscovery: true) }
-        index.clips.append(clip)
+        var incoming = clip
+        if let history = index.retiredEditions?.removeValue(forKey: clip.id),
+           history.bytes == clip.bytes, history.duration == clip.duration {
+            incoming.shownStarts = history.starts
+            incoming.lastUsed = history.lastUsed
+        }
+        index.clips.append(incoming)
         save()
         return victims
     }
@@ -214,6 +228,11 @@ actor ArchiveClipStore {
         try? FileManager.default.removeItem(at: url(for: c))
         index.clips.removeAll { $0.id == id }
         if rememberDiscovery {
+            if !c.shownStarts.isEmpty {
+                var history = index.retiredEditions ?? [:]
+                history[id] = RetiredEdition(bytes: c.bytes, duration: c.duration, lastUsed: c.lastUsed, starts: c.shownStarts)
+                index.retiredEditions = history
+            }
             index.recentDiscoveries = Array(((index.recentDiscoveries ?? []) + [id]).suffix(24))
         }
         save()
@@ -333,24 +352,6 @@ nonisolated enum ArchiveClipValidator {
         let hasAudio = !(try await asset.loadTracks(withMediaType: .audio)).isEmpty
         let (black, white) = try await levels(asset, duration: duration)
         return Result(duration: duration, width: w, height: h, hasAudio: hasAudio, black: black, white: white)
-    }
-
-    /// Keep an interior excerpt without re-encoding the picture or soundtrack.
-    static func exportExcerpt(from source: URL, to destination: URL, sourceBytes: Int64,
-                              seed: UInt64) async throws -> Bool {
-        let asset = AVURLAsset(url: source)
-        let duration = try await asset.load(.duration).seconds
-        guard duration.isFinite, duration >= 60 else { return false }
-        let fraction = Double(80_000_000) / Double(sourceBytes)
-        let length = min(240, max(30, duration * fraction))
-        guard length < duration,
-              let export = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetPassthrough) else { return false }
-        var rng = MusicRNG(seed: seed)
-        let start = ArchiveCatalog.segmentStart(duration: duration, length: length, avoid: [], rng: &rng)
-        export.timeRange = CMTimeRange(start: CMTime(seconds: start, preferredTimescale: 600),
-                                       duration: CMTime(seconds: length, preferredTimescale: 600))
-        try await export.export(to: destination, as: .mp4)
-        return true
     }
 
     /// 5th / 95th luma percentiles over 8 small frames spread across the clip.

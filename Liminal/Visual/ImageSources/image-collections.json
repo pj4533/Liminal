@@ -15,7 +15,6 @@
   "maxRequestsPerSecond": 1,
   "storeBudgetBytes": 3000000000,
   "minFreeBytes": 1000000000,
-  "unseenAhead": 36,
   "ingestInterval": 4,
   "recencyWindow": 24,
   "monochromeEvery": 6,

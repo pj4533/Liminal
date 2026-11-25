@@ -158,6 +158,18 @@ struct ArchiveCatalogTests {
         }
     }
 
+    @Test func fullFilmProtectionReleasesTheOldestExclusionsFirst() {
+        let shown: [Double] = [70, 20, 45, 95]
+        let protected = ArchiveCatalog.protectedStarts(in: 0...100, shown: shown, separation: 24)
+        #expect(protected == [20, 45, 95])
+        var rng = MusicRNG(seed: 8)
+        for _ in 0..<200 {
+            let start = ArchiveCatalog.segmentStart(duration: 140, length: 40, avoid: protected,
+                                                    separation: 24, preferInterior: false, rng: &rng)
+            #expect((69...71).contains(start))
+        }
+    }
+
     @Test func shuffleBagHasNoRepeatsUntilExhausted() {
         var bag = ShuffleBag(["a", "b", "c", "d", "e"])
         var rng = MusicRNG(seed: 3)
@@ -244,7 +256,8 @@ struct ArchiveCachePolicyTests {
         let store = ArchiveClipStore(directory: dir)
         await store.load()
         let staged = dir.appendingPathComponent("incoming.mp4")
-        for id in ["a", "b"] {
+        let discoveries = ["a"] + (1..<ArchiveCachePolicy.discoverySlots).map { "fresh-\($0)" }
+        for id in discoveries {
             try Data([1]).write(to: staged)
             try await store.add(Self.clip(id, mb: 1, used: nil), from: staged, protected: [])
         }
@@ -254,7 +267,7 @@ struct ArchiveCachePolicyTests {
             try await store.add(Self.clip(pin.id, mb: 1, used: nil), from: staged, protected: [])
         }
         #expect(ArchiveSeedList.pinnedIDs.count == 13)
-        #expect(await store.clips.count == 15)
+        #expect(await store.clips.count == ArchiveCachePolicy.poolTarget)
         try Data([1]).write(to: staged)
         let newcomer = Self.clip("c", mb: 1, used: nil)
         await store.markUsed("a", segmentStart: 40)
@@ -267,6 +280,14 @@ struct ArchiveCachePolicyTests {
         }
         #expect(try await store.add(newcomer, from: staged, protected: []) == ["a"])
         #expect(await store.recentDiscoveryIDs == ["a"])
+
+        await store.markUsed("c", segmentStart: 50)
+        await store.markUsed("c", segmentStart: 100)
+        try Data([1]).write(to: staged)
+        #expect(try await store.add(Self.clip("a", mb: 1, used: nil), from: staged, protected: []) == ["c"])
+        let returning = await store.clips.first { $0.id == "a" }
+        #expect(returning?.shownStarts == [40, 90])
+        #expect(returning?.useCount == 0)
     }
 
     @Test func storeAddsEvictsAndPersists() async throws {
@@ -298,7 +319,8 @@ struct ArchiveCachePolicyTests {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let kept = try #require(ArchiveSeedList.pinned.first?.id)
         let retired = ["Narcotic1967_2", "lsdthespringgroveexperimentreel1"]
-        let legacy = (retired + [kept, "fresh-a", "fresh-b"]).map { Self.clip($0, mb: 1, used: nil) }
+        let fresh = (0..<ArchiveCachePolicy.discoverySlots).map { "fresh-\($0)" }
+        let legacy = (retired + [kept] + fresh).map { Self.clip($0, mb: 1, used: nil) }
             + [Self.clip("old-discovery", mb: 1, used: nil, count: 2)]
         for clip in legacy {
             try Data([1]).write(to: dir.appendingPathComponent(clip.fileName))
@@ -307,7 +329,7 @@ struct ArchiveCachePolicyTests {
 
         let reloaded = ArchiveClipStore(directory: dir)
         await reloaded.load()
-        #expect(Set(await reloaded.clips.map(\.id)) == [kept, "fresh-a", "fresh-b"])
+        #expect(Set(await reloaded.clips.map(\.id)) == Set([kept] + fresh))
         #expect(await reloaded.recentDiscoveryIDs == ["old-discovery"])
         for id in retired {
             #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent("\(id).mp4").path))
@@ -639,7 +661,7 @@ struct FootageWeaverTests {
         #expect(abs(p.driveEnvelope(at: 32) - 0.5 * p.level(at: 32) / 0.5) < 1e-5)
     }
 
-    @Test func playbackRunsFourCuratedExcerptsBetweenDiscoveries() throws {
+    @Test func playbackUsesDiscoveriesWithoutRepeatingTheOnlyPin() throws {
         let pinnedID = try #require(ArchiveSeedList.pinned.first?.id)
         let pinned = ArchiveCachePolicyTests.clip(pinnedID, mb: 80, used: 10)
         let regular = ArchiveCachePolicyTests.clip("regular", mb: 20, used: 1)
@@ -660,9 +682,7 @@ struct FootageWeaverTests {
         #expect(selected.count >= 6)
         #expect(selected.first == pinnedID)
         #expect(selected.contains(regular.id))
-        for (index, id) in selected.enumerated() {
-            #expect(id == (index % 5 == 4 ? regular.id : pinnedID))
-        }
+        #expect(zip(selected, selected.dropFirst()).allSatisfy { $0 != $1 })
     }
 
     @Test func clipChoiceAvoidsClipsOnScreen() {

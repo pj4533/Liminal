@@ -126,8 +126,8 @@ struct FootageSalienceTests {
         }
     }
 
-    @Test func topFiveAreWeightedAndBoostNeverExcludesAClip() {
-        let lines = (0..<8).map { Self.line(80 + Double($0) * 45, interest: 0.95 - Float($0) * 0.03) }
+    @Test func quieterLinesRemainReachableAndBoostNeverExcludesAClip() {
+        let lines = (0..<8).map { Self.line(80 + Double($0) * 45, interest: 0.95 - Float($0) * 0.09) }
         var selected = Set<Double>()
         let clips = (0..<8).map { ArchiveCachePolicyTests.clip("film-\($0)", mb: 1, used: Double($0)) }
         var selectedClips = Set<String>()
@@ -136,18 +136,19 @@ struct FootageSalienceTests {
             if let pick = Self.pick(seed: seed, lines: lines) { selected.insert(pick.line.start) }
             if let clip = FootageWeaver.chooseClip(clips, avoiding: [], boost: ["film-0": 2], rng: &rng) { selectedClips.insert(clip.id) }
         }
-        #expect(selected == Set(lines.prefix(5).map(\.start)))
+        #expect(selected == Set(lines.map(\.start)))
         #expect(selectedClips == Set(clips.map(\.id)))
     }
 
-    @Test func indexLimitsMergesAndPersistsWithLexiconInvalidation() throws {
+    @Test func denseLinesMergeAndPersistWithLexiconInvalidation() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("salience-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appendingPathComponent("DialogueSalience.json")
         let index = DialogueSalienceIndex(url: url)
         index.record(contentID: "film", scanned: 0..<30, lines: (0..<10).map { Self.line(Double($0) * 2.5, interest: 0.5 + Float($0) * 0.04) })
-        index.record(contentID: "film", scanned: 25..<55, lines: [Self.line(40, interest: 0.4)])
+        index.record(contentID: "film", scanned: 25..<55, lines: [Self.line(40, interest: 0.4), Self.line(45, interest: 0.2)])
         #expect(index.entry(contentID: "film").spans == [.init(start: 0, end: 55)])
-        #expect(index.entry(contentID: "film").lines.count == 6)
+        #expect(index.entry(contentID: "film").lines.count == 11)
         try index.save()
         let reloaded = DialogueSalienceIndex(url: url)
         #expect(reloaded.entry(contentID: "film") == index.entry(contentID: "film"))
@@ -175,7 +176,7 @@ struct FootageSalienceTests {
         await director.finishSalienceLearning()
         #expect(!index.entry(contentID: "stored").spans.isEmpty)
         #expect(!index.entry(contentID: "stored").lines.isEmpty)
-        #expect(index.entry(contentID: "stored").lines.allSatisfy { $0.interest >= 0.45 })
+        #expect(index.entry(contentID: "stored").lines.allSatisfy { $0.interest >= DialogueMotifTuning.plainInterest })
     }
     @Test func scannedSpanUsesAnalyzedFramesAndSourceRate() {
         var options = DialogueFixtures.Options()

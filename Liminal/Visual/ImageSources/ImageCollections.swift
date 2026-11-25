@@ -29,7 +29,6 @@ nonisolated struct ImageCollections: Codable, Sendable {
         /// Ingest pauses while the volume has less free space than this.
         let minFreeBytes: Int64
         /// Ingest runs while fewer never-shown pictures than this wait in the pool.
-        let unseenAhead: Int
         /// Seconds between downloads, on top of the per-host gaps.
         let ingestInterval: Double
         /// Pictures shown since, below which a picture is not shown again.
@@ -73,7 +72,7 @@ nonisolated struct ImageCollections: Codable, Sendable {
         version: 0,
         defaults: Defaults(minLongSide: 2048, minShortSide: 1365, targetLongSide: 2528, maxBytes: 12_000_000,
                            allowedMime: ["image/jpeg", "image/png"], userAgent: "Liminal/1.0",
-                           storeBudgetBytes: 3_000_000_000, minFreeBytes: 1_000_000_000, unseenAhead: 36,
+                           storeBudgetBytes: 3_000_000_000, minFreeBytes: 1_000_000_000,
                            ingestInterval: 4, recencyWindow: 24, monochromeEvery: 6, candidateRefreshDays: 7,
                            hostGaps: [:], defaultHostGap: 1, openness: .standard),
         providers: [:], licenseAllowlist: [], sources: [])

@@ -106,6 +106,6 @@ struct ArchiveInterestRouteTests {
     @Test func cacheHoldsThePinsAndTwoDiscoveries() {
         // Thirteen pins measured about 3.02 GB (A31 sizes plus the three reviewed files, A32).
         #expect(ArchiveCachePolicy.capBytes == 4_000_000_000)
-        #expect(ArchiveCachePolicy.poolTarget == ArchiveSeedList.pinned.count + 2)
+        #expect(ArchiveCachePolicy.poolTarget == ArchiveSeedList.pinned.count + 6)
     }
 }

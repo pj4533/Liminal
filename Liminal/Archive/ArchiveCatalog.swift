@@ -211,18 +211,19 @@ nonisolated enum ArchiveCatalog {
 
     // MARK: - Segments
 
-    /// Pick an interior start at least 20 source seconds from previous starts when possible.
+    /// Pick a start separated from previous excerpts when space allows.
     /// For crowded or short films, pick the point furthest from any previous start.
-    static func segmentStart(duration: Double, length: Double, avoid: [Double], rng: inout MusicRNG) -> Double {
+    static func segmentStart(duration: Double, length: Double, avoid: [Double], separation: Double = 20,
+                             preferInterior: Bool = true, rng: inout MusicRNG) -> Double {
         let last = max(0, duration - length)
         guard last > 0 else { return 0 }
         let margin = min(0.2 * duration, 60)
-        let interior = last > 2 * margin ? margin...(last - margin) : 0...last
+        let interior = preferInterior && last > 2 * margin ? margin...(last - margin) : 0...last
         let shown = avoid.sorted()
 
-        var ranges = freshRanges(in: interior, shown: shown, separation: 20)
+        var ranges = freshRanges(in: interior, shown: shown, separation: separation)
         if ranges.isEmpty, interior.lowerBound > 0 {
-            ranges = freshRanges(in: 0...last, shown: shown, separation: 20)
+            ranges = freshRanges(in: 0...last, shown: shown, separation: separation)
         }
         if !ranges.isEmpty {
             let weights = ranges.map { Float($0.upperBound - $0.lowerBound) }
@@ -236,6 +237,23 @@ nonisolated enum ArchiveCatalog {
             return (0...last).contains(start) ? (start, (right - left) / 2) : nil
         }
         return (edges + midpoints).max { $0.gap < $1.gap }?.start ?? 0
+    }
+
+    /// Once a film has filled its start range, release the oldest exclusions first.
+    /// Keep the newest exclusion for a short film so the distance fallback still applies.
+    static func protectedStarts(in bounds: ClosedRange<Double>, shown: [Double], separation: Double) -> [Double] {
+        guard !shown.isEmpty else { return [] }
+        var low = 0
+        var high = shown.count - 1
+        while low < high {
+            let middle = (low + high) / 2
+            if freshRanges(in: bounds, shown: shown[middle...].sorted(), separation: separation).isEmpty {
+                low = middle + 1
+            } else {
+                high = middle
+            }
+        }
+        return Array(shown[low...])
     }
 
     static func freshRanges(in bounds: ClosedRange<Double>, shown: [Double],

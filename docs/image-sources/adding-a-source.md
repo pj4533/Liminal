@@ -102,7 +102,7 @@ Add an object to `sources` in `Liminal/Visual/ImageSources/image-collections.jso
 | `requiresKey` | string | | Documentation for keyed providers (`SMITHSONIAN_API_KEY`); enabled sources must not set it |
 | `priority` | bool | | One of the interest packs (D130). Priority sources together are held at `defaults.priorityShare` (0.6) of the newest 40 stored pictures; `weight` then splits the draws among them. A new priority source joins that share, a new ordinary source joins the other 40%. `ImagePriorityCollectionTests` lists the pack ids |
 
-Defaults and limits that apply to every source live in `defaults`: sizes, `maxBytes`, `hostGaps`, the `openness` thresholds, `recencyWindow`, `monochromeEvery`, `unseenAhead`, `ingestInterval` and `candidateRefreshDays`, and `priorityShare` (D130). The allowed rights labels live in `licenseAllowlist`. Change those only with a decision record, because they apply to every source.
+Defaults and limits that apply to every source live in `defaults`: sizes, `maxBytes`, `hostGaps`, the `openness` thresholds, `recencyWindow`, `monochromeEvery`, `ingestInterval` and `candidateRefreshDays`, and `priorityShare` (D130). The allowed rights labels live in `licenseAllowlist`. Change those only with a decision record, because they apply to every source.
 
 An example, `dc-tichnor-postcards`:
 

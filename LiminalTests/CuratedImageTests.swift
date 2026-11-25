@@ -727,7 +727,7 @@ struct CuratedImagePoolTests {
         let evicted = try pool.add(jpeg: ImageAPIFixtures.jpeg, metadata: fourth, budget: size * 3)
         #expect(evicted == [ids[1]])
         #expect(pool.count == 3)
-        #expect(!pool.seenKeys.contains(removedKey))   // can be fetched again
+        #expect(pool.seenKeys.contains(removedKey))   // displayed images stay known after eviction
         #expect(pool.store.entries().count == 3)
     }
 

@@ -5,8 +5,8 @@
 //  The curated picture feed's two halves (docs/plans/image-api-mode.md 4.3):
 //  - ingest: one picture at a time from the next source in the rotation -> rights and size gates ->
 //    download -> bounded decode -> border trim -> 3:2 window -> openness, document and face gates ->
-//    saturation -> JPEG into the pool. Runs while fewer than `unseenAhead` never-shown pictures
-//    wait, so the network only ever adds to the disk pool.
+//    saturation -> JPEG into the pool. Searches continue at the configured pace independently
+//    of the display queue.
 //  - display: picks the next stored picture (ImageRotation.nextDisplay). Reads only from disk, so
 //    the reveal's reserve deadline and offline use never wait on the network.
 //
@@ -248,10 +248,6 @@ nonisolated final class CuratedImageFeed: Sendable {
             if let limit = previewLimit, state.withLock({ $0.ingested + $0.rejected }) >= limit {
                 finishPreview("limit reached")
                 return
-            }
-            if previewLimit == nil, pool.unseenCount >= d.unseenAhead {
-                try? await Task.sleep(for: .seconds(5))
-                continue
             }
             if let free = pool.freeBytes(), free < d.minFreeBytes {
                 LMLog.visual.warning("🖼️ [API] ingest paused: \(free) bytes free")

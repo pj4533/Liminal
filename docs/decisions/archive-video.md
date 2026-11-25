@@ -425,3 +425,12 @@ Tests: `ArchiveInterestRouteTests` (script mirror, full exclusions on every rout
   image transition), 11 piece changes with no slow frame.
 - Open: the level band and swell sizes are first guesses for the user's eye on the headset; Imprint stays faint on
   busy pictures; device GPU cost of two layers during crossfades is unmeasured.
+
+## A33 (2026-11-24) Full film editions and longer rests between excerpts
+
+Allow six discoveries within the shared 4 GB cache, and give them turns after two
+pinned excerpts when both are ready. Rest recently played titles before applying
+curation and audio preferences. Keep full playable editions so rotation can
+reach the entire film. Protect recent portions by visible length and release
+the oldest exclusions first when the start range is full. Keep the excerpt
+history on rediscovery of a matching edition.

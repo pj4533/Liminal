@@ -195,14 +195,17 @@ nonisolated final class CuratedImagePool: Sendable {
             guard !s.loaded else { return }
             s.items = items
             s.ledger = ledger
-            // Pictures whose files are gone (or were evicted) can be fetched again.
+            // A missing file can be fetched again if it was never shown.
             for (key, record) in s.ledger.candidates {
-                if let id = record.stored, items[id] == nil { s.ledger.candidates[key] = nil }
+                if let id = record.stored, items[id] == nil {
+                    s.ledger.candidates[key] = s.ledger.shown[id] == nil ? nil
+                        : .init(stored: nil, rejected: nil, date: record.date)
+                }
             }
             s.ledger.shown = s.ledger.shown.filter { items[$0.key] != nil }
             s.ledger.fingerprints = s.ledger.fingerprints.filter { items[$0.key] != nil }
-            let storedKeys = Set(items.values.map(\.candidateKey))
-            s.ledger.aliases = s.ledger.aliases.filter { storedKeys.contains($0.value) }
+            let knownKeys = s.ledger.seenKeys.union(items.values.map(\.candidateKey))
+            s.ledger.aliases = s.ledger.aliases.filter { knownKeys.contains($0.value) }
             s.loaded = true
         }
         LMLog.visual.info("🖼️ [API] pool: \(items.count) pictures in \(self.store.directory.lastPathComponent, privacy: .public)")
@@ -384,8 +387,13 @@ nonisolated final class CuratedImagePool: Sendable {
                                                     budget: budget, keep: item.id)
             for id in evict {
                 if let gone = s.items.removeValue(forKey: id) {
-                    s.ledger.candidates[gone.candidateKey] = nil
-                    s.ledger.forgetStored(id: id, candidateKey: gone.candidateKey)
+                    if s.ledger.shown[id] == nil {
+                        s.ledger.candidates[gone.candidateKey] = nil
+                        s.ledger.forgetStored(id: id, candidateKey: gone.candidateKey)
+                    } else {
+                        s.ledger.candidates[gone.candidateKey] = .init(stored: nil, rejected: nil, date: Date())
+                        s.ledger.fingerprints[id] = nil
+                    }
                 }
                 s.ledger.shown[id] = nil
             }

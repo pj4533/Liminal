@@ -67,7 +67,7 @@ nonisolated final class DialogueSalienceIndex: Sendable {
 
     func entry(contentID: String) -> Entry { entries.withLock { $0[contentID] ?? Entry() } }
 
-    func unplayed(contentID: String, ledger: DialogueLineLedger, minimum: Float = 0.6) -> [Line] {
+    func unplayed(contentID: String, ledger: DialogueLineLedger, minimum: Float = DialogueMotifTuning.plainInterest) -> [Line] {
         entry(contentID: contentID).lines.filter {
             $0.interest >= minimum && ledger.lastPlay(contentID: contentID, seconds: $0.seconds) == nil
         }
@@ -86,16 +86,12 @@ nonisolated final class DialogueSalienceIndex: Sendable {
             }
             // Repeated or late transcripts replace overlapping candidates, retaining the better line.
             for line in lines where line.start.isFinite && line.end.isFinite && line.interest.isFinite
-                && line.end > line.start && line.start >= scanned.lowerBound && line.end <= scanned.upperBound && line.interest >= 0.45 {
+                && line.end > line.start && line.start >= scanned.lowerBound && line.end <= scanned.upperBound && line.interest >= DialogueMotifTuning.plainInterest {
                 if let i = entry.lines.firstIndex(where: { DialogueLineLedger.sameLine($0.seconds, line.seconds) }) {
                     if line.interest >= entry.lines[i].interest { entry.lines[i] = line }
                 } else { entry.lines.append(line) }
             }
-            var kept: [Line] = []
-            for line in entry.lines.sorted(by: { ($0.interest, -$0.start) > ($1.interest, -$1.start) }) {
-                if kept.filter({ abs($0.start - line.start) < 30 }).count < 6 { kept.append(line) }
-            }
-            entry.lines = kept.sorted { $0.start < $1.start }
+            entry.lines.sort { $0.start < $1.start }
             all[contentID] = entry
         }
         scheduleSave()
